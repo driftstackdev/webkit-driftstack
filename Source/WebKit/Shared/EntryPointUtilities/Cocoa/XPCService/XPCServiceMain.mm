@@ -213,8 +213,7 @@ void XPCServiceEventHandler(xpc_connection_t peer)
                 // the override first; only falls back to ucal_getHostTimeZone
                 // if no override is set.
                 const char* tzValue = getenv("TZ");
-                fprintf(stderr, "[Driftstack] XPCServiceMain bootstrap: TZ=%s\n",
-                        tzValue ?: "(unset)");
+                NSLog(@"[Driftstack] XPCServiceMain bootstrap: TZ=%s", tzValue ?: "(unset)");
                 if (tzValue)
                     WTF::setTimeZoneOverride(WTF::StringView::fromLatin1(tzValue));
 #endif

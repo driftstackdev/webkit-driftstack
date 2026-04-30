@@ -399,7 +399,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
         const char* environmentTZ = getenv("TZ");
         const char* environmentLANG = getenv("LANG");
         const char* environmentLCALL = getenv("LC_ALL");
-        fprintf(stderr, "[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s\n",
+        NSLog(@"[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s",
                 environmentTZ ?: "(unset)",
                 environmentLANG ?: "(unset)",
                 environmentLCALL ?: "(unset)");
