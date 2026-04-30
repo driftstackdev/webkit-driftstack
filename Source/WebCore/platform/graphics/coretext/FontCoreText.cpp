@@ -70,7 +70,7 @@ static bool fontHasVerticalGlyphs(CTFontRef font)
     return fontHasEitherTable(font, kCTFontTableVhea, kCTFontTableVORG);
 }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
 bool fontFamilyShouldNotBeUsedForArabic(CFStringRef fontFamilyName)
 {
     if (!fontFamilyName)
@@ -148,7 +148,7 @@ void Font::platformInit()
     if (isAhemFont(familyName.get()))
         m_allowsAntialiasing = false;
 
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
     // We need to adjust Times, Helvetica, and Courier to closely match the
     // vertical metrics of their Microsoft counterparts that are the de facto
     // web standard. The AppKit adjustment of 20% is too big and is
@@ -171,11 +171,11 @@ void Font::platformInit()
     }
 
     // Compute line spacing before the line metrics hacks are applied.
-#if !PLATFORM(IOS_FAMILY)
+#if !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)
     float lineSpacing = std::lround(ascent) + std::lround(descent) + std::lround(lineGap);
 #endif
 
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
     // Hack Hiragino line metrics to allow room for marked text underlines.
     // <rdar://problem/5386183>
     if (descent < 3 && lineGap >= 3 && familyName && CFStringHasPrefix(familyName.get(), CFSTR("Hiragino"))) {
@@ -183,11 +183,11 @@ void Font::platformInit()
         descent = 3;
     }
 #endif
-    
+
     if (platformData().orientation() == FontOrientation::Vertical && !isTextOrientationFallback())
         m_hasVerticalGlyphs = fontHasVerticalGlyphs(ctFont.get());
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     CGFloat adjustment = shouldUseAdjustment(ctFont.get()) ? ceil((ascent + descent) * kLineHeightAdjustment) : 0;
 
     lineGap = ceilf(lineGap);
@@ -776,7 +776,7 @@ void Font::determinePitch()
     bool userInstalled = extractBoolean(adoptCF(static_cast<CFBooleanRef>(CTFontCopyAttribute(ctFont.get(), kCTFontUserInstalledAttribute))).get());
     m_treatAsFixedPitch = (CTFontGetSymbolicTraits(ctFont.get()) & kCTFontMonoSpaceTrait) || fixedPitch || (caseInsensitiveCompare(fullName.get(), CFSTR("Osaka-Mono")) || caseInsensitiveCompare(fullName.get(), CFSTR("MS-PGothic")) || caseInsensitiveCompare(fullName.get(), CFSTR("MonotypeCorsiva")));
     if (familyName && caseInsensitiveCompare(familyName.get(), CFSTR("Courier New"))) {
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
         // Special case Courier New to not be treated as fixed pitch, as this will make use of a hacked space width which is undesireable for iPhone (see rdar://6269783).
         m_treatAsFixedPitch = false;
 #endif

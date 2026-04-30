@@ -218,7 +218,7 @@ public:
     String description() const;
 #endif
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     bool shouldNotBeUsedForArabic() const { return m_shouldNotBeUsedForArabic; };
 #endif
 #if USE(CORE_TEXT)
@@ -410,14 +410,14 @@ private:
 
     unsigned m_isSystemFontFallbackPlaceholder : 1 { false };
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     unsigned m_shouldNotBeUsedForArabic : 1;
 #endif
 
     // Adding any non-derived information to Font needs a parallel change in WebCoreArgumentCoders.cpp.
 };
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
 bool fontFamilyShouldNotBeUsedForArabic(CFStringRef);
 #endif
 
