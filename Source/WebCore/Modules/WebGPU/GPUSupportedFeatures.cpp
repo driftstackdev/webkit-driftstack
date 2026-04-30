@@ -31,8 +31,16 @@ namespace WebCore {
 
 void GPUSupportedFeatures::initializeSetLike(DOMSetAdapter& set) const
 {
-    for (const auto& feature : m_backing->features())
+    for (const auto& feature : m_backing->features()) {
+#if PLATFORM(DRIFTSTACK)
+        // V-072 cumulative rig finding: Mac exposes "clip-distances" in
+        // the GPU adapter feature set; iPhone 16 Pro / iOS 26.4 does not.
+        // Filter it out on Driftstack to match the iPhone feature list.
+        if (feature == "clip-distances"_s)
+            continue;
+#endif
         set.add<IDLDOMString>(feature);
+    }
 }
 
 }
