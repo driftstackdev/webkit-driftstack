@@ -2094,11 +2094,11 @@ CursiveFontFamily:
   webcoreImplementation: custom
   defaultValue:
     WebKitLegacy:
-      "PLATFORM(IOS_FAMILY)": '"Snell Roundhand"_str'
+      "PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)": '"Snell Roundhand"_str'
       default: '"Apple Chancery"_str'
     WebKit:
-      "PLATFORM(COCOA) && PLATFORM(IOS_FAMILY)": '"Snell Roundhand"_str'
-      "PLATFORM(COCOA) && !PLATFORM(IOS_FAMILY)": '"Apple Chancery"_str'
+      "PLATFORM(COCOA) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))": '"Snell Roundhand"_str'
+      "PLATFORM(COCOA) && !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)": '"Apple Chancery"_str'
       default: '"Comic Sans MS"_str'
     WebCore:
       default: '""_str'
@@ -6197,11 +6197,11 @@ PictographFontFamily:
   webcoreImplementation: custom
   defaultValue:
     WebKitLegacy:
-      "PLATFORM(IOS_FAMILY)": '"AppleColorEmoji"_str'
+      "PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)": '"AppleColorEmoji"_str'
       default: '"Apple Color Emoji"_str'
     WebKit:
-      "PLATFORM(COCOA) && PLATFORM(IOS_FAMILY)": '"AppleColorEmoji"_str'
-      "PLATFORM(COCOA) && !PLATFORM(IOS_FAMILY)": '"Apple Color Emoji"_str'
+      "PLATFORM(COCOA) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))": '"AppleColorEmoji"_str'
+      "PLATFORM(COCOA) && !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)": '"Apple Color Emoji"_str'
       default: '"Times"_str'
     WebCore:
       default: '""_str'
