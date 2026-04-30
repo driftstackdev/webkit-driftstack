@@ -83,6 +83,10 @@ int Screen::height() const
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Height);
 
+#if PLATFORM(DRIFTSTACK)
+    return 874;
+#endif
+
     if (shouldFlipScreenDimensions(*frame))
         return static_cast<int>(frame->screenSize().width());
 
@@ -96,6 +100,10 @@ int Screen::width() const
         return 0;
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Width);
+
+#if PLATFORM(DRIFTSTACK)
+    return 402;
+#endif
 
     if (shouldFlipScreenDimensions(*frame))
         return static_cast<int>(frame->screenSize().height());
@@ -152,6 +160,10 @@ int Screen::availHeight() const
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailHeight);
 
+#if PLATFORM(DRIFTSTACK)
+    return 874;
+#endif
+
     if (shouldApplyScreenFingerprintingProtections(*frame))
         return static_cast<int>(frame->screenSize().height());
 
@@ -166,6 +178,10 @@ int Screen::availWidth() const
 
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailWidth);
+
+#if PLATFORM(DRIFTSTACK)
+    return 402;
+#endif
 
     if (shouldApplyScreenFingerprintingProtections(*frame))
         return static_cast<int>(frame->screenSize().width());
