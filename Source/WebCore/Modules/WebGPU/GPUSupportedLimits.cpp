@@ -100,11 +100,17 @@ uint32_t GPUSupportedLimits::maxUniformBuffersPerShaderStage() const
 
 uint64_t GPUSupportedLimits::maxUniformBufferBindingSize() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return std::min<uint64_t>(m_backing->maxUniformBufferBindingSize(), 1073741824ULL);
+#endif
     return m_backing->maxUniformBufferBindingSize();
 }
 
 uint64_t GPUSupportedLimits::maxStorageBufferBindingSize() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return std::min<uint64_t>(m_backing->maxStorageBufferBindingSize(), 1073741824ULL);
+#endif
     return m_backing->maxStorageBufferBindingSize();
 }
 
@@ -125,6 +131,9 @@ uint32_t GPUSupportedLimits::maxVertexBuffers() const
 
 uint64_t GPUSupportedLimits::maxBufferSize() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return std::min<uint64_t>(m_backing->maxBufferSize(), 1073741824ULL);
+#endif
     return m_backing->maxBufferSize();
 }
 
