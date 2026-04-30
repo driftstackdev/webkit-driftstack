@@ -2014,6 +2014,9 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_TEXTURE_SIZE:
         return m_maxTextureSize;
     case GraphicsContextGL::MAX_VARYING_VECTORS:
+#if PLATFORM(DRIFTSTACK)
+        return 31;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_ATTRIBS:
         return static_cast<GCGLint>(maxVertexAttribs());
