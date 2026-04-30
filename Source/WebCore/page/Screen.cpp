@@ -130,6 +130,10 @@ int Screen::availLeft() const
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailLeft);
 
+#if PLATFORM(DRIFTSTACK)
+    return 0;
+#endif
+
     if (shouldApplyScreenFingerprintingProtections(*frame))
         return 0;
 
@@ -141,6 +145,9 @@ int Screen::availTop() const
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
+#if PLATFORM(DRIFTSTACK)
+    return 0;
+#endif
 
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailTop);
