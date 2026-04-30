@@ -563,6 +563,7 @@ static const IdentifierSchema& pointerFeatureSchema()
             if (identifiers.isEmpty())
                 identifiers.append(CSSValueNone);
             return identifiers;
+#endif
         }
 
     };
