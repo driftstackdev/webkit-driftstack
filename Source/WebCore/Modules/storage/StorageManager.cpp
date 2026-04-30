@@ -124,6 +124,20 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
 
     auto connectionInfo = connectionInfoOrException.releaseReturnValue();
     connectionInfo.connection.get()->getEstimate(WTF::move(connectionInfo.origin), [promise = WTF::move(promise)](ExceptionOr<StorageEstimate>&& result) mutable {
+#if PLATFORM(DRIFTSTACK)
+        // V-072 cumulative rig finding: Mac storage.estimate.quota
+        // reports ~2x iPhone equivalent (Mac 82GB vs iPhone 41GB on
+        // the test machines). The reportedQuota is system-derived
+        // from disk free space; halving on Driftstack approximates
+        // the iPhone quota tier without needing to track the actual
+        // iOS quota algorithm.
+        if (!result.hasException()) {
+            auto estimate = result.returnValue();
+            estimate.quota = estimate.quota / 2;
+            promise.resolve(estimate);
+            return;
+        }
+#endif
         promise.settle(WTF::move(result));
     });
 }
