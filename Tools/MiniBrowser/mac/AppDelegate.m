@@ -25,6 +25,8 @@
 
 #import "AppDelegate.h"
 
+#import <wtf/Platform.h>
+
 #import "ExtensionManagerWindowController.h"
 #import "SettingsController.h"
 #import "WK1BrowserWindowController.h"
@@ -312,10 +314,18 @@ static NSNumber *_currentBadge;
         configuration.preferences._developerExtrasEnabled = YES;
         configuration.preferences._accessibilityIsolatedTreeEnabled = YES;
         configuration.preferences._logsPageMessagesToSystemConsoleEnabled = YES;
+#if !PLATFORM(DRIFTSTACK)
+        // Driftstack archetype: iPhone Safari does NOT expose
+        // window.Notification or related Push APIs in non-PWA contexts.
+        // MiniBrowser's developer-convenience force-enable of these
+        // overrides the wave-2-2-prefs YAML default and breaks
+        // archetype matching. Keep upstream behavior on non-Driftstack
+        // builds.
         configuration.preferences._pushAPIEnabled = YES;
         configuration.preferences._notificationsEnabled = YES;
         configuration.preferences._notificationEventEnabled = YES;
         configuration.preferences._appBadgeEnabled = YES;
+#endif
 
         if (sForceSiteIsolationSetting)
             configuration.preferences._siteIsolationEnabled = sShouldEnableSiteIsolation;
