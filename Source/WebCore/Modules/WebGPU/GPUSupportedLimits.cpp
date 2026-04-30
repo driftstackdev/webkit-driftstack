@@ -149,6 +149,15 @@ uint32_t GPUSupportedLimits::maxVertexBufferArrayStride() const
 
 uint32_t GPUSupportedLimits::maxInterStageShaderVariables() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-072 cumulative rig finding: iPhone 16 Pro reports 124, Mac
+    // reports 31. Report iPhone-equivalent value. Real Mac GPU may
+    // not support all 124 in actual use; pages that probe this for
+    // fingerprinting see iPhone value, pages that allocate >31
+    // inter-stage variables will fail at shader compile time
+    // (acceptable trade-off for archetype matching).
+    return 124;
+#endif
     return m_backing->maxInterStageShaderVariables();
 }
 
