@@ -390,6 +390,19 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "CFFIXED_USER_HOME", environmentCFFIXED_USER_HOME);
         if (const char* environmentTMPDIR = getenv("TMPDIR"))
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TMPDIR", environmentTMPDIR);
+#if PLATFORM(DRIFTSTACK)
+        // Wave 1.8: forward locale + timezone env vars to WebContent process
+        // so JSC's Intl + Date implementations honor them. Without this, TZ
+        // set in MiniBrowser's parent shell doesn't propagate to the XPC
+        // child where JS executes (V-072 cumulative-rig finding: 4
+        // date.behavior diffs traced to TZ not propagating).
+        if (const char* environmentTZ = getenv("TZ"))
+            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TZ", environmentTZ);
+        if (const char* environmentLANG = getenv("LANG"))
+            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LANG", environmentLANG);
+        if (const char* environmentLCALL = getenv("LC_ALL"))
+            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LC_ALL", environmentLCALL);
+#endif
         xpc_dictionary_set_value(bootstrapMessage.get(), "ContainerEnvironmentVariables", containerEnvironmentVariables.get());
     }
 #endif
