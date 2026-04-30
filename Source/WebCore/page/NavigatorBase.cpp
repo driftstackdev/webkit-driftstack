@@ -96,7 +96,9 @@ String NavigatorBase::appVersion() const
 
 String NavigatorBase::platform() const
 {
-#if OS(LINUX)
+#if PLATFORM(DRIFTSTACK)
+    return "iPhone"_s;
+#elif OS(LINUX)
     static NeverDestroyed<String> platformName = [] {
         struct utsname osname;
         return uname(&osname) >= 0 ? makeString(unsafeSpan(osname.sysname), " "_s, unsafeSpan(osname.machine)) : emptyString();
