@@ -289,8 +289,19 @@ PlatformSpeechSynthesizer::~PlatformSpeechSynthesizer() = default;
 void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
 {
     for (AVSpeechSynthesisVoice *voice in voices) {
-        if (voice.isSystemVoice)
-            m_voiceList.append(PlatformSpeechSynthesisVoice::create(voice.identifier, voice.name, voice.language, /* localService */ true, /* isDefault */ true));
+        if (voice.isSystemVoice) {
+            NSString *identifier = voice.identifier;
+#if PLATFORM(DRIFTSTACK)
+            // Driftstack: iPhone Safari ships Samantha as the "compact" tier
+            // (com.apple.voice.compact.en-US.Samantha) while Mac uses the
+            // "super-compact" tier for the same voice. The other 67 voices
+            // in the iPhone reference list match Mac's identifiers exactly;
+            // only Samantha differs. V-074 follow-up.
+            if ([identifier isEqualToString:@"com.apple.voice.super-compact.en-US.Samantha"])
+                identifier = @"com.apple.voice.compact.en-US.Samantha";
+#endif
+            m_voiceList.append(PlatformSpeechSynthesisVoice::create(identifier, voice.name, voice.language, /* localService */ true, /* isDefault */ true));
+        }
     }
 }
 
