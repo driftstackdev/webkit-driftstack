@@ -1762,6 +1762,9 @@ double LocalDOMWindow::devicePixelRatio() const
     // for both main frame and iframes. frameScaleFactor() doesn't include page zoom
     // since page zoom is applied globally for rendering.
     auto frameScaleRatio = frame->frameScaleFactor() * frame->pageZoomFactor();
+#if PLATFORM(DRIFTSTACK)
+    return 3.0 * frameScaleRatio;
+#endif
     return page->deviceScaleFactor() * frameScaleRatio;
 }
 
