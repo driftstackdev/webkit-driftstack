@@ -399,11 +399,22 @@ NSScreen *screen(PlatformDisplayID displayID)
 
 DestinationColorSpace screenColorSpace(Widget* widget)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-072 / V-074 / V-075 cumulative rig findings: canvas pixel
+    // outputs differ between Mac (DisplayP3 destination) and iPhone
+    // (sRGB destination). iPhone Safari's screenColorSpace returns
+    // SRGB by default (per PlatformScreenIOS.mm); Mac reads DisplayP3
+    // from screenProperties. Match iPhone by returning SRGB on
+    // Driftstack.
+    UNUSED_PARAM(widget);
+    return DestinationColorSpace::SRGB();
+#else
     if (auto data = screenProperties(widget))
         return data->colorSpace;
 
     ASSERT(hasProcessPrivilege(ProcessPrivilege::CanCommunicateWithWindowServer));
     return DestinationColorSpace { protect(screen(widget)).get().colorSpace.CGColorSpace };
+#endif
 }
 
 OptionSet<ContentsFormat> screenContentsFormats(Widget* widget)
