@@ -39,6 +39,7 @@
 #import <pal/spi/cocoa/LaunchServicesSPI.h>
 #import <sys/sysctl.h>
 #import <wtf/BlockPtr.h>
+#import <wtf/DateMath.h>
 #import <wtf/Language.h>
 #import <wtf/OSObjectPtr.h>
 #import <wtf/RetainPtr.h>
@@ -201,6 +202,19 @@ void XPCServiceEventHandler(xpc_connection_t peer)
                     setenv(key, xpc_string_get_string_ptr(value), 1);  // NOLINT
                     return true;
                 });
+#if PLATFORM(DRIFTSTACK)
+                // setenv is necessary but not sufficient for JSC's Date/Intl
+                // pipeline: JSC's DateCache reads the host TZ via
+                // ucal_getHostTimeZone (CoreFoundation) and caches it. By the
+                // time the rig's first Date.toString() runs, that cache may
+                // already hold the Mac default TZ. Use WTF::setTimeZoneOverride
+                // — exposed for embedders precisely so they can inject the TZ
+                // before any JS Date code runs. JSC's defaultTimeZone() reads
+                // the override first; only falls back to ucal_getHostTimeZone
+                // if no override is set.
+                if (const char* tzValue = getenv("TZ"))
+                    WTF::setTimeZoneOverride(WTF::StringView::fromLatin1(tzValue));
+#endif
             }
 #endif
             String serviceName = xpcDictionaryGetString(event, "service-name"_s);
