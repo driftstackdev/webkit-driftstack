@@ -971,6 +971,18 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *__nullable credential))completionHandler
 {
     LOG(@"didReceiveAuthenticationChallenge: %@", challenge);
+    // Driftstack fork: accept self-signed certs for localhost so the
+    // cumulative-rig HTTPS variant works without requiring system
+    // keychain trust setup. Limited to localhost so ordinary browsing
+    // still validates real certificates correctly.
+    if ([challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
+        NSString* host = challenge.protectionSpace.host;
+        if ([host isEqualToString:@"localhost"] || [host isEqualToString:@"127.0.0.1"] || [host isEqualToString:@"::1"]) {
+            NSURLCredential* cred = [NSURLCredential credentialForTrust:challenge.protectionSpace.serverTrust];
+            completionHandler(NSURLSessionAuthChallengeUseCredential, cred);
+            return;
+        }
+    }
     if ([challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodHTTPBasic]) {
         NSAlert *alert = [[NSAlert alloc] init];
         NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 200, 48)];
