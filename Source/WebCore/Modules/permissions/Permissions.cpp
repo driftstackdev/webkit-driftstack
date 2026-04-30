@@ -173,6 +173,17 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
             return;
         }
 
+#if PLATFORM(DRIFTSTACK)
+        // V-072 cumulative rig finding: iPhone Permissions API returns
+        // 'denied' for notifications + push (Web Push only works in
+        // installed PWA on iOS). Match by short-circuiting both
+        // permissions to Denied on Driftstack.
+        if (permissionDescriptor.name == PermissionName::Notifications || permissionDescriptor.name == PermissionName::Push) {
+            promise.resolve(PermissionStatus::create(*context, PermissionState::Denied, permissionDescriptor, PermissionQuerySource::Window, *page));
+            return;
+        }
+#endif
+
         PermissionController::singleton().query(ClientOrigin { document->topOrigin().data(), WTF::move(originData) }, permissionDescriptor, *page, *source, [document = protect(*document), page, permissionDescriptor, promise = WTF::move(promise)](auto permissionState) mutable {
             if (!permissionState) {
                 promise.reject(Exception { ExceptionCode::NotSupportedError, "Permissions::query does not support this API"_s });
