@@ -380,7 +380,7 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
         }
     }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     bool wasAntialiased = CGContextGetShouldAntialias(context);
     // Anti-aliasing is on by default on the iPhone. Need to turn it off when drawing images.
     CGContextSetShouldAntialias(context, false);
@@ -434,7 +434,7 @@ void GraphicsContextCG::drawNativeImage(const NativeImage& nativeImage, const Fl
 
     if (!stateSaver.didSave()) {
         CGContextSetCTM(context, transform);
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
         CGContextSetShouldAntialias(context, wasAntialiased);
 #endif
         setCGBlendMode(context, oldCompositeOperator, oldBlendMode);
@@ -617,7 +617,7 @@ void GraphicsContextCG::drawLine(const FloatPoint& point1, const FloatPoint& poi
     auto p2 = centeredPoints[1];
 
     if (shouldAntialias()) {
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
         // Force antialiasing on for line patterns as they don't look good with it turned off (<rdar://problem/5459772>).
         CGContextSetShouldAntialias(context, strokeStyle == StrokeStyle::DottedStroke || strokeStyle == StrokeStyle::DashedStroke);
 #else
