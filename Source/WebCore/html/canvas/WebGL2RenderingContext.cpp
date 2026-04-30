@@ -3165,8 +3165,14 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_ELEMENTS_VERTICES:
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_INPUT_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        return 124;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_BLOCKS:
+#if PLATFORM(DRIFTSTACK)
+        return 12;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_COMPONENTS:
         return getIntParameter(pname);
@@ -3187,12 +3193,24 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_UNIFORM_BLOCK_SIZE:
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_UNIFORM_BUFFER_BINDINGS:
+#if PLATFORM(DRIFTSTACK)
+        return 24;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VARYING_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        return 124;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_OUTPUT_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        return 124;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_BLOCKS:
+#if PLATFORM(DRIFTSTACK)
+        return 12;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_COMPONENTS:
         return getIntParameter(pname);
