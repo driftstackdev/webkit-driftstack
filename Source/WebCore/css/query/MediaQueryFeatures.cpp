@@ -199,7 +199,12 @@ static float deviceScaleFactor(const FeatureEvaluationContext& context)
 {
     Ref frame = *context.document->frame();
     auto mediaType = protect(frame->view())->mediaType();
-    
+
+#if PLATFORM(DRIFTSTACK)
+    if (mediaType == screenAtom())
+        return 3.0f;
+#endif
+
     if (mediaType == screenAtom())
         return frame->page() ? frame->page()->deviceScaleFactor() : 1;
 
@@ -443,11 +448,16 @@ static const IdentifierSchema& hoverFeatureSchema()
         FixedVector { CSSValueNone, CSSValueHover },
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            return MatchingIdentifiers { CSSValueNone };
+#else
             if (context.document->quirks().shouldSupportHoverMediaQueries())
                 return MatchingIdentifiers { CSSValueHover };
             RefPtr page = context.document->frame()->page();
             bool isSupported =  page && page->chrome().client().hoverSupportedByPrimaryPointingDevice();
             return MatchingIdentifiers { isSupported ? CSSValueHover : CSSValueNone };
+#endif
         }
     };
     return schema;
@@ -525,6 +535,12 @@ static const IdentifierSchema& pointerFeatureSchema()
         FixedVector { CSSValueNone, CSSValueFine, CSSValueCoarse },
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            MatchingIdentifiers identifiers;
+            identifiers.append(CSSValueCoarse);
+            return identifiers;
+#else
             RefPtr page = context.document->frame()->page();
             auto pointerCharacteristics = page ? page->chrome().client().pointerCharacteristicsOfPrimaryPointingDevice() : OptionSet<PointerCharacteristics>();
             MatchingIdentifiers identifiers;
