@@ -401,6 +401,16 @@ void AuthenticatorCoordinator::discoverFromExternalSource(const Document& docume
 
 void AuthenticatorCoordinator::isUserVerifyingPlatformAuthenticatorAvailable(const Document& document, DOMPromiseDeferred<IDLBoolean>&& promise) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // iPhone-archetype reports UVPA available (Face ID / Touch ID present).
+    // Mac MiniBrowser without Touch ID configured would say false; force true
+    // for archetype matching. Real WebAuthn flow against the underlying Mac
+    // platform may then fail at credential-creation time — acceptable
+    // trade-off for fingerprint matching since most pages probe but do not
+    // exercise the UVPA capability.
+    promise.resolve(true);
+    return;
+#endif
     // The following implements https://www.w3.org/TR/webauthn/#isUserVerifyingPlatformAuthenticatorAvailable
     // as of 5 December 2017.
     if (!m_client)  {
@@ -421,6 +431,11 @@ void AuthenticatorCoordinator::isUserVerifyingPlatformAuthenticatorAvailable(con
 
 void AuthenticatorCoordinator::isConditionalMediationAvailable(const Document& document, DOMPromiseDeferred<IDLBoolean>&& promise) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // iPhone-archetype reports passkey conditional UI available.
+    promise.resolve(true);
+    return;
+#endif
     if (!m_client) {
         promise.reject(Exception { ExceptionCode::UnknownError, "Unknown internal error."_s });
         return;
