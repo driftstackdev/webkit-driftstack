@@ -396,11 +396,18 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
         // set in MiniBrowser's parent shell doesn't propagate to the XPC
         // child where JS executes (V-072 cumulative-rig finding: 4
         // date.behavior diffs traced to TZ not propagating).
-        if (const char* environmentTZ = getenv("TZ"))
+        const char* environmentTZ = getenv("TZ");
+        const char* environmentLANG = getenv("LANG");
+        const char* environmentLCALL = getenv("LC_ALL");
+        fprintf(stderr, "[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s\n",
+                environmentTZ ?: "(unset)",
+                environmentLANG ?: "(unset)",
+                environmentLCALL ?: "(unset)");
+        if (environmentTZ)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TZ", environmentTZ);
-        if (const char* environmentLANG = getenv("LANG"))
+        if (environmentLANG)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LANG", environmentLANG);
-        if (const char* environmentLCALL = getenv("LC_ALL"))
+        if (environmentLCALL)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LC_ALL", environmentLCALL);
 #endif
         xpc_dictionary_set_value(bootstrapMessage.get(), "ContainerEnvironmentVariables", containerEnvironmentVariables.get());

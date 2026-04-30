@@ -212,7 +212,10 @@ void XPCServiceEventHandler(xpc_connection_t peer)
                 // before any JS Date code runs. JSC's defaultTimeZone() reads
                 // the override first; only falls back to ucal_getHostTimeZone
                 // if no override is set.
-                if (const char* tzValue = getenv("TZ"))
+                const char* tzValue = getenv("TZ");
+                fprintf(stderr, "[Driftstack] XPCServiceMain bootstrap: TZ=%s\n",
+                        tzValue ?: "(unset)");
+                if (tzValue)
                     WTF::setTimeZoneOverride(WTF::StringView::fromLatin1(tzValue));
 #endif
             }
