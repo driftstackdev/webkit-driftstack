@@ -1,0 +1,20 @@
+Tests that scroll interactions with no delta scroll by one page and wrap around.
+
+On success, you will see a series of "PASS" messages, followed by "TEST COMPLETE".
+
+
+PASS scrollVerticalError is ""
+PASS verticalScrollTopAfterFirstScroll is 200
+PASS scrollVerticalWrapError is ""
+PASS verticalScrollTopAfterWrap is 0
+PASS scrollHorizontalError is ""
+PASS horizontalScrollLeftAfterFirstScroll is 200
+PASS scrollHorizontalWrapError is ""
+PASS horizontalScrollLeftAfterWrap is 0
+PASS scrollPageError is ""
+PASS pageScrollTopAfterScroll is > 0
+PASS successfullyParsed is true
+
+TEST COMPLETE
+Top of vertical scroller
+Start of horizontal scroller

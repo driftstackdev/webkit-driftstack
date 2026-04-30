@@ -1,0 +1,6 @@
+
+Harness Error (FAIL), message = SyntaxError: Invalid character '\ufffd'
+
+PASS Worker with UTF-16BE BOM
+PASS Worker with UTF-16LE BOM
+

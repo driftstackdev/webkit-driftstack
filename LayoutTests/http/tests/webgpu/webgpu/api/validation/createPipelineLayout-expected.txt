@@ -1,0 +1,79 @@
+
+FAIL :number_of_dynamic_buffers_exceeds_the_maximum_value: assert_unreached:
+  - (in subcase: visibility=0;type="uniform") SKIP: binding limit for uniform === 0
+  - (in subcase: visibility=0;type="uniform") INFO: subcase skipped
+  - (in subcase: visibility=0;type="storage") SKIP: subcase skipped: binding limit for storage === 0
+  - (in subcase: visibility=0;type="storage") INFO: subcase skipped
+  - (in subcase: visibility=0;type="read-only-storage") SKIP: subcase skipped: binding limit for read-only-storage === 0
+  - (in subcase: visibility=0;type="read-only-storage") INFO: subcase skipped
+  - (in subcase: visibility=2;type="uniform") INFO: subcase ran
+  - (in subcase: visibility=2;type="storage") VALIDATION FAILED: Validation succeeded unexpectedly.
+    eventualAsyncExpectation@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:258:33
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/gpu_test.js:1221:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/createPipelineLayout.spec.js:89:26
+  - (in subcase: visibility=2;type="storage") INFO: subcase ran
+  - (in subcase: visibility=2;type="read-only-storage") VALIDATION FAILED: Validation succeeded unexpectedly.
+    eventualAsyncExpectation@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:258:33
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/gpu_test.js:1221:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/createPipelineLayout.spec.js:89:26
+  - (in subcase: visibility=2;type="read-only-storage") INFO: subcase ran
+  - (in subcase: visibility=4;type="uniform") INFO: subcase ran
+  - (in subcase: visibility=4;type="storage") INFO: subcase ran
+  - (in subcase: visibility=4;type="read-only-storage") INFO: subcase ran
+  - (in subcase: visibility=6;type="uniform") INFO: subcase ran
+  - (in subcase: visibility=6;type="storage") VALIDATION FAILED: Validation succeeded unexpectedly.
+      at (elided: only 2 shown)
+  - (in subcase: visibility=6;type="storage") INFO: subcase ran
+  - (in subcase: visibility=6;type="read-only-storage") VALIDATION FAILED: Validation succeeded unexpectedly.
+      at (elided: only 2 shown)
+  - (in subcase: visibility=6;type="read-only-storage") INFO: subcase ran
+ Reached unreachable code
+PASS :number_of_bind_group_layouts_exceeds_the_maximum_value:
+PASS :bind_group_layouts,device_mismatch:
+PASS :bind_group_layouts,null_bind_group_layouts:
+PASS :bind_group_layouts,create_pipeline_with_null_bind_group_layouts:
+FAIL :bind_group_layouts,set_pipeline_with_null_bind_group_layouts: assert_unreached:
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Render";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Null";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=0;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=1;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=2;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=true) INFO: subcase ran
+  - (in subcase: pipelineType="Compute";emptyBindGroupLayoutType="Undefined";emptyBindGroupLayoutIndex=3;setBindGroupOnEmptyBindGroupLayoutIndex=false) INFO: subcase ran
+  - EXCEPTION: Error: Unexpected validation error occurred: number of bind groups set(3) is less than the pipeline uses(4)
+    attemptEndTestScope@http://127.0.0.1:8000/webgpu/webgpu/util/device_pool.js:466:44
+ Reached unreachable code
+PASS :immediate_data_size:immediateSize=0
+PASS :immediate_data_size:immediateSize=4
+PASS :immediate_data_size:immediateSize="max"
+PASS :immediate_data_size:immediateSize=1
+PASS :immediate_data_size:immediateSize=2
+PASS :immediate_data_size:immediateSize=3
+PASS :immediate_data_size:immediateSize=5
+PASS :immediate_data_size:immediateSize="exceedLimit"
+

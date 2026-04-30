@@ -1,0 +1,1290 @@
+
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    createBindGroupLayout@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:38:12
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:72:30
+    expectGPUErrorAsync@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:682:27
+    expectValidationError@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:726:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:71:36
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createBindGroupLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:61:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atDefault";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="forward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="backward" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="underDefault";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - EXCEPTION: Error
+    assert@http://127.0.0.1:8000/webgpu/common/util/util.js:37:20
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:111:13
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="atMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="atLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="forward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="backward" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipelineLayout,at_over:limitTest="overMaximum";testValueName="overLimit";order="shiftByHalf" assert_unreached:
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:92:47
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atDefault";testValueName="atLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atDefault";testValueName="atLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atDefault";testValueName="overLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atDefault";testValueName="overLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="underDefault";testValueName="atLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="underDefault";testValueName="atLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:525:24
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="underDefault";testValueName="overLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="underDefault";testValueName="overLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+    range@http://127.0.0.1:8000/webgpu/common/util/util.js:239:23
+    getWGSLBindings@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:98:10
+    getPerStageWGSLForBindingCombinationImpl@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:128:26
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:163:56
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:664:17
+    _testThenDestroyDevice@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:587:13
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:660:38
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXPECTATION FAILED: expected actual actualLimit: undefined to equal defaultLimit: 4
+      at (elided: below max severity)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: RangeError: Array length must be a positive integer of safe magnitude.
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="betweenDefaultAndMaximum";testValueName="atLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="betweenDefaultAndMaximum";testValueName="overLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atMaximum";testValueName="atLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atMaximum";testValueName="atLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atMaximum";testValueName="overLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="atMaximum";testValueName="overLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="overMaximum";testValueName="atLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="overMaximum";testValueName="atLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="overMaximum";testValueName="overLimit";async=false assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :createPipeline,at_over:limitTest="overMaximum";testValueName="overLimit";async=true assert_unreached:
+  - (in subcase: order="forward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="forward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    _getDeviceWithSpecificLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:496:54
+    _getDeviceWithRequestedMaximumLimit@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:563:44
+    testDeviceWithRequestedMaximumLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:647:75
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/maxStorageTexturesInVertexStage.spec.js:151:47
+  - (in subcase: order="forward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="backward";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="backward";bindGroupTest="differentGroups") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="sameGroup") INFO: subcase ran
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+      at (elided: only 2 shown)
+  - (in subcase: order="shiftByHalf";bindGroupTest="differentGroups") INFO: subcase ran
+ Reached unreachable code
+FAIL :auto_upgrades_per_stage,maxStorageTexturesPerShaderStage: assert_unreached:
+  - EXPECTATION FAILED: maximumLimit(undefined) is <= adapter.limits.maxStorageTexturesPerShaderStage(44)
+      at (elided: below max severity)
+  - EXCEPTION: TypeError: Value NaN is outside the range [0, 9007199254740991]
+    requestDevice@[native code]
+    requestDeviceTracked@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:200:54
+    requestDeviceWithLimits@http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:450:39
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:1306:51
+    runTest@http://127.0.0.1:8000/webgpu/common/internal/test_group.js:528:22
+    async run@http://127.0.0.1:8000/webgpu/common/internal/test_group.js:680:31
+    @http://127.0.0.1:8000/webgpu/common/runtime/wpt.js:75:27
+ Reached unreachable code
+FAIL :auto_upgraded_from_per_stage,maxStorageTexturesPerShaderStage: assert_unreached:
+  - EXPECTATION FAILED: maxStorageTexturesInVertexStage(undefined) === 44
+    expect@http://127.0.0.1:8000/webgpu/common/framework/fixture.js:375:43
+    @http://127.0.0.1:8000/webgpu/webgpu/api/validation/capability_checks/limits/limit_utils.js:1343:13
+    async runTest@http://127.0.0.1:8000/webgpu/common/internal/test_group.js:528:22
+    async run@http://127.0.0.1:8000/webgpu/common/internal/test_group.js:680:31
+    @http://127.0.0.1:8000/webgpu/common/runtime/wpt.js:75:27
+ Reached unreachable code
+

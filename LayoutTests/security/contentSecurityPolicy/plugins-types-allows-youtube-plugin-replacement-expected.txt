@@ -1,0 +1,14 @@
+CONSOLE MESSAGE: The Content Security Policy directive 'plugin-types' has been removed from the specification and is ignored.
+
+CONSOLE MESSAGE: The Content Security Policy directive 'plugin-types' has been removed from the specification and is ignored.
+
+CONSOLE MESSAGE: Blocked access to external URL https://www.youtube.com/embed/UF8uR6Z6KLc
+CONSOLE MESSAGE: The Content Security Policy directive 'plugin-types' has been removed from the specification and is ignored.
+
+CONSOLE MESSAGE: The Content Security Policy directive 'plugin-types' has been removed from the specification and is ignored.
+
+Test that the removed 'plugin-types' CSP directive does not block YouTube plugin replacement.
+
+PASS: YouTube plugin replacement iframe was created.
+
+

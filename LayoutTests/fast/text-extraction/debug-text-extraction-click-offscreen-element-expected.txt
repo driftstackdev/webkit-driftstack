@@ -1,0 +1,13 @@
+PASS scrollTopBeforeClick is 0
+PASS clickButtonError is ""
+PASS buttonClicked is true
+PASS scrollTopAfterButtonClick is 0
+PASS clickInputError is ""
+PASS scrollTopAfterInputClick is 0
+PASS activeElementAfterInputClick is offscreenInput
+PASS successfullyParsed is true
+
+TEST COMPLETE
+This test verifies that clicking an offscreen element via text extraction focuses it without requiring scrolling.
+
+Click Me

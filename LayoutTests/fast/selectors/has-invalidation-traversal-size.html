@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* Subject :has() with child combinator and compound peer */
+.c1:has(> .trigger) > .target { color: green; }
+/* Subject :has() with descendant combinator and compound peer */
+.c2:has(.trigger) > .target { color: green; }
+/* Subject :has() without compound peer (uses unique trigger3 class to avoid leaking invalidations to other subtests via shared class "trigger" key) */
+:has(> .trigger3) > .target { color: green; }
+/* :has() in non-subject position with compound peer */
+.c4:has(> .trigger) .target { color: green; }
+/* :has() with sibling combinator */
+.c5:has(+ .trigger) { color: green; }
+/* :has() with :is() wrapping */
+.c6:has(:is(.trigger + .other)) > .target { color: green; }
+/* Non-subject :has() with descendant — scope-bounded traversal */
+.c7:has(.trigger) .target { color: green; }
+/* :has() inside :not() with compound peer */
+.c8:not(:has(.trigger)) .target { color: green; }
+/* :has() inside :is() with compound peer */
+.c9:is(:has(.trigger)) .target { color: green; }
+/* :has() inside :is() with complex selector and compound peer */
+.c10:is(.other :has(.trigger)) .target { color: green; }
+</style>
+<script>
+if (window.testRunner)
+    testRunner.dumpAsText();
+</script>
+</head>
+<body>
+<pre id="log"></pre>
+<div id="tests"></div>
+<script>
+function log(message) {
+    document.getElementById("log").textContent += message + "\n";
+}
+
+function makeTree(containerClass, childCount, wrapperClass) {
+    var container = document.createElement("div");
+    if (containerClass)
+        container.className = containerClass;
+    container.id = "container";
+    for (var i = 0; i < childCount; i++) {
+        var child = document.createElement("div");
+        child.className = "other";
+        container.appendChild(child);
+    }
+    var target = document.createElement("div");
+    target.className = "target";
+    container.appendChild(target);
+    var root = container;
+    if (wrapperClass) {
+        var wrapper = document.createElement("div");
+        wrapper.className = wrapperClass;
+        wrapper.appendChild(container);
+        root = wrapper;
+    }
+    document.getElementById("tests").appendChild(root);
+    return container;
+}
+
+function runTest(description, containerClass, mutate, expectGreen, wrapperClass) {
+    var container = makeTree(containerClass, 5, wrapperClass);
+    // Force initial style.
+    document.body.offsetHeight;
+
+    internals.resetStyleInvalidationTraversalCount();
+
+    mutate(container);
+
+    // Force style resolution.
+    document.body.offsetHeight;
+
+    var count = internals.styleInvalidationTraversalCount;
+    var target = container.querySelector(".target");
+    var color = target ? getComputedStyle(target).color : "";
+    var passed = expectGreen ? color === "rgb(0, 128, 0)" : color !== "rgb(0, 128, 0)";
+
+    log(description);
+    log("  Traversal count: " + count);
+    if (!passed)
+        log("  FAIL: unexpected color " + color);
+
+    (container.parentNode === document.getElementById("tests") ? container : container.parentNode).remove();
+}
+
+runTest(":has(> .trigger) with compound peer .c1", "c1", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, true);
+
+runTest(":has(.trigger) with compound peer .c2", "c2", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.firstElementChild.appendChild(trigger);
+}, true);
+
+runTest(":has(> .trigger3) without compound peer", null, function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger3";
+    container.appendChild(trigger);
+}, true);
+
+runTest(":has(> .trigger) in non-subject position with compound peer .c4", "c4", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, true);
+
+runTest(":has(+ .trigger) with compound peer .c5", "c5", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.parentNode.insertBefore(trigger, container.nextSibling);
+}, true);
+
+runTest(":has(:is(.trigger + .other)) with compound peer .c6", "c6", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.insertBefore(trigger, container.querySelector(".other"));
+}, true);
+
+runTest(":has(.trigger) non-subject with scope-bounded traversal .c7", "c7", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, true);
+
+runTest(":not(:has(.trigger)) inside :not() with compound peer .c8", "c8", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, false);
+
+runTest(":is(:has(.trigger)) inside :is() with compound peer .c9", "c9", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, true);
+
+runTest(":is(.other :has(.trigger)) inside :is() with complex selector and compound peer .c10", "c10", function(container) {
+    var trigger = document.createElement("div");
+    trigger.className = "trigger";
+    container.appendChild(trigger);
+}, true, "other");
+</script>
+</script>
+</body>
+</html>

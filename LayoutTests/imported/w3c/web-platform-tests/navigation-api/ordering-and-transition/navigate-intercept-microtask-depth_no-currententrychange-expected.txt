@@ -1,0 +1,3 @@
+
+PASS navigatesuccess fires at the correct microtask depth relative to handler promise reactions
+

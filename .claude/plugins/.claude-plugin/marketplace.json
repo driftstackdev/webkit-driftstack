@@ -1,0 +1,13 @@
+{
+  "name": "webkit-plugins",
+  "owner": {
+    "name": "WebKit"
+  },
+  "plugins": [
+    {
+      "name": "git-webkit",
+      "source": "./git-webkit",
+      "description": "Teaches Claude to use git-webkit tools for working with the WebKit repository"
+    }
+  ]
+}

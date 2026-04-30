@@ -1,0 +1,16 @@
+<!DOCTYPE HTML><!-- webkit-test-runner [ jscOptions=--useSharedArrayBuffer=true ] -->
+<html>
+<head>
+<script src="../../resources/js-test.js"></script>
+</head>
+<body>
+<script>
+description("Checks that window.postMessage throws DataCloneError for growable SharedArrayBuffers");
+
+var sab = new SharedArrayBuffer(4, { maxByteLength: 1024 });
+var memory = new Int32Array(sab);
+
+shouldThrow("window.postMessage(memory, '*')", "'DataCloneError: The object can not be cloned.'");
+</script>
+</body>
+</html>
