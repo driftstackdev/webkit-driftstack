@@ -356,9 +356,14 @@ static const LengthSchema& deviceHeightFeatureSchema()
         "device-height"_s,
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            return LayoutUnit { 874.0f };
+#else
             if (RefPtr localFrame = context.document->frame()->localMainFrame())
                 return LayoutUnit { localFrame->screenSize().height() };
             return LayoutUnit { 0.0f };
+#endif
         }
     };
     return schema;
@@ -382,9 +387,14 @@ static const LengthSchema& deviceWidthFeatureSchema()
         "device-width"_s,
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            return LayoutUnit { 402.0f };
+#else
             if (RefPtr localFrame = context.document->frame()->localMainFrame())
                 return LayoutUnit { localFrame->screenSize().width() };
             return LayoutUnit { 0.0f };
+#endif
         }
     };
     return schema;
