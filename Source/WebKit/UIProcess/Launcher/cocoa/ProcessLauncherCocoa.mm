@@ -376,7 +376,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
         xpc_dictionary_set_value(bootstrapMessage.get(), "OverrideLanguages", languages.get());
     }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     bool isWebContentExtension = false;
 #if USE(EXTENSIONKIT)
     isWebContentExtension = (m_launchOptions.processType == ProcessLauncher::ProcessType::Web);
@@ -384,12 +384,14 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
     if (!isWebContentExtension) {
         // Clients that set these environment variables explicitly do not have the values automatically forwarded by libxpc.
         auto containerEnvironmentVariables = adoptOSObject(xpc_dictionary_create(nullptr, nullptr, 0));
+#if PLATFORM(IOS_FAMILY)
         if (const char* environmentHOME = getenv("HOME"))
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "HOME", environmentHOME);
         if (const char* environmentCFFIXED_USER_HOME = getenv("CFFIXED_USER_HOME"))
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "CFFIXED_USER_HOME", environmentCFFIXED_USER_HOME);
         if (const char* environmentTMPDIR = getenv("TMPDIR"))
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TMPDIR", environmentTMPDIR);
+#endif
 #if PLATFORM(DRIFTSTACK)
         // Wave 1.8: forward locale + timezone env vars to WebContent process
         // so JSC's Intl + Date implementations honor them. Without this, TZ
