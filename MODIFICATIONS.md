@@ -210,10 +210,160 @@ more load-bearing than smoothing for canvas-text bit-exactness).
 
 ## Wave 3 — Filtered passthroughs at WebKit layer
 
-(Patches land here as Phase 2 progresses. WebGL / WebGPU / codec
-filtering for surfaces where Mac fleet's underlying driver
-returns Mac-specific values; WebKit-layer filter substitutes
-iPhone-archetype values.)
+WebGL / WebGPU / codec / payment / scroll / dimensions filtering
+where Mac fleet's underlying driver or system returns Mac-specific
+values; WebKit-layer filter substitutes iPhone-archetype values.
+Per-patch detail; commit hashes resolve via `git log driftstack-main`.
+
+### wave-3-1: GPU adapter buffer-size limits clamp to iPhone values
+
+- **Commit:** `194ac487`
+- **Files:** `Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp`
+- **Surface:** `navigator.gpu.requestAdapter().limits.{maxBufferSize, maxStorageBufferBindingSize, maxUniformBufferBindingSize}`
+- **Description:** Clamp three buffer-size limits to iPhone 16 Pro values via `std::min<uint64_t>(m_backing->maxBufferSize(), 1073741824ULL)` etc.
+
+### wave-3-2 / 3-2-extension / 3-2-extension-2 / 3-2-fix: matchMedia hover/pointer/orientation
+
+- **Commits:** various; ends `fded66ef`, `6ed27b3d`, `65f42a72`
+- **Files:** `Source/WebCore/css/query/MediaQueryFeatures.cpp`
+- **Surface:** `matchMedia('(hover: hover)')`, `(pointer: coarse)`, `(any-hover: none)`, `(any-pointer: coarse)`, `(orientation: portrait)`, `(device-width: 402px)`, `(device-height: 874px)`
+- **Description:** Override 7 CSS media-feature evaluators on Driftstack to return iPhone-touch-only / iPhone-portrait / iPhone-archetype-dimensions values.
+
+### wave-3-3: GPU adapter maxInterStageShaderVariables → 124
+
+- **Commit:** `bb918088`
+- **Files:** `Source/WebCore/Modules/WebGPU/GPUSupportedLimits.cpp`
+- **Surface:** `navigator.gpu.requestAdapter().limits.maxInterStageShaderVariables`
+- **Description:** Returns 124 (iPhone) instead of Mac's higher value.
+
+### wave-3-4: WebAuthn UVPA + conditionalMediation availability → true
+
+- **Commit:** `27ddaaf4`
+- **Files:** `Source/WebCore/Modules/webauthn/AuthenticatorCoordinator.cpp`
+- **Surface:** `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`, `PublicKeyCredential.isConditionalMediationAvailable()`
+- **Description:** Force-return true on Driftstack to match iPhone Touch ID/Face ID availability.
+
+### wave-3-5: GPU adapter features filter — drop clip-distances
+
+- **Commit:** `d688bc55`
+- **Files:** `Source/WebCore/Modules/WebGPU/GPUSupportedFeatures.cpp`
+- **Surface:** `navigator.gpu.requestAdapter().features` set
+- **Description:** Filter out `clip-distances` feature on Driftstack — iPhone 16 Pro doesn't expose it.
+
+### wave-3-6: WebGL2 getParameter filter — 6 limit values
+
+- **Commit:** `c7cab7e8`
+- **Files:** `Source/WebCore/html/canvas/WebGL2RenderingContext.cpp`
+- **Surface:** `gl.getParameter(MAX_*)` for 6 specific PNAMEs
+- **Description:** Clamp / substitute MAX_VERTEX_UNIFORM_COMPONENTS, MAX_FRAGMENT_UNIFORM_COMPONENTS, MAX_VARYING_COMPONENTS, etc. to iPhone values.
+
+### wave-3-7: WebGL1 MAX_VARYING_VECTORS → 31
+
+- **Commit:** `4efbaa5a`
+- **Files:** `Source/WebCore/html/canvas/WebGLRenderingContextBase.cpp`
+- **Surface:** `gl.getParameter(MAX_VARYING_VECTORS)`
+- **Description:** Returns 31 (iPhone 16 Pro) instead of Mac higher value.
+
+### wave-3-8 + wave-3-8-extension: storage.estimate quota / usage
+
+- **Commits:** `fe771d7e`, `6f50ecc3`
+- **Files:** `Source/WebCore/Modules/storage/StorageManager.cpp`
+- **Surface:** `navigator.storage.estimate()` quota + usage
+- **Description:** quota /= 2 (approximate iPhone tier); usage = 0.
+
+### wave-3-9 → wave-3-9-revert: TOUCH_EVENTS extension attempt
+
+- **Commits:** `89ef9b37` → `8f051fcb`
+- **Status:** REVERTED — enabling TOUCH_EVENTS exposed missing source files in WebCore.xcodeproj. PlatformTouchEvent.h is gated on `PLATFORM(IOS_FAMILY) && USE(APPLE_INTERNAL_SDK)`. Touch/TouchEvent/TouchList compilation needs Apple-internal SDK or stub-class approach. Tracked as future work.
+
+### wave-3-10: accept self-signed certs for localhost in MiniBrowser
+
+- **Commit:** `8d744684`
+- **Files:** `Tools/MiniBrowser/mac/WK2BrowserWindowController.m`
+- **Surface:** N/A (rig infrastructure — enables HTTPS rig variant)
+- **Description:** `didReceiveAuthenticationChallenge` accepts self-signed certs for `localhost`/`127.0.0.1` on Driftstack so the HTTPS-only rig (ApplePaySession surfaces, secure-context APIs) can run without cert installation.
+
+### wave-3-11 + wave-3-11-fix: AES-KW generateKey errors
+
+- **Commits:** `017ccf62`, `57ca6127`
+- **Files:** `Source/WebCore/crypto/algorithms/CryptoAlgorithmAESKW.cpp`
+- **Surface:** `crypto.subtle.generateKey({name:'AES-KW',length:128},...)` error message
+- **Description:** Reject AES-KW generateKey with `ExceptionCode::SyntaxError` (text "A required parameter was missing or out-of-range") to match iPhone behavior.
+
+### wave-3-12: ApplePaySession status constants iOS legacy naming
+
+- **Commit:** `d77576c6`
+- **Files:** `Source/WebCore/Modules/applepay/ApplePaySession.idl` + `ApplePaySession.h`
+- **Surface:** `ApplePaySession.STATUS_INVALID_BILLING_ADDRESS` + `STATUS_INVALID_SHIPPING_ADDRESS`
+- **Description:** Rename IDL constant names from POSTAL_ADDRESS variants to non-POSTAL (iPhone Safari ships the legacy names). H-file aliases preserve enum values.
+
+### wave-3-13: window/visualViewport dimensions match iPhone archetype
+
+- **Commit:** `4d530988`
+- **Files:** `Source/WebCore/page/LocalDOMWindow.cpp` + `VisualViewport.cpp`
+- **Surface:** `window.{innerWidth,innerHeight,outerWidth,outerHeight,screenX,screenY}` + `visualViewport.{width,height,pageTop}`
+- **Description:** Hardcode iPhone 16 Pro values: 402×714 inner, 402×874 outer, 0/0 screen. Bypasses upstream layout-derived computation so the value is constant regardless of MiniBrowser's actual NSWindow geometry.
+
+### wave-3-14: speech.voices Samantha identifier compact tier
+
+- **Commit:** `dfbda840`
+- **Files:** `Source/WebCore/platform/cocoa/PlatformSpeechSynthesizerCocoa.mm`
+- **Surface:** `speechSynthesis.getVoices()[*].voiceURI` for Samantha
+- **Description:** Substitute `com.apple.voice.super-compact.en-US.Samantha` → `com.apple.voice.compact.en-US.Samantha` in voice list construction. iPhone Safari ships Samantha at the higher-quality "compact" tier; only this 1 voice URI differs across the 68-voice list.
+
+### wave-1-7-extension: Permissions API notifications + push → denied
+
+- **Commit:** `fb0090e4`
+- **Files:** `Source/WebCore/Modules/permissions/Permissions.cpp`
+- **Surface:** `navigator.permissions.query({name:'notifications'})` + `'push'`
+- **Description:** Both return `Permission::Denied` to match iPhone non-PWA defaults.
+
+### wave-1-8-fix → wave-1-8-fix-4: TZ + LANG + LC_ALL env-var propagation chain
+
+- **Commits:** `2c6910ef` → `79c52234` → `88c3461b` → `016a47ad`
+- **Files:** `Source/WebKit/UIProcess/Launcher/cocoa/ProcessLauncherCocoa.mm` + `Source/WebKit/Shared/EntryPointUtilities/Cocoa/XPCService/XPCServiceMain.mm`
+- **Surface:** `Date.toString()` timezone, `Intl.DateTimeFormat().resolvedOptions().timeZone`, `Date.getTimezoneOffset()`
+- **Description:** Forwards TZ/LANG/LC_ALL env vars from UIProcess to WebContent XPC service via `xpc_dictionary_set_string("ContainerEnvironmentVariables", …)`. fix-4 found and resolved root cause: outer gate at line 379 was `#if PLATFORM(IOS_FAMILY)` only, excluding Driftstack from compiling the entire block. Extended to `IOS_FAMILY || DRIFTSTACK`. Also calls `WTF::setTimeZoneOverride()` in XPCServiceMain so JSC's DateCache picks up the value before any Date code runs.
+
+### wave-2-2-prefs-fix-2: MiniBrowser don't force-enable Notification/Push
+
+- **Commit:** `5ba46417`
+- **Files:** `Tools/MiniBrowser/mac/AppDelegate.m`
+- **Surface:** `Notification` + `PushManager` global presence
+- **Description:** Removed unconditional force-enables; the YAML default (NotificationsEnabled=false on Driftstack) now takes effect.
+
+### wave-2-4-prefs-fix: disable FEATURE_DEFAULT_VALIDATION
+
+- **Commit:** `6a47775e`
+- **Files:** `Source/WTF/wtf/PlatformEnable.h`
+- **Surface:** N/A (build infrastructure)
+- **Description:** Gates off the `static_assert` validation of stable-feature defaults on Driftstack so wave-2-* prefs YAML overrides compile without firing the assert.
+
+### wave-2-5-prefs / wave-2-6-prefs: PaymentRequest + ApplePay enabled
+
+- **Commits:** `f1d629ad`, `8a373b29`
+- **Files:** `Source/WebCore/page/Settings.yaml`, `Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml`
+- **Surface:** PaymentRequest + ApplePaySession constructors exposed
+- **Description:** Both default true on Driftstack.
+
+### scaffold-1-fix: define WTF_PLATFORM_DRIFTSTACK before PlatformEnable.h
+
+- **Commit:** `27a46e43`
+- **Files:** `Source/WTF/wtf/Platform.h`
+- **Surface:** N/A (foundational fix)
+- **Description:** Originally placed after Platform*.h includes. With the wrong order, `!PLATFORM(DRIFTSTACK)` gates evaluated as if DRIFTSTACK was undefined, breaking wave-2-4-prefs-fix's static_assert gating. Reorder fixes the cascade.
+
+### stage-a-2-3: screenColorSpace returns SRGB on Driftstack
+
+- **Commit:** `1f8efe77`
+- **Files:** `Source/WebCore/platform/mac/PlatformScreenMac.mm`
+- **Surface:** `screenColorSpace()` for Driftstack ViewTransitions
+- **Description:** Returns `DestinationColorSpace::SRGB()` unconditionally on Driftstack, bypassing Mac's `screenProperties(widget)->colorSpace` which returns DisplayP3 for HDR-capable Macs. Note: zero rig impact since canvas pipeline uses `PredefinedColorSpace::SRGB()` by default; this only matters for the ViewTransition.cpp path. Patch is correct but doesn't move the rig needle.
+
+### wave-3-9-revert: TOUCH_EVENTS extension reverted
+
+- **Commit:** `8f051fcb`
+- **Status:** Documented above under wave-3-9.
 
 ## Phase 2.5 — Option B Stages B + C + D
 
