@@ -1307,6 +1307,12 @@ bool LocalDOMWindow::offscreenBuffering() const
 
 int LocalDOMWindow::outerHeight() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack archetype iPhone 16 Pro / iOS 26.4.1: outer = full screen
+    // height in CSS pixels (874). MiniBrowser's actual NSWindow height on
+    // Mac is unrelated to iPhone — match reference unconditionally.
+    return 874;
+#else
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
@@ -1331,10 +1337,14 @@ int LocalDOMWindow::outerHeight() const
 #else
     return static_cast<int>(page->chrome().windowRect().height());
 #endif
+#endif
 }
 
 int LocalDOMWindow::outerWidth() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return 402;
+#else
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
@@ -1359,13 +1369,19 @@ int LocalDOMWindow::outerWidth() const
 #else
     return static_cast<int>(page->chrome().windowRect().width());
 #endif
+#endif
 }
 
 int LocalDOMWindow::innerHeight() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack archetype iPhone 16 Pro / iOS 26.4.1: layout viewport
+    // height with default URL bar chrome = 714 CSS pixels (874 - 160).
+    return 714;
+#else
     if (!frame())
         return 0;
-    
+
     // Force enough layout in the parent document to ensure that the FrameView has been resized.
     if (RefPtr ownerElement = frameElement())
         protect(ownerElement->document())->updateLayoutIfDimensionsOutOfDate(*ownerElement, { DimensionsCheck::Height });
@@ -1373,16 +1389,20 @@ int LocalDOMWindow::innerHeight() const
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
-    
+
     RefPtr view = frame->view();
     if (!view)
         return 0;
 
     return view->mapFromLayoutToCSSUnits(static_cast<int>(view->unobscuredContentRectIncludingScrollbars().height()));
+#endif
 }
 
 int LocalDOMWindow::innerWidth() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return 402;
+#else
     if (!frame())
         return 0;
 
@@ -1399,10 +1419,16 @@ int LocalDOMWindow::innerWidth() const
         return 0;
 
     return view->mapFromLayoutToCSSUnits(static_cast<int>(view->unobscuredContentRectIncludingScrollbars().width()));
+#endif
 }
 
 int LocalDOMWindow::screenX() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack: iPhone fullscreen Safari has no NSWindow placement —
+    // window covers the screen at (0, 0).
+    return 0;
+#else
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
@@ -1412,10 +1438,14 @@ int LocalDOMWindow::screenX() const
         return 0;
 
     return static_cast<int>(page->chrome().windowRect().x());
+#endif
 }
 
 int LocalDOMWindow::screenY() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return 0;
+#else
     RefPtr frame = this->frame();
     if (!frame)
         return 0;
@@ -1425,6 +1455,7 @@ int LocalDOMWindow::screenY() const
         return 0;
 
     return static_cast<int>(page->chrome().windowRect().y());
+#endif
 }
 
 int LocalDOMWindow::scrollX() const

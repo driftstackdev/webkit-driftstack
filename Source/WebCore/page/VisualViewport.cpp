@@ -104,29 +104,44 @@ double VisualViewport::pageLeft() const
 
 double VisualViewport::pageTop() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack: visualViewport reflects the iPhone-archetype layout
+    // viewport regardless of MiniBrowser's actual NSWindow geometry.
+    // pageTop is scroll-relative; iPhone reference captured at scroll 0.
+    return 0;
+#else
     if (!frame())
         return 0;
 
     updateFrameLayout();
     return m_pageTop;
+#endif
 }
 
 double VisualViewport::width() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return 402;
+#else
     if (!frame())
         return 0;
 
     updateFrameLayout();
     return m_width;
+#endif
 }
 
 double VisualViewport::height() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return 714;
+#else
     if (!frame())
         return 0;
 
     updateFrameLayout();
     return m_height;
+#endif
 }
 
 double VisualViewport::scale() const
