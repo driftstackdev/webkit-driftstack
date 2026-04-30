@@ -74,6 +74,13 @@ public:
     static constexpr auto STATUS_FAILURE = ApplePayPaymentAuthorizationResult::Failure;
     static constexpr auto STATUS_INVALID_BILLING_POSTAL_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidBillingPostalAddress;
     static constexpr auto STATUS_INVALID_SHIPPING_POSTAL_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidShippingPostalAddress;
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack: aliases for the legacy (non-POSTAL) names exposed to JS
+    // by iPhone Safari. Required so the IDL-generated static_assert can
+    // resolve ApplePaySession::STATUS_INVALID_BILLING_ADDRESS.
+    static constexpr auto STATUS_INVALID_BILLING_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidBillingPostalAddress;
+    static constexpr auto STATUS_INVALID_SHIPPING_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidShippingPostalAddress;
+#endif
     static constexpr auto STATUS_INVALID_SHIPPING_CONTACT = ApplePayPaymentAuthorizationResult::InvalidShippingContact;
     static constexpr auto STATUS_PIN_REQUIRED = ApplePayPaymentAuthorizationResult::PINRequired;
     static constexpr auto STATUS_PIN_INCORRECT = ApplePayPaymentAuthorizationResult::PINIncorrect;
