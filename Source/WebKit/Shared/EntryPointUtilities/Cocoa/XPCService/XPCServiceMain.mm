@@ -195,7 +195,7 @@ void XPCServiceEventHandler(xpc_connection_t peer)
             register_for_dlsym_callbacks();
 #endif
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
             if (RetainPtr containerEnvironmentVariables = xpc_dictionary_get_value(event, "ContainerEnvironmentVariables")) {
                 xpc_dictionary_apply(containerEnvironmentVariables.get(), ^(const char *key, xpc_object_t value) {
                     setenv(key, xpc_string_get_string_ptr(value), 1);  // NOLINT
