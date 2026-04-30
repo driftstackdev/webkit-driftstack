@@ -593,13 +593,13 @@ ApplePayEnabled:
   condition: ENABLE(APPLE_PAY)
   defaultValue:
     WebKitLegacy:
-      "ENABLE(APPLE_PAY_REMOTE_UI)": true
+      "ENABLE(APPLE_PAY_REMOTE_UI) || PLATFORM(DRIFTSTACK)": true
       default: false
     WebKit:
-      "ENABLE(APPLE_PAY_REMOTE_UI)": true
+      "ENABLE(APPLE_PAY_REMOTE_UI) || PLATFORM(DRIFTSTACK)": true
       default: false
     WebCore:
-      "ENABLE(APPLE_PAY_REMOTE_UI)": true
+      "ENABLE(APPLE_PAY_REMOTE_UI) || PLATFORM(DRIFTSTACK)": true
       default: false
   sharedPreferenceForWebProcess: true
   richJavaScript: true
