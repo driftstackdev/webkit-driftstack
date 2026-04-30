@@ -48,6 +48,19 @@
    macros, policy decision macros, and top-level port definitions. */
 #include <wtf/PlatformLegacy.h>
 
+/* ==== Driftstack fork ==== */
+
+/* PLATFORM(DRIFTSTACK) — compile-time gate.
+ * The Driftstack WebKit fork (github.com/driftstackdev/webkit-driftstack)
+ * defines this unconditionally. All Driftstack-archetype-specific
+ * patches are gated by #if PLATFORM(DRIFTSTACK) per file 124 §2,
+ * keeping them legible against upstream rebases.
+ *
+ * MUST be defined BEFORE PlatformHave/Use/Enable.h so those headers
+ * can reference PLATFORM(DRIFTSTACK) in their conditionals (e.g. the
+ * FEATURE_DEFAULT_VALIDATION gate disables on Driftstack). */
+#define WTF_PLATFORM_DRIFTSTACK 1
+
 /* HAVE() - specific system features (headers, functions or similar) that are present or not */
 #include <wtf/PlatformHave.h>
 
@@ -59,15 +72,6 @@
 
 /* ENABLE() - turn on a specific feature of WebKit */
 #include <wtf/PlatformEnable.h>
-
-/* ==== Driftstack fork ==== */
-
-/* PLATFORM(DRIFTSTACK) — compile-time gate.
- * The Driftstack WebKit fork (github.com/driftstackdev/webkit-driftstack)
- * defines this unconditionally. All Driftstack-archetype-specific
- * patches are gated by #if PLATFORM(DRIFTSTACK) per file 124 §2,
- * keeping them legible against upstream rebases. */
-#define WTF_PLATFORM_DRIFTSTACK 1
 
 
 /* ==== Helper macros ==== */
