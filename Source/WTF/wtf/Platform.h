@@ -60,6 +60,15 @@
 /* ENABLE() - turn on a specific feature of WebKit */
 #include <wtf/PlatformEnable.h>
 
+/* ==== Driftstack fork ==== */
+
+/* PLATFORM(DRIFTSTACK) — compile-time gate.
+ * The Driftstack WebKit fork (github.com/driftstackdev/webkit-driftstack)
+ * defines this unconditionally. All Driftstack-archetype-specific
+ * patches are gated by #if PLATFORM(DRIFTSTACK) per file 124 §2,
+ * keeping them legible against upstream rebases. */
+#define WTF_PLATFORM_DRIFTSTACK 1
+
 
 /* ==== Helper macros ==== */
 
