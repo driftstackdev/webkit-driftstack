@@ -334,7 +334,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         break;
     }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     UNUSED_VARIABLE(shouldSmoothFonts);
 #else
     bool originalShouldUseFontSmoothing = CGContextGetShouldSmoothFonts(cgContext.get());
@@ -391,7 +391,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     if (hasSimpleShadow)
         context.setDropShadow(*shadow);
 
-#if !PLATFORM(IOS_FAMILY)
+#if !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)
     if (shouldSmoothFonts != originalShouldUseFontSmoothing)
         CGContextSetShouldSmoothFonts(cgContext.get(), originalShouldUseFontSmoothing);
 #endif
