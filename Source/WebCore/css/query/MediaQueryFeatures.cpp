@@ -528,6 +528,14 @@ static const IdentifierSchema& orientationFeatureSchema()
         FixedVector { CSSValueLandscape, CSSValuePortrait },
         MediaQueryDynamicDependency::Viewport,
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            // Driftstack archetype is iPhone in portrait orientation
+            // (matches Wave 1.5 screen.orientation.type = portrait-primary).
+            // MiniBrowser window may be landscape-sized but matchMedia
+            // surface returns portrait.
+            return MatchingIdentifiers { CSSValuePortrait };
+#else
             if (context.document->quirks().shouldPreventOrientationMediaQueryFromEvaluatingToLandscape())
                 return MatchingIdentifiers { CSSValuePortrait };
 
@@ -535,6 +543,7 @@ static const IdentifierSchema& orientationFeatureSchema()
             // Square viewport is portrait.
             bool isPortrait = view->layoutHeight() >= view->layoutWidth();
             return MatchingIdentifiers { isPortrait ? CSSValuePortrait : CSSValueLandscape };
+#endif
         }
     };
     return schema;
