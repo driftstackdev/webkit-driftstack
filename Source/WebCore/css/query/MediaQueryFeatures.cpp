@@ -236,11 +236,16 @@ static const IdentifierSchema& anyHoverFeatureSchema()
         FixedVector { CSSValueNone, CSSValueHover },
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            return MatchingIdentifiers { CSSValueNone };
+#else
             if (context.document->quirks().shouldSupportHoverMediaQueries())
                 return MatchingIdentifiers { CSSValueHover };
             RefPtr page = context.document->frame()->page();
             bool isSupported = page && page->chrome().client().hoverSupportedByAnyAvailablePointingDevice();
             return MatchingIdentifiers { isSupported ? CSSValueHover : CSSValueNone };
+#endif
         }
     };
     return schema;
@@ -253,6 +258,12 @@ static const IdentifierSchema& anyPointerFeatureSchema()
         FixedVector { CSSValueNone, CSSValueFine, CSSValueCoarse },
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            (void)context;
+            MatchingIdentifiers identifiers;
+            identifiers.append(CSSValueCoarse);
+            return identifiers;
+#else
             RefPtr page = context.document->frame()->page();
             auto pointerCharacteristics = page ? page->chrome().client().pointerCharacteristicsOfAllAvailablePointingDevices() : OptionSet<PointerCharacteristics>();
 
@@ -264,6 +275,7 @@ static const IdentifierSchema& anyPointerFeatureSchema()
             if (identifiers.isEmpty())
                 identifiers.append(CSSValueNone);
             return identifiers;
+#endif
         }
 
     };
