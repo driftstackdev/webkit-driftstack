@@ -66,11 +66,13 @@ void CryptoAlgorithmAESKW::generateKey(const CryptoAlgorithmParameters& paramete
     // unwrapKey], extractable:true} producing the error
     // "A required parameter was missing or out-of-range". Mac WebKit
     // accepts the same parameters. Match the iOS behavior — return an
-    // error from this entry point on Driftstack.
+    // error from this entry point on Driftstack. iOS's error text
+    // "A required parameter was missing or out-of-range" maps to
+    // SyntaxError in WebKit's ExceptionCode catalog (see V-074 follow-up).
     UNUSED_PARAM(parameters);
     UNUSED_PARAM(extractable);
     UNUSED_PARAM(callback);
-    exceptionCallback(ExceptionCode::OperationError);
+    exceptionCallback(ExceptionCode::SyntaxError);
     return;
 #else
     auto result = CryptoKeyAES::generate(CryptoAlgorithmIdentifier::AES_KW, downcast<CryptoAlgorithmAesKeyParams>(parameters).length, extractable, usages);
