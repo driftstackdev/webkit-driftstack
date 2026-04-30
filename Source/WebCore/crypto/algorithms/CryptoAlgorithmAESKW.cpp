@@ -60,6 +60,19 @@ void CryptoAlgorithmAESKW::generateKey(const CryptoAlgorithmParameters& paramete
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // V-072 cumulative rig finding: iOS Safari rejects AES-KW
+    // generateKey with the test parameters {length:128, usages:[wrapKey,
+    // unwrapKey], extractable:true} producing the error
+    // "A required parameter was missing or out-of-range". Mac WebKit
+    // accepts the same parameters. Match the iOS behavior — return an
+    // error from this entry point on Driftstack.
+    UNUSED_PARAM(parameters);
+    UNUSED_PARAM(extractable);
+    UNUSED_PARAM(callback);
+    exceptionCallback(ExceptionCode::OperationError);
+    return;
+#else
     auto result = CryptoKeyAES::generate(CryptoAlgorithmIdentifier::AES_KW, downcast<CryptoAlgorithmAesKeyParams>(parameters).length, extractable, usages);
     if (!result) {
         exceptionCallback(ExceptionCode::OperationError);
@@ -67,6 +80,7 @@ void CryptoAlgorithmAESKW::generateKey(const CryptoAlgorithmParameters& paramete
     }
 
     callback(result.releaseNonNull());
+#endif
 }
 
 void CryptoAlgorithmAESKW::importKey(CryptoKeyFormat format, KeyData&& data, const CryptoAlgorithmParameters& parameters, bool extractable, CryptoKeyUsageBitmap usages, KeyCallback&& callback, ExceptionCallback&& exceptionCallback)
