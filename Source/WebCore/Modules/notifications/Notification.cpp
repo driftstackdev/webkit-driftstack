@@ -399,6 +399,10 @@ auto Notification::permission(ScriptExecutionContext& context) -> Permission
     if (!context.isSecureContext())
         return Permission::Denied;
 
+#if PLATFORM(DRIFTSTACK)
+    return Permission::Denied;
+#endif
+
     return client->checkPermission(&context);
 }
 
