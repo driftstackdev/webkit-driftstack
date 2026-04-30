@@ -179,6 +179,9 @@ ExceptionOr<void> ScreenOrientation::unlock()
 
 auto ScreenOrientation::type() const -> Type
 {
+#if PLATFORM(DRIFTSTACK)
+    return Type::PortraitPrimary;
+#endif
     RefPtr manager = this->manager();
     if (!manager)
         return naturalScreenOrientationType();

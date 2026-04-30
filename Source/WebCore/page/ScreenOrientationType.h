@@ -52,7 +52,9 @@ constexpr bool isLandscape(ScreenOrientationType type)
 
 inline ScreenOrientationType naturalScreenOrientationType()
 {
-#if PLATFORM(IOS) || PLATFORM(VISION)
+#if PLATFORM(DRIFTSTACK)
+    return ScreenOrientationType::PortraitPrimary;
+#elif PLATFORM(IOS) || PLATFORM(VISION)
     if (PAL::deviceHasIPadCapability())
         return ScreenOrientationType::LandscapePrimary;
     return ScreenOrientationType::PortraitPrimary;
