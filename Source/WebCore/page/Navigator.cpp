@@ -448,7 +448,7 @@ void Navigator::clearAppBadge(Ref<DeferredPromise>&& promise)
 
 int Navigator::maxTouchPoints() const
 {
-#if ENABLE(IOS_TOUCH_EVENTS) && !PLATFORM(MACCATALYST)
+#if (ENABLE(IOS_TOUCH_EVENTS) && !PLATFORM(MACCATALYST)) || PLATFORM(DRIFTSTACK)
     RefPtr document = this->document();
     if (!document || !document->quirks().needsZeroMaxTouchPointsQuirk())
         return 5;
