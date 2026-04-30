@@ -325,6 +325,7 @@ PaymentRequestEnabled:
   condition: ENABLE(PAYMENT_REQUEST)
   defaultValue:
     WebCore:
+      "PLATFORM(DRIFTSTACK)": true
       default: false
 
 PitchCorrectionAlgorithm:
