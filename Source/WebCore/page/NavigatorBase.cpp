@@ -191,6 +191,10 @@ int NavigatorBase::hardwareConcurrency(ScriptExecutionContext& context)
         return 1 + WeakRandom { randomSeed }.getUint32(63);
     }
 
+#if PLATFORM(DRIFTSTACK)
+    return 4;
+#endif
+
     // Enforce a maximum for the number of cores reported to mitigate
     // fingerprinting for the minority of machines with large numbers of cores.
     // If machines with more than 8 cores become commonplace, we should bump this number.
