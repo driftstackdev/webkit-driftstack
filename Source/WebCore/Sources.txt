@@ -1405,6 +1405,7 @@ dom/TextEvent.cpp
 dom/TextNodeTraversal.cpp
 dom/ToggleEvent.cpp
 dom/ToggleEventTask.cpp
+dom/GestureEvent.cpp @no-unify
 dom/Touch.cpp @no-unify
 dom/TouchEvent.cpp @no-unify
 dom/TouchList.cpp @no-unify

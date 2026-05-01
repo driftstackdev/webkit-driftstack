@@ -1507,6 +1507,8 @@
 		D75F570CF50500A5DEFA6A63 /* JSTouch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FDA7C10188322EB00C954B5 /* JSTouch.cpp */; };
 		D75F570CF50500A5DEFA6A64 /* JSTouchEvent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FDA7C12188322EB00C954B5 /* JSTouchEvent.cpp */; };
 		D75F570CF50500A5DEFA6A65 /* JSTouchList.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0FDA7C14188322EB00C954B5 /* JSTouchList.cpp */; };
+		D71010101010000000000004 /* GestureEvent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D71010101010000000000001 /* GestureEvent.cpp */; };
+		D71010101010000000000006 /* JSGestureEvent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D71010101010000000000005 /* JSGestureEvent.cpp */; };
 		41519CB81FD1F02E007F623C /* ServiceWorkerClientQueryOptions.h in Headers */ = {isa = PBXBuildFile; fileRef = 413FC4CD1FD1DD8C00541C4B /* ServiceWorkerClientQueryOptions.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		4151AAE52F22426700E99C91 /* DOMAsyncIterator.h in Headers */ = {isa = PBXBuildFile; fileRef = 4151AAE32F22425B00E99C91 /* DOMAsyncIterator.h */; };
 		4151E5BB1FBA4C7A00E47E2D /* SWOriginStore.h in Headers */ = {isa = PBXBuildFile; fileRef = 4151E5B71FBA4C7500E47E2D /* SWOriginStore.h */; settings = {ATTRIBUTES = (Private, ); }; };
@@ -8521,6 +8523,10 @@
 		0FD975D2245CBDAF00C42299 /* ScrollingTreeGestureState.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScrollingTreeGestureState.h; sourceTree = "<group>"; };
 		0FD975D4245CBDD700C42299 /* ScrollingTreeGestureState.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ScrollingTreeGestureState.cpp; sourceTree = "<group>"; };
 		0FDA7C10188322EB00C954B5 /* JSTouch.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSTouch.cpp; sourceTree = "<group>"; };
+		D71010101010000000000001 /* GestureEvent.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = GestureEvent.cpp; sourceTree = "<group>"; };
+		D71010101010000000000002 /* GestureEvent.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GestureEvent.h; sourceTree = "<group>"; };
+		D71010101010000000000003 /* GestureEvent.idl */ = {isa = PBXFileReference; lastKnownFileType = text; path = GestureEvent.idl; sourceTree = "<group>"; };
+		D71010101010000000000005 /* JSGestureEvent.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSGestureEvent.cpp; sourceTree = "<group>"; };
 		0FDA7C11188322EB00C954B5 /* JSTouch.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = JSTouch.h; sourceTree = "<group>"; };
 		0FDA7C12188322EB00C954B5 /* JSTouchEvent.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSTouchEvent.cpp; sourceTree = "<group>"; };
 		0FDA7C13188322EB00C954B5 /* JSTouchEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = JSTouchEvent.h; sourceTree = "<group>"; };
@@ -35425,6 +35431,7 @@
 				CED06ACF1C77754800FDFAF1 /* JSSecurityPolicyViolationEvent.h */,
 				933A14B60B7D1D5200A53FFD /* JSTextEvent.cpp */,
 				933A14B70B7D1D5200A53FFD /* JSTextEvent.h */,
+				D71010101010000000000005 /* JSGestureEvent.cpp */,
 				0FDA7C10188322EB00C954B5 /* JSTouch.cpp */,
 				0FDA7C11188322EB00C954B5 /* JSTouch.h */,
 				0FDA7C12188322EB00C954B5 /* JSTouchEvent.cpp */,
@@ -42764,6 +42771,9 @@
 				49C66C4C299C294B00073276 /* ToggleEvent.idl */,
 				49C66C4B299C294B00073277 /* ToggleEventTask.cpp */,
 				49C66C4D299C294C00073277 /* ToggleEventTask.h */,
+				D71010101010000000000001 /* GestureEvent.cpp */,
+				D71010101010000000000002 /* GestureEvent.h */,
+				D71010101010000000000003 /* GestureEvent.idl */,
 				BC4C22342C010335003F561F /* Touch.cpp */,
 				0F54DD051881D5F5003EEDBB /* Touch.h */,
 				BC4C22352C01033D003F561F /* Touch.idl */,
@@ -50497,6 +50507,8 @@
 				D75F570CF50500A5DEFA6A63 /* JSTouch.cpp in Sources */,
 				D75F570CF50500A5DEFA6A64 /* JSTouchEvent.cpp in Sources */,
 				D75F570CF50500A5DEFA6A65 /* JSTouchList.cpp in Sources */,
+				D71010101010000000000004 /* GestureEvent.cpp in Sources */,
+				D71010101010000000000006 /* JSGestureEvent.cpp in Sources */,
 				C1692DD223D23ABD006E88F7 /* SystemBattery.mm in Sources */,
 				329C0C2328BD96D600F187D2 /* TagName.cpp in Sources */,
 				CE88EE262414467B007F29C2 /* TextAlternativeWithRange.mm in Sources */,

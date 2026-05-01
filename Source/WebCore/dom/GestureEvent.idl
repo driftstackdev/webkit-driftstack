@@ -1,0 +1,20 @@
+/*
+ * Copyright (C) 2026 Driftstack. All rights reserved.
+ *
+ * Driftstack: minimal stub of iOS Safari's GestureEvent so the JS-visible
+ * window.GestureEvent constructor exposes 'function' typeof matching
+ * iPhone Safari. iOS GestureEvent is documented at
+ * https://developer.apple.com/documentation/webkitjs/gestureevent and
+ * inherits UIEvent with scale + rotation properties for pinch-zoom and
+ * rotation gestures. On Driftstack this is never dispatched (Mac fleet
+ * has no touch input); the constructor exists purely for fingerprint
+ * authenticity (file 109 hard rule — match real iPhone exactly).
+ */
+
+[
+    Conditional=IOS_GESTURE_EVENTS|MAC_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS,
+    Exposed=Window
+] interface GestureEvent : UIEvent {
+    readonly attribute float scale;
+    readonly attribute float rotation;
+};
