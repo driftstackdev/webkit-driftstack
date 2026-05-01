@@ -62,6 +62,126 @@ bool fontNameIsSystemFont(CFStringRef fontName)
     return CFStringGetLength(fontName) > 0 && CFStringGetCharacterAtIndex(fontName, 0) == '.';
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Stage B Step 2/3: lazily-initialized map of lowercase iOS font-family-name
+// -> file URL. Populated on first font lookup by walking DRIFTSTACK_FONTS_DIR
+// and reading kCTFontFamilyNameAttribute from each font binary. Used by
+// fontWithFamily on Driftstack to bypass CTFont's name-based lookup (which
+// returns Mac's system font for "Helvetica" et al. even when iOS variants
+// are also process-registered) and instead create a CTFont directly from
+// the iOS file URL via CTFontManagerCreateFontDescriptorsFromURL. This is
+// what makes iOS Helvetica's font metrics actually win over Mac's in
+// canvas measureText output.
+
+static Lock driftstackIOSFontMapLock;
+
+static MemoryCompactRobinHoodHashMap<String, RetainPtr<CFURLRef>>& driftstackIOSFontMap() WTF_REQUIRES_LOCK(driftstackIOSFontMapLock)
+{
+    static NeverDestroyed<MemoryCompactRobinHoodHashMap<String, RetainPtr<CFURLRef>>> map;
+    return map.get();
+}
+
+static bool driftstackIOSFontMapInitialized WTF_GUARDED_BY_LOCK(driftstackIOSFontMapLock) = false;
+
+static void initializeDriftstackIOSFontMapIfNeeded()
+{
+    Locker locker(driftstackIOSFontMapLock);
+    if (driftstackIOSFontMapInitialized)
+        return;
+    driftstackIOSFontMapInitialized = true;
+
+    const char* envDir = getenv("DRIFTSTACK_FONTS_DIR");
+    String dir = envDir ? String::fromUTF8(envDir) : "/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1"_s;
+
+    @autoreleasepool {
+        RetainPtr<NSString> rootHolder = dir.createNSString();
+        NSString *root = rootHolder.get();
+        NSFileManager *fm = [NSFileManager defaultManager];
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:root isDirectory:&isDir] || !isDir) {
+            WTFLogAlways("[Driftstack] FontCache: iOS fonts dir not found at %s — skipping override map population", dir.utf8().data());
+            return;
+        }
+        NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
+        size_t mapped = 0;
+        size_t parseFailed = 0;
+        for (NSString *rel in en) {
+            NSString *ext = rel.pathExtension.lowercaseString;
+            if (![ext isEqualToString:@"ttf"] && ![ext isEqualToString:@"ttc"] && ![ext isEqualToString:@"otf"])
+                continue;
+            NSURL *fontURL = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:rel]];
+            // Register at process scope so the font is available to CTFont
+            // creation (some code paths still go through name lookup; this
+            // ensures the binary is in the process registry too).
+            CFErrorRef regError = nullptr;
+            CTFontManagerRegisterFontsForURL((__bridge CFURLRef)fontURL, kCTFontManagerScopeProcess, &regError);
+            if (regError)
+                CFRelease(regError);
+
+            // Read all font descriptors in the binary (.ttc collections may
+            // contain multiple). Map every family name to this URL so any
+            // family request finds it.
+            RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)fontURL));
+            if (!descs) {
+                ++parseFailed;
+                continue;
+            }
+            CFIndex count = CFArrayGetCount(descs.get());
+            for (CFIndex i = 0; i < count; ++i) {
+                CTFontDescriptorRef desc = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
+                RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontFamilyNameAttribute)));
+                if (!familyCF)
+                    continue;
+                String family = String(familyCF.get()).convertToASCIILowercase();
+                if (family.isEmpty())
+                    continue;
+                // First-write-wins so "Helvetica" maps to Core/Helvetica.ttc not some
+                // alternate location if multiple files share family names.
+                auto addResult = driftstackIOSFontMap().add(family, RetainPtr<CFURLRef> { (__bridge CFURLRef)fontURL });
+                if (addResult.isNewEntry)
+                    ++mapped;
+            }
+        }
+        WTFLogAlways("[Driftstack] FontCache: %zu families mapped to iOS font binaries (parseFailed=%zu, dir=%s)", mapped, parseFailed, dir.utf8().data());
+    }
+}
+
+static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, float size)
+{
+    if (family.isEmpty())
+        return nullptr;
+    initializeDriftstackIOSFontMapIfNeeded();
+
+    String lowercase = family.string().convertToASCIILowercase();
+    Locker locker(driftstackIOSFontMapLock);
+    auto it = driftstackIOSFontMap().find(lowercase);
+    if (it == driftstackIOSFontMap().end())
+        return nullptr;
+    CFURLRef url = it->value.get();
+
+    RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(url));
+    if (!descs || !CFArrayGetCount(descs.get()))
+        return nullptr;
+    // For matching iOS Helvetica.ttc which contains multiple variants, find
+    // the descriptor whose family-name matches the requested family. Falls
+    // back to first descriptor if no match.
+    CTFontDescriptorRef chosen = nullptr;
+    CFIndex count = CFArrayGetCount(descs.get());
+    for (CFIndex i = 0; i < count; ++i) {
+        CTFontDescriptorRef d = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
+        RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(d, kCTFontFamilyNameAttribute)));
+        if (familyCF && String(familyCF.get()).convertToASCIILowercase() == lowercase) {
+            chosen = d;
+            break;
+        }
+    }
+    if (!chosen)
+        chosen = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), 0));
+
+    return adoptCF(CTFontCreateWithFontDescriptor(chosen, size, nullptr));
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 static RetainPtr<CFArrayRef> variationAxesWithNonLocalizedAxesNames(CTFontDescriptorRef fontDescriptor)
 {
     // Reading kCTFontVariationAxesAttribute returns non localized axes names
@@ -626,6 +746,15 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
 
     if (family.isEmpty())
         return nullptr;
+
+#if PLATFORM(DRIFTSTACK)
+    // Stage B Step 3: prefer iOS-archetype fonts for any family name they
+    // expose. This bypasses CTFont's name-based lookup which otherwise
+    // returns Mac's system Helvetica/Arial/etc. variants — and prevents
+    // canvas measureText from observing iPhone-specific font metrics.
+    if (auto driftstackFont = driftstackIOSFontWithFamily(family, size))
+        return driftstackFont;
+#endif
 
     if (auto lookupResult = fontDescriptorWithFamilySpecialCase(family, fontDescription, size, fontDescription.shouldAllowUserInstalledFonts())) {
         lookupResult->unrealizedCoreTextFont.setSize(size);

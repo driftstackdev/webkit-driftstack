@@ -383,66 +383,6 @@ static void setVideoDecoderBehaviors(OptionSet<VideoDecoderBehavior> videoDecode
     PAL::softLinkVideoToolboxVTRestrictVideoDecoders(flags, allowedCodecTypeList.span().data(), allowedCodecTypeList.size());
 }
 
-#if PLATFORM(DRIFTSTACK)
-// Stage B Step 2: Process-scope registration of extracted iOS 26.4 fonts so
-// that WebContent's CTFont stack resolves the iPhone-archetype font fallback
-// chain to the iOS font binaries instead of Mac's. Path is configurable via
-// the DRIFTSTACK_FONTS_DIR env var (forwarded through XPC bootstrap by
-// ProcessLauncherCocoa.mm wave-1-8-fix-4) so production fleet machines can
-// override the dev default. Registration happens once per WebContent process
-// startup; CTFontManagerRegisterFontsForURL adds them at process scope, ABOVE
-// the system fonts in the resolution order.
-static void registerDriftstackIOSFonts()
-{
-    const char* envDir = getenv("DRIFTSTACK_FONTS_DIR");
-    String dir = envDir ? String::fromUTF8(envDir) : "/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1"_s;
-
-    @autoreleasepool {
-        RetainPtr<NSString> rootHolder = dir.createNSString();
-        NSString *root = rootHolder.get();
-        NSFileManager *fm = [NSFileManager defaultManager];
-        BOOL isDir = NO;
-        BOOL exists = [fm fileExistsAtPath:root isDirectory:&isDir];
-        WTFLogAlways("[Driftstack] font registration: dir=%s exists=%d isDir=%d", dir.utf8().data(), exists, isDir);
-        if (!exists || !isDir) {
-            WTFLogAlways("[Driftstack] iOS fonts dir not found at %s — skipping font registration", dir.utf8().data());
-            return;
-        }
-        // Diagnostic: try contentsOfDirectoryAtPath:error: which surfaces
-        // sandbox-block as an NSError instead of silent empty enumeration.
-        NSError *contentsErr = nil;
-        NSArray<NSString *> *topLevel = [fm contentsOfDirectoryAtPath:root error:&contentsErr];
-        if (contentsErr) {
-            WTFLogAlways("[Driftstack] contentsOfDirectoryAtPath error: %s (code=%ld) — likely sandbox blocking; switching to AdditionalFonts IPC needed", contentsErr.localizedDescription.UTF8String, (long)contentsErr.code);
-        } else {
-            WTFLogAlways("[Driftstack] top-level entries at root: %lu", (unsigned long)topLevel.count);
-        }
-        NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
-        size_t registered = 0;
-        size_t failed = 0;
-        for (NSString *rel in en) {
-            NSString *ext = rel.pathExtension.lowercaseString;
-            if (![ext isEqualToString:@"ttf"] && ![ext isEqualToString:@"ttc"] && ![ext isEqualToString:@"otf"])
-                continue;
-            NSURL *fontURL = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:rel]];
-            CFErrorRef cfError = nullptr;
-            if (CTFontManagerRegisterFontsForURL((__bridge CFURLRef)fontURL, kCTFontManagerScopeProcess, &cfError)) {
-                ++registered;
-            } else {
-                ++failed;
-                if (failed <= 3 && cfError) {
-                    NSError *err = (__bridge NSError *)cfError;
-                    WTFLogAlways("[Driftstack] register failed for %s: %s", rel.UTF8String, err.localizedDescription.UTF8String);
-                }
-                if (cfError)
-                    CFRelease(cfError);
-            }
-        }
-        WTFLogAlways("[Driftstack] iOS font registration: %zu registered, %zu failed (dir: %s)", registered, failed, dir.utf8().data());
-    }
-}
-#endif
-
 void WebProcess::platformInitializeWebProcess(WebProcessCreationParameters& parameters)
 {
 #if ENABLE(WEBASSEMBLY_DEBUGGER) && ENABLE(REMOTE_INSPECTOR)
@@ -452,10 +392,6 @@ void WebProcess::platformInitializeWebProcess(WebProcessCreationParameters& para
         JSC::Options::enableWasmDebugger() = true;
         JSC::Options::notifyOptionsChanged();
     }
-#endif
-
-#if PLATFORM(DRIFTSTACK)
-    registerDriftstackIOSFonts();
 #endif
 
 #if ENABLE(LOGD_BLOCKING_IN_WEBCONTENT)
