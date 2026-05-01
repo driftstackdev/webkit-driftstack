@@ -226,6 +226,24 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     initializeDriftstackIOSFontMapIfNeeded();
 
     String lowercase = family.string().convertToASCIILowercase();
+
+    // V-088 Track 4 Pattern 2: redirect family names that aren't installed
+    // on iOS to the iOS system fallback iPhone uses. Empirically verified
+    // (V-085 capture data) iPhone falls back to Helvetica for these
+    // family names (identical width=160.0625 / fBBA=14 / fBBD=4 metrics
+    // when CSS asks for them on iPhone).
+    if (lowercase == "kefa"_s
+        || lowercase == "gujarati sangam mn"_s
+        || lowercase == "oriya sangam mn"_s
+        || lowercase == "plantagenet cherokee"_s
+        || lowercase == "gurmukhi mn"_s)
+        lowercase = "helvetica"_s;
+    // Telugu has its own iOS font (Kohinoor Telugu) — different metrics
+    // than Helvetica (w=162.31 vs 160.06 in iPhone reference); redirect
+    // to the actual iOS Telugu font.
+    else if (lowercase == "telugu sangam mn"_s)
+        lowercase = "kohinoor telugu"_s;
+
     DriftstackIOSFontVariant chosenVariant;
     bool found = false;
     {
