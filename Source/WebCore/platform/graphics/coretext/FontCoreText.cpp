@@ -195,6 +195,62 @@ void Font::platformInit()
     ascent = ceilf(ascent + adjustment);
     descent = ceilf(descent);
 
+#if PLATFORM(DRIFTSTACK)
+    // V-081 Stage D-2 Track 1: iPhone reports a different per-size
+    // fontBoundingBox{Ascent,Descent} for Apple Color Emoji than Mac's
+    // CoreText returns from the same iOS font binary. Captured per-size
+    // empirically (Stage D-3 Set A, sizes [8..96]). Override here so
+    // m_fontMetrics.intAscent() / .intDescent() (which feed
+    // fontBoundingBox* in TextMetrics) match iPhone exactly.
+    if (CTFontGetSymbolicTraits(ctFont.get()) & kCTFontTraitColorGlyphs) {
+        struct DriftstackEmojiFontMetricsEntry { float size; float ascent; float descent; };
+        static constexpr std::array<DriftstackEmojiFontMetricsEntry, 89> driftstackEmojiFontMetricsTable = {{
+            {  8.f, 10.f,  4.f }, {  9.f, 12.f,  4.f }, { 10.f, 13.f,  4.f }, { 11.f, 14.f,  5.f },
+            { 12.f, 15.f,  5.f }, { 13.f, 17.f,  6.f }, { 14.f, 18.f,  6.f }, { 15.f, 19.f,  6.f },
+            { 16.f, 20.f,  7.f }, { 17.f, 21.f,  7.f }, { 18.f, 21.f,  7.f }, { 19.f, 22.f,  7.f },
+            { 20.f, 22.f,  7.f }, { 21.f, 23.f,  8.f }, { 22.f, 23.f,  8.f }, { 23.f, 24.f,  8.f },
+            { 24.f, 25.f,  8.f }, { 25.f, 26.f,  8.f }, { 26.f, 27.f,  9.f }, { 27.f, 28.f,  9.f },
+            { 28.f, 29.f,  9.f }, { 29.f, 30.f, 10.f }, { 30.f, 31.f, 10.f }, { 31.f, 32.f, 10.f },
+            { 32.f, 33.f, 11.f }, { 33.f, 34.f, 11.f }, { 34.f, 35.f, 11.f }, { 35.f, 36.f, 11.f },
+            { 36.f, 37.f, 12.f }, { 37.f, 38.f, 12.f }, { 38.f, 39.f, 12.f }, { 39.f, 40.f, 13.f },
+            { 40.f, 41.f, 13.f }, { 41.f, 42.f, 13.f }, { 42.f, 43.f, 14.f }, { 43.f, 44.f, 14.f },
+            { 44.f, 45.f, 14.f }, { 45.f, 46.f, 15.f }, { 46.f, 47.f, 15.f }, { 47.f, 48.f, 15.f },
+            { 48.f, 49.f, 16.f }, { 49.f, 50.f, 16.f }, { 50.f, 51.f, 16.f }, { 51.f, 52.f, 16.f },
+            { 52.f, 53.f, 17.f }, { 53.f, 54.f, 17.f }, { 54.f, 55.f, 17.f }, { 55.f, 56.f, 18.f },
+            { 56.f, 57.f, 18.f }, { 57.f, 58.f, 18.f }, { 58.f, 59.f, 19.f }, { 59.f, 60.f, 19.f },
+            { 60.f, 61.f, 19.f }, { 61.f, 62.f, 20.f }, { 62.f, 63.f, 20.f }, { 63.f, 64.f, 20.f },
+            { 64.f, 65.f, 21.f }, { 65.f, 66.f, 21.f }, { 66.f, 67.f, 21.f }, { 67.f, 68.f, 21.f },
+            { 68.f, 69.f, 22.f }, { 69.f, 70.f, 22.f }, { 70.f, 71.f, 22.f }, { 71.f, 72.f, 23.f },
+            { 72.f, 73.f, 23.f }, { 73.f, 74.f, 23.f }, { 74.f, 75.f, 24.f }, { 75.f, 76.f, 24.f },
+            { 76.f, 77.f, 24.f }, { 77.f, 78.f, 25.f }, { 78.f, 79.f, 25.f }, { 79.f, 80.f, 25.f },
+            { 80.f, 81.f, 26.f }, { 81.f, 82.f, 26.f }, { 82.f, 83.f, 26.f }, { 83.f, 84.f, 26.f },
+            { 84.f, 85.f, 27.f }, { 85.f, 86.f, 27.f }, { 86.f, 87.f, 27.f }, { 87.f, 88.f, 28.f },
+            { 88.f, 89.f, 28.f }, { 89.f, 90.f, 28.f }, { 90.f, 91.f, 29.f }, { 91.f, 92.f, 29.f },
+            { 92.f, 93.f, 29.f }, { 93.f, 94.f, 30.f }, { 94.f, 95.f, 30.f }, { 95.f, 96.f, 30.f },
+            { 96.f, 97.f, 31.f }
+        }};
+        const float emojiSize = m_platformData.size();
+        if (emojiSize <= driftstackEmojiFontMetricsTable.front().size) {
+            ascent = driftstackEmojiFontMetricsTable.front().ascent;
+            descent = driftstackEmojiFontMetricsTable.front().descent;
+        } else if (emojiSize >= driftstackEmojiFontMetricsTable.back().size) {
+            ascent = driftstackEmojiFontMetricsTable.back().ascent;
+            descent = driftstackEmojiFontMetricsTable.back().descent;
+        } else {
+            DriftstackEmojiFontMetricsEntry a = driftstackEmojiFontMetricsTable.front();
+            for (const auto& b : driftstackEmojiFontMetricsTable) {
+                if (emojiSize >= a.size && emojiSize <= b.size && a.size != b.size) {
+                    float t = (emojiSize - a.size) / (b.size - a.size);
+                    ascent  = a.ascent  + t * (b.ascent  - a.ascent);
+                    descent = a.descent + t * (b.descent - a.descent);
+                    break;
+                }
+                a = b;
+            }
+        }
+    }
+#endif
+
     m_shouldNotBeUsedForArabic = fontFamilyShouldNotBeUsedForArabic(familyName.get());
 #endif
 
