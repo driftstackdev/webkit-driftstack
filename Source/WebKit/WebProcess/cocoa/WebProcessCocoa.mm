@@ -398,7 +398,8 @@ static void registerDriftstackIOSFonts()
     String dir = envDir ? String::fromUTF8(envDir) : "/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1"_s;
 
     @autoreleasepool {
-        NSString *root = dir.createNSString().get();
+        RetainPtr<NSString> rootHolder = dir.createNSString();
+        NSString *root = rootHolder.get();
         NSFileManager *fm = [NSFileManager defaultManager];
         BOOL isDir = NO;
         if (![fm fileExistsAtPath:root isDirectory:&isDir] || !isDir) {
