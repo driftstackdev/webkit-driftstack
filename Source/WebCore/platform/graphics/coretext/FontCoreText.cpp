@@ -786,6 +786,100 @@ void Font::determinePitch()
         m_canTakeFixedPitchFastContentMeasuring = m_treatAsFixedPitch && !userInstalled;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-080 / V-081 Stage D-2 Track 2: iPhone normalizes ALL color-emoji glyph
+// bboxes to a per-size canonical value, INDEPENDENT of glyph codepoint AND
+// of the rendering font. Captured empirically (Stage D-3 emoji matrix,
+// 2026-05-01: 15 distinct emoji × 89 sizes × 2 fonts → identical
+// (width, ABA, ABD) per size). Mac CoreText returns smaller per-glyph
+// bboxes from the same iOS font binary; clamp to iPhone canonical
+// values whenever the queried glyph is a color glyph.
+//
+// Table: per-size (width, ascent, descent) tuples for sizes [8..96].
+// Ascent / descent are FloatRect-coordinate values (positive ascent
+// becomes -y in the WebKit-local convention; positive descent becomes
+// +maxY). Width is the glyph's advance-width-equivalent bbox horizontal
+// extent.
+struct DriftstackEmojiBboxEntry { float size; float width; float ascent; float descent; };
+// All values are exact 1/64-px multiples (LayoutUnit precision).
+// Formatted as decimal-representable-as-float fractions to avoid
+// rounding noise (the iPhone-canonical 13.640625 = 873/64).
+static constexpr std::array<DriftstackEmojiBboxEntry, 89> driftstackEmojiBboxTable = {{
+    {   8.f,  11.f,        7.796875f,    2.1875f },     {   9.f,  12.f,        8.765625f,    2.46875f },
+    {  10.f,  13.f,        9.75f,        2.75f },       {  11.f,  15.f,       10.71875f,     3.015625f },
+    {  12.f,  16.f,       11.6875f,      3.296875f },   {  13.f,  17.f,       12.671875f,    3.5625f },
+    {  14.f,  19.f,       13.640625f,    3.84375f },    {  15.f,  20.f,       14.625f,       4.125f },
+    {  16.f,  21.f,       15.59375f,     4.390625f },   {  17.f,  22.f,       16.1875f,      4.296875f },
+    {  18.f,  22.f,       16.796875f,    4.1875f },     {  19.f,  23.f,       17.390625f,    4.09375f },
+    {  20.f,  23.f,       18.f,          4.f },         {  21.f,  23.f,       18.59375f,     3.890625f },
+    {  22.f,  24.f,       19.1875f,      3.796875f },   {  23.f,  24.f,       19.796875f,    3.6875f },
+    {  24.f,  25.f,       20.390625f,    3.59375f },    {  25.f,  26.f,       21.25f,        3.75f },
+    {  26.f,  26.f,       22.09375f,     3.890625f },   {  27.f,  27.f,       22.9375f,      4.046875f },
+    {  28.f,  28.f,       23.796875f,    4.1875f },     {  29.f,  29.f,       24.640625f,    4.34375f },
+    {  30.f,  30.f,       25.5f,         4.5f },        {  31.f,  31.f,       26.34375f,     4.640625f },
+    {  32.f,  32.f,       27.1875f,      4.796875f },   {  33.f,  33.f,       28.046875f,    4.9375f },
+    {  34.f,  34.f,       28.890625f,    5.09375f },    {  35.f,  35.f,       29.75f,        5.25f },
+    {  36.f,  36.f,       30.59375f,     5.390625f },   {  37.f,  37.f,       31.4375f,      5.546875f },
+    {  38.f,  38.f,       32.296875f,    5.6875f },     {  39.f,  39.f,       33.140625f,    5.84375f },
+    {  40.f,  40.f,       34.f,          6.f },         {  41.f,  41.f,       34.84375f,     6.140625f },
+    {  42.f,  42.f,       35.6875f,      6.296875f },   {  43.f,  43.f,       36.546875f,    6.4375f },
+    {  44.f,  44.f,       37.390625f,    6.59375f },    {  45.f,  45.f,       38.25f,        6.75f },
+    {  46.f,  46.f,       39.09375f,     6.890625f },   {  47.f,  47.f,       39.9375f,      7.046875f },
+    {  48.f,  48.f,       40.796875f,    7.1875f },     {  49.f,  49.f,       41.640625f,    7.34375f },
+    {  50.f,  50.f,       42.5f,         7.5f },        {  51.f,  51.f,       43.34375f,     7.640625f },
+    {  52.f,  52.f,       44.1875f,      7.796875f },   {  53.f,  53.f,       45.046875f,    7.9375f },
+    {  54.f,  54.f,       45.890625f,    8.09375f },    {  55.f,  55.f,       46.75f,        8.25f },
+    {  56.f,  56.f,       47.59375f,     8.390625f },   {  57.f,  57.f,       48.4375f,      8.546875f },
+    {  58.f,  58.f,       49.296875f,    8.6875f },     {  59.f,  59.f,       50.140625f,    8.84375f },
+    {  60.f,  60.f,       51.f,          9.f },         {  61.f,  61.f,       51.84375f,     9.140625f },
+    {  62.f,  62.f,       52.6875f,      9.296875f },   {  63.f,  63.f,       53.546875f,    9.4375f },
+    {  64.f,  64.f,       54.390625f,    9.59375f },    {  65.f,  65.f,       55.25f,        9.75f },
+    {  66.f,  66.f,       56.09375f,     9.890625f },   {  67.f,  67.f,       56.9375f,     10.046875f },
+    {  68.f,  68.f,       57.796875f,   10.1875f },     {  69.f,  69.f,       58.640625f,   10.34375f },
+    {  70.f,  70.f,       59.5f,        10.5f },        {  71.f,  71.f,       60.34375f,    10.640625f },
+    {  72.f,  72.f,       61.1875f,     10.796875f },   {  73.f,  73.f,       62.046875f,   10.9375f },
+    {  74.f,  74.f,       62.890625f,   11.09375f },    {  75.f,  75.f,       63.75f,       11.25f },
+    {  76.f,  76.f,       64.59375f,    11.390625f },   {  77.f,  77.f,       65.4375f,     11.546875f },
+    {  78.f,  78.f,       66.296875f,   11.6875f },     {  79.f,  79.f,       67.140625f,   11.84375f },
+    {  80.f,  80.f,       68.f,         12.f },         {  81.f,  81.f,       68.84375f,    12.140625f },
+    {  82.f,  82.f,       69.6875f,     12.296875f },   {  83.f,  83.f,       70.546875f,   12.4375f },
+    {  84.f,  84.f,       71.390625f,   12.59375f },    {  85.f,  85.f,       72.25f,       12.75f },
+    {  86.f,  86.f,       73.09375f,    12.890625f },   {  87.f,  87.f,       73.9375f,     13.046875f },
+    {  88.f,  88.f,       74.796875f,   13.1875f },     {  89.f,  89.f,       75.640625f,   13.34375f },
+    {  90.f,  90.f,       76.5f,        13.5f },        {  91.f,  91.f,       77.34375f,    13.640625f },
+    {  92.f,  92.f,       78.1875f,     13.796875f },   {  93.f,  93.f,       79.046875f,   13.9375f },
+    {  94.f,  94.f,       79.890625f,   14.09375f },    {  95.f,  95.f,       80.75f,       14.25f },
+    {  96.f,  96.f,       81.59375f,    14.390625f }
+}};
+
+// Linear-interp lookup. Sizes outside [8, 96] clamp to nearest endpoint.
+// Most canvas sizes are integer points so the interp branch rarely fires.
+static FloatRect driftstackEmojiBboxForSize(float size)
+{
+    if (size <= driftstackEmojiBboxTable.front().size) {
+        const auto& e = driftstackEmojiBboxTable.front();
+        return FloatRect(0, -e.ascent, e.width, e.ascent + e.descent);
+    }
+    if (size >= driftstackEmojiBboxTable.back().size) {
+        const auto& e = driftstackEmojiBboxTable.back();
+        return FloatRect(0, -e.ascent, e.width, e.ascent + e.descent);
+    }
+    DriftstackEmojiBboxEntry a = driftstackEmojiBboxTable.front();
+    for (const auto& b : driftstackEmojiBboxTable) {
+        if (size >= a.size && size <= b.size && a.size != b.size) {
+            float t = (size - a.size) / (b.size - a.size);
+            float w = a.width   + t * (b.width   - a.width);
+            float ascent  = a.ascent  + t * (b.ascent  - a.ascent);
+            float descent = a.descent + t * (b.descent - a.descent);
+            return FloatRect(0, -ascent, w, ascent + descent);
+        }
+        a = b;
+    }
+    // Unreachable: above branches cover all cases.
+    return FloatRect();
+}
+#endif
+
 FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
 {
     FloatRect boundingBox;
@@ -793,6 +887,11 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
     boundingBox = CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, &glyph, &ignoredRect, 1);
     boundingBox.setY(-boundingBox.maxY());
     boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
+
+#if PLATFORM(DRIFTSTACK)
+    if (colorGlyphType(glyph) == ColorGlyphType::Color)
+        return driftstackEmojiBboxForSize(m_platformData.size());
+#endif
 
     return boundingBox;
 }
@@ -802,12 +901,29 @@ Vector<FloatRect, Font::inlineGlyphRunCapacity> Font::platformBoundsForGlyphs(co
     Vector<CGRect, inlineGlyphRunCapacity> rectsForGlyphs(glyphs.size());
     CTFontGetBoundingRectsForGlyphs(protect(ctFont()).get(), platformData().orientation() == FontOrientation::Vertical ? kCTFontOrientationVertical : kCTFontOrientationHorizontal, glyphs.span().data(), rectsForGlyphs.mutableSpan().data(), rectsForGlyphs.size());
 
+#if PLATFORM(DRIFTSTACK)
+    Vector<FloatRect, Font::inlineGlyphRunCapacity> result;
+    result.reserveInitialCapacity(glyphs.size());
+    const float fontSize = m_platformData.size();
+    for (size_t i = 0; i < glyphs.size(); ++i) {
+        if (colorGlyphType(glyphs[i]) == ColorGlyphType::Color) {
+            result.append(driftstackEmojiBboxForSize(fontSize));
+            continue;
+        }
+        FloatRect boundingBox(rectsForGlyphs[i]);
+        boundingBox.setY(-boundingBox.maxY());
+        boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
+        result.append(boundingBox);
+    }
+    return result;
+#else
     return rectsForGlyphs.map<Vector<FloatRect, inlineGlyphRunCapacity>>([&](const auto& rect) -> auto {
         FloatRect boundingBox(rect);
         boundingBox.setY(-boundingBox.maxY());
         boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
         return boundingBox;
     });
+#endif
 }
 
 Path Font::platformPathForGlyph(Glyph glyph) const
