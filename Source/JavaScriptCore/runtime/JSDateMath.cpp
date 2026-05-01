@@ -451,18 +451,21 @@ String DateCache::timeZoneDisplayName(bool isDST)
         // observed in customer sessions or rig captures. For TZs not in
         // the table, ICU's fallback is correct enough that the diff
         // is an unknown-unknown rather than a known-wrong.
-        struct TZDisplayName { ASCIILiteral canonical; ASCIILiteral standard; ASCIILiteral dst; };
+        // Display-name entries can contain non-ASCII (e.g. "Türkiye"); use
+        // UTF-8 char* and convert via String::fromUTF8 at lookup time so
+        // multi-byte sequences land as Unicode rather than Latin1-mojibake.
+        struct TZDisplayName { ASCIILiteral canonical; const char* standard; const char* dst; };
         static constexpr TZDisplayName iPhoneTZDisplayNames[] = {
-            { "Europe/Istanbul"_s,           "Türkiye Standard Time"_s,           "Türkiye Standard Time"_s },
-            { "Asia/Istanbul"_s,             "Türkiye Standard Time"_s,           "Türkiye Standard Time"_s },
+            { "Europe/Istanbul"_s,           "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
+            { "Asia/Istanbul"_s,             "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
             // Additional TZ entries land here as iPhone reference captures cover them.
         };
         String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
         StringView canonicalView(canonicalString);
         for (const auto& entry : iPhoneTZDisplayNames) {
             if (canonicalView == StringView(entry.canonical)) {
-                m_timeZoneStandardDisplayNameCache = String(entry.standard);
-                m_timeZoneDSTDisplayNameCache = String(entry.dst);
+                m_timeZoneStandardDisplayNameCache = String::fromUTF8(entry.standard);
+                m_timeZoneDSTDisplayNameCache = String::fromUTF8(entry.dst);
                 if (isDST)
                     return m_timeZoneDSTDisplayNameCache;
                 return m_timeZoneStandardDisplayNameCache;
