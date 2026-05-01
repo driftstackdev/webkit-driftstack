@@ -822,6 +822,29 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         CTFontOrientation orientation = horizontal || m_isBrokenIdeographFallback ? kCTFontOrientationHorizontal : kCTFontOrientationVertical;
         CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
     }
+#if PLATFORM(DRIFTSTACK)
+    // V-094 Track 5: iPhone Apple Color Emoji advance is constant per
+    // ptSize across all emoji codepoints. Empirical (Track 5 capture
+    // 159 probes / 53 codepoints / 3 sizes):
+    //   ptSize 14 → advance 19
+    //   ptSize 24 → advance 25
+    //   ptSize 48 → advance 48
+    // Override Mac CTFontGetAdvancesForGlyphs result for color glyphs
+    // so canvas.measureText returns iPhone-equivalent widths.
+    if (platformData().size() > 0.f && colorGlyphType(glyph) == ColorGlyphType::Color) {
+        const float ptSize = platformData().size();
+        float iphoneAdvance;
+        if (ptSize <= 14.f)
+            iphoneAdvance = 19.f * (ptSize / 14.f);
+        else if (ptSize >= 48.f)
+            iphoneAdvance = ptSize;
+        else if (ptSize <= 24.f)
+            iphoneAdvance = 19.f + (ptSize - 14.f) * (25.f - 19.f) / (24.f - 14.f);
+        else
+            iphoneAdvance = 25.f + (ptSize - 24.f) * (48.f - 25.f) / (48.f - 24.f);
+        return iphoneAdvance;
+    }
+#endif
     return advance.width;
 }
 
