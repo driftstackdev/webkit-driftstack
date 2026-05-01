@@ -26,7 +26,7 @@
 
 #include "config.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "TouchEvent.h"
 
@@ -63,4 +63,4 @@ TouchEvent::~TouchEvent() = default;
 
 } // namespace WebCore
 
-#endif // ENABLE(TOUCH_EVENTS)
+#endif // ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)

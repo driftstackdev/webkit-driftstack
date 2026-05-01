@@ -31,7 +31,7 @@
 #pragma clang diagnostic ignored "-Wnon-modular-include-in-module"
 #include <WebKitAdditions/TouchIOS.h>
 #pragma clang diagnostic pop
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include <WebCore/DoublePoint.h>
 #include <WebCore/EventTarget.h>
@@ -99,4 +99,4 @@ private:
 
 } // namespace WebCore
 
-#endif // ENABLE(TOUCH_EVENTS)
+#endif // ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)

@@ -25,7 +25,7 @@
 
 #include "config.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "Touch.h"
 
@@ -94,4 +94,4 @@ Ref<Touch> Touch::cloneWithNewTarget(EventTarget* eventTarget) const
 
 } // namespace WebCore
 
-#endif
+#endif // ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)

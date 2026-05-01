@@ -28,7 +28,7 @@
 
 #if ENABLE(IOS_TOUCH_EVENTS)
 #include <WebKitAdditions/TouchEventIOS.h>
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "MouseRelatedEvent.h"
 #include "TouchList.h"
@@ -84,4 +84,4 @@ private:
 
 SPECIALIZE_TYPE_TRAITS_EVENT(TouchEvent)
 
-#endif // ENABLE(TOUCH_EVENTS)
+#endif // ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)

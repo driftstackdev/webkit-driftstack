@@ -25,7 +25,7 @@
 
 #include "config.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "TouchList.h"
 
@@ -45,4 +45,4 @@ const Touch* TouchList::item(unsigned index) const
 
 } // namespace WebCore
 
-#endif
+#endif // ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)

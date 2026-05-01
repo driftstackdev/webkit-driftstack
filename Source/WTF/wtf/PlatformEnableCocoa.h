@@ -900,6 +900,18 @@
 #define ENABLE_TOUCH_EVENTS 1
 #endif
 
+// Driftstack: separate gate that exposes the JS-visible Touch / TouchEvent /
+// TouchList constructors without enabling the full TOUCH_EVENTS event-handling
+// pipeline (which depends on PlatformTouchEvent.h, gated on APPLE_INTERNAL_SDK
+// and not registered in WebCore.xcodeproj on Mac builds). The IDL Conditional
+// for these interfaces becomes 'TOUCH_EVENTS|DRIFTSTACK_TOUCH_STUBS' so the
+// bindings get generated; their .cpp files compile under the same OR gate.
+// EventHandler.cpp's PlatformTouchEvent include path stays gated on
+// !ENABLE(TOUCH_EVENTS), unchanged.
+#if !defined(ENABLE_DRIFTSTACK_TOUCH_STUBS) && PLATFORM(DRIFTSTACK)
+#define ENABLE_DRIFTSTACK_TOUCH_STUBS 1
+#endif
+
 #if !defined(ENABLE_TOUCH_EVENT_REGIONS) && PLATFORM(IOS_FAMILY)
 #define ENABLE_TOUCH_EVENT_REGIONS 1
 #endif
