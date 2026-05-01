@@ -29,7 +29,9 @@
 #include <WebCore/RenderingResourceIdentifier.h>
 #include <WebCore/TrustedFonts.h>
 #include <wtf/BitVector.h>
+#include <wtf/Lock.h>
 #include <wtf/Platform.h>
+#include <wtf/RetainPtr.h>
 #include <wtf/WeakPtr.h>
 
 #if PLATFORM(COCOA)
@@ -269,6 +271,10 @@ public:
     // forward glyph map for each. Returns 0 if glyph is not a known
     // single-codepoint color emoji.
     char32_t driftstackCodepointForColorGlyph(Glyph) const;
+    // V-090 / Phase F.1.B-2: decoded atlas PNG → CGImageRef cache lookup.
+    // pngBytes must remain valid for the lifetime of the returned image
+    // (atlas mmap'd region — singleton lifetime is process lifetime).
+    RetainPtr<CGImageRef> driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const;
 #endif
 
 private:
@@ -387,6 +393,10 @@ private:
     // of color glyphs covered by DriftstackEmojiAtlas. Populated lazily.
     mutable HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_driftstackEmojiReverseMap;
     mutable bool m_driftstackEmojiReverseMapBuilt { false };
+    // V-090 / Phase F.1.B-2: per-(codepoint, strike) decoded PNG → CGImage cache.
+    // Key encoding: (uint64_t)codepoint << 32 | strikePPEM. WTF::Lock-protected.
+    mutable HashMap<uint64_t, RetainPtr<CGImageRef>, IntHash<uint64_t>, WTF::UnsignedWithZeroKeyHashTraits<uint64_t>> m_driftstackAtlasImageCache;
+    mutable Lock m_driftstackAtlasImageCacheLock;
 #endif
 
 #if PLATFORM(COCOA)

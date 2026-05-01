@@ -867,6 +867,30 @@ char32_t Font::driftstackCodepointForColorGlyph(Glyph glyph) const
     auto it = m_driftstackEmojiReverseMap.find(glyph);
     return it != m_driftstackEmojiReverseMap.end() ? it->value : 0;
 }
+
+// V-090 / Phase F.1.B-2: decode atlas PNG bytes into a CGImageRef and
+// cache per (codepoint, strikePPEM). Cache key encodes both as
+// (codepoint << 32) | strikePPEM. The provider holds a CFData wrapper
+// around the mmap'd atlas region; both the data and provider are
+// process-lifetime stable since the atlas singleton is NeverDestroyed.
+RetainPtr<CGImageRef> Font::driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const
+{
+    const uint64_t key = (static_cast<uint64_t>(codepoint) << 32) | strikePPEM;
+    Locker locker(m_driftstackAtlasImageCacheLock);
+    auto it = m_driftstackAtlasImageCache.find(key);
+    if (it != m_driftstackAtlasImageCache.end())
+        return it->value;
+    RetainPtr<CFDataRef> data = adoptCF(CFDataCreate(kCFAllocatorDefault, pngBytes.data(), static_cast<CFIndex>(pngBytes.size())));
+    if (!data)
+        return { };
+    RetainPtr<CGDataProviderRef> provider = adoptCF(CGDataProviderCreateWithCFData(data.get()));
+    if (!provider)
+        return { };
+    RetainPtr<CGImageRef> image = adoptCF(CGImageCreateWithPNGDataProvider(provider.get(), nullptr, false, kCGRenderingIntentDefault));
+    if (image)
+        m_driftstackAtlasImageCache.add(key, image);
+    return image;
+}
 #endif
 
 GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned beginningGlyphIndex, unsigned beginningStringIndex, bool enableKerning, bool requiresShaping, const AtomString& locale, StringView text, TextDirection textDirection) const

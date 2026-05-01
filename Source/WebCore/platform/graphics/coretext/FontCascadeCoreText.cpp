@@ -388,38 +388,110 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // V-090 / Phase F.1.B-1: log-only atlas integration validation.
-    // For each color glyph, look up DriftstackEmojiAtlas and log whether
-    // the atlas has the bitmap. Does NOT change rendering yet — that
-    // composite path is F.1.B-2.
+    // V-090 / Phase F.1.B-2: composite atlas-rendered emoji bitmaps in
+    // place of CT-rendered color glyphs. For atlas-HIT codepoints,
+    // decode PNG → CGImage → CGContextDrawImage; non-color or atlas-MISS
+    // glyphs forward to showGlyphsWithAdvances unchanged.
+    bool didCompositePath = false;
     {
         auto& atlas = DriftstackEmojiAtlas::singleton();
         if (atlas.isAvailable()) {
             const float ptSize = font.platformData().size();
             const uint32_t strike = atlas.pickStrikeForPointSize(ptSize);
+
+            // Pass 1: classify each glyph (atlas-hit | passthrough).
+            struct GlyphPlan {
+                bool atlasHit;
+                uint32_t cp;
+                std::span<const uint8_t> pngBytes;
+            };
+            Vector<GlyphPlan, 256> plans;
+            plans.reserveInitialCapacity(glyphs.size());
+            bool anyAtlasHit = false;
             for (size_t i = 0; i < glyphs.size(); ++i) {
+                GlyphPlan p { false, 0, { } };
                 Glyph g = glyphs[i];
-                if (font.colorGlyphType(g) != ColorGlyphType::Color)
-                    continue;
-                char32_t cp = font.driftstackCodepointForColorGlyph(g);
-                static unsigned logCount = 0;
-                if (++logCount > 30)
-                    break;
-                if (!cp) {
-                    WTFLogAlways("[Driftstack] Atlas lookup glyph=%u (no reverse-map entry; likely composite/ZWJ) ptSize=%.1f",
-                        static_cast<unsigned>(g), ptSize);
-                    continue;
+                if (font.colorGlyphType(g) == ColorGlyphType::Color) {
+                    char32_t cp = font.driftstackCodepointForColorGlyph(g);
+                    if (cp) {
+                        auto entry = atlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
+                        if (!entry.empty()) {
+                            p.atlasHit = true;
+                            p.cp = static_cast<uint32_t>(cp);
+                            p.pngBytes = entry;
+                            anyAtlasHit = true;
+                        }
+                    }
                 }
-                auto entry = atlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
-                WTFLogAlways("[Driftstack] Atlas lookup glyph=%u cp=U+%04X ptSize=%.1f strike=%u → %s",
-                    static_cast<unsigned>(g), static_cast<unsigned>(cp), ptSize, strike,
-                    entry.empty() ? "MISS" : "HIT");
+                plans.append(p);
+            }
+
+            if (anyAtlasHit) {
+                didCompositePath = true;
+                // Compute glyph positions in CTM coords (no text-matrix flip).
+                Vector<CGPoint, 256> positions;
+                positions.reserveInitialCapacity(glyphs.size());
+                FloatPoint cursor = point;
+                for (size_t i = 0; i < glyphs.size(); ++i) {
+                    positions.append(CGPointMake(cursor.x(), cursor.y()));
+                    // GlyphBufferAdvance is CGSize on cocoa; .width/.height are fields, not methods.
+                    cursor.move(advances[i].width, advances[i].height);
+                }
+
+                // Pass 2: emit non-atlas glyphs via showGlyphsWithAdvances in
+                // contiguous CT runs; atlas-hit glyphs via CGContextDrawImage.
+                Vector<GlyphBufferGlyph, 64> ctRunGlyphs;
+                Vector<GlyphBufferAdvance, 64> ctRunAdvances;
+                FloatPoint ctRunStart = point;
+
+                auto flushCTRun = [&]() {
+                    if (ctRunGlyphs.isEmpty())
+                        return;
+                    showGlyphsWithAdvances(ctRunStart, font, cgContext.get(),
+                        ctRunGlyphs.span(), ctRunAdvances.span(), textMatrix);
+                    ctRunGlyphs.clear();
+                    ctRunAdvances.clear();
+                };
+
+                for (size_t i = 0; i < glyphs.size(); ++i) {
+                    if (!plans[i].atlasHit) {
+                        if (ctRunGlyphs.isEmpty())
+                            ctRunStart = FloatPoint(positions[i].x, positions[i].y);
+                        ctRunGlyphs.append(glyphs[i]);
+                        ctRunAdvances.append(advances[i]);
+                        continue;
+                    }
+                    flushCTRun();
+                    // Atlas image: canvas dim = 2*strike + 8 (per atlas capture spec).
+                    // Glyph drawn at (4, strike + 2) within canvas. Scale strike → ptSize.
+                    RetainPtr<CGImageRef> image = font.driftstackAtlasImageForCodepoint(plans[i].cp, strike, plans[i].pngBytes);
+                    if (!image)
+                        continue;
+                    const float canvasDim = 2.0f * static_cast<float>(strike) + 8.0f;
+                    const float scale = ptSize / static_cast<float>(strike);
+                    const float imageDim = canvasDim * scale;
+                    const float originXOffset = -4.0f * scale;
+                    const float originYOffset = -(static_cast<float>(strike) + 2.0f) * scale;
+                    // WebKit canonical "draw image right-side-up in Y-down CTM" pattern,
+                    // mirroring GraphicsContextCG::drawNativeImage (lines 415-433).
+                    CGContextSaveGState(cgContext.get());
+                    CGContextTranslateCTM(cgContext.get(),
+                        positions[i].x + originXOffset,
+                        positions[i].y + originYOffset);
+                    CGContextTranslateCTM(cgContext.get(), 0.f, imageDim);
+                    CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
+                    CGContextDrawImage(cgContext.get(), CGRectMake(0.f, 0.f, imageDim, imageDim), image.get());
+                    CGContextRestoreGState(cgContext.get());
+                }
+                flushCTRun();
             }
         }
     }
-#endif
-
+    if (!didCompositePath)
+        showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
+#else
     showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
+#endif
 
     if (syntheticBoldOffset)
         showGlyphsWithAdvances(FloatPoint(point.x() + syntheticBoldOffset, point.y()), font, cgContext.get(), glyphs, advances, textMatrix);
