@@ -402,9 +402,20 @@ static void registerDriftstackIOSFonts()
         NSString *root = rootHolder.get();
         NSFileManager *fm = [NSFileManager defaultManager];
         BOOL isDir = NO;
-        if (![fm fileExistsAtPath:root isDirectory:&isDir] || !isDir) {
+        BOOL exists = [fm fileExistsAtPath:root isDirectory:&isDir];
+        WTFLogAlways("[Driftstack] font registration: dir=%s exists=%d isDir=%d", dir.utf8().data(), exists, isDir);
+        if (!exists || !isDir) {
             WTFLogAlways("[Driftstack] iOS fonts dir not found at %s — skipping font registration", dir.utf8().data());
             return;
+        }
+        // Diagnostic: try contentsOfDirectoryAtPath:error: which surfaces
+        // sandbox-block as an NSError instead of silent empty enumeration.
+        NSError *contentsErr = nil;
+        NSArray<NSString *> *topLevel = [fm contentsOfDirectoryAtPath:root error:&contentsErr];
+        if (contentsErr) {
+            WTFLogAlways("[Driftstack] contentsOfDirectoryAtPath error: %s (code=%ld) — likely sandbox blocking; switching to AdditionalFonts IPC needed", contentsErr.localizedDescription.UTF8String, (long)contentsErr.code);
+        } else {
+            WTFLogAlways("[Driftstack] top-level entries at root: %lu", (unsigned long)topLevel.count);
         }
         NSDirectoryEnumerator *en = [fm enumeratorAtPath:root];
         size_t registered = 0;
