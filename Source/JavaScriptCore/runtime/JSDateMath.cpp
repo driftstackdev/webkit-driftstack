@@ -457,7 +457,8 @@ String DateCache::timeZoneDisplayName(bool isDST)
             { "Asia/Istanbul"_s,             "Türkiye Standard Time"_s,           "Türkiye Standard Time"_s },
             // Additional TZ entries land here as iPhone reference captures cover them.
         };
-        StringView canonicalView(timeZoneCache.m_canonicalTimeZone.toICUString());
+        String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
+        StringView canonicalView(canonicalString);
         for (const auto& entry : iPhoneTZDisplayNames) {
             if (canonicalView == StringView(entry.canonical)) {
                 m_timeZoneStandardDisplayNameCache = String(entry.standard);
