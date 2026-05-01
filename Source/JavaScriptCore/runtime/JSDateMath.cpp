@@ -437,14 +437,36 @@ String DateCache::timeZoneDisplayName(bool isDST)
     if (m_timeZoneStandardDisplayNameCache.isNull()) {
         auto& timeZoneCache = *this->timeZoneCache();
 #if PLATFORM(DRIFTSTACK)
-        // Mac's defaultLanguage() returns whatever the user set in macOS UI
-        // preferences; ICU's ucal_getTimeZoneDisplayName with that locale
-        // often falls back to "GMT+offset" format for timezones whose
-        // localized name isn't in Mac's CLDR data subset. iPhone with
-        // en-US locale returns the long localized name (e.g.,
-        // "Türkiye Standard Time" for Europe/Istanbul). On Driftstack,
-        // hardcode the locale to "en-US" so ICU returns the iPhone-style
-        // long names. V-074 cumulative-rig finding.
+        // wave-c-3: iPhone Safari (iOS 26.4) returns specific localized
+        // standard/DST names for top timezones (e.g., 'Türkiye Standard
+        // Time' for Europe/Istanbul). Mac's bundled ICU CLDR data lacks
+        // many of these names regardless of locale, so ucal_getTimeZoneDisplayName
+        // falls back to 'GMT+offset' format (V-074 finding). Maintain a
+        // per-TZ localized-name lookup table on Driftstack; if the TZ
+        // is in the table return the iPhone string, else fall through
+        // to ICU.
+        //
+        // Table is sourced empirically from iPhone reference captures.
+        // Extensible: add entries as more iPhone-archetype timezones are
+        // observed in customer sessions or rig captures. For TZs not in
+        // the table, ICU's fallback is correct enough that the diff
+        // is an unknown-unknown rather than a known-wrong.
+        struct TZDisplayName { ASCIILiteral canonical; ASCIILiteral standard; ASCIILiteral dst; };
+        static constexpr TZDisplayName iPhoneTZDisplayNames[] = {
+            { "Europe/Istanbul"_s,           "Türkiye Standard Time"_s,           "Türkiye Standard Time"_s },
+            { "Asia/Istanbul"_s,             "Türkiye Standard Time"_s,           "Türkiye Standard Time"_s },
+            // Additional TZ entries land here as iPhone reference captures cover them.
+        };
+        StringView canonicalView(timeZoneCache.m_canonicalTimeZone.toICUString());
+        for (const auto& entry : iPhoneTZDisplayNames) {
+            if (canonicalView == StringView(entry.canonical)) {
+                m_timeZoneStandardDisplayNameCache = String(entry.standard);
+                m_timeZoneDSTDisplayNameCache = String(entry.dst);
+                if (isDST)
+                    return m_timeZoneDSTDisplayNameCache;
+                return m_timeZoneStandardDisplayNameCache;
+            }
+        }
         CString language { "en_US" };
 #else
         CString language = defaultLanguage().utf8();

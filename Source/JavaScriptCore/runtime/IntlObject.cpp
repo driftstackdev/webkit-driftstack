@@ -1913,6 +1913,18 @@ static JSArray* availableNumberingSystems(JSGlobalObject* globalObject)
         elements.constructAndAppend(std::span { name, static_cast<size_t>(length) });
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // wave-c-2: iPhone Safari (iOS 26.4) lists the 'tols' numbering system
+    // (Toto/Tolung digits) which Mac WebKit's bundled ICU doesn't include.
+    // V-074 cumulative-rig set diff: only 'tols' is on iPhone-only side.
+    // Append on Driftstack so supportedValuesOf("numberingSystem") matches
+    // iPhone exactly. Note: Mac's ICU doesn't actually support 'tols' for
+    // number formatting; calling Intl.NumberFormat(..., {numberingSystem:
+    // 'tols'}) will throw RangeError. iPhone presumably supports it in
+    // some way; this stub matches the supportedValuesOf surface only.
+    elements.append("tols"_s);
+#endif
+
     // The AvailableNumberingSystems abstract operation returns a List, ordered as if an Array of the same
     // values had been sorted using %Array.prototype.sort% using undefined as comprator
     std::ranges::sort(elements, WTF::codePointCompareLessThan);
@@ -2013,6 +2025,50 @@ static const Vector<String>& intlAvailableTimeZones()
         // values had been sorted using %Array.prototype.sort% using undefined as comparator
         std::ranges::sort(temporary, WTF::codePointCompareLessThan);
         auto end = std::unique(temporary.begin(), temporary.end());
+
+#if PLATFORM(DRIFTSTACK)
+        // wave-c-1: iPhone Safari (iOS 26.4) returns 19 IANA *legacy* aliases
+        // in supportedValuesOf("timeZone") where Mac WebKit returns the
+        // post-2018-CLDR canonical names. The canonical→legacy map below
+        // was enumerated from V-074 cumulative-rig set diff against the
+        // 2026-04-29 iPhone reference. On Driftstack, substitute each
+        // canonical with its legacy alias, then re-sort+re-unique to
+        // restore the spec-required ordering.
+        static constexpr struct { ASCIILiteral canonical, legacy; } iPhoneTZAliases[] = {
+            { "Africa/Asmara"_s,                       "Africa/Asmera"_s },
+            { "America/Argentina/Buenos_Aires"_s,      "America/Buenos_Aires"_s },
+            { "America/Argentina/Catamarca"_s,         "America/Catamarca"_s },
+            { "America/Argentina/Cordoba"_s,           "America/Cordoba"_s },
+            { "America/Argentina/Jujuy"_s,             "America/Jujuy"_s },
+            { "America/Argentina/Mendoza"_s,           "America/Mendoza"_s },
+            { "America/Atikokan"_s,                    "America/Coral_Harbour"_s },
+            { "America/Indiana/Indianapolis"_s,        "America/Indianapolis"_s },
+            { "America/Kentucky/Louisville"_s,         "America/Louisville"_s },
+            { "America/Nuuk"_s,                        "America/Godthab"_s },
+            { "Asia/Ho_Chi_Minh"_s,                    "Asia/Saigon"_s },
+            { "Asia/Kathmandu"_s,                      "Asia/Katmandu"_s },
+            { "Asia/Kolkata"_s,                        "Asia/Calcutta"_s },
+            { "Asia/Yangon"_s,                         "Asia/Rangoon"_s },
+            { "Atlantic/Faroe"_s,                      "Atlantic/Faeroe"_s },
+            { "Europe/Kyiv"_s,                         "Europe/Kiev"_s },
+            { "Pacific/Chuuk"_s,                       "Pacific/Truk"_s },
+            { "Pacific/Kanton"_s,                      "Pacific/Enderbury"_s },
+            { "Pacific/Pohnpei"_s,                     "Pacific/Ponape"_s },
+        };
+        for (auto it = temporary.begin(); it != end; ++it) {
+            for (const auto& [canonical, legacy] : iPhoneTZAliases) {
+                if (*it == StringView(canonical)) {
+                    *it = String(legacy);
+                    break;
+                }
+            }
+        }
+        // Re-sort+re-unique because the substitutions can land in different
+        // alphabetical positions than the canonical originals.
+        std::ranges::sort(temporary.begin(), end, WTF::codePointCompareLessThan);
+        end = std::unique(temporary.begin(), end);
+#endif
+
         availableTimeZones.construct();
 
         auto createImmortalThreadSafeString = [&](String&& string) -> String {
