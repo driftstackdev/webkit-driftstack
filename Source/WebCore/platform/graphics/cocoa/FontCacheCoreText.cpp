@@ -183,10 +183,20 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     {
         Locker locker(driftstackIOSFontMapLock);
         auto it = driftstackIOSFontMap().find(lowercase);
-        if (it == driftstackIOSFontMap().end())
+        if (it == driftstackIOSFontMap().end()) {
+            // Diagnostic: surface lookup misses for the first few unique families
+            // so we know whether the override is being called at all and what
+            // names canvas measureText is asking for.
+            static unsigned missCount = 0;
+            if (++missCount <= 5)
+                WTFLogAlways("[Driftstack] FontCache: lookup MISS for family '%s' (lowercase='%s')", family.string().utf8().data(), lowercase.utf8().data());
             return nullptr;
+        }
         url = it->value;
     }
+    static unsigned hitCount = 0;
+    if (++hitCount <= 5)
+        WTFLogAlways("[Driftstack] FontCache: lookup HIT for family '%s' size=%.1f", family.string().utf8().data(), size);
 
     RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(url.get()));
     if (!descs || !CFArrayGetCount(descs.get()))
