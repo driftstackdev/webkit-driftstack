@@ -49,6 +49,11 @@ public:
     // or the largest strike if size > all strikes.
     uint32_t pickStrikeForPointSize(float pointSize) const;
 
+    // Returns the unique codepoints present in the atlas (sorted ascending).
+    // Used by Font::platformInit on Driftstack to build the glyph→codepoint
+    // reverse map for color-emoji fonts. Built lazily on first call.
+    const Vector<uint32_t>& codepoints() const;
+
 private:
     friend NeverDestroyed<DriftstackEmojiAtlas>;
     DriftstackEmojiAtlas();
@@ -64,6 +69,9 @@ private:
     std::span<const uint8_t> m_indexSpan;
     std::span<const uint8_t> m_dataPayloadSpan;
     size_t m_numEntries { 0 };
+
+    mutable Vector<uint32_t> m_uniqueCodepoints;
+    mutable bool m_codepointsBuilt { false };
 };
 
 } // namespace WebCore

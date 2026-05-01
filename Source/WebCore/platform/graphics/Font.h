@@ -262,6 +262,15 @@ public:
 
     ColorGlyphType colorGlyphType(Glyph) const;
 
+#if PLATFORM(DRIFTSTACK)
+    // V-090 / Phase F.1.B-1: glyph→codepoint reverse lookup for color
+    // emoji atlas. Built at platformInit by walking the
+    // DriftstackEmojiAtlas's codepoint list and querying the CTFont's
+    // forward glyph map for each. Returns 0 if glyph is not a known
+    // single-codepoint color emoji.
+    char32_t driftstackCodepointForColorGlyph(Glyph) const;
+#endif
+
 private:
     WEBCORE_EXPORT Font(const FontPlatformData&, Origin, IsInterstitial, Visibility, IsOrientationFallback, std::optional<RenderingResourceIdentifier>);
     Font(IsSystemFallbackFontPlaceholder);
@@ -372,6 +381,13 @@ private:
     using EmojiType = Variant<NoEmojiGlyphs, SomeEmojiGlyphs>;
 #endif
     EmojiType m_emojiType { NoEmojiGlyphs { } };
+
+#if PLATFORM(DRIFTSTACK)
+    // V-090 / Phase F.1.B-1: glyph→codepoint reverse map for the subset
+    // of color glyphs covered by DriftstackEmojiAtlas. Populated lazily.
+    mutable HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_driftstackEmojiReverseMap;
+    mutable bool m_driftstackEmojiReverseMapBuilt { false };
+#endif
 
 #if PLATFORM(COCOA)
     mutable std::optional<PAL::OTSVGTable> m_otSVGTable;

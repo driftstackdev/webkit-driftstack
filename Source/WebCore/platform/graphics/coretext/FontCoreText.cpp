@@ -27,6 +27,10 @@
 #include "config.h"
 #include "Font.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "../cocoa/DriftstackEmojiAtlas.h"
+#endif
+
 #include "Color.h"
 #include "DoublePoint.h"
 #include "FloatRect.h"
@@ -820,6 +824,50 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     }
     return advance.width;
 }
+
+#if PLATFORM(DRIFTSTACK)
+// V-090 / Phase F.1.B-1: glyph→codepoint reverse map for the
+// DriftstackEmojiAtlas. Built lazily on first access. Iterates the
+// atlas's known codepoints, queries CTFont for the glyph each
+// resolves to, stores reverse mapping. Cost: ~1426 CTFontGetGlyphsForCharacters
+// calls per color-emoji font; one-time at first lookup.
+char32_t Font::driftstackCodepointForColorGlyph(Glyph glyph) const
+{
+    if (!m_driftstackEmojiReverseMapBuilt) {
+        const auto& atlas = DriftstackEmojiAtlas::singleton();
+        if (!atlas.isAvailable()) {
+            m_driftstackEmojiReverseMapBuilt = true;
+            return 0;
+        }
+
+        RetainPtr<CTFontRef> font = ctFont();
+        const auto& codepoints = atlas.codepoints();
+        for (uint32_t cp : codepoints) {
+            std::array<UniChar, 2> codeUnits {};
+            std::array<CGGlyph, 2> glyphs {};
+            CFIndex len;
+            if (cp > 0xFFFFu) {
+                uint32_t scalar = cp - 0x10000u;
+                codeUnits[0] = 0xD800u | (scalar >> 10);
+                codeUnits[1] = 0xDC00u | (scalar & 0x3FFu);
+                len = 2;
+            } else {
+                codeUnits[0] = static_cast<UniChar>(cp);
+                len = 1;
+            }
+            if (CTFontGetGlyphsForCharacters(font.get(), codeUnits.data(), glyphs.data(), len)) {
+                if (glyphs[0])
+                    m_driftstackEmojiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
+            }
+        }
+        m_driftstackEmojiReverseMapBuilt = true;
+        WTFLogAlways("[Driftstack] Font::driftstackCodepointForColorGlyph: built reverse map for color-emoji font, %u entries", static_cast<unsigned>(m_driftstackEmojiReverseMap.size()));
+    }
+
+    auto it = m_driftstackEmojiReverseMap.find(glyph);
+    return it != m_driftstackEmojiReverseMap.end() ? it->value : 0;
+}
+#endif
 
 GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned beginningGlyphIndex, unsigned beginningStringIndex, bool enableKerning, bool requiresShaping, const AtomString& locale, StringView text, TextDirection textDirection) const
 {

@@ -182,6 +182,24 @@ uint32_t DriftstackEmojiAtlas::pickStrikeForPointSize(float pointSize) const
     return m_strikes.last();
 }
 
+const Vector<uint32_t>& DriftstackEmojiAtlas::codepoints() const
+{
+    if (m_codepointsBuilt)
+        return m_uniqueCodepoints;
+
+    m_uniqueCodepoints.reserveInitialCapacity(m_numEntries / m_strikes.size());
+    uint32_t lastSeen = std::numeric_limits<uint32_t>::max();
+    for (size_t i = 0; i < m_numEntries; ++i) {
+        auto e = readEntry(m_indexSpan, i);
+        if (e.codepoint != lastSeen) {
+            m_uniqueCodepoints.append(e.codepoint);
+            lastSeen = e.codepoint;
+        }
+    }
+    m_codepointsBuilt = true;
+    return m_uniqueCodepoints;
+}
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

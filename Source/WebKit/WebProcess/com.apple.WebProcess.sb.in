@@ -110,9 +110,16 @@
 ;;; per wave-1-8-fix-4); these subpaths cover the dev default
 ;;; (/Users/john/code/driftstack-fonts) and the production fleet
 ;;; default (/var/driftstack/fonts) per stage-b rollout doc.
+;;; V-090 / Phase F.1.B: also allow the emoji atlas binary path
+;;; (mmap'd by DriftstackEmojiAtlas singleton at WebContent init).
+;;; Configurable via DRIFTSTACK_EMOJI_ATLAS_PATH env var; subpaths
+;;; below cover the dev default (the repo's reference dir) and the
+;;; production fleet default (/var/driftstack/atlas).
 (allow file-read*
     (subpath "/Users/john/code/driftstack-fonts")
-    (subpath "/var/driftstack/fonts"))
+    (subpath "/var/driftstack/fonts")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
+    (subpath "/var/driftstack/atlas"))
 #endif
 
 ;;; Allow reading internal profiles on development builds

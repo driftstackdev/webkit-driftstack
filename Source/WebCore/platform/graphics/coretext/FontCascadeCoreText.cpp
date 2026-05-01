@@ -26,6 +26,10 @@
 #include "ComplexTextController.h"
 #include "DashArray.h"
 #include "Font.h"
+
+#if PLATFORM(DRIFTSTACK)
+#include "../cocoa/DriftstackEmojiAtlas.h"
+#endif
 #include "FontCascadeFonts.h"
 #include "FontCascadeInlines.h"
 #include "GlyphBuffer.h"
@@ -382,6 +386,38 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         }
         context.setFillColor(fillColor);
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // V-090 / Phase F.1.B-1: log-only atlas integration validation.
+    // For each color glyph, look up DriftstackEmojiAtlas and log whether
+    // the atlas has the bitmap. Does NOT change rendering yet — that
+    // composite path is F.1.B-2.
+    {
+        auto& atlas = DriftstackEmojiAtlas::singleton();
+        if (atlas.isAvailable()) {
+            const float ptSize = font.platformData().size();
+            const uint32_t strike = atlas.pickStrikeForPointSize(ptSize);
+            for (size_t i = 0; i < glyphs.size(); ++i) {
+                Glyph g = glyphs[i];
+                if (font.colorGlyphType(g) != ColorGlyphType::Color)
+                    continue;
+                char32_t cp = font.driftstackCodepointForColorGlyph(g);
+                static unsigned logCount = 0;
+                if (++logCount > 30)
+                    break;
+                if (!cp) {
+                    WTFLogAlways("[Driftstack] Atlas lookup glyph=%u (no reverse-map entry; likely composite/ZWJ) ptSize=%.1f",
+                        static_cast<unsigned>(g), ptSize);
+                    continue;
+                }
+                auto entry = atlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
+                WTFLogAlways("[Driftstack] Atlas lookup glyph=%u cp=U+%04X ptSize=%.1f strike=%u → %s",
+                    static_cast<unsigned>(g), static_cast<unsigned>(cp), ptSize, strike,
+                    entry.empty() ? "MISS" : "HIT");
+            }
+        }
+    }
+#endif
 
     showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
 
