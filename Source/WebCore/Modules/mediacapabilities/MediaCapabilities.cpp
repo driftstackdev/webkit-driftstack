@@ -165,11 +165,40 @@ static bool isValidMediaConfiguration(const MediaConfiguration& configuration)
     return true;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Driftstack: clamp the decoding-info `smooth` boolean to iPhone-archetype
+// hardware ceilings. Mac WebKit's underlying media stack reports smooth=true
+// for HEVC 4K@60 because Apple Silicon Macs decode it smoothly; iPhone 16
+// Pro reports smooth=false for the same config because its hardware
+// ceiling is below 60fps at 4K HEVC. V-074 cumulative rig identified this
+// as a 1-surface diff against iPhone reference. Clamping is per-call
+// (Phase 3 per file 105) and conservative — only the configurations we
+// have evidence for.
+static void applyDriftstackHardwareCeiling(PlatformMediaCapabilitiesDecodingInfo& info)
+{
+    const auto& v = info.configuration.video;
+    if (!v)
+        return;
+
+    // HEVC at 4K resolution with framerate >= 60fps: iPhone 16 Pro can decode
+    // (supported=true) and does so power-efficiently, but not smoothly.
+    // Match. Both 'hev1.*' and 'hvc1.*' codec strings are HEVC.
+    bool isHEVC = v->contentType.contains("hev1"_s) || v->contentType.contains("hvc1"_s);
+    bool is4KOrHigher = v->width >= 3840 || v->height >= 2160;
+    bool is60fpsOrHigher = v->framerate >= 60.0;
+    if (isHEVC && is4KOrHigher && is60fpsOrHigher)
+        info.smooth = false;
+}
+#endif
+
 static void gatherDecodingInfo(Document& document, PlatformMediaDecodingConfiguration&& configuration, PlatformMediaEngineConfigurationFactory::DecodingConfigurationCallback&& callback)
 {
     RELEASE_LOG_INFO(Media, "Gathering decoding MediaCapabilities");
     PlatformMediaEngineConfigurationFactory::DecodingConfigurationCallback decodingCallback = [callback = WTF::move(callback)](PlatformMediaCapabilitiesDecodingInfo&& result) mutable {
         RELEASE_LOG_INFO(Media, "Finished gathering decoding MediaCapabilities");
+#if PLATFORM(DRIFTSTACK)
+        applyDriftstackHardwareCeiling(result);
+#endif
         callback(WTF::move(result));
     };
 
