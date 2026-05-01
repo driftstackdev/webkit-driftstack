@@ -12,7 +12,7 @@
  */
 
 [
-    Conditional=IOS_GESTURE_EVENTS|MAC_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS,
+    Conditional=DRIFTSTACK_TOUCH_STUBS,
     Exposed=Window
 ] interface GestureEvent : UIEvent {
     readonly attribute float scale;
