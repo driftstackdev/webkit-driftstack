@@ -267,6 +267,23 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
         || lowercase == "plantagenet cherokee"_s
         || lowercase == "gurmukhi mn"_s)
         lowercase = "helvetica"_s;
+    // V-098 Track 8: iOS system font (SFUI.ttf) registers under family
+    // ".SF UI" via CoreText's platform-0 Unicode name (preferred over
+    // the platform-3 'System Font' name). Empirical (V-099 cumulative):
+    // ONLY -apple-system + system-ui resolve to this iOS system font
+    // on iPhone (width 163.73 for the rig test string). The others
+    // (BlinkMacSystemFont, SF Pro Text, SF Pro Display) resolve to
+    // Helvetica on iPhone (width 160.0625 — same as a CSS sans-serif
+    // fallback). Don't redirect those — they match iPhone via the
+    // existing MISS → CSS fallback path.
+    // V-099 Track 8 finding: -apple-system / system-ui CSS pseudo-families
+    // bypass driftstackIOSFontWithFamily entirely (proven empirically across
+    // builds #9-#15). Diagnostic redirect to "helvetica" had ZERO effect on
+    // measured -apple-system width — function not entered for these names.
+    // The CSS resolution layer maps -apple-system to a system font directly
+    // via WebKit's higher-level FontCascadeDescription / font-family
+    // resolution path. Track 8 fix requires WebCore CSS-resolution layer
+    // modification, not FontCache layer. Surfaced for founder review.
     // Telugu has its own iOS font (Kohinoor Telugu) — different metrics
     // than Helvetica (w=162.31 vs 160.06 in iPhone reference); redirect
     // to the actual iOS Telugu font.
