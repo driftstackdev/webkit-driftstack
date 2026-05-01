@@ -436,7 +436,19 @@ String DateCache::timeZoneDisplayName(bool isDST)
 {
     if (m_timeZoneStandardDisplayNameCache.isNull()) {
         auto& timeZoneCache = *this->timeZoneCache();
+#if PLATFORM(DRIFTSTACK)
+        // Mac's defaultLanguage() returns whatever the user set in macOS UI
+        // preferences; ICU's ucal_getTimeZoneDisplayName with that locale
+        // often falls back to "GMT+offset" format for timezones whose
+        // localized name isn't in Mac's CLDR data subset. iPhone with
+        // en-US locale returns the long localized name (e.g.,
+        // "Türkiye Standard Time" for Europe/Istanbul). On Driftstack,
+        // hardcode the locale to "en-US" so ICU returns the iPhone-style
+        // long names. V-074 cumulative-rig finding.
+        CString language { "en_US" };
+#else
         CString language = defaultLanguage().utf8();
+#endif
         {
             Vector<char16_t, 32> standardDisplayNameBuffer;
             auto status = callBufferProducingFunction(ucal_getTimeZoneDisplayName, timeZoneCache.m_calendar.get(), UCAL_STANDARD, language.data(), standardDisplayNameBuffer);
