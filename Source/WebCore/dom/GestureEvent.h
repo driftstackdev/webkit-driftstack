@@ -37,7 +37,7 @@ public:
     float rotation() const { return 0.0f; }
 
 private:
-    GestureEvent() = default;
+    GestureEvent() : UIEvent(EventInterfaceType::GestureEvent) { }
 };
 
 } // namespace WebCore
