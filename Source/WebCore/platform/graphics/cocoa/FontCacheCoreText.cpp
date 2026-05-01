@@ -83,15 +83,27 @@ bool fontNameIsSystemFont(CFStringRef fontName)
 
 static Lock driftstackIOSFontMapLock;
 
-static MemoryCompactRobinHoodHashMap<String, RetainPtr<CFURLRef>>& driftstackIOSFontMap() WTF_REQUIRES_LOCK(driftstackIOSFontMapLock)
+// V-086 Track 4 fix: nested map structure family → list of (style traits, URL).
+// Each iOS font binary has a kCTFontStyleNameAttribute (Regular / Bold / Italic /
+// Bold Italic / etc.) and kCTFontTraitsAttribute with weight + slant. We index
+// every variant and pick the closest match at lookup time per the requested
+// FontDescription's weight + italic.
+struct DriftstackIOSFontVariant {
+    RetainPtr<CFURLRef> url;
+    float weight { 0.f };          // CTFontWeight: -1.0 (ultralight) … 0 (regular) … 1.0 (heavy)
+    bool italic { false };
+    String styleName;              // for diagnostics
+};
+
+static MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& driftstackIOSFontMap() WTF_REQUIRES_LOCK(driftstackIOSFontMapLock)
 {
-    static NeverDestroyed<MemoryCompactRobinHoodHashMap<String, RetainPtr<CFURLRef>>> map;
+    static NeverDestroyed<MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>> map;
     return map.get();
 }
 
 static bool driftstackIOSFontMapInitialized WTF_GUARDED_BY_LOCK(driftstackIOSFontMapLock) = false;
 
-static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoodHashMap<String, RetainPtr<CFURLRef>>& map, size_t& mappedCount, size_t& parseFailedCount)
+static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& map, size_t& mappedCount, size_t& parseFailedCount)
 {
     DIR* dir = opendir(root.c_str());
     if (!dir)
@@ -126,8 +138,8 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         if (regError)
             CFRelease(regError);
 
-        // Read all family names in the binary (.ttc collections may contain multiple)
-        // and add an entry for each into the map.
+        // Read all variants in the binary (.ttc collections may contain multiple)
+        // and add each (family, weight, italic) tuple into the map.
         RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(fontURL.get()));
         if (!descs) {
             ++parseFailedCount;
@@ -142,9 +154,44 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             String family = String(familyCF.get()).convertToASCIILowercase();
             if (family.isEmpty())
                 continue;
-            auto addResult = map.add(family, fontURL);
-            if (addResult.isNewEntry)
+
+            // Read weight + slant from kCTFontTraitsAttribute (NSDictionary).
+            DriftstackIOSFontVariant variant;
+            variant.url = fontURL;
+            variant.weight = 0.f;
+            variant.italic = false;
+
+            RetainPtr<CFDictionaryRef> traits = adoptCF(static_cast<CFDictionaryRef>(CTFontDescriptorCopyAttribute(desc, kCTFontTraitsAttribute)));
+            if (traits) {
+                CFNumberRef weightNum = static_cast<CFNumberRef>(CFDictionaryGetValue(traits.get(), kCTFontWeightTrait));
+                if (weightNum)
+                    CFNumberGetValue(weightNum, kCFNumberFloatType, &variant.weight);
+                CFNumberRef slantNum = static_cast<CFNumberRef>(CFDictionaryGetValue(traits.get(), kCTFontSlantTrait));
+                if (slantNum) {
+                    float slant = 0.f;
+                    CFNumberGetValue(slantNum, kCFNumberFloatType, &slant);
+                    variant.italic = slant > 0.01f;
+                }
+            }
+
+            RetainPtr<CFStringRef> styleCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontStyleNameAttribute)));
+            if (styleCF)
+                variant.styleName = String(styleCF.get());
+
+            auto& variants = map.ensure(family, [] { return Vector<DriftstackIOSFontVariant> { }; }).iterator->value;
+            // Avoid duplicates from the same .ttf being descriptor-walked twice.
+            bool dup = false;
+            for (const auto& v : variants) {
+                if (CFEqual(v.url.get(), variant.url.get()) && v.italic == variant.italic
+                    && std::abs(v.weight - variant.weight) < 0.01f) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                variants.append(WTF::move(variant));
                 ++mappedCount;
+            }
         }
     }
     closedir(dir);
@@ -172,44 +219,93 @@ static void initializeDriftstackIOSFontMapIfNeeded()
     WTFLogAlways("[Driftstack] FontCache: %zu families mapped to iOS font binaries (parseFailed=%zu, dir=%s)", mapped, parseFailed, root.c_str());
 }
 
-static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, float size)
+static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, const FontDescription& fontDescription, float size)
 {
     if (family.isEmpty())
         return nullptr;
     initializeDriftstackIOSFontMapIfNeeded();
 
     String lowercase = family.string().convertToASCIILowercase();
-    RetainPtr<CFURLRef> url;
+    DriftstackIOSFontVariant chosenVariant;
+    bool found = false;
     {
         Locker locker(driftstackIOSFontMapLock);
         auto it = driftstackIOSFontMap().find(lowercase);
         if (it == driftstackIOSFontMap().end()) {
-            // Diagnostic: surface lookup misses for the first few unique families
-            // so we know whether the override is being called at all and what
-            // names canvas measureText is asking for.
             static unsigned missCount = 0;
-            if (++missCount <= 5)
+            if (++missCount <= 8)
                 WTFLogAlways("[Driftstack] FontCache: lookup MISS for family '%s' (lowercase='%s')", family.string().utf8().data(), lowercase.utf8().data());
             return nullptr;
         }
-        url = it->value;
-    }
-    static unsigned hitCount = 0;
-    if (++hitCount <= 5)
-        WTFLogAlways("[Driftstack] FontCache: lookup HIT for family '%s' size=%.1f", family.string().utf8().data(), size);
+        // V-086 Track 4 fix: pick the variant whose (weight, italic)
+        // is closest to the requested FontDescription. Convert the
+        // request's weight/italic into CTFont's [-1, 1] weight scale
+        // and slant boolean.
+        const auto& variants = it->value;
+        const float requestedWeight = (static_cast<float>(fontDescription.weight()) - 400.f) / 400.f; // 100 → -0.75; 400 → 0; 700 → 0.75; 900 → 1.25 → clamp 1.0
+        const bool requestedItalic = isItalic(fontDescription.fontStyleSlope());
 
-    RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(url.get()));
+        float bestScore = std::numeric_limits<float>::infinity();
+        for (const auto& v : variants) {
+            float italicMismatch = (v.italic != requestedItalic) ? 1.0f : 0.0f;
+            float weightDelta = std::abs(v.weight - requestedWeight);
+            // Italic mismatch is a hard cost; weight delta is soft.
+            float score = italicMismatch * 10.0f + weightDelta;
+            if (score < bestScore) {
+                bestScore = score;
+                chosenVariant = v;
+                found = true;
+            }
+        }
+    }
+    if (!found)
+        return nullptr;
+
+    static unsigned hitCount = 0;
+    if (++hitCount <= 12) {
+        char pathBuf[1024] = {};
+        if (chosenVariant.url) {
+            RetainPtr<CFStringRef> urlPath = CFURLGetString(chosenVariant.url.get());
+            if (urlPath)
+                CFStringGetCString(urlPath.get(), pathBuf, sizeof(pathBuf), kCFStringEncodingUTF8);
+        }
+        WTFLogAlways("[Driftstack] FontCache: lookup HIT family='%s' weight=%d italic=%d size=%.1f → style='%s' URL=%s",
+            family.string().utf8().data(),
+            static_cast<int>(static_cast<float>(fontDescription.weight())),
+            static_cast<int>(isItalic(fontDescription.fontStyleSlope())),
+            size,
+            chosenVariant.styleName.utf8().data(),
+            pathBuf);
+    }
+
+    RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(chosenVariant.url.get()));
     if (!descs || !CFArrayGetCount(descs.get()))
         return nullptr;
     // For .ttc collections containing multiple variants, find the descriptor
-    // whose family-name matches the requested family exactly. Falls back to
-    // the first descriptor if no match.
+    // whose family-name matches the requested family exactly AND whose
+    // italic + weight matches our chosen variant. Falls back to the first
+    // descriptor if no match.
     CTFontDescriptorRef chosen = nullptr;
     CFIndex count = CFArrayGetCount(descs.get());
     for (CFIndex i = 0; i < count; ++i) {
         CTFontDescriptorRef d = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
         RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(d, kCTFontFamilyNameAttribute)));
-        if (familyCF && String(familyCF.get()).convertToASCIILowercase() == lowercase) {
+        if (!familyCF || String(familyCF.get()).convertToASCIILowercase() != lowercase)
+            continue;
+        // Match style by traits.
+        RetainPtr<CFDictionaryRef> dTraits = adoptCF(static_cast<CFDictionaryRef>(CTFontDescriptorCopyAttribute(d, kCTFontTraitsAttribute)));
+        float dWeight = 0.f; bool dItalic = false;
+        if (dTraits) {
+            CFNumberRef wn = static_cast<CFNumberRef>(CFDictionaryGetValue(dTraits.get(), kCTFontWeightTrait));
+            if (wn) CFNumberGetValue(wn, kCFNumberFloatType, &dWeight);
+            CFNumberRef sn = static_cast<CFNumberRef>(CFDictionaryGetValue(dTraits.get(), kCTFontSlantTrait));
+            if (sn) {
+                float s = 0.f;
+                CFNumberGetValue(sn, kCFNumberFloatType, &s);
+                dItalic = s > 0.01f;
+            }
+        }
+        if (dItalic == chosenVariant.italic && std::abs(dWeight - chosenVariant.weight) < 0.01f) {
             chosen = d;
             break;
         }
@@ -791,7 +887,7 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
     // expose. This bypasses CTFont's name-based lookup which otherwise
     // returns Mac's system Helvetica/Arial/etc. variants — and prevents
     // canvas measureText from observing iPhone-specific font metrics.
-    if (auto driftstackFont = driftstackIOSFontWithFamily(family, size))
+    if (auto driftstackFont = driftstackIOSFontWithFamily(family, fontDescription, size))
         return driftstackFont;
 #endif
 
