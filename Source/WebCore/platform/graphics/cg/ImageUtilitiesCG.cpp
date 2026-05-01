@@ -448,6 +448,18 @@ static bool encode(CGImageRef image, const String& mimeType, std::optional<doubl
     if (!image)
         return false;
 
+#if PLATFORM(DRIFTSTACK)
+    // V-090 Track 6: iPhone Safari toBlob falls back to PNG-encoded bytes
+    // for image/avif and image/heic (verified via iPhone reference: same
+    // 304-byte PNG payload returned for png/avif/heic). Match this
+    // behavior. The Blob's MIME tag is set by the caller from the
+    // originally-requested mimeType, not from the encoder, so the
+    // resulting blob.type stays "image/avif" / "image/heic" as expected.
+    if (equalLettersIgnoringASCIICase(mimeType, "image/avif"_s)
+        || equalLettersIgnoringASCIICase(mimeType, "image/heic"_s))
+        return encode(image, "image/png"_s, quality, function);
+#endif
+
     auto destinationUTI = utiFromImageBufferMIMEType(mimeType);
     if (!destinationUTI)
         return false;

@@ -180,10 +180,15 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
 
             auto& variants = map.ensure(family, [] { return Vector<DriftstackIOSFontVariant> { }; }).iterator->value;
             // Avoid duplicates from the same .ttf being descriptor-walked twice.
+            // V-091 fix: include styleName in dup-detection so .ttc files with
+            // multiple faces sharing weight + italic but differing in styleName
+            // (e.g., iOS Papyrus.ttc face 0 Condensed + face 1 Regular both at
+            // weight=0 italic=false) all end up registered.
             bool dup = false;
             for (const auto& v : variants) {
                 if (CFEqual(v.url.get(), variant.url.get()) && v.italic == variant.italic
-                    && std::abs(v.weight - variant.weight) < 0.01f) {
+                    && std::abs(v.weight - variant.weight) < 0.01f
+                    && v.styleName == variant.styleName) {
                     dup = true;
                     break;
                 }
@@ -195,6 +200,30 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         }
     }
     closedir(dir);
+}
+
+// V-090 Track 4 Phase 4.D: Apple's per-family CSS-weight → styleName mapping.
+// Mac's reading of iOS .ttc font traits doesn't always match iPhone's
+// per-CSS-weight font-face selection; for the 3 fonts where Mac picks a
+// different face than iPhone at any CSS weight, encode the empirical
+// iPhone mapping explicitly. Italic CSS requests reuse the upright face
+// for these families (empirical: iPhone has no italic variant — italic CSS
+// produces identical metrics).
+static String preferredIOSStyleForFamily(const String& lowercaseFamily, int cssWeight)
+{
+    if (lowercaseFamily == "hiragino sans"_s) {
+        if (cssWeight <= 300) return "W3"_s;
+        if (cssWeight == 400) return "W4"_s;
+        if (cssWeight == 500) return "W5"_s;
+        if (cssWeight == 600) return "W6"_s;
+        if (cssWeight == 700) return "W7"_s;
+        return "W8"_s; // CSS 800 + 900 → W8 (heaviest available in HiraginoKakuGothic.ttc)
+    }
+    if (lowercaseFamily == "marker felt"_s)
+        return cssWeight < 600 ? "Thin"_s : "Wide"_s;
+    if (lowercaseFamily == "papyrus"_s)
+        return cssWeight < 600 ? "Regular"_s : "Condensed"_s;
+    return String();
 }
 
 static void initializeDriftstackIOSFontMapIfNeeded()
@@ -255,24 +284,39 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
                 WTFLogAlways("[Driftstack] FontCache: lookup MISS for family '%s' (lowercase='%s')", family.string().utf8().data(), lowercase.utf8().data());
             return nullptr;
         }
-        // V-086 Track 4 fix: pick the variant whose (weight, italic)
-        // is closest to the requested FontDescription. Convert the
-        // request's weight/italic into CTFont's [-1, 1] weight scale
-        // and slant boolean.
         const auto& variants = it->value;
         const float requestedWeight = (static_cast<float>(fontDescription.weight()) - 400.f) / 400.f; // 100 → -0.75; 400 → 0; 700 → 0.75; 900 → 1.25 → clamp 1.0
         const bool requestedItalic = isItalic(fontDescription.fontStyleSlope());
 
-        float bestScore = std::numeric_limits<float>::infinity();
-        for (const auto& v : variants) {
-            float italicMismatch = (v.italic != requestedItalic) ? 1.0f : 0.0f;
-            float weightDelta = std::abs(v.weight - requestedWeight);
-            // Italic mismatch is a hard cost; weight delta is soft.
-            float score = italicMismatch * 10.0f + weightDelta;
-            if (score < bestScore) {
-                bestScore = score;
-                chosenVariant = v;
-                found = true;
+        // V-090 Track 4 Phase 4.D: try explicit per-family styleName override first.
+        const int cssWeight = static_cast<int>(static_cast<float>(fontDescription.weight()));
+        String preferredStyle = preferredIOSStyleForFamily(lowercase, cssWeight);
+        if (!preferredStyle.isEmpty()) {
+            for (const auto& v : variants) {
+                if (v.styleName == preferredStyle) {
+                    chosenVariant = v;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            // V-086 Track 4 fix: pick the variant whose (weight, italic)
+            // is closest to the requested FontDescription. Convert the
+            // request's weight/italic into CTFont's [-1, 1] weight scale
+            // and slant boolean.
+            float bestScore = std::numeric_limits<float>::infinity();
+            for (const auto& v : variants) {
+                float italicMismatch = (v.italic != requestedItalic) ? 1.0f : 0.0f;
+                float weightDelta = std::abs(v.weight - requestedWeight);
+                // Italic mismatch is a hard cost; weight delta is soft.
+                float score = italicMismatch * 10.0f + weightDelta;
+                if (score < bestScore) {
+                    bestScore = score;
+                    chosenVariant = v;
+                    found = true;
+                }
             }
         }
     }
@@ -280,7 +324,7 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
         return nullptr;
 
     static unsigned hitCount = 0;
-    if (++hitCount <= 12) {
+    if (++hitCount <= 100 || family == AtomString("Papyrus"_s)) {
         char pathBuf[1024] = {};
         if (chosenVariant.url) {
             RetainPtr<CFStringRef> urlPath = CFURLGetString(chosenVariant.url.get());
@@ -324,6 +368,14 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
             }
         }
         if (dItalic == chosenVariant.italic && std::abs(dWeight - chosenVariant.weight) < 0.01f) {
+            // V-091 fix: also match by styleName when traits tie, so .ttc
+            // files with multiple faces at identical (weight, italic) but
+            // differing styleName (e.g., Papyrus.ttc Condensed/Regular)
+            // resolve to the variant the override picked, not whichever
+            // descriptor was enumerated first.
+            RetainPtr<CFStringRef> styleCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(d, kCTFontStyleNameAttribute)));
+            if (!styleCF || String(styleCF.get()) != chosenVariant.styleName)
+                continue;
             chosen = d;
             break;
         }
