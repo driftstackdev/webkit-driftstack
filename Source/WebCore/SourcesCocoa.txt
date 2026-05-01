@@ -451,6 +451,7 @@ platform/graphics/cocoa/AudioTrackPrivateWebM.cpp
 platform/graphics/cocoa/CMUtilities.mm @nonARC @no-unify
 platform/graphics/cocoa/ColorCocoa.mm @nonARC
 platform/graphics/cocoa/CVPixelBufferUtilities.cpp
+platform/graphics/cocoa/DriftstackEmojiAtlas.mm @nonARC
 platform/graphics/cocoa/FloatRectCocoa.mm @nonARC
 platform/graphics/cocoa/FontCacheCocoa.mm @nonARC
 platform/graphics/cocoa/FontCacheCoreText.cpp
