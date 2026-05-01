@@ -249,6 +249,155 @@ void Font::platformInit()
             }
         }
     }
+
+    // V-083 Track 3: per-size fontBoundingBox{Ascent,Descent} overrides
+    // for non-emoji fonts where Mac CoreText returns metrics that diverge
+    // from iPhone's. Captured per-size via Track 3 BS Automate run
+    // (track3-non-emoji-fonts.html), 6 fonts × 89 sizes = 534 reference
+    // probes. Of the 6 fonts, 3 (Gujarati Sangam MN / Oriya Sangam MN /
+    // Plantagenet Cherokee) share identical metrics → one shared table.
+    {
+        struct DriftstackTrack3Entry { float size; float ascent; float descent; };
+        static constexpr std::array<DriftstackTrack3Entry, 89> track3TimesTable = {{
+            {   8.f,   8.f,   2.f }, {   9.f,   9.f,   2.f }, {  10.f,   9.f,   3.f }, {  11.f,  10.f,   3.f },
+            {  12.f,  11.f,   3.f }, {  13.f,  12.f,   3.f }, {  14.f,  13.f,   4.f }, {  15.f,  14.f,   4.f },
+            {  16.f,  15.f,   4.f }, {  17.f,  16.f,   4.f }, {  18.f,  17.f,   4.f }, {  19.f,  17.f,   5.f },
+            {  20.f,  18.f,   5.f }, {  21.f,  19.f,   5.f }, {  22.f,  20.f,   5.f }, {  23.f,  21.f,   5.f },
+            {  24.f,  22.f,   6.f }, {  25.f,  23.f,   6.f }, {  26.f,  24.f,   6.f }, {  27.f,  25.f,   6.f },
+            {  28.f,  25.f,   7.f }, {  29.f,  26.f,   7.f }, {  30.f,  27.f,   7.f }, {  31.f,  28.f,   7.f },
+            {  32.f,  29.f,   7.f }, {  33.f,  30.f,   8.f }, {  34.f,  31.f,   8.f }, {  35.f,  32.f,   8.f },
+            {  36.f,  33.f,   8.f }, {  37.f,  33.f,   9.f }, {  38.f,  34.f,   9.f }, {  39.f,  35.f,   9.f },
+            {  40.f,  36.f,   9.f }, {  41.f,  37.f,   9.f }, {  42.f,  38.f,  10.f }, {  43.f,  39.f,  10.f },
+            {  44.f,  40.f,  10.f }, {  45.f,  41.f,  10.f }, {  46.f,  41.f,  10.f }, {  47.f,  42.f,  11.f },
+            {  48.f,  43.f,  11.f }, {  49.f,  44.f,  11.f }, {  50.f,  45.f,  11.f }, {  51.f,  46.f,  12.f },
+            {  52.f,  47.f,  12.f }, {  53.f,  48.f,  12.f }, {  54.f,  49.f,  12.f }, {  55.f,  50.f,  12.f },
+            {  56.f,  50.f,  13.f }, {  57.f,  51.f,  13.f }, {  58.f,  52.f,  13.f }, {  59.f,  53.f,  13.f },
+            {  60.f,  54.f,  13.f }, {  61.f,  55.f,  14.f }, {  62.f,  56.f,  14.f }, {  63.f,  57.f,  14.f },
+            {  64.f,  58.f,  14.f }, {  65.f,  58.f,  15.f }, {  66.f,  59.f,  15.f }, {  67.f,  60.f,  15.f },
+            {  68.f,  61.f,  15.f }, {  69.f,  62.f,  15.f }, {  70.f,  63.f,  16.f }, {  71.f,  64.f,  16.f },
+            {  72.f,  65.f,  16.f }, {  73.f,  66.f,  16.f }, {  74.f,  66.f,  17.f }, {  75.f,  67.f,  17.f },
+            {  76.f,  68.f,  17.f }, {  77.f,  69.f,  17.f }, {  78.f,  70.f,  17.f }, {  79.f,  71.f,  18.f },
+            {  80.f,  72.f,  18.f }, {  81.f,  73.f,  18.f }, {  82.f,  74.f,  18.f }, {  83.f,  74.f,  18.f },
+            {  84.f,  75.f,  19.f }, {  85.f,  76.f,  19.f }, {  86.f,  77.f,  19.f }, {  87.f,  78.f,  19.f },
+            {  88.f,  79.f,  20.f }, {  89.f,  80.f,  20.f }, {  90.f,  81.f,  20.f }, {  91.f,  82.f,  20.f },
+            {  92.f,  82.f,  20.f }, {  93.f,  83.f,  21.f }, {  94.f,  84.f,  21.f }, {  95.f,  85.f,  21.f },
+            {  96.f,  86.f,  21.f }
+        }};
+        static constexpr std::array<DriftstackTrack3Entry, 89> track3AppleSystemTable = {{
+            {   8.f,   8.f,   2.f }, {   9.f,   9.f,   3.f }, {  10.f,  10.f,   3.f }, {  11.f,  11.f,   3.f },
+            {  12.f,  12.f,   3.f }, {  13.f,  13.f,   4.f }, {  14.f,  14.f,   4.f }, {  15.f,  15.f,   4.f },
+            {  16.f,  16.f,   4.f }, {  17.f,  17.f,   5.f }, {  18.f,  18.f,   5.f }, {  19.f,  19.f,   5.f },
+            {  20.f,  20.f,   5.f }, {  21.f,  20.f,   6.f }, {  22.f,  21.f,   6.f }, {  23.f,  22.f,   6.f },
+            {  24.f,  23.f,   6.f }, {  25.f,  24.f,   7.f }, {  26.f,  25.f,   7.f }, {  27.f,  26.f,   7.f },
+            {  28.f,  27.f,   7.f }, {  29.f,  28.f,   7.f }, {  30.f,  29.f,   8.f }, {  31.f,  30.f,   8.f },
+            {  32.f,  31.f,   8.f }, {  33.f,  32.f,   8.f }, {  34.f,  33.f,   9.f }, {  35.f,  34.f,   9.f },
+            {  36.f,  35.f,   9.f }, {  37.f,  36.f,   9.f }, {  38.f,  37.f,  10.f }, {  39.f,  38.f,  10.f },
+            {  40.f,  39.f,  10.f }, {  41.f,  40.f,  10.f }, {  42.f,  40.f,  11.f }, {  43.f,  41.f,  11.f },
+            {  44.f,  42.f,  11.f }, {  45.f,  43.f,  11.f }, {  46.f,  44.f,  12.f }, {  47.f,  45.f,  12.f },
+            {  48.f,  46.f,  12.f }, {  49.f,  47.f,  12.f }, {  50.f,  48.f,  13.f }, {  51.f,  49.f,  13.f },
+            {  52.f,  50.f,  13.f }, {  53.f,  51.f,  13.f }, {  54.f,  52.f,  14.f }, {  55.f,  53.f,  14.f },
+            {  56.f,  54.f,  14.f }, {  57.f,  55.f,  14.f }, {  58.f,  56.f,  14.f }, {  59.f,  57.f,  15.f },
+            {  60.f,  58.f,  15.f }, {  61.f,  59.f,  15.f }, {  62.f,  60.f,  15.f }, {  63.f,  60.f,  16.f },
+            {  64.f,  61.f,  16.f }, {  65.f,  62.f,  16.f }, {  66.f,  63.f,  16.f }, {  67.f,  64.f,  17.f },
+            {  68.f,  65.f,  17.f }, {  69.f,  66.f,  17.f }, {  70.f,  67.f,  17.f }, {  71.f,  68.f,  18.f },
+            {  72.f,  69.f,  18.f }, {  73.f,  70.f,  18.f }, {  74.f,  71.f,  18.f }, {  75.f,  72.f,  19.f },
+            {  76.f,  73.f,  19.f }, {  77.f,  74.f,  19.f }, {  78.f,  75.f,  19.f }, {  79.f,  76.f,  20.f },
+            {  80.f,  77.f,  20.f }, {  81.f,  78.f,  20.f }, {  82.f,  79.f,  20.f }, {  83.f,  80.f,  21.f },
+            {  84.f,  80.f,  21.f }, {  85.f,  81.f,  21.f }, {  86.f,  82.f,  21.f }, {  87.f,  83.f,  21.f },
+            {  88.f,  84.f,  22.f }, {  89.f,  85.f,  22.f }, {  90.f,  86.f,  22.f }, {  91.f,  87.f,  22.f },
+            {  92.f,  88.f,  23.f }, {  93.f,  89.f,  23.f }, {  94.f,  90.f,  23.f }, {  95.f,  91.f,  23.f },
+            {  96.f,  92.f,  24.f }
+        }};
+        static constexpr std::array<DriftstackTrack3Entry, 89> track3IndicSharedTable = {{
+            {   8.f,   9.f,   2.f }, {   9.f,   9.f,   3.f }, {  10.f,  10.f,   3.f }, {  11.f,  11.f,   3.f },
+            {  12.f,  12.f,   3.f }, {  13.f,  13.f,   3.f }, {  14.f,  14.f,   4.f }, {  15.f,  15.f,   4.f },
+            {  16.f,  16.f,   4.f }, {  17.f,  17.f,   4.f }, {  18.f,  17.f,   5.f }, {  19.f,  18.f,   5.f },
+            {  20.f,  20.f,   5.f }, {  21.f,  21.f,   5.f }, {  22.f,  21.f,   6.f }, {  23.f,  22.f,   6.f },
+            {  24.f,  23.f,   6.f }, {  25.f,  24.f,   6.f }, {  26.f,  25.f,   6.f }, {  27.f,  26.f,   7.f },
+            {  28.f,  27.f,   7.f }, {  29.f,  28.f,   7.f }, {  30.f,  29.f,   7.f }, {  31.f,  29.f,   8.f },
+            {  32.f,  30.f,   8.f }, {  33.f,  31.f,   8.f }, {  34.f,  33.f,   8.f }, {  35.f,  33.f,   9.f },
+            {  36.f,  34.f,   9.f }, {  37.f,  35.f,   9.f }, {  38.f,  36.f,   9.f }, {  39.f,  37.f,   9.f },
+            {  40.f,  38.f,  10.f }, {  41.f,  39.f,  10.f }, {  42.f,  40.f,  10.f }, {  43.f,  41.f,  10.f },
+            {  44.f,  41.f,  11.f }, {  45.f,  42.f,  11.f }, {  46.f,  43.f,  11.f }, {  47.f,  45.f,  11.f },
+            {  48.f,  45.f,  12.f }, {  49.f,  46.f,  12.f }, {  50.f,  47.f,  12.f }, {  51.f,  48.f,  12.f },
+            {  52.f,  49.f,  12.f }, {  53.f,  49.f,  13.f }, {  54.f,  51.f,  13.f }, {  55.f,  52.f,  13.f },
+            {  56.f,  53.f,  13.f }, {  57.f,  53.f,  14.f }, {  58.f,  54.f,  14.f }, {  59.f,  55.f,  14.f },
+            {  60.f,  57.f,  14.f }, {  61.f,  57.f,  15.f }, {  62.f,  58.f,  15.f }, {  63.f,  59.f,  15.f },
+            {  64.f,  60.f,  15.f }, {  65.f,  61.f,  15.f }, {  66.f,  61.f,  16.f }, {  67.f,  63.f,  16.f },
+            {  68.f,  64.f,  16.f }, {  69.f,  65.f,  16.f }, {  70.f,  65.f,  17.f }, {  71.f,  66.f,  17.f },
+            {  72.f,  67.f,  17.f }, {  73.f,  68.f,  17.f }, {  74.f,  69.f,  18.f }, {  75.f,  70.f,  18.f },
+            {  76.f,  71.f,  18.f }, {  77.f,  72.f,  18.f }, {  78.f,  73.f,  18.f }, {  79.f,  73.f,  19.f },
+            {  80.f,  75.f,  19.f }, {  81.f,  76.f,  19.f }, {  82.f,  77.f,  19.f }, {  83.f,  77.f,  20.f },
+            {  84.f,  78.f,  20.f }, {  85.f,  79.f,  20.f }, {  86.f,  80.f,  20.f }, {  87.f,  81.f,  21.f },
+            {  88.f,  82.f,  21.f }, {  89.f,  83.f,  21.f }, {  90.f,  84.f,  21.f }, {  91.f,  85.f,  21.f },
+            {  92.f,  85.f,  22.f }, {  93.f,  86.f,  22.f }, {  94.f,  88.f,  22.f }, {  95.f,  89.f,  22.f },
+            {  96.f,  89.f,  23.f }
+        }};
+        static constexpr std::array<DriftstackTrack3Entry, 89> track3TeluguSangamTable = {{
+            {   8.f,   9.f,   3.f }, {   9.f,  10.f,   4.f }, {  10.f,  11.f,   4.f }, {  11.f,  12.f,   4.f },
+            {  12.f,  13.f,   5.f }, {  13.f,  14.f,   5.f }, {  14.f,  15.f,   5.f }, {  15.f,  16.f,   6.f },
+            {  16.f,  17.f,   6.f }, {  17.f,  18.f,   6.f }, {  18.f,  19.f,   7.f }, {  19.f,  20.f,   7.f },
+            {  20.f,  21.f,   7.f }, {  21.f,  23.f,   8.f }, {  22.f,  24.f,   8.f }, {  23.f,  25.f,   9.f },
+            {  24.f,  26.f,   9.f }, {  25.f,  27.f,   9.f }, {  26.f,  28.f,  10.f }, {  27.f,  29.f,  10.f },
+            {  28.f,  30.f,  10.f }, {  29.f,  31.f,  11.f }, {  30.f,  32.f,  11.f }, {  31.f,  33.f,  11.f },
+            {  32.f,  34.f,  12.f }, {  33.f,  35.f,  12.f }, {  34.f,  36.f,  12.f }, {  35.f,  37.f,  13.f },
+            {  36.f,  38.f,  13.f }, {  37.f,  39.f,  13.f }, {  38.f,  40.f,  14.f }, {  39.f,  41.f,  14.f },
+            {  40.f,  42.f,  14.f }, {  41.f,  44.f,  15.f }, {  42.f,  45.f,  15.f }, {  43.f,  46.f,  16.f },
+            {  44.f,  47.f,  16.f }, {  45.f,  48.f,  16.f }, {  46.f,  49.f,  17.f }, {  47.f,  50.f,  17.f },
+            {  48.f,  51.f,  17.f }, {  49.f,  52.f,  18.f }, {  50.f,  53.f,  18.f }, {  51.f,  54.f,  18.f },
+            {  52.f,  55.f,  19.f }, {  53.f,  56.f,  19.f }, {  54.f,  57.f,  19.f }, {  55.f,  58.f,  20.f },
+            {  56.f,  59.f,  20.f }, {  57.f,  60.f,  20.f }, {  58.f,  61.f,  21.f }, {  59.f,  62.f,  21.f },
+            {  60.f,  63.f,  21.f }, {  61.f,  65.f,  22.f }, {  62.f,  66.f,  22.f }, {  63.f,  67.f,  23.f },
+            {  64.f,  68.f,  23.f }, {  65.f,  69.f,  23.f }, {  66.f,  70.f,  24.f }, {  67.f,  71.f,  24.f },
+            {  68.f,  72.f,  24.f }, {  69.f,  73.f,  25.f }, {  70.f,  74.f,  25.f }, {  71.f,  75.f,  25.f },
+            {  72.f,  76.f,  26.f }, {  73.f,  77.f,  26.f }, {  74.f,  78.f,  26.f }, {  75.f,  79.f,  27.f },
+            {  76.f,  80.f,  27.f }, {  77.f,  81.f,  27.f }, {  78.f,  82.f,  28.f }, {  79.f,  83.f,  28.f },
+            {  80.f,  84.f,  28.f }, {  81.f,  86.f,  29.f }, {  82.f,  87.f,  29.f }, {  83.f,  88.f,  30.f },
+            {  84.f,  89.f,  30.f }, {  85.f,  90.f,  30.f }, {  86.f,  91.f,  31.f }, {  87.f,  92.f,  31.f },
+            {  88.f,  93.f,  31.f }, {  89.f,  94.f,  32.f }, {  90.f,  95.f,  32.f }, {  91.f,  96.f,  32.f },
+            {  92.f,  97.f,  33.f }, {  93.f,  98.f,  33.f }, {  94.f,  99.f,  33.f }, {  95.f, 100.f,  34.f },
+            {  96.f, 101.f,  34.f }
+        }};
+
+        // Match family by lowercased name. The 6 fonts collapse into 4
+        // tables (Gujarati/Oriya/Plantagenet share the indic table).
+        const std::span<const DriftstackTrack3Entry> matchedTable = [&]() -> std::span<const DriftstackTrack3Entry> {
+            if (!familyName)
+                return { };
+            String fn = String(familyName.get()).convertToASCIILowercase();
+            if (fn == "times"_s)
+                return std::span<const DriftstackTrack3Entry>(track3TimesTable);
+            if (fn == ".applesystemuifont"_s || fn == "applesystemuifont"_s || fn == "-apple-system"_s)
+                return std::span<const DriftstackTrack3Entry>(track3AppleSystemTable);
+            if (fn == "gujarati sangam mn"_s || fn == "oriya sangam mn"_s || fn == "plantagenet cherokee"_s)
+                return std::span<const DriftstackTrack3Entry>(track3IndicSharedTable);
+            if (fn == "telugu sangam mn"_s)
+                return std::span<const DriftstackTrack3Entry>(track3TeluguSangamTable);
+            return { };
+        }();
+
+        if (!matchedTable.empty()) {
+            const float track3Size = m_platformData.size();
+            if (track3Size <= matchedTable.front().size) {
+                ascent = matchedTable.front().ascent;
+                descent = matchedTable.front().descent;
+            } else if (track3Size >= matchedTable.back().size) {
+                ascent = matchedTable.back().ascent;
+                descent = matchedTable.back().descent;
+            } else {
+                DriftstackTrack3Entry a = matchedTable.front();
+                for (const auto& b : matchedTable) {
+                    if (track3Size >= a.size && track3Size <= b.size && a.size != b.size) {
+                        float t = (track3Size - a.size) / (b.size - a.size);
+                        ascent  = a.ascent  + t * (b.ascent  - a.ascent);
+                        descent = a.descent + t * (b.descent - a.descent);
+                        break;
+                    }
+                    a = b;
+                }
+            }
+        }
+    }
 #endif
 
     m_shouldNotBeUsedForArabic = fontFamilyShouldNotBeUsedForArabic(familyName.get());
