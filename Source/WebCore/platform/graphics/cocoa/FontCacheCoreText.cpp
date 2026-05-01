@@ -100,18 +100,19 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
     while (struct dirent* entry = readdir(dir)) {
         if (entry->d_name[0] == '.')
             continue;
-        std::string fullPath = root + "/" + entry->d_name;
+        // Use WTF::String for safe extension comparison (avoids -Wunsafe-buffer-usage
+        // -in-libc-call from strlen/strcasecmp/etc.).
+        String name = String::fromUTF8(unsafeSpan(entry->d_name));
+        std::string fullPath = root + "/" + name.utf8().data();
 
         if (entry->d_type == DT_DIR) {
             driftstackWalkFontDir(fullPath, map, mappedCount, parseFailedCount);
             continue;
         }
 
-        size_t nameLen = strlen(entry->d_name);
-        if (nameLen < 5)
-            continue;
-        const char* ext = entry->d_name + nameLen - 4;
-        if (strcasecmp(ext, ".ttf") && strcasecmp(ext, ".ttc") && strcasecmp(ext, ".otf"))
+        if (!name.endsWithIgnoringASCIICase(".ttf"_s)
+            && !name.endsWithIgnoringASCIICase(".ttc"_s)
+            && !name.endsWithIgnoringASCIICase(".otf"_s))
             continue;
 
         RetainPtr<CFStringRef> pathCF = adoptCF(CFStringCreateWithCString(kCFAllocatorDefault, fullPath.c_str(), kCFStringEncodingUTF8));
