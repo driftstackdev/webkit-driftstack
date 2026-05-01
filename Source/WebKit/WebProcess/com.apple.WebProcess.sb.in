@@ -103,6 +103,18 @@
     (subpath "/usr/lib")
     (subpath "/usr/share"))))
 
+#if PLATFORM(DRIFTSTACK)
+;;; Driftstack: allow WebContent read access to the iOS font binary
+;;; install dir for Stage B font registration. Path is configurable
+;;; via DRIFTSTACK_FONTS_DIR env var (forwarded through XPC bootstrap
+;;; per wave-1-8-fix-4); these subpaths cover the dev default
+;;; (/Users/john/code/driftstack-fonts) and the production fleet
+;;; default (/var/driftstack/fonts) per stage-b rollout doc.
+(allow file-read*
+    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath "/var/driftstack/fonts"))
+#endif
+
 ;;; Allow reading internal profiles on development builds
 (allow file-read*
     (require-all (file-mode #o0004)
