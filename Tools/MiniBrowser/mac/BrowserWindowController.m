@@ -52,12 +52,17 @@
     // Enable tabbing - group regular windows together
     self.window.tabbingIdentifier = @"MiniBrowserMainWindow";
 
-    NSString *sizeString = [[NSUserDefaults standardUserDefaults] stringForKey:@"WindowSize"];
-    if (sizeString) {
-        NSSize size = NSSizeFromString(sizeString);
-        if (size.width && size.height)
-            [self.window setContentSize:size];
-    }
+    // Driftstack wave-3-13-extension: force iPhone 16 Pro / iOS 26.4.1
+    // content size (402×714) so the CSS layout viewport matches what
+    // wave-3-13 forces JS-side via window.innerWidth/innerHeight.
+    // Without this, CSS sees Mac's NSWindow content size (varies by user)
+    // and the rig page renders into a viewport whose dimensions don't
+    // match the JS-reported values. Result: pageYOffset/scrollY != 0
+    // because the page content is taller than the actual viewport.
+    // This fork is always Driftstack — MiniBrowser doesn't include
+    // wtf/Platform.h so we don't gate on PLATFORM(DRIFTSTACK).
+    // NSUserDefault override removed; content size is always 402×714.
+    [self.window setContentSize:NSMakeSize(402, 714)];
 
     [share sendActionOn:NSEventMaskLeftMouseDown];
     [super windowDidLoad];
