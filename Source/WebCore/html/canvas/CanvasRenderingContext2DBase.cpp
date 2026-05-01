@@ -3077,8 +3077,22 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
     auto ascent = fontMetrics.ascent();
     auto descent = fontMetrics.descent();
 
+#if PLATFORM(DRIFTSTACK)
+    // V-076 cumulative-rig finding: Mac's glyphOverflow.top/bottom returns
+    // integer-rounded values (e.g., 14, 3.5 for 14px Helvetica) where
+    // iPhone Safari's canvas pipeline returns float values consistent
+    // across all fonts (13.640625, 3.84375). The fontMetrics-derived
+    // ascent/descent values match iPhone's actualBoundingBox* exactly
+    // because iPhone effectively uses font-metric values for these even
+    // though the spec describes glyph extent. Match iPhone exactly:
+    // use fontMetrics.ascent()/descent() for actualBoundingBox* on
+    // Driftstack. Resolves ~161 canvas surfaces in V-076 rig.
+    metrics->setActualBoundingBoxAscent(ascent - offset.y());
+    metrics->setActualBoundingBoxDescent(descent + offset.y());
+#else
     metrics->setActualBoundingBoxAscent(glyphOverflow.top - offset.y());
     metrics->setActualBoundingBoxDescent(glyphOverflow.bottom + offset.y());
+#endif
     metrics->setFontBoundingBoxAscent(fontMetrics.intAscent() - offset.y());
     metrics->setFontBoundingBoxDescent(fontMetrics.intDescent() + offset.y());
     metrics->setEmHeightAscent(ascent - offset.y());
