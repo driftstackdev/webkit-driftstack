@@ -3077,67 +3077,8 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
     auto ascent = fontMetrics.ascent();
     auto descent = fontMetrics.descent();
 
-#if PLATFORM(DRIFTSTACK)
-    // Stage D-2 (V-078 empirical formula): iPhone Safari's canvas
-    // measureText returns actualBoundingBox{Ascent,Descent} that are
-    // TEXT-INDEPENDENT and follow `value = computedSize × ratio_per_font`,
-    // with a small bold offset and italic = 0 offset. Derived from
-    // BrowserStack Automate capture of iPhone 17 Pro/iOS 26.0 +
-    // iPhone 17/iOS 26.4 (5760 probes × 2 = 0/5760 cross-iOS diffs;
-    // formula iOS-major-stable). See docs/experiments/ios-canvas-version-variance.md.
-    //
-    // Mac's glyphOverflow.top/bottom calculation returns per-glyph
-    // bounding-box extents that don't match iPhone's per-font ratio
-    // formula. Replace with table lookup on Driftstack only.
-    {
-        struct iPhoneFontRatio { ASCIILiteral family; float ascentRatio; float descentRatio; };
-        static constexpr iPhoneFontRatio iPhoneFontRatios[] = {
-            { "helvetica"_s,                  0.7365f, 0.2109f },
-            { "arial"_s,                      0.7277f, 0.2098f },
-            { "times"_s,                      0.6942f, 0.2154f },
-            { "times new roman"_s,            0.6942f, 0.2154f },
-            { "-apple-system"_s,              0.7444f, 0.1797f },
-            { "system-ui"_s,                  0.7444f, 0.1797f },
-            { "sans-serif"_s,                 0.7365f, 0.2109f },
-            { "serif"_s,                      0.7365f, 0.2109f },
-            { "monospace"_s,                  0.7365f, 0.2109f },
-            { "cursive"_s,                    0.7365f, 0.2109f },
-            { "courier"_s,                    0.6719f, 0.1920f },
-            { "courier new"_s,                0.6719f, 0.1920f },
-            { "apple color emoji"_s,          0.7365f, 0.2746f },
-        };
-        // Fallback for fonts iPhone Safari doesn't have loaded — V-074
-        // showed 78/79 probed fonts (cursive-style names) returned
-        // 13.640625 / 3.84375 at 14px = size × 0.97433 / 0.27455.
-        constexpr float fallbackAscentRatio = 0.97433f;
-        constexpr float fallbackDescentRatio = 0.27455f;
-
-        const auto& fontDescription = font.fontDescription();
-        const float computedSize = fontDescription.computedSize();
-        AtomString familyName = fontDescription.familyCount() > 0
-            ? fontDescription.firstFamily().name : nullAtom();
-        String familyLower = familyName.string().convertToASCIILowercase();
-        float ascentRatio = fallbackAscentRatio;
-        float descentRatio = fallbackDescentRatio;
-        for (const auto& entry : iPhoneFontRatios) {
-            if (familyLower == StringView(entry.family)) {
-                ascentRatio = entry.ascentRatio;
-                descentRatio = entry.descentRatio;
-                break;
-            }
-        }
-        // Bold offset (matrix empirical: +0.0022 ratio when bold).
-        // Italic offset: 0.
-        if (fontDescription.weight() >= boldThreshold())
-            ascentRatio += 0.0022f;
-
-        metrics->setActualBoundingBoxAscent(computedSize * ascentRatio - offset.y());
-        metrics->setActualBoundingBoxDescent(computedSize * descentRatio + offset.y());
-    }
-#else
     metrics->setActualBoundingBoxAscent(glyphOverflow.top - offset.y());
     metrics->setActualBoundingBoxDescent(glyphOverflow.bottom + offset.y());
-#endif
     metrics->setFontBoundingBoxAscent(fontMetrics.intAscent() - offset.y());
     metrics->setFontBoundingBoxDescent(fontMetrics.intDescent() + offset.y());
     metrics->setEmHeightAscent(ascent - offset.y());
