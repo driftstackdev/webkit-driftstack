@@ -430,7 +430,21 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 Glyph g = glyphs[i];
                 if (font.colorGlyphType(g) == ColorGlyphType::Color) {
                     char32_t cp = font.driftstackCodepointForColorGlyph(g);
-                    if (cp) {
+                    // V-106: Per Unicode TR51, all BMP emoji codepoints
+                    // (≤ U+FFFF) have Emoji_Presentation=False — they default
+                    // to TEXT presentation and require VS-16 (U+FE0F) to
+                    // render as color. iPhone Safari respects this: bare
+                    // U+2764 renders monochrome text-heart. Mac CT, when
+                    // sans-serif primary font lacks the glyph, falls back to
+                    // Apple Color Emoji which returns a Color glyph for the
+                    // same bare codepoint — F.1.B-2 then substitutes via
+                    // atlas, producing a color heart that diverges from
+                    // iPhone (V-095 U+2764 ❤ failure). Skipping BMP entries
+                    // here lets CT's fallback render via showGlyphsWithAdvances
+                    // (text or color, whatever CT shaped) — matches iPhone for
+                    // bare-codepoint case. BMP+VS-16 sequences are routed
+                    // through the composite atlas (F.1.B-5/6), not this path.
+                    if (cp > 0xFFFF) {
                         auto entry = atlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
                         if (!entry.empty()) {
                             p.atlasHit = true;
