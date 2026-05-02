@@ -37,6 +37,9 @@
 #include "TextRun.h"
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
+#if PLATFORM(DRIFTSTACK)
+#include "cocoa/DriftstackCompositeAtlas.h"
+#endif
 #include <ranges>
 #include <wtf/MainThread.h>
 #include <wtf/MathExtras.h>
@@ -1650,15 +1653,27 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                 offsets.append(v);
         }
 
+        auto& atlas = DriftstackCompositeAtlas::singleton();
+        const float ptSize = primaryFont().platformData().size();
+        const uint32_t strike = atlas.isAvailable() ? atlas.pickStrikeForPointSize(ptSize) : 0;
+
         for (unsigned off : offsets) {
             unsigned compositeEnd = detectSequence(off);
             if (compositeEnd > off + 1 || (compositeEnd > off && [&]() { auto [cp, sz] = codePointAt(off); return sz > 0; }())) {
-                // Log composite detection. Phase 3 will look up atlas at this point.
                 String sub = source.substring(off, compositeEnd - off).toString();
                 auto utf8 = sub.utf8();
-                WTFLogAlways("[Driftstack-F1B6] Phase2 detect cluster=[%u,%u) len=%zu seq='%s' utf8len=%zu",
+                std::span<const uint8_t> seqBytes = unsafeMakeSpan(reinterpret_cast<const uint8_t*>(utf8.data()), utf8.length());
+                bool atlasHit = false;
+                size_t pngLen = 0;
+                if (atlas.isAvailable()) {
+                    auto entry = atlas.entryForSequenceAndStrike(seqBytes, strike);
+                    atlasHit = !entry.empty();
+                    pngLen = entry.size();
+                }
+                WTFLogAlways("[Driftstack-F1B6] Phase2.5 detect cluster=[%u,%u) len=%zu seq='%s' utf8len=%zu strike=%u atlas=%s pngBytes=%zu",
                     off, compositeEnd, static_cast<size_t>(compositeEnd - off),
-                    utf8.data(), static_cast<size_t>(utf8.length()));
+                    utf8.data(), static_cast<size_t>(utf8.length()),
+                    strike, atlasHit ? "HIT" : "miss", pngLen);
             }
         }
     };
