@@ -291,38 +291,35 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
     for (AVSpeechSynthesisVoice *voice in voices) {
         if (voice.isSystemVoice) {
             NSString *identifier = voice.identifier;
+            NSString *displayName = voice.name;
 #if PLATFORM(DRIFTSTACK)
-            // Driftstack: iPhone Safari ships Samantha as the "compact" tier
-            // (com.apple.voice.compact.en-US.Samantha) while Mac uses the
-            // "super-compact" tier for the same voice. V-074 follow-up.
+            // V-2026-05-02: iPhone reference voice list (captured from real
+            // iPhone 16 Pro / iOS 26.4.1, 68 entries) shares ALL voice
+            // identifiers with Mac. The DIFFERENCE is in the display names
+            // of 4 voices that iOS renamed (legacy URIs preserved):
+            //   com.apple.speech.synthesis.voice.Deranged   → "Wobble"     (Mac: "Deranged")
+            //   com.apple.speech.synthesis.voice.Hysterical → "Jester"     (Mac: "Hysterical")
+            //   com.apple.speech.synthesis.voice.Princess   → "Superstar"  (Mac: "Princess")
+            //   com.apple.speech.synthesis.voice.Organ      → "Organ"      (Mac: "Pipe Organ")
+            // Also Samantha tier mapping (V-074 follow-up): iPhone uses
+            // "compact", Mac uses "super-compact" — remap identifier.
+            //
+            // Earlier blacklist approach was WRONG: iPhone reference HAS all
+            // those novelty voices (Albert, Bad News, etc.) — only their
+            // names changed for the 4 renamed entries. Filtering them out
+            // broke the cumulative-rig speech.voices match.
             if ([identifier isEqualToString:@"com.apple.voice.super-compact.en-US.Samantha"])
                 identifier = @"com.apple.voice.compact.en-US.Samantha";
-
-            // V-2026-05-02: filter out classic Mac novelty/legacy voices that
-            // do NOT exist on iPhone. Browserleaks-style voice-list fingerprint
-            // detects these as Mac dead-giveaways. The blacklist is name-based
-            // (these voices have stable names since macOS 10.x) and identifier-
-            // based (com.apple.speech.synthesis.voice.* is the legacy Mac
-            // voice URI scheme that iPhone never uses). All "compact" /
-            // "premium" / "enhanced" identifiers shared with iPhone pass through.
-            NSString *voiceName = voice.name;
-            static NSSet<NSString *> *macOnlyNovelty = [[NSSet alloc] initWithObjects:
-                @"Albert", @"Bad News", @"Bahh", @"Bells", @"Boing", @"Bubbles",
-                @"Cellos", @"Deranged", @"Good News", @"Hysterical", @"Pipe Organ",
-                @"Trinoids", @"Whisper", @"Zarvox", @"Bruce", @"Fred", @"Junior",
-                @"Kathy", @"Princess", @"Ralph", @"Vicki", @"Victoria", @"Agnes",
-                @"Reed", @"Rocko", @"Shelley", @"Sandy", @"Grandma", @"Grandpa",
-                @"Eddy", @"Flo", @"Superstar", @"Wobble", @"Jester",
-                nil];
-            if ([macOnlyNovelty containsObject:voiceName])
-                continue;
-            // Also skip any voice whose identifier starts with the legacy
-            // Mac-specific scheme (iPhone uses only com.apple.voice.* and
-            // com.apple.ttsbundle.*).
-            if ([identifier hasPrefix:@"com.apple.speech.synthesis.voice."])
-                continue;
+            else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
+                displayName = @"Wobble";
+            else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Hysterical"])
+                displayName = @"Jester";
+            else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Princess"])
+                displayName = @"Superstar";
+            else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Organ"])
+                displayName = @"Organ"; // Mac may use "Pipe Organ"; iPhone uses "Organ"
 #endif
-            m_voiceList.append(PlatformSpeechSynthesisVoice::create(identifier, voice.name, voice.language, /* localService */ true, /* isDefault */ true));
+            m_voiceList.append(PlatformSpeechSynthesisVoice::create(identifier, displayName, voice.language, /* localService */ true, /* isDefault */ true));
         }
     }
 }
