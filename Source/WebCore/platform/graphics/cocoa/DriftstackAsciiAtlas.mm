@@ -110,7 +110,7 @@ void DriftstackAsciiAtlas::mapAtlas()
         size_t len = 0;
         while (len < kAsciiAtlasFontNameBytes && bytesSpan[off + len] != 0)
             ++len;
-        m_fontNames.append(String::fromUTF8(unsafeMakeSpan(bytesSpan.data() + off, len)));
+        m_fontNames.append(String::fromUTF8(bytesSpan.subspan(off, len)));
     }
 
     if (indexOffset != 24 + numFonts * kAsciiAtlasFontNameBytes
