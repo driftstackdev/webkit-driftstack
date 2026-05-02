@@ -1701,9 +1701,34 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     if (!source.isEmpty() && glyphBuffer.size()) {
         auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
         if (asciiAtlas.isAvailable()) {
-            const String cssFamily = m_fontDescription.firstFamily().name;
+            const auto& firstFamily = m_fontDescription.firstFamily();
+            const String cssFamily = firstFamily.name;
             const float ptSize = primaryFont().platformData().size();
             const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
+
+            // V-122 founder Tier-2 ack: when the resolved primary family is a
+            // Generic-kind family (CSS sans-serif/serif/etc. resolved to Mac's
+            // per-page-settings default), atlas may not have an entry for the
+            // resolved name (e.g., "Helvetica") but DOES have one for the
+            // CSS keyword. Build a fallback name list to try in order. The
+            // resolved-name list ("Helvetica" / "Times" / "Courier" / etc.)
+            // is Mac WebKit's documented per-page-settings default for the
+            // five CSS generic families.
+            Vector<String, 4> familyKeysToTry;
+            familyKeysToTry.append(cssFamily);
+            if (firstFamily.kind == FontFamilyKind::Generic) {
+                if (cssFamily == "Helvetica"_s) {
+                    familyKeysToTry.append("sans-serif"_s);
+                } else if (cssFamily == "Times"_s) {
+                    familyKeysToTry.append("serif"_s);
+                } else if (cssFamily == "Courier"_s) {
+                    familyKeysToTry.append("monospace"_s);
+                } else if (cssFamily == "Apple Chancery"_s) {
+                    familyKeysToTry.append("cursive"_s);
+                } else if (cssFamily == "Papyrus"_s) {
+                    familyKeysToTry.append("fantasy"_s);
+                }
+            }
 
             // Recover codepoint at a source offset (UTF-16 surrogate pair aware).
             auto codePointAtOffset = [&](unsigned i) -> char32_t {
@@ -1735,7 +1760,12 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                 char32_t cp = codePointAtOffset(offset);
                 if (cp < 0x20 || cp > 0x7E)
                     continue;
-                auto entry = asciiAtlas.entryFor(cssFamily, sizePx, static_cast<uint32_t>(cp));
+                std::span<const uint8_t> entry;
+                for (const auto& key : familyKeysToTry) {
+                    entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp));
+                    if (!entry.empty())
+                        break;
+                }
                 if (entry.empty())
                     continue;
                 atlasHits.append({ AtlasHitKind::Ascii, i, i + 1, entry, static_cast<uint32_t>(sizePx) });
