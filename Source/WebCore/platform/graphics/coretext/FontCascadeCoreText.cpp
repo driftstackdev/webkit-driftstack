@@ -304,6 +304,23 @@ static void setCGFontRenderingMode(GraphicsContext& context)
 
     CGContextSetShouldSubpixelPositionFonts(cgContext.get(), true);
     CGContextSetShouldSubpixelQuantizeFonts(cgContext.get(), doSubpixelQuantization);
+    // V-102 empirical: disabling subpixel positioning on Driftstack does
+    // NOT reduce byte-diff vs iPhone (tested: F.3 stayed at 2.27% byte-diff).
+    // The ~2% byte-diff at AA edges is NOT from subpixel quantization but
+    // from another factor (font hinting / AA gamma curve / color space /
+    // CG private flags). Subpixel state restored to upstream behavior.
+#if PLATFORM(DRIFTSTACK)
+    // V-104 hypothesis: iOS sets CGFontAntialiasingStyle explicitly via
+    // FontAntialiasingStateSaver (Source/WebCore/platform/graphics/ios/
+    // FontAntialiasingStateSaver.h:64) — portrait → kCGFontAntialiasingStyle
+    // Unfiltered (= 0), landscape → kCGFontAntialiasingStyleFilterLight.
+    // Mac default is kCGFontAntialiasingStyleUnfilteredCustomDilation
+    // (= 8 << 7 = 1024) which applies Mac-specific CustomDilation. The two
+    // produce different AA pixel patterns at glyph edges. iPhone 16 Pro
+    // archetype is portrait, so set Unfiltered. If this resolves V-097's
+    // ~2% byte-diff, F.2-F.7 root cause is the CG AA style flag.
+    CGContextSetFontAntialiasingStyle(cgContext.get(), kCGFontAntialiasingStyleUnfiltered);
+#endif
 }
 
 void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)
