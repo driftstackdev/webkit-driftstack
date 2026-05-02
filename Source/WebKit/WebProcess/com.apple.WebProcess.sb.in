@@ -115,10 +115,15 @@
 ;;; Configurable via DRIFTSTACK_EMOJI_ATLAS_PATH env var; subpaths
 ;;; below cover the dev default (the repo's reference dir) and the
 ;;; production fleet default (/var/driftstack/atlas).
+;;; V-117 / Stage F root cause B: same allow for ASCII atlas path
+;;; (mmap'd by DriftstackAsciiAtlas singleton). Configurable via
+;;; DRIFTSTACK_ASCII_ATLAS_PATH; dev default is the repo's reference
+;;; dir, production default is /var/driftstack/atlas.
 (allow file-read*
     (subpath "/Users/john/code/driftstack-fonts")
     (subpath "/var/driftstack/fonts")
     (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
     (subpath "/var/driftstack/atlas"))
 #endif
 
