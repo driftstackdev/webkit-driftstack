@@ -28,6 +28,7 @@
 #include "Font.h"
 
 #if PLATFORM(DRIFTSTACK)
+#include "../cocoa/DriftstackAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #endif
 
@@ -843,6 +844,91 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         else
             iphoneAdvance = 25.f + (ptSize - 24.f) * (48.f - 25.f) / (48.f - 24.f);
         return iphoneAdvance;
+    }
+
+    // V-121 closure: per-glyph ASCII advance override at the configured
+    // (font, size, codepoint) combinations. iPhone reference data captured
+    // via stage-f-ascii-advances probe (1900 entries × 4 fonts × 5 sizes ×
+    // 95 codepoints). Mac CT advance differs from iPhone CT advance by ~0.18 px/char
+    // for -apple-system + ~0.45 px/char for sans-serif fallback, accumulating
+    // to the cumulative-rig measureText.fonts.value.{-apple-system,Apple Color
+    // Emoji}.width residuals (V-120/V-121). This override aligns advances to
+    // iPhone reference, which closes the residual + helps the canvas-fp t02
+    // multi-glyph composition match.
+    if (platformData().size() > 0.f) {
+        const float ptSize = platformData().size();
+        const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
+        if (sizePx == 14 || sizePx == 16 || sizePx == 18 || sizePx == 20 || sizePx == 24) {
+            // Map resolved family name → atlas-table key. Direct CSS-name
+            // matches first (Arial, Helvetica, Times New Roman, Courier,
+            // Tahoma, Verdana, Georgia, Trebuchet MS — priority D coverage).
+            // Then generic-resolution aliases (Mac per-page-settings defaults
+            // for sans-serif/serif/etc. → V-122 multi-key pattern).
+            const String& familyName = m_platformData.familyName();
+            const char* atlasKey = nullptr;
+            if (familyName == "Arial"_s) atlasKey = "Arial";
+            else if (familyName == "Tahoma"_s) atlasKey = "Tahoma";
+            else if (familyName == "Times New Roman"_s) atlasKey = "Times New Roman";
+            else if (familyName == "Courier"_s || familyName == "Courier New"_s) atlasKey = "Courier";
+            else if (familyName == "Verdana"_s) atlasKey = "Verdana";
+            else if (familyName == "Georgia"_s) atlasKey = "Georgia";
+            else if (familyName == "Trebuchet MS"_s) atlasKey = "Trebuchet MS";
+            else if (familyName == "Helvetica"_s) atlasKey = "Helvetica";
+            else if (familyName == ".AppleSystemUIFont"_s) atlasKey = "-apple-system";
+            else if (familyName == "Times"_s || familyName == "Times Roman"_s) atlasKey = "serif";
+            if (atlasKey) {
+                // Build glyph→codepoint reverse map for ASCII range on first use.
+                if (!m_driftstackAsciiReverseMapBuilt) {
+                    RetainPtr font = ctFont();
+                    if (font) {
+                        for (UChar cp = 0x20; cp <= 0x7E; ++cp) {
+                            UniChar ch[1] = { cp };
+                            CGGlyph glyphs[1] = { 0 };
+                            if (CTFontGetGlyphsForCharacters(font.get(), ch, glyphs, 1) && glyphs[0])
+                                m_driftstackAsciiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
+                        }
+                    }
+                    m_driftstackAsciiReverseMapBuilt = true;
+                    WTFLogAlways("[Driftstack-V121] ascii reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
+                        familyName.utf8().data(), atlasKey, ptSize, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
+                }
+                auto it = m_driftstackAsciiReverseMap.find(glyph);
+                if (it != m_driftstackAsciiReverseMap.end()) {
+                    char32_t cp = it->value;
+                    // Find atlasKey font_id in kDriftstackAsciiAdvanceFonts.
+                    uint16_t fontId = 0xFFFF;
+                    for (uint16_t i = 0; i < std::size(kDriftstackAsciiAdvanceFonts); ++i) {
+                        if (kDriftstackAsciiAdvanceFonts[i] == atlasKey) {
+                            fontId = i;
+                            break;
+                        }
+                    }
+                    if (fontId != 0xFFFF) {
+                        // Linear scan of the table (sorted by font_id+size+cp).
+                        for (const auto& e : kDriftstackAsciiAdvanceTable) {
+                            if (e.fontId > fontId)
+                                break;
+                            if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
+                                static unsigned hits = 0;
+                                if (++hits <= 5)
+                                    WTFLogAlways("[Driftstack-V121] HIT family='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                        atlasKey, sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
+                                return e.widthPx;
+                            }
+                        }
+                        static unsigned misses = 0;
+                        if (++misses <= 5)
+                            WTFLogAlways("[Driftstack-V121] MISS family='%s' fontId=%u size=%u cp=U+%04X (table_len=%zu)",
+                                atlasKey, fontId, sizePx, static_cast<uint32_t>(cp), kDriftstackAsciiAdvanceTable.size());
+                    } else {
+                        static unsigned noFontId = 0;
+                        if (++noFontId <= 5)
+                            WTFLogAlways("[Driftstack-V121] no fontId for atlasKey='%s' (font_table_len=%zu)",
+                                atlasKey, kDriftstackAsciiAdvanceFonts.size());
+                    }
+                }
+            }
+        }
     }
 #endif
     return advance.width;

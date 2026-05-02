@@ -397,6 +397,13 @@ private:
     // Key encoding: (uint64_t)codepoint << 32 | strikePPEM. WTF::Lock-protected.
     mutable HashMap<uint64_t, RetainPtr<CGImageRef>, IntHash<uint64_t>, WTF::UnsignedWithZeroKeyHashTraits<uint64_t>> m_driftstackAtlasImageCache;
     mutable Lock m_driftstackAtlasImageCacheLock;
+    // V-121 closure: glyph→ASCII-codepoint reverse map for the subset of glyphs
+    // in U+0020..U+007E. Used by Font::platformWidthForGlyph to look up
+    // iPhone reference widths from DriftstackAsciiAdvanceTable. Populated
+    // lazily; ~95 entries per font, one CTFontGetGlyphsForCharacters call
+    // per codepoint at first use.
+    mutable HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_driftstackAsciiReverseMap;
+    mutable bool m_driftstackAsciiReverseMapBuilt { false };
 #endif
 
 #if PLATFORM(COCOA)
