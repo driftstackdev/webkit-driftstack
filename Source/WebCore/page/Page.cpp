@@ -4372,6 +4372,16 @@ void Page::setUseColorAppearance(bool useDarkAppearance, bool useElevatedUserInt
 
 bool Page::useDarkAppearance() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-2026-05-02 leak fix: Mac fleet runs in whatever appearance the
+    // host Mac is set to (system Appearance preference). iPhone reference
+    // captures are taken in light mode by default. Force light appearance
+    // on Driftstack so prefers-color-scheme: dark = false matches iPhone
+    // reference (file 109 hard rule: match iPhone bit-exactly). Customers
+    // who genuinely want dark-mode rendering can override per-session via
+    // m_useDarkAppearanceOverride if needed.
+    return false;
+#endif
 #if ENABLE(DARK_MODE_CSS)
     // This overrides everything else.
     if (m_useDarkAppearanceOverride)
