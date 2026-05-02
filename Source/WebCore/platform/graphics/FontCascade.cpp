@@ -39,6 +39,10 @@
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
 #include "cocoa/DriftstackCompositeAtlas.h"
+#include "NativeImage.h"
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#include <wtf/RetainPtr.h>
 #endif
 #include <ranges>
 #include <wtf/MainThread.h>
@@ -1564,17 +1568,23 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
 // This function assumes the GlyphBuffer's initial advance has already been incorporated into the start point.
 void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction, StringView source) const
 {
+    ASSERT(glyphBuffer.isFlattened());
+
 #if PLATFORM(DRIFTSTACK)
-    // F.1.B-6 Phase 2: composite emoji DETECTION + atlas lookup logging.
-    // Per founder direction Approach 1 (source-text iteration). TR51-
-    // simplified sequence boundary detection (ZWJ chains, regional flag
-    // pairs, keycap, skin-tone, VS-16 forced). Phase 3 adds CGContextDrawImage
-    // substitution per atlas-hit; Phase 2 is detection + logging only,
-    // verifying the detection fires correctly on known sequences without
-    // any rendering behavior change.
-    auto detectAndLogComposites = [&]() {
-        if (source.isEmpty() || !glyphBuffer.size())
-            return;
+    // F.1.B-6 Phase 3: composite emoji atlas substitution via CGContextDrawImage.
+    // Per founder direction Approach 1 (source-text iteration). TR51-simplified
+    // sequence boundary detection (ZWJ chains, regional flag pairs, keycap,
+    // skin-tone, VS-16 forced) → DriftstackCompositeAtlas lookup → PNG decode
+    // → drawNativeImage at cluster origin. Atlas-hit glyphs skipped from
+    // platform drawGlyphs path; non-hit text runs forwarded as normal.
+    struct AtlasHit {
+        size_t glyphStart; // first glyph index in cluster
+        size_t glyphEnd;   // one past last glyph index
+        std::span<const uint8_t> pngBytes;
+        uint32_t strike;
+    };
+    Vector<AtlasHit, 8> atlasHits;
+    if (!source.isEmpty() && glyphBuffer.size()) {
         auto codePointAt = [&](unsigned i) -> std::pair<char32_t, unsigned> {
             if (i >= source.length())
                 return { 0, 0 };
@@ -1592,8 +1602,6 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             auto [cp, cpSize] = codePointAt(start);
             if (!cpSize)
                 return start;
-            // Quick filter: bail if cp is not in a known emoji range to avoid
-            // touching the atlas singleton on every text run.
             bool maybeEmoji = (cp >= 0x1F000 && cp <= 0x1FFFF)
                 || (cp >= 0x2600 && cp <= 0x27BF)
                 || (cp >= 0x2300 && cp <= 0x23FF)
@@ -1603,7 +1611,6 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             if (!maybeEmoji)
                 return start;
             unsigned end = start + cpSize;
-            // ZWJ chain.
             for (;;) {
                 auto [zwj, zwjSize] = codePointAt(end);
                 if (!zwjSize || zwj != 0x200D)
@@ -1613,23 +1620,17 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     break;
                 end += zwjSize + nextSize;
             }
-            // Skin-tone modifier.
             auto [tone, toneSize] = codePointAt(end);
             if (toneSize && tone >= 0x1F3FB && tone <= 0x1F3FF)
                 end += toneSize;
-            // VS-16.
             auto [vs, vsSize] = codePointAt(end);
             if (vsSize && vs == 0xFE0F)
                 end += vsSize;
-            // Regional indicator pair.
             if (cp >= 0x1F1E6 && cp <= 0x1F1FF) {
                 auto [pair, pairSize] = codePointAt(start + cpSize);
                 if (pairSize && pair >= 0x1F1E6 && pair <= 0x1F1FF)
                     end = std::max(end, start + cpSize + pairSize);
             }
-            // Keycap: digit/symbol + VS-16 + COMBINING_ENCLOSING_KEYCAP.
-            // Check from start+cpSize because VS-16 may have been consumed
-            // by the VS-16 check above.
             if ((cp >= '0' && cp <= '9') || cp == '#' || cp == '*') {
                 auto [a, aSize] = codePointAt(start + cpSize);
                 auto [b, bSize] = codePointAt(start + cpSize + aSize);
@@ -1639,8 +1640,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             return end > start + cpSize ? end : start;
         };
 
-        // Build set of unique source-text offsets the GlyphBuffer references,
-        // sorted ascending. Each offset starts a glyph-cluster boundary.
+        // Build sorted unique source-text offsets the GlyphBuffer references.
         Vector<unsigned, 32> rawOffsets;
         rawOffsets.reserveInitialCapacity(glyphBuffer.size());
         for (size_t i = 0; i < glyphBuffer.size(); ++i)
@@ -1657,39 +1657,158 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         const float ptSize = primaryFont().platformData().size();
         const uint32_t strike = atlas.isAvailable() ? atlas.pickStrikeForPointSize(ptSize) : 0;
 
-        for (unsigned off : offsets) {
-            unsigned compositeEnd = detectSequence(off);
-            if (compositeEnd > off + 1 || (compositeEnd > off && [&]() { auto [cp, sz] = codePointAt(off); return sz > 0; }())) {
+        if (atlas.isAvailable()) {
+            for (unsigned off : offsets) {
+                unsigned compositeEnd = detectSequence(off);
+                bool isComposite = compositeEnd > off + 1
+                    || (compositeEnd > off && [&]() { auto [cp, sz] = codePointAt(off); return sz > 0; }());
+                if (!isComposite)
+                    continue;
                 String sub = source.substring(off, compositeEnd - off).toString();
                 auto utf8 = sub.utf8();
                 std::span<const uint8_t> seqBytes = unsafeMakeSpan(reinterpret_cast<const uint8_t*>(utf8.data()), utf8.length());
-                bool atlasHit = false;
-                size_t pngLen = 0;
-                if (atlas.isAvailable()) {
-                    auto entry = atlas.entryForSequenceAndStrike(seqBytes, strike);
-                    atlasHit = !entry.empty();
-                    pngLen = entry.size();
+                auto entry = atlas.entryForSequenceAndStrike(seqBytes, strike);
+                if (entry.empty())
+                    continue;
+                // Map source-text [off, compositeEnd) to glyph index range.
+                size_t gStart = glyphBuffer.size();
+                size_t gEnd = 0;
+                for (size_t i = 0; i < glyphBuffer.size(); ++i) {
+                    unsigned gOff = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
+                    if (gOff >= off && gOff < compositeEnd) {
+                        if (i < gStart) gStart = i;
+                        if (i + 1 > gEnd) gEnd = i + 1;
+                    }
                 }
-                WTFLogAlways("[Driftstack-F1B6] Phase2.5 detect cluster=[%u,%u) len=%zu seq='%s' utf8len=%zu strike=%u atlas=%s pngBytes=%zu",
-                    off, compositeEnd, static_cast<size_t>(compositeEnd - off),
-                    utf8.data(), static_cast<size_t>(utf8.length()),
-                    strike, atlasHit ? "HIT" : "miss", pngLen);
+                if (gStart < gEnd)
+                    atlasHits.append({ gStart, gEnd, entry, strike });
             }
+            // Sort by glyphStart so the drawing loop can advance through them.
+            std::sort(atlasHits.begin(), atlasHits.end(),
+                [](const AtlasHit& a, const AtlasHit& b) { return a.glyphStart < b.glyphStart; });
         }
+    }
+
+    auto drawCompositeAtImageOrigin = [&](const AtlasHit& hit, FloatPoint origin) {
+        WTFLogAlways("[Driftstack-F1B6] Phase3 draw start hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strike=%u",
+            hit.glyphStart, hit.glyphEnd, (float)origin.x(), (float)origin.y(), hit.pngBytes.size(), hit.strike);
+        // Decode PNG → CGImage.
+        RetainPtr cfData = adoptCF(CFDataCreate(kCFAllocatorDefault, hit.pngBytes.data(), hit.pngBytes.size()));
+        if (!cfData) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cfData"); return; }
+        RetainPtr cgSource = adoptCF(CGImageSourceCreateWithData(cfData.get(), nullptr));
+        if (!cgSource || !CGImageSourceGetCount(cgSource.get())) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cgSource or empty"); return; }
+        RetainPtr cgImage = adoptCF(CGImageSourceCreateImageAtIndex(cgSource.get(), 0, nullptr));
+        if (!cgImage) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cgImage"); return; }
+        WTFLogAlways("[Driftstack-F1B6] Phase3 cgImage decoded %zux%zu",
+            CGImageGetWidth(cgImage.get()), CGImageGetHeight(cgImage.get()));
+
+        // Geometry: atlas canvas dim = 2*strike + 8; glyph drawn at (4, strike+2)
+        // within atlas canvas. Scale strike → ptSize; place atlas origin so
+        // glyph baseline lands at `origin` (matching where CT would place glyphs).
+        const float ptSize = primaryFont().platformData().size();
+        const float canvasDim = 2.0f * static_cast<float>(hit.strike) + 8.0f;
+        const float scale = ptSize / static_cast<float>(hit.strike);
+        const float imageDim = canvasDim * scale;
+        const float originXOffset = -4.0f * scale;
+        const float originYOffset = -(static_cast<float>(hit.strike) + 2.0f) * scale;
+
+        CGContextRef cgContext = context.platformContext();
+        if (!cgContext) {
+            WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cgContext (hasPlatformContext=%d). Falling back to GraphicsContext::drawNativeImage path.", context.hasPlatformContext() ? 1 : 0);
+            // Fallback: use GraphicsContext::drawNativeImage which works for both
+            // direct CG contexts AND recorder contexts (records draw into display list).
+            RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
+            if (!nativeImg) { WTFLogAlways("[Driftstack-F1B6] Phase3 nativeImg NULL"); return; }
+            FloatRect destRect(origin.x() + originXOffset, origin.y() + originYOffset, imageDim, imageDim);
+            FloatRect srcRect(0, 0, CGImageGetWidth(nativeImg->platformImage().get()), CGImageGetHeight(nativeImg->platformImage().get()));
+            context.drawNativeImage(*nativeImg, destRect, srcRect);
+            WTFLogAlways("[Driftstack-F1B6] Phase3 drawNativeImage fallback complete (dest=%.1fx%.1f at %.1f,%.1f)",
+                (float)destRect.width(), (float)destRect.height(), (float)destRect.x(), (float)destRect.y());
+            return;
+        }
+        WTFLogAlways("[Driftstack-F1B6] Phase3 drawing: ptSize=%.2f canvasDim=%.2f scale=%.2f imageDim=%.2f origin=(%.2f,%.2f) offsets=(%.2f,%.2f)",
+            ptSize, canvasDim, scale, imageDim, (float)origin.x(), (float)origin.y(), originXOffset, originYOffset);
+        CGContextSaveGState(cgContext);
+        CGContextTranslateCTM(cgContext, origin.x() + originXOffset, origin.y() + originYOffset);
+        CGContextTranslateCTM(cgContext, 0.f, imageDim);
+        CGContextScaleCTM(cgContext, 1.f, -1.f);
+        CGContextDrawImage(cgContext, CGRectMake(0.f, 0.f, imageDim, imageDim), cgImage.get());
+        CGContextRestoreGState(cgContext);
+        WTFLogAlways("[Driftstack-F1B6] Phase3 draw COMPLETE");
     };
-    detectAndLogComposites();
 #else
     UNUSED_PARAM(source);
 #endif
-    ASSERT(glyphBuffer.isFlattened());
+
     RefPtr fontData = glyphBuffer.fontAt(0);
     FloatPoint startPoint = point;
     float nextX = startPoint.x() + WebCore::width(glyphBuffer.advanceAt(0));
     float nextY = startPoint.y() + height(glyphBuffer.advanceAt(0));
     unsigned lastFrom = 0;
     unsigned nextGlyph = 1;
+#if PLATFORM(DRIFTSTACK)
+    size_t hitIdx = 0;
+    auto flushTextRun = [&](size_t from, size_t to, FloatPoint runStart) {
+        if (from >= to)
+            return;
+        if (!shouldDrawIfLoading(*fontData, customFontNotReadyAction))
+            return;
+        size_t glyphCount = to - from;
+        context.drawGlyphs(*fontData, glyphBuffer.glyphs(from, glyphCount), glyphBuffer.advances(from, glyphCount), runStart, m_fontDescription.usedFontSmoothing());
+    };
+    // First glyph special-case: if 0 is start of an atlas hit, flush nothing,
+    // emit composite, advance past hit.
+    if (!atlasHits.isEmpty() && atlasHits[0].glyphStart == 0) {
+        const AtlasHit& hit = atlasHits[0];
+        drawCompositeAtImageOrigin(hit, point);
+        // Advance position by sum of advances for all skipped glyphs.
+        float skipX = 0.f, skipY = 0.f;
+        for (size_t i = hit.glyphStart; i < hit.glyphEnd; ++i) {
+            skipX += WebCore::width(glyphBuffer.advanceAt(i));
+            skipY += height(glyphBuffer.advanceAt(i));
+        }
+        startPoint.setX(point.x() + skipX);
+        startPoint.setY(point.y() + skipY);
+        nextX = startPoint.x();
+        nextY = startPoint.y();
+        if (hit.glyphEnd > 0)
+            fontData = glyphBuffer.fontAt(hit.glyphEnd - 1); // approximate; refined below
+        lastFrom = hit.glyphEnd;
+        nextGlyph = hit.glyphEnd;
+        if (lastFrom < glyphBuffer.size())
+            fontData = glyphBuffer.fontAt(lastFrom);
+        ++hitIdx;
+    }
+#endif
     while (nextGlyph < glyphBuffer.size()) {
         RefPtr nextFontData = glyphBuffer.fontAt(nextGlyph);
+#if PLATFORM(DRIFTSTACK)
+        // Check if entering an atlas hit boundary.
+        if (hitIdx < atlasHits.size() && nextGlyph == atlasHits[hitIdx].glyphStart) {
+            // Flush current run up to but not including this glyph.
+            flushTextRun(lastFrom, nextGlyph, startPoint);
+            // Draw composite at current draw position (nextX, nextY but actually need to track advance from startPoint).
+            // The current cursor position in text-flow coords is (nextX, nextY).
+            drawCompositeAtImageOrigin(atlasHits[hitIdx], FloatPoint(nextX, nextY));
+            const AtlasHit& hit = atlasHits[hitIdx];
+            // Advance cursor by sum of skipped glyph advances.
+            float skipX = 0.f, skipY = 0.f;
+            for (size_t i = hit.glyphStart; i < hit.glyphEnd; ++i) {
+                skipX += WebCore::width(glyphBuffer.advanceAt(i));
+                skipY += height(glyphBuffer.advanceAt(i));
+            }
+            nextX += skipX;
+            nextY += skipY;
+            lastFrom = hit.glyphEnd;
+            nextGlyph = hit.glyphEnd;
+            startPoint.setX(nextX);
+            startPoint.setY(nextY);
+            if (lastFrom < glyphBuffer.size())
+                fontData = glyphBuffer.fontAt(lastFrom);
+            ++hitIdx;
+            continue;
+        }
+#endif
 
         if (nextFontData != fontData) {
             if (shouldDrawIfLoading(*fontData, customFontNotReadyAction)) {
@@ -1706,7 +1825,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         nextGlyph++;
     }
 
-    if (shouldDrawIfLoading(*fontData, customFontNotReadyAction)) {
+    if (lastFrom < glyphBuffer.size() && shouldDrawIfLoading(*fontData, customFontNotReadyAction)) {
         size_t glyphCount = nextGlyph - lastFrom;
         context.drawGlyphs(*fontData, glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
     }
