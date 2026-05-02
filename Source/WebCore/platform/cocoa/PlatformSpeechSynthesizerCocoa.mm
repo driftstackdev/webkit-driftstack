@@ -294,11 +294,33 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
 #if PLATFORM(DRIFTSTACK)
             // Driftstack: iPhone Safari ships Samantha as the "compact" tier
             // (com.apple.voice.compact.en-US.Samantha) while Mac uses the
-            // "super-compact" tier for the same voice. The other 67 voices
-            // in the iPhone reference list match Mac's identifiers exactly;
-            // only Samantha differs. V-074 follow-up.
+            // "super-compact" tier for the same voice. V-074 follow-up.
             if ([identifier isEqualToString:@"com.apple.voice.super-compact.en-US.Samantha"])
                 identifier = @"com.apple.voice.compact.en-US.Samantha";
+
+            // V-2026-05-02: filter out classic Mac novelty/legacy voices that
+            // do NOT exist on iPhone. Browserleaks-style voice-list fingerprint
+            // detects these as Mac dead-giveaways. The blacklist is name-based
+            // (these voices have stable names since macOS 10.x) and identifier-
+            // based (com.apple.speech.synthesis.voice.* is the legacy Mac
+            // voice URI scheme that iPhone never uses). All "compact" /
+            // "premium" / "enhanced" identifiers shared with iPhone pass through.
+            NSString *voiceName = voice.name;
+            static NSSet<NSString *> *macOnlyNovelty = [[NSSet alloc] initWithObjects:
+                @"Albert", @"Bad News", @"Bahh", @"Bells", @"Boing", @"Bubbles",
+                @"Cellos", @"Deranged", @"Good News", @"Hysterical", @"Pipe Organ",
+                @"Trinoids", @"Whisper", @"Zarvox", @"Bruce", @"Fred", @"Junior",
+                @"Kathy", @"Princess", @"Ralph", @"Vicki", @"Victoria", @"Agnes",
+                @"Reed", @"Rocko", @"Shelley", @"Sandy", @"Grandma", @"Grandpa",
+                @"Eddy", @"Flo", @"Superstar", @"Wobble", @"Jester",
+                nil];
+            if ([macOnlyNovelty containsObject:voiceName])
+                continue;
+            // Also skip any voice whose identifier starts with the legacy
+            // Mac-specific scheme (iPhone uses only com.apple.voice.* and
+            // com.apple.ttsbundle.*).
+            if ([identifier hasPrefix:@"com.apple.speech.synthesis.voice."])
+                continue;
 #endif
             m_voiceList.append(PlatformSpeechSynthesisVoice::create(identifier, voice.name, voice.language, /* localService */ true, /* isDefault */ true));
         }
