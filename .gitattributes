@@ -31,4 +31,12 @@ objc/*.h diff=objcppheader
 /Source/JavaScriptCore/b3/air/testair.cpp test=1
 /Source/JavaScriptCore/dfg/testdfg.cpp test=1
 /Tools/TestWebKitAPI/**/* test=1
-*.bin filter=lfs diff=lfs merge=lfs -text
+# Driftstack: atlas binaries (DSEA/DSEC/DSAS) tracked via LFS to keep
+# clone sizes manageable (~600-800 MB at D-α A+ Coverage A+ size).
+# Scoped to the cocoa graphics dir only to avoid accidentally
+# capturing existing WebKit test *.bin files (WebGPU shader cache,
+# JSC stress test bytecode, WPT *.bin fixtures, etc.).
+Source/WebCore/platform/graphics/cocoa/driftstack-*-atlas*.bin filter=lfs diff=lfs merge=lfs -text
+Source/WebCore/platform/graphics/cocoa/*.dsea filter=lfs diff=lfs merge=lfs -text
+Source/WebCore/platform/graphics/cocoa/*.dsec filter=lfs diff=lfs merge=lfs -text
+Source/WebCore/platform/graphics/cocoa/*.dsas filter=lfs diff=lfs merge=lfs -text
