@@ -38,6 +38,7 @@
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
+#include "cocoa/DriftstackAsciiAtlas.h"
 #include "cocoa/DriftstackCompositeAtlas.h"
 #include "NativeImage.h"
 #include <CoreGraphics/CoreGraphics.h>
@@ -1577,11 +1578,13 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // skin-tone, VS-16 forced) → DriftstackCompositeAtlas lookup → PNG decode
     // → drawNativeImage at cluster origin. Atlas-hit glyphs skipped from
     // platform drawGlyphs path; non-hit text runs forwarded as normal.
+    enum class AtlasHitKind { Composite, Ascii };
     struct AtlasHit {
+        AtlasHitKind kind { AtlasHitKind::Composite };
         size_t glyphStart; // first glyph index in cluster
         size_t glyphEnd;   // one past last glyph index
         std::span<const uint8_t> pngBytes;
-        uint32_t strike;
+        uint32_t strikeOrSize; // strike (Composite) or sizePx (Ascii)
     };
     Vector<AtlasHit, 8> atlasHits;
     if (!source.isEmpty() && glyphBuffer.size()) {
@@ -1681,7 +1684,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     }
                 }
                 if (gStart < gEnd)
-                    atlasHits.append({ gStart, gEnd, entry, strike });
+                    atlasHits.append({ AtlasHitKind::Composite, gStart, gEnd, entry, strike });
             }
             // Sort by glyphStart so the drawing loop can advance through them.
             std::sort(atlasHits.begin(), atlasHits.end(),
@@ -1689,28 +1692,109 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         }
     }
 
+    // V-117: Stage F root cause B — DriftstackAsciiAtlas substitution for
+    // ASCII printable codepoints (U+0020 .. U+007E). Per V-117 empirical:
+    // 0/196 non-space ASCII probes byte-match between Mac CT and iOS CT
+    // across 6 (font, size) cells; only iPhone-rendered atlas substitution
+    // closes this. Per-glyph dispatch (one hit per ASCII glyph), no source-
+    // text iteration needed beyond reading codepoint at glyph's stringOffset.
+    if (!source.isEmpty() && glyphBuffer.size()) {
+        auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
+        if (asciiAtlas.isAvailable()) {
+            const String cssFamily = m_fontDescription.firstFamily().name;
+            const float ptSize = primaryFont().platformData().size();
+            const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
+
+            // Recover codepoint at a source offset (UTF-16 surrogate pair aware).
+            auto codePointAtOffset = [&](unsigned i) -> char32_t {
+                if (i >= source.length())
+                    return 0;
+                if (source.is8Bit())
+                    return static_cast<char32_t>(source[i]);
+                UChar ch = source[i];
+                if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < source.length()) {
+                    UChar low = source[i + 1];
+                    if (low >= 0xDC00 && low <= 0xDFFF)
+                        return static_cast<char32_t>(0x10000 + ((ch - 0xD800) << 10) + (low - 0xDC00));
+                }
+                return static_cast<char32_t>(ch);
+            };
+
+            for (size_t i = 0; i < glyphBuffer.size(); ++i) {
+                // Skip glyphs already covered by a composite atlas hit.
+                bool alreadyHit = false;
+                for (const auto& h : atlasHits) {
+                    if (i >= h.glyphStart && i < h.glyphEnd) {
+                        alreadyHit = true;
+                        break;
+                    }
+                }
+                if (alreadyHit)
+                    continue;
+                unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
+                char32_t cp = codePointAtOffset(offset);
+                if (cp < 0x20 || cp > 0x7E)
+                    continue;
+                auto entry = asciiAtlas.entryFor(cssFamily, sizePx, static_cast<uint32_t>(cp));
+                if (entry.empty())
+                    continue;
+                atlasHits.append({ AtlasHitKind::Ascii, i, i + 1, entry, static_cast<uint32_t>(sizePx) });
+            }
+            std::sort(atlasHits.begin(), atlasHits.end(),
+                [](const AtlasHit& a, const AtlasHit& b) { return a.glyphStart < b.glyphStart; });
+        }
+    }
+
     auto drawCompositeAtImageOrigin = [&](const AtlasHit& hit, FloatPoint origin) {
-        WTFLogAlways("[Driftstack-F1B6] Phase3 draw start hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strike=%u",
-            hit.glyphStart, hit.glyphEnd, (float)origin.x(), (float)origin.y(), hit.pngBytes.size(), hit.strike);
+        WTFLogAlways("[Driftstack-Atlas] draw start kind=%s hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strikeOrSize=%u",
+            hit.kind == AtlasHitKind::Composite ? "composite" : "ascii",
+            hit.glyphStart, hit.glyphEnd, (float)origin.x(), (float)origin.y(), hit.pngBytes.size(), hit.strikeOrSize);
         // Decode PNG → CGImage.
         RetainPtr cfData = adoptCF(CFDataCreate(kCFAllocatorDefault, hit.pngBytes.data(), hit.pngBytes.size()));
-        if (!cfData) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cfData"); return; }
+        if (!cfData) { WTFLogAlways("[Driftstack-Atlas] NULL cfData"); return; }
         RetainPtr cgSource = adoptCF(CGImageSourceCreateWithData(cfData.get(), nullptr));
-        if (!cgSource || !CGImageSourceGetCount(cgSource.get())) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cgSource or empty"); return; }
+        if (!cgSource || !CGImageSourceGetCount(cgSource.get())) { WTFLogAlways("[Driftstack-Atlas] NULL cgSource or empty"); return; }
         RetainPtr cgImage = adoptCF(CGImageSourceCreateImageAtIndex(cgSource.get(), 0, nullptr));
-        if (!cgImage) { WTFLogAlways("[Driftstack-F1B6] Phase3 NULL cgImage"); return; }
-        WTFLogAlways("[Driftstack-F1B6] Phase3 cgImage decoded %zux%zu",
+        if (!cgImage) { WTFLogAlways("[Driftstack-Atlas] NULL cgImage"); return; }
+        WTFLogAlways("[Driftstack-Atlas] cgImage decoded %zux%zu",
             CGImageGetWidth(cgImage.get()), CGImageGetHeight(cgImage.get()));
 
-        // Geometry: atlas canvas dim = 2*strike + 8; glyph drawn at (4, strike+2)
-        // within atlas canvas. Scale strike → ptSize; place atlas origin so
-        // glyph baseline lands at `origin` (matching where CT would place glyphs).
+        // V-117 ASCII branch: atlas image is 32×32 with glyph drawn at internal
+        // (4, sizePx + 4) on transparent background. Glyph PNG is black RGB +
+        // alpha-coverage. Stencil-and-tint via transparency layer so the glyph
+        // takes the current GraphicsContext fillColor (matching CT's behavior
+        // where fillText paints in the current fillStyle), and so the
+        // substitution composes correctly over any canvas background.
+        if (hit.kind == AtlasHitKind::Ascii) {
+            const float sizePx = static_cast<float>(hit.strikeOrSize);
+            const float canvasDim = 32.0f;
+            FloatRect destRect(origin.x() - 4.0f, origin.y() - sizePx - 4.0f, canvasDim, canvasDim);
+            FloatRect srcRect(0, 0, canvasDim, canvasDim);
+            RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
+            if (!nativeImg) { WTFLogAlways("[Driftstack-Atlas] Ascii nativeImg NULL"); return; }
+
+            // Capture current fill color (the text color the caller intended).
+            Color tint = context.fillColor();
+
+            context.beginTransparencyLayer(1.0f);
+            context.fillRect(destRect, tint);
+            context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::DestinationIn });
+            context.endTransparencyLayer();
+            WTFLogAlways("[Driftstack-Atlas] Ascii draw COMPLETE dest=%.1fx%.1f at %.1f,%.1f",
+                (float)destRect.width(), (float)destRect.height(), (float)destRect.x(), (float)destRect.y());
+            return;
+        }
+
+        // Composite emoji geometry: atlas canvas dim = 2*strike + 8; glyph drawn
+        // at (4, strike+2) within atlas canvas. Scale strike → ptSize; place
+        // atlas origin so glyph baseline lands at `origin` (matching where CT
+        // would place glyphs).
         const float ptSize = primaryFont().platformData().size();
-        const float canvasDim = 2.0f * static_cast<float>(hit.strike) + 8.0f;
-        const float scale = ptSize / static_cast<float>(hit.strike);
+        const float canvasDim = 2.0f * static_cast<float>(hit.strikeOrSize) + 8.0f;
+        const float scale = ptSize / static_cast<float>(hit.strikeOrSize);
         const float imageDim = canvasDim * scale;
         const float originXOffset = -4.0f * scale;
-        const float originYOffset = -(static_cast<float>(hit.strike) + 2.0f) * scale;
+        const float originYOffset = -(static_cast<float>(hit.strikeOrSize) + 2.0f) * scale;
 
         CGContextRef cgContext = context.platformContext();
         if (!cgContext) {
