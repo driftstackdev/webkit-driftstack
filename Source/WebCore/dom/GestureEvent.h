@@ -36,6 +36,9 @@ public:
     float scale() const { return 1.0f; }
     float rotation() const { return 0.0f; }
 
+    // Anchor declaration: vtable goes into GestureEvent.cpp.
+    ~GestureEvent() override;
+
 private:
     GestureEvent() : UIEvent(EventInterfaceType::GestureEvent) { }
 };

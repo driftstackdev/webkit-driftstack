@@ -132,6 +132,13 @@ void ConstantPropertyMap::updateConstantsForSafeAreaInsets()
 {
     RefPtr page = m_document->page();
     FloatBoxExtent unobscuredSafeAreaInsets = page ? page->unobscuredSafeAreaInsets() : FloatBoxExtent();
+    // V-2026-05-02: file 99 P11-P13 listed iPhone safe-area-inset override
+    // as launch-blocking, but empirically the iPhone reference (per
+    // captures/v1/index.html via real iPhone 16 Pro) reports ALL safe-area-
+    // inset values as 0px in standard Safari tab context. Mac fork's default
+    // also produces 0px. The two already match — no override needed for
+    // normal Safari tab rendering. If a future iPhone capture in standalone
+    // PWA mode shows non-zero values, re-introduce override gated by context.
     setValueForProperty(ConstantProperty::SafeAreaInsetTop, variableDataForPositivePixelLength(unobscuredSafeAreaInsets.top()));
     setValueForProperty(ConstantProperty::SafeAreaInsetRight, variableDataForPositivePixelLength(unobscuredSafeAreaInsets.right()));
     setValueForProperty(ConstantProperty::SafeAreaInsetBottom, variableDataForPositivePixelLength(unobscuredSafeAreaInsets.bottom()));
