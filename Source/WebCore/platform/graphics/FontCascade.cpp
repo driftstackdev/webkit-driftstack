@@ -1860,11 +1860,15 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         // the layout fractional X to pick the matching sub-pixel variant.
         // Composite hits use pre-resolved pngBytes from pre-flight.
         std::span<const uint8_t> pngBytes = hit.pngBytes;
+        // V-140: fracX visible to draw code so destRect can pick floor vs
+        // ceil to match the variant the atlas entry was captured for.
+        float fracX = 0.0f;
+        uint8_t quant = 0;
         if (hit.kind == AtlasHitKind::Ascii) {
             auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
-            float fracX = origin.x() - floorf(origin.x());
+            fracX = origin.x() - floorf(origin.x());
             if (fracX < 0.0f) fracX += 1.0f;
-            uint8_t quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
+            quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
             pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
                                             hit.asciiCodepoint, quant);
             if (pngBytes.empty()) {
@@ -1898,12 +1902,18 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         if (hit.kind == AtlasHitKind::Ascii) {
             const float sizePx = static_cast<float>(hit.strikeOrSize);
             const float canvasDim = 32.0f;
-            // V-127: destRect.x snaps to floor(origin.x) - 4 because the
-            // atlas variant captured the glyph at the matching sub-pixel
-            // offset relative to integer position. floor + atlas-internal
-            // offset together reproduce the original sub-pixel layout
-            // without further fractional resampling at drawNativeImage.
-            FloatRect destRect(floorf(origin.x()) - 4.0f, origin.y() - sizePx - 4.0f, canvasDim, canvasDim);
+            // V-127: destRect.x snaps to integer-pixel-aligned position so the
+            // atlas variant's captured sub-pixel offset reproduces the original
+            // layout without further fractional resampling at drawNativeImage.
+            //
+            // V-140 fix: when quant==0 was selected via wraparound
+            // (fracX > 0.5), the atlas variant represents the NEXT integer's
+            // pixel boundary, not the current's. Use ceil instead of floor in
+            // that case. Per V-135 empirical: 16% of canvas-fp t01 glyphs hit
+            // the wrap case (fracX in [0.875, 1.0]), so floor placed them
+            // 1 px left of where iPhone CT would.
+            const float snapX = (quant == 0 && fracX > 0.5f) ? ceilf(origin.x()) : floorf(origin.x());
+            FloatRect destRect(snapX - 4.0f, origin.y() - sizePx - 4.0f, canvasDim, canvasDim);
             FloatRect srcRect(0, 0, canvasDim, canvasDim);
             RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
             if (!nativeImg) { WTFLogAlways("[Driftstack-Atlas] Ascii nativeImg NULL"); return; }
