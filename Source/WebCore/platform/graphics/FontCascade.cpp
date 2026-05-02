@@ -197,7 +197,7 @@ FloatSize FontCascade::drawText(GraphicsContext& context, const TextRun& run, co
         return FloatSize();
 
     FloatPoint startPoint = point + WebCore::size(glyphBuffer.initialAdvance());
-    drawGlyphBuffer(context, glyphBuffer, startPoint, customFontNotReadyAction);
+    drawGlyphBuffer(context, glyphBuffer, startPoint, customFontNotReadyAction, run.text());
     return startPoint - point;
 }
 
@@ -1559,8 +1559,9 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
 }
 
 // This function assumes the GlyphBuffer's initial advance has already been incorporated into the start point.
-void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction) const
+void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction, StringView source) const
 {
+    UNUSED_PARAM(source); // F.1.B-6 Phase 1 scaffold: parameter wired through; composite detection lands in Phase 2.
     ASSERT(glyphBuffer.isFlattened());
     RefPtr fontData = glyphBuffer.fontAt(0);
     FloatPoint startPoint = point;
