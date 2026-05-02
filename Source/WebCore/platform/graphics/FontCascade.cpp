@@ -1706,22 +1706,19 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // text iteration needed beyond reading codepoint at glyph's stringOffset.
     if (!source.isEmpty() && glyphBuffer.size()) {
         auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
-        // V-131 closure path 2: CTM gate. The atlas was captured under
-        // CTM=identity at iPhone. CGContextDrawImage under non-identity
-        // CTM applies sub-pixel resampling kernels that diverge from
-        // CTFontDrawGlyphs under the same CTM (different filter shapes).
-        // Per V-136 empirical: skip atlas dispatch when CTM is non-
-        // translation. Pure-translation is fine because that's a glyph
-        // origin shift, not a transform of the glyph itself.
-        const auto ctm = context.getCTM();
-        const bool ctmIsTranslation = ctm.a() == 1 && ctm.b() == 0
-            && ctm.c() == 0 && ctm.d() == 1;
-        if (asciiAtlas.isAvailable() && ctmIsTranslation) {
+        // V-131 path 2 (CTM gate) was REVERTED in V-135. Empirical finding:
+        // canvas's CTM is always non-identity (DPR-scaled by 2 or 3), so
+        // the gate blocked 100% of canvas dispatches, leaving transparent
+        // -background canvases with NO visible text (V-127 stencil-and-tint
+        // was the only mechanism producing glyphs in that path; native CT
+        // alone produced empty output). Per V-135 cumulative-rig: 1250/1253
+        // unchanged vs V-136; canvas-fp 7/14 unchanged but with VISIBLE
+        // text on all probes (was hash-stable garbage before).
+        if (asciiAtlas.isAvailable()) {
             const auto& firstFamily = m_fontDescription.firstFamily();
             const String cssFamily = firstFamily.name;
             const float ptSize = primaryFont().platformData().size();
             const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
-
             // V-122 founder Tier-2 ack: when the resolved primary family is a
             // Generic-kind family (CSS sans-serif/serif/etc. resolved to Mac's
             // per-page-settings default), atlas may not have an entry for the
@@ -1732,6 +1729,15 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // five CSS generic families.
             Vector<String, 4> familyKeysToTry;
             familyKeysToTry.append(cssFamily);
+            // V-135 finding: Mac fork resolves CSS sans-serif/serif/etc. to
+            // internal "-webkit-sans-serif" / "-webkit-serif" names (NOT
+            // "Helvetica" as V-122 assumed). Add explicit fallbacks for
+            // these canonical webkit-internal names.
+            if (cssFamily == "-webkit-sans-serif"_s) familyKeysToTry.append("sans-serif"_s);
+            else if (cssFamily == "-webkit-serif"_s) familyKeysToTry.append("serif"_s);
+            else if (cssFamily == "-webkit-monospace"_s) familyKeysToTry.append("monospace"_s);
+            else if (cssFamily == "-webkit-cursive"_s) familyKeysToTry.append("cursive"_s);
+            else if (cssFamily == "-webkit-fantasy"_s) familyKeysToTry.append("fantasy"_s);
             if (firstFamily.kind == FontFamilyKind::Generic) {
                 if (cssFamily == "Helvetica"_s) {
                     familyKeysToTry.append("sans-serif"_s);
