@@ -17,11 +17,15 @@ namespace WebCore {
 
 // V-117 atlas binary path. Override at runtime via DRIFTSTACK_ASCII_ATLAS_PATH
 // env var; default resolves to the captured atlas in dev environment.
-static const char* kDefaultAtlasPath = "/Users/john/code/driftstack/reference/driftstack_ascii_atlas/driftstack-ascii-atlas.bin";
-
-static constexpr uint8_t kAtlasMagic[4] = { 'D', 'S', 'A', 'S' };
-static constexpr size_t kFontNameBytes = 64;
-static constexpr size_t kEntryBytes = 16;
+// Anonymous namespace isolates these names from other Driftstack atlas .mm
+// files (EmojiAtlas, CompositeAtlas) which the WebKit unify-build mechanism
+// merges into the same translation unit.
+namespace {
+const char* kAsciiAtlasDefaultPath = "/Users/john/code/driftstack/reference/driftstack_ascii_atlas/driftstack-ascii-atlas.bin";
+constexpr uint8_t kAsciiAtlasMagic[4] = { 'D', 'S', 'A', 'S' };
+constexpr size_t kAsciiAtlasFontNameBytes = 64;
+constexpr size_t kAsciiAtlasEntryBytes = 16;
+}
 
 DriftstackAsciiAtlas& DriftstackAsciiAtlas::singleton()
 {
@@ -45,7 +49,7 @@ DriftstackAsciiAtlas::~DriftstackAsciiAtlas()
 void DriftstackAsciiAtlas::mapAtlas()
 {
     const char* envPath = getenv("DRIFTSTACK_ASCII_ATLAS_PATH");
-    const char* path = envPath ? envPath : kDefaultAtlasPath;
+    const char* path = envPath ? envPath : kAsciiAtlasDefaultPath;
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -70,10 +74,10 @@ void DriftstackAsciiAtlas::mapAtlas()
     std::span<const uint8_t> bytesSpan = unsafeMakeSpan(static_cast<const uint8_t*>(base), static_cast<size_t>(st.st_size));
 
     if (bytesSpan.size() < 24
-        || bytesSpan[0] != kAtlasMagic[0]
-        || bytesSpan[1] != kAtlasMagic[1]
-        || bytesSpan[2] != kAtlasMagic[2]
-        || bytesSpan[3] != kAtlasMagic[3]) {
+        || bytesSpan[0] != kAsciiAtlasMagic[0]
+        || bytesSpan[1] != kAsciiAtlasMagic[1]
+        || bytesSpan[2] != kAsciiAtlasMagic[2]
+        || bytesSpan[3] != kAsciiAtlasMagic[3]) {
         WTFLogAlways("[Driftstack] AsciiAtlas: bad magic at start of %s", path);
         munmap(base, st.st_size);
         close(fd);
@@ -101,16 +105,16 @@ void DriftstackAsciiAtlas::mapAtlas()
     // Parse font_table (64 bytes per entry, zero-padded UTF-8).
     m_fontNames.reserveInitialCapacity(numFonts);
     for (uint32_t i = 0; i < numFonts; ++i) {
-        size_t off = 24 + i * kFontNameBytes;
+        size_t off = 24 + i * kAsciiAtlasFontNameBytes;
         // Find first NUL byte.
         size_t len = 0;
-        while (len < kFontNameBytes && bytesSpan[off + len] != 0)
+        while (len < kAsciiAtlasFontNameBytes && bytesSpan[off + len] != 0)
             ++len;
         m_fontNames.append(String::fromUTF8(unsafeMakeSpan(bytesSpan.data() + off, len)));
     }
 
-    if (indexOffset != 24 + numFonts * kFontNameBytes
-        || dataOffset != indexOffset + numEntries * kEntryBytes
+    if (indexOffset != 24 + numFonts * kAsciiAtlasFontNameBytes
+        || dataOffset != indexOffset + numEntries * kAsciiAtlasEntryBytes
         || dataOffset > bytesSpan.size()) {
         WTFLogAlways("[Driftstack] AsciiAtlas: header offsets invalid (indexOffset=%u dataOffset=%u fileSize=%zu)",
             indexOffset, dataOffset, bytesSpan.size());
@@ -119,7 +123,7 @@ void DriftstackAsciiAtlas::mapAtlas()
         return;
     }
 
-    m_indexSpan = bytesSpan.subspan(indexOffset, numEntries * kEntryBytes);
+    m_indexSpan = bytesSpan.subspan(indexOffset, numEntries * kAsciiAtlasEntryBytes);
     m_dataPayloadSpan = bytesSpan.subspan(dataOffset);
     m_numEntries = numEntries;
 
@@ -142,10 +146,10 @@ uint16_t DriftstackAsciiAtlas::fontIdFor(const String& fontCssName) const
 
 // Read an IndexEntry from the byte span at logical entry index i.
 // Avoids unaligned struct access by reading byte-by-byte.
-static DriftstackAsciiAtlas_IndexEntry readEntry(std::span<const uint8_t> indexSpan, size_t i)
+static DriftstackAsciiAtlas_IndexEntry readAsciiEntry(std::span<const uint8_t> indexSpan, size_t i)
 {
     DriftstackAsciiAtlas_IndexEntry e;
-    auto entrySpan = indexSpan.subspan(i * kEntryBytes, kEntryBytes);
+    auto entrySpan = indexSpan.subspan(i * kAsciiAtlasEntryBytes, kAsciiAtlasEntryBytes);
     e.fontId = uint16_t(entrySpan[0]) | (uint16_t(entrySpan[1]) << 8);
     e.sizePx = uint16_t(entrySpan[2]) | (uint16_t(entrySpan[3]) << 8);
     e.codepoint = uint32_t(entrySpan[4]) | (uint32_t(entrySpan[5]) << 8) | (uint32_t(entrySpan[6]) << 16) | (uint32_t(entrySpan[7]) << 24);
@@ -167,7 +171,7 @@ std::span<const uint8_t> DriftstackAsciiAtlas::entryFor(const String& fontCssNam
     size_t lo = 0, hi = m_numEntries;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        auto e = readEntry(m_indexSpan, mid);
+        auto e = readAsciiEntry(m_indexSpan, mid);
         if (e.fontId < fontId) lo = mid + 1;
         else if (e.fontId > fontId) hi = mid;
         else if (e.sizePx < sizePx) lo = mid + 1;
