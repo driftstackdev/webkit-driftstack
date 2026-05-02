@@ -1706,7 +1706,17 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // text iteration needed beyond reading codepoint at glyph's stringOffset.
     if (!source.isEmpty() && glyphBuffer.size()) {
         auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
-        if (asciiAtlas.isAvailable()) {
+        // V-131 closure path 2: CTM gate. The atlas was captured under
+        // CTM=identity at iPhone. CGContextDrawImage under non-identity
+        // CTM applies sub-pixel resampling kernels that diverge from
+        // CTFontDrawGlyphs under the same CTM (different filter shapes).
+        // Per V-136 empirical: skip atlas dispatch when CTM is non-
+        // translation. Pure-translation is fine because that's a glyph
+        // origin shift, not a transform of the glyph itself.
+        const auto ctm = context.getCTM();
+        const bool ctmIsTranslation = ctm.a() == 1 && ctm.b() == 0
+            && ctm.c() == 0 && ctm.d() == 1;
+        if (asciiAtlas.isAvailable() && ctmIsTranslation) {
             const auto& firstFamily = m_fontDescription.firstFamily();
             const String cssFamily = firstFamily.name;
             const float ptSize = primaryFont().platformData().size();
@@ -1751,46 +1761,68 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                 return static_cast<char32_t>(ch);
             };
 
+            // V-131 closure path 1: mixed-dispatch fallthrough. If source
+            // contains BOTH ASCII (0x20..0x7E) and non-ASCII (>= 0x80)
+            // codepoints, atlas substitution would produce a hybrid render
+            // (iPhone-atlas ASCII + Mac-CT non-ASCII) that cannot byte-
+            // match iPhone's pure-CT render. Abandon atlas dispatch for
+            // the entire run; fall through to native CT path. The pre-flight
+            // for-loop below stays gated on the !mixed condition.
+            bool hasAscii = false;
+            bool hasNonAscii = false;
             for (size_t i = 0; i < glyphBuffer.size(); ++i) {
-                // Skip glyphs already covered by a composite atlas hit.
-                bool alreadyHit = false;
-                for (const auto& h : atlasHits) {
-                    if (i >= h.glyphStart && i < h.glyphEnd) {
-                        alreadyHit = true;
-                        break;
-                    }
-                }
-                if (alreadyHit)
-                    continue;
                 unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
                 char32_t cp = codePointAtOffset(offset);
-                if (cp < 0x20 || cp > 0x7E)
-                    continue;
-                // V-127: probe atlas at quant=0 to verify (font, size, cp) is
-                // covered. If yes, store the WINNING key in the AtlasHit;
-                // draw-time lookup re-queries with the subpixelQuant from
-                // the layout fractional X.
-                String winningKey;
-                for (const auto& key : familyKeysToTry) {
-                    auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0);
-                    if (!entry.empty()) {
-                        winningKey = key;
-                        break;
-                    }
-                }
-                if (winningKey.isEmpty())
-                    continue;
-                AtlasHit h;
-                h.kind = AtlasHitKind::Ascii;
-                h.glyphStart = i;
-                h.glyphEnd = i + 1;
-                h.strikeOrSize = static_cast<uint32_t>(sizePx);
-                h.asciiCssFamily = winningKey;
-                h.asciiCodepoint = static_cast<uint32_t>(cp);
-                atlasHits.append(std::move(h));
+                if (cp >= 0x20 && cp <= 0x7E)
+                    hasAscii = true;
+                else if (cp >= 0x80)
+                    hasNonAscii = true;
+                if (hasAscii && hasNonAscii)
+                    break;
             }
-            std::sort(atlasHits.begin(), atlasHits.end(),
-                [](const AtlasHit& a, const AtlasHit& b) { return a.glyphStart < b.glyphStart; });
+            const bool mixedDispatch = hasAscii && hasNonAscii;
+            if (!mixedDispatch) {
+                for (size_t i = 0; i < glyphBuffer.size(); ++i) {
+                    // Skip glyphs already covered by a composite atlas hit.
+                    bool alreadyHit = false;
+                    for (const auto& h : atlasHits) {
+                        if (i >= h.glyphStart && i < h.glyphEnd) {
+                            alreadyHit = true;
+                            break;
+                        }
+                    }
+                    if (alreadyHit)
+                        continue;
+                    unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
+                    char32_t cp = codePointAtOffset(offset);
+                    if (cp < 0x20 || cp > 0x7E)
+                        continue;
+                    // V-127: probe atlas at quant=0 to verify (font, size, cp) is
+                    // covered. If yes, store the WINNING key in the AtlasHit;
+                    // draw-time lookup re-queries with the subpixelQuant from
+                    // the layout fractional X.
+                    String winningKey;
+                    for (const auto& key : familyKeysToTry) {
+                        auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0);
+                        if (!entry.empty()) {
+                            winningKey = key;
+                            break;
+                        }
+                    }
+                    if (winningKey.isEmpty())
+                        continue;
+                    AtlasHit h;
+                    h.kind = AtlasHitKind::Ascii;
+                    h.glyphStart = i;
+                    h.glyphEnd = i + 1;
+                    h.strikeOrSize = static_cast<uint32_t>(sizePx);
+                    h.asciiCssFamily = winningKey;
+                    h.asciiCodepoint = static_cast<uint32_t>(cp);
+                    atlasHits.append(std::move(h));
+                }
+                std::sort(atlasHits.begin(), atlasHits.end(),
+                    [](const AtlasHit& a, const AtlasHit& b) { return a.glyphStart < b.glyphStart; });
+            }
         }
     }
 
