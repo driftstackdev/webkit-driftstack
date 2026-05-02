@@ -2936,7 +2936,13 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
         if (cachedShapedText) {
             const auto& glyphBuffer = cachedShapedText->textShapingResult.glyphBuffer;
             if (!cachedShapedText->textShapingResult.glyphBuffer.isEmpty()) {
+#if PLATFORM(DRIFTSTACK)
+                // F.1.B-6: bypass displayList cache so drawGlyphBuffer is
+                // called WITH source text (composite emoji detection).
+                if (false && cachedShapedText->displayList && !context.hasDropShadow()) {
+#else
                 if (cachedShapedText->displayList && !context.hasDropShadow()) {
+#endif
                     if (cachedDisplayListNeedsStateSave) {
                         GraphicsContextStateSaver stateSaver(context);
                         context.translate(point);
@@ -2948,7 +2954,8 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
                     }
                 } else {
                     FloatPoint startPoint = point + WebCore::size(glyphBuffer.initialAdvance());
-                    fontCascade.drawGlyphBuffer(context, glyphBuffer, startPoint, FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady);
+                    // F.1.B-6: pass source text for composite emoji detection on Driftstack.
+                    fontCascade.drawGlyphBuffer(context, glyphBuffer, startPoint, FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady, textRun.text());
                 }
             }
         } else

@@ -1561,7 +1561,111 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
 // This function assumes the GlyphBuffer's initial advance has already been incorporated into the start point.
 void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction, StringView source) const
 {
-    UNUSED_PARAM(source); // F.1.B-6 Phase 1 scaffold: parameter wired through; composite detection lands in Phase 2.
+#if PLATFORM(DRIFTSTACK)
+    // F.1.B-6 Phase 2: composite emoji DETECTION + atlas lookup logging.
+    // Per founder direction Approach 1 (source-text iteration). TR51-
+    // simplified sequence boundary detection (ZWJ chains, regional flag
+    // pairs, keycap, skin-tone, VS-16 forced). Phase 3 adds CGContextDrawImage
+    // substitution per atlas-hit; Phase 2 is detection + logging only,
+    // verifying the detection fires correctly on known sequences without
+    // any rendering behavior change.
+    auto detectAndLogComposites = [&]() {
+        if (source.isEmpty() || !glyphBuffer.size())
+            return;
+        auto codePointAt = [&](unsigned i) -> std::pair<char32_t, unsigned> {
+            if (i >= source.length())
+                return { 0, 0 };
+            if (source.is8Bit())
+                return { static_cast<char32_t>(source[i]), 1 };
+            UChar ch = source[i];
+            if (ch >= 0xD800 && ch <= 0xDBFF && i + 1 < source.length()) {
+                UChar low = source[i + 1];
+                if (low >= 0xDC00 && low <= 0xDFFF)
+                    return { static_cast<char32_t>(0x10000 + ((ch - 0xD800) << 10) + (low - 0xDC00)), 2 };
+            }
+            return { static_cast<char32_t>(ch), 1 };
+        };
+        auto detectSequence = [&](unsigned start) -> unsigned {
+            auto [cp, cpSize] = codePointAt(start);
+            if (!cpSize)
+                return start;
+            // Quick filter: bail if cp is not in a known emoji range to avoid
+            // touching the atlas singleton on every text run.
+            bool maybeEmoji = (cp >= 0x1F000 && cp <= 0x1FFFF)
+                || (cp >= 0x2600 && cp <= 0x27BF)
+                || (cp >= 0x2300 && cp <= 0x23FF)
+                || (cp >= 0x2000 && cp <= 0x21FF)
+                || (cp >= 0x1F1E6 && cp <= 0x1F1FF)
+                || ((cp >= '0' && cp <= '9') || cp == '#' || cp == '*');
+            if (!maybeEmoji)
+                return start;
+            unsigned end = start + cpSize;
+            // ZWJ chain.
+            for (;;) {
+                auto [zwj, zwjSize] = codePointAt(end);
+                if (!zwjSize || zwj != 0x200D)
+                    break;
+                auto [next, nextSize] = codePointAt(end + zwjSize);
+                if (!nextSize)
+                    break;
+                end += zwjSize + nextSize;
+            }
+            // Skin-tone modifier.
+            auto [tone, toneSize] = codePointAt(end);
+            if (toneSize && tone >= 0x1F3FB && tone <= 0x1F3FF)
+                end += toneSize;
+            // VS-16.
+            auto [vs, vsSize] = codePointAt(end);
+            if (vsSize && vs == 0xFE0F)
+                end += vsSize;
+            // Regional indicator pair.
+            if (cp >= 0x1F1E6 && cp <= 0x1F1FF) {
+                auto [pair, pairSize] = codePointAt(start + cpSize);
+                if (pairSize && pair >= 0x1F1E6 && pair <= 0x1F1FF)
+                    end = std::max(end, start + cpSize + pairSize);
+            }
+            // Keycap: digit/symbol + VS-16 + COMBINING_ENCLOSING_KEYCAP.
+            // Check from start+cpSize because VS-16 may have been consumed
+            // by the VS-16 check above.
+            if ((cp >= '0' && cp <= '9') || cp == '#' || cp == '*') {
+                auto [a, aSize] = codePointAt(start + cpSize);
+                auto [b, bSize] = codePointAt(start + cpSize + aSize);
+                if (aSize && bSize && a == 0xFE0F && b == 0x20E3)
+                    end = std::max(end, start + cpSize + aSize + bSize);
+            }
+            return end > start + cpSize ? end : start;
+        };
+
+        // Build set of unique source-text offsets the GlyphBuffer references,
+        // sorted ascending. Each offset starts a glyph-cluster boundary.
+        Vector<unsigned, 32> rawOffsets;
+        rawOffsets.reserveInitialCapacity(glyphBuffer.size());
+        for (size_t i = 0; i < glyphBuffer.size(); ++i)
+            rawOffsets.append(static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i)));
+        std::sort(rawOffsets.begin(), rawOffsets.end());
+        Vector<unsigned, 32> offsets;
+        offsets.reserveInitialCapacity(rawOffsets.size());
+        for (unsigned v : rawOffsets) {
+            if (offsets.isEmpty() || offsets.last() != v)
+                offsets.append(v);
+        }
+
+        for (unsigned off : offsets) {
+            unsigned compositeEnd = detectSequence(off);
+            if (compositeEnd > off + 1 || (compositeEnd > off && [&]() { auto [cp, sz] = codePointAt(off); return sz > 0; }())) {
+                // Log composite detection. Phase 3 will look up atlas at this point.
+                String sub = source.substring(off, compositeEnd - off).toString();
+                auto utf8 = sub.utf8();
+                WTFLogAlways("[Driftstack-F1B6] Phase2 detect cluster=[%u,%u) len=%zu seq='%s' utf8len=%zu",
+                    off, compositeEnd, static_cast<size_t>(compositeEnd - off),
+                    utf8.data(), static_cast<size_t>(utf8.length()));
+            }
+        }
+    };
+    detectAndLogComposites();
+#else
+    UNUSED_PARAM(source);
+#endif
     ASSERT(glyphBuffer.isFlattened());
     RefPtr fontData = glyphBuffer.fontAt(0);
     FloatPoint startPoint = point;
