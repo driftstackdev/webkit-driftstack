@@ -56,12 +56,14 @@
 
 namespace WebCore {
 
-// Index entry struct exposed for the .mm-side reader. 16 bytes; not
-// directly mapped over the mmap due to alignment + safe-buffer rules.
+// Index entry struct exposed for the .mm-side reader.
+// V-127 v2: 20 bytes (was 16 in v1; added subpixelQuant field).
 struct DriftstackAsciiAtlas_IndexEntry {
     uint16_t fontId;
     uint16_t sizePx;
     uint32_t codepoint;
+    uint8_t subpixelQuant;
+    // 3 bytes implicit padding
     uint32_t dataOffset;
     uint32_t pngLen;
 };
@@ -70,16 +72,23 @@ class DriftstackAsciiAtlas {
 public:
     static DriftstackAsciiAtlas& singleton();
 
-    // Returns PNG-encoded bytes for (fontCssName, sizePx, codepoint), or empty span if not found.
-    // Caller decodes via WebKit's existing PNG infrastructure.
-    std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx, uint32_t codepoint) const;
+    // V-127 lookup with sub-pixel quantization. subpixelQuant ∈ [0, subpixelVariantCount()).
+    std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx,
+                                      uint32_t codepoint, uint8_t subpixelQuant) const;
 
-    // True iff atlas binary was successfully loaded.
+    // V-117 v1-compat: same as entryFor(..., 0). For callers that don't
+    // care about sub-pixel positioning (integer-aligned drawing).
+    std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx, uint32_t codepoint) const
+    {
+        return entryFor(fontCssName, sizePx, codepoint, 0);
+    }
+
+    // V-127: subpixelVariantCount returns 1 for v1 atlas (no sub-pixel
+    // variants captured), 1..4 for v2 atlas. Caller uses this to size
+    // the quantizer.
+    uint8_t subpixelVariantCount() const { return m_subpixelVariantCount; }
+
     bool isAvailable() const { return !m_dataPayloadSpan.empty(); }
-
-    // Returns the list of CSS family names available in the atlas.
-    // Used by callers that want to short-circuit lookup before doing
-    // codepoint matching.
     const Vector<String>& fontNames() const { return m_fontNames; }
 
 private:
@@ -88,9 +97,6 @@ private:
     ~DriftstackAsciiAtlas();
 
     void mapAtlas();
-
-    // Returns the font_id for a CSS family name, or std::numeric_limits<uint16_t>::max()
-    // if the font is not in the atlas.
     uint16_t fontIdFor(const String& fontCssName) const;
 
     int m_fd { -1 };
@@ -101,6 +107,12 @@ private:
     std::span<const uint8_t> m_indexSpan;
     std::span<const uint8_t> m_dataPayloadSpan;
     size_t m_numEntries { 0 };
+    // V-127 v2 metadata. v1 atlas → m_atlasVersion=1, m_subpixelVariantCount=1,
+    // m_entryStride=16. v2 atlas → m_atlasVersion=2, count from header,
+    // m_entryStride=20.
+    uint32_t m_atlasVersion { 0 };
+    uint8_t m_subpixelVariantCount { 1 };
+    size_t m_entryStride { 16 };
 };
 
 } // namespace WebCore

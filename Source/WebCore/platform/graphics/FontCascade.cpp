@@ -1583,8 +1583,14 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         AtlasHitKind kind { AtlasHitKind::Composite };
         size_t glyphStart; // first glyph index in cluster
         size_t glyphEnd;   // one past last glyph index
+        // Composite: pngBytes pre-resolved at pre-flight; strikeOrSize = strike.
+        // Ascii (V-127): pngBytes left empty at pre-flight; draw-time resolves
+        // by (asciiCssFamily, strikeOrSize=sizePx, asciiCodepoint, subpixelQuant)
+        // where subpixelQuant is computed from origin.x() fractional part.
         std::span<const uint8_t> pngBytes;
         uint32_t strikeOrSize; // strike (Composite) or sizePx (Ascii)
+        String asciiCssFamily; // V-127: empty for Composite
+        uint32_t asciiCodepoint; // V-127: 0 for Composite
     };
     Vector<AtlasHit, 8> atlasHits;
     if (!source.isEmpty() && glyphBuffer.size()) {
@@ -1684,7 +1690,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     }
                 }
                 if (gStart < gEnd)
-                    atlasHits.append({ AtlasHitKind::Composite, gStart, gEnd, entry, strike });
+                    atlasHits.append({ AtlasHitKind::Composite, gStart, gEnd, entry, strike, String(), 0u });
             }
             // Sort by glyphStart so the drawing loop can advance through them.
             std::sort(atlasHits.begin(), atlasHits.end(),
@@ -1760,27 +1766,83 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                 char32_t cp = codePointAtOffset(offset);
                 if (cp < 0x20 || cp > 0x7E)
                     continue;
-                std::span<const uint8_t> entry;
+                // V-127: probe atlas at quant=0 to verify (font, size, cp) is
+                // covered. If yes, store the WINNING key in the AtlasHit;
+                // draw-time lookup re-queries with the subpixelQuant from
+                // the layout fractional X.
+                String winningKey;
                 for (const auto& key : familyKeysToTry) {
-                    entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp));
-                    if (!entry.empty())
+                    auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0);
+                    if (!entry.empty()) {
+                        winningKey = key;
                         break;
+                    }
                 }
-                if (entry.empty())
+                if (winningKey.isEmpty())
                     continue;
-                atlasHits.append({ AtlasHitKind::Ascii, i, i + 1, entry, static_cast<uint32_t>(sizePx) });
+                AtlasHit h;
+                h.kind = AtlasHitKind::Ascii;
+                h.glyphStart = i;
+                h.glyphEnd = i + 1;
+                h.strikeOrSize = static_cast<uint32_t>(sizePx);
+                h.asciiCssFamily = winningKey;
+                h.asciiCodepoint = static_cast<uint32_t>(cp);
+                atlasHits.append(std::move(h));
             }
             std::sort(atlasHits.begin(), atlasHits.end(),
                 [](const AtlasHit& a, const AtlasHit& b) { return a.glyphStart < b.glyphStart; });
         }
     }
 
+    // V-127 sub-pixel quantizer. Concretized per V-128 spot-check pattern
+    // (variants=3): 0.0 ≡ 0.25 (snap to integer) ≠ 0.5 ≠ 0.75. Verified
+    // empirically on 9/10 codepoints in batch 0 of the V-127 capture.
+    // Founder-required full-capture verification step before this commit.
+    auto quantizeSubpixel = [](float fracX, uint8_t variantCount) -> uint8_t {
+        if (variantCount <= 1)
+            return 0;
+        if (variantCount == 4) {
+            int q = static_cast<int>(roundf(fracX * 4.0f)) & 3;
+            return static_cast<uint8_t>(q);
+        }
+        if (variantCount == 3) {
+            // 0.0..0.4 → 0 (covers 0.0 + 0.25); 0.4..0.625 → 1 (0.5);
+            // 0.625..1.0 → 2 (0.75)
+            if (fracX < 0.4f) return 0;
+            if (fracX < 0.625f) return 1;
+            return 2;
+        }
+        if (variantCount == 2)
+            return fracX < 0.5f ? 0 : 1;
+        return 0;
+    };
+
     auto drawCompositeAtImageOrigin = [&](const AtlasHit& hit, FloatPoint origin) {
+        // V-127: for Ascii hits, resolve atlas entry at draw time using
+        // the layout fractional X to pick the matching sub-pixel variant.
+        // Composite hits use pre-resolved pngBytes from pre-flight.
+        std::span<const uint8_t> pngBytes = hit.pngBytes;
+        if (hit.kind == AtlasHitKind::Ascii) {
+            auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
+            float fracX = origin.x() - floorf(origin.x());
+            if (fracX < 0.0f) fracX += 1.0f;
+            uint8_t quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
+            pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
+                                            hit.asciiCodepoint, quant);
+            if (pngBytes.empty()) {
+                // Fall back to subpixel-0 if the specific quant has no
+                // entry (atlas v1 or pre-V-127 atlas missing higher
+                // quants).
+                pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
+                                                hit.asciiCodepoint, 0);
+            }
+        }
         WTFLogAlways("[Driftstack-Atlas] draw start kind=%s hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strikeOrSize=%u",
             hit.kind == AtlasHitKind::Composite ? "composite" : "ascii",
-            hit.glyphStart, hit.glyphEnd, (float)origin.x(), (float)origin.y(), hit.pngBytes.size(), hit.strikeOrSize);
+            hit.glyphStart, hit.glyphEnd, (float)origin.x(), (float)origin.y(), pngBytes.size(), hit.strikeOrSize);
+        if (pngBytes.empty()) return;
         // Decode PNG → CGImage.
-        RetainPtr cfData = adoptCF(CFDataCreate(kCFAllocatorDefault, hit.pngBytes.data(), hit.pngBytes.size()));
+        RetainPtr cfData = adoptCF(CFDataCreate(kCFAllocatorDefault, pngBytes.data(), pngBytes.size()));
         if (!cfData) { WTFLogAlways("[Driftstack-Atlas] NULL cfData"); return; }
         RetainPtr cgSource = adoptCF(CGImageSourceCreateWithData(cfData.get(), nullptr));
         if (!cgSource || !CGImageSourceGetCount(cgSource.get())) { WTFLogAlways("[Driftstack-Atlas] NULL cgSource or empty"); return; }
@@ -1798,7 +1860,12 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         if (hit.kind == AtlasHitKind::Ascii) {
             const float sizePx = static_cast<float>(hit.strikeOrSize);
             const float canvasDim = 32.0f;
-            FloatRect destRect(origin.x() - 4.0f, origin.y() - sizePx - 4.0f, canvasDim, canvasDim);
+            // V-127: destRect.x snaps to floor(origin.x) - 4 because the
+            // atlas variant captured the glyph at the matching sub-pixel
+            // offset relative to integer position. floor + atlas-internal
+            // offset together reproduce the original sub-pixel layout
+            // without further fractional resampling at drawNativeImage.
+            FloatRect destRect(floorf(origin.x()) - 4.0f, origin.y() - sizePx - 4.0f, canvasDim, canvasDim);
             FloatRect srcRect(0, 0, canvasDim, canvasDim);
             RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
             if (!nativeImg) { WTFLogAlways("[Driftstack-Atlas] Ascii nativeImg NULL"); return; }
