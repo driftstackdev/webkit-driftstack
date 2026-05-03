@@ -1035,6 +1035,82 @@ char32_t Font::driftstackCodepointForColorGlyph(Glyph glyph) const
 // (codepoint << 32) | strikePPEM. The provider holds a CFData wrapper
 // around the mmap'd atlas region; both the data and provider are
 // process-lifetime stable since the atlas singleton is NeverDestroyed.
+// V-148-Complex: per-pair iphone-vs-mac kerning delta. Public Font method
+// callable from ComplexTextController (which doesn't go through
+// Font::applyTransforms where V-138 v4 fires). Inlines the helper logic
+// since the anonymous-namespace helpers have internal linkage.
+float Font::driftstackPairKerningDelta(uint8_t leftCp, uint8_t rightCp, float macShapedAdvanceL) const
+{
+    using namespace DriftstackKerning;
+    if (leftCp < 0x20 || leftCp > 0x7E || rightCp < 0x20 || rightCp > 0x7E)
+        return 0.0f;
+    // Inline resolveKerningFontId.
+    const String& familyName = m_platformData.familyName();
+    auto utf8 = familyName.utf8();
+    auto utf8sv = std::string_view(utf8.data(), utf8.length());
+    uint16_t fontId = 0xFFFF;
+    for (size_t i = 0; i < kKerningFonts.size(); ++i) {
+        if (utf8sv == kKerningFonts[i]) { fontId = static_cast<uint16_t>(i); break; }
+    }
+    if (fontId == 0xFFFF) {
+        if (familyName == ".AppleSystemUIFont"_s || familyName == ".SF NS"_s) {
+            for (size_t i = 0; i < kKerningFonts.size(); ++i)
+                if (std::string_view(kKerningFonts[i]) == "-apple-system") { fontId = static_cast<uint16_t>(i); break; }
+        } else if (familyName == "-webkit-sans-serif"_s || familyName == "Helvetica"_s) {
+            for (size_t i = 0; i < kKerningFonts.size(); ++i)
+                if (std::string_view(kKerningFonts[i]) == "sans-serif") { fontId = static_cast<uint16_t>(i); break; }
+        } else if (familyName == "-webkit-serif"_s || familyName == "Times"_s) {
+            for (size_t i = 0; i < kKerningFonts.size(); ++i)
+                if (std::string_view(kKerningFonts[i]) == "serif") { fontId = static_cast<uint16_t>(i); break; }
+        }
+    }
+    if (fontId == 0xFFFF)
+        return 0.0f;
+    const uint16_t sizePx = static_cast<uint16_t>(roundf(m_platformData.size()));
+    // Inline findKerningCell binary search.
+    const KerningCell* cell = nullptr;
+    {
+        size_t lo = 0, hi = kKerningCells.size();
+        while (lo < hi) {
+            size_t mid = (lo + hi) / 2;
+            const auto& c = kKerningCells[mid];
+            if (c.fontId < fontId || (c.fontId == fontId && c.sizePx < sizePx)) lo = mid + 1;
+            else if (c.fontId > fontId || (c.fontId == fontId && c.sizePx > sizePx)) hi = mid;
+            else { cell = &c; break; }
+        }
+    }
+    if (!cell)
+        return 0.0f;
+    // Inline findKerningPair binary search.
+    auto pairs = std::span<const KerningPair> { kKerningPairs }.subspan(cell->pairsOffset, cell->pairsCount);
+    const KerningPair* p = nullptr;
+    {
+        size_t lo = 0, hi = pairs.size();
+        while (lo < hi) {
+            size_t mid = (lo + hi) / 2;
+            const auto& kp = pairs[mid];
+            if (kp.leftCp < leftCp || (kp.leftCp == leftCp && kp.rightCp < rightCp)) lo = mid + 1;
+            else if (kp.leftCp > leftCp || (kp.leftCp == leftCp && kp.rightCp > rightCp)) hi = mid;
+            else { p = &kp; break; }
+        }
+    }
+    if (!p)
+        return 0.0f;
+    float iphoneKerning = static_cast<float>(p->kerningQ8) / 256.0f;
+    // Inline naturalAdvanceForGlyph.
+    UniChar ch = static_cast<UniChar>(leftCp);
+    CGGlyph glyph = 0;
+    CTFontRef ctf = ctFont();
+    if (!ctf) return 0.0f;
+    CTFontGetGlyphsForCharacters(ctf, &ch, &glyph, 1);
+    if (!glyph) return 0.0f;
+    CGSize adv = CGSizeZero;
+    CTFontGetAdvancesForGlyphs(ctf, kCTFontOrientationHorizontal, &glyph, &adv, 1);
+    float natural = static_cast<float>(adv.width);
+    float macKerning = macShapedAdvanceL - natural;
+    return iphoneKerning - macKerning;
+}
+
 RetainPtr<CGImageRef> Font::driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const
 {
     const uint64_t key = (static_cast<uint64_t>(codepoint) << 32) | strikePPEM;

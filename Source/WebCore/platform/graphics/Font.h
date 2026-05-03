@@ -275,6 +275,11 @@ public:
     // pngBytes must remain valid for the lifetime of the returned image
     // (atlas mmap'd region — singleton lifetime is process lifetime).
     RetainPtr<CGImageRef> driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const;
+    // V-148-Complex: per-pair iphone-vs-mac kerning delta to apply to the
+    // LEFT glyph's advance. Returns 0 if (font, size, leftCp, rightCp) not
+    // in V-138 table, or if both kerning values match. Mac kerning is
+    // computed via natural-vs-shaped using CTFontGetAdvancesForGlyphs.
+    float driftstackPairKerningDelta(uint8_t leftCp, uint8_t rightCp, float macShapedAdvanceL) const;
 #endif
 
 private:

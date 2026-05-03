@@ -222,6 +222,13 @@ private:
     bool m_mayUseNaturalWritingDirection { false };
     bool m_forTextEmphasis { false };
     TextSpacing::SpacingState m_textSpacingState;
+
+#if PLATFORM(DRIFTSTACK)
+    // V-148-Complex: previous-character state for ASCII pair-kerning override
+    // in adjustGlyphsAndAdvances. 0 = no previous ASCII char (cleared at run
+    // start or non-ASCII char encountered).
+    char16_t m_lastDriftstackAsciiCharacter { 0 };
+#endif
 };
 
 } // namespace WebCore
