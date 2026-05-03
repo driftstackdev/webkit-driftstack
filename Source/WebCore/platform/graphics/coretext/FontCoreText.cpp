@@ -1084,31 +1084,29 @@ static MacKerningCache& macKerningCache()
     return cache.get();
 }
 
-static float computeMacPairKerningOnce(CTFontRef ctFont, uint8_t left, uint8_t right)
+// V-138 v4: get the natural (un-kerned) advance for a single glyph via
+// CTFontGetAdvancesForGlyphs. The CALLER computes mac kerning at the
+// dispatch site as: (current shaped advance from glyphBuffer) - (this).
+// Avoids the V-138 v1-v3 bug where CTFontShapeGlyphs(2-glyph, …) returns
+// zero advances.
+static float naturalAdvanceForGlyph(CTFontRef ctFont, uint8_t left)
 {
-    UniChar pair[2] = { static_cast<UniChar>(left), static_cast<UniChar>(right) };
-    CGGlyph glyphs[2] = { 0, 0 };
-    CTFontGetGlyphsForCharacters(ctFont, pair, glyphs, 2);
-    if (!glyphs[0] || !glyphs[1])
+    UniChar ch = static_cast<UniChar>(left);
+    CGGlyph glyph = 0;
+    CTFontGetGlyphsForCharacters(ctFont, &ch, &glyph, 1);
+    if (!glyph)
         return 0.0f;
+    CGSize adv = CGSizeZero;
+    CTFontGetAdvancesForGlyphs(ctFont, kCTFontOrientationHorizontal, &glyph, &adv, 1);
+    return static_cast<float>(adv.width);
+}
 
-    CGSize advancesPair[2] = { CGSizeZero, CGSizeZero };
-    CGPoint originsPair[2] = { CGPointZero, CGPointZero };
-    CFIndex indices[2] = { 0, 1 };
-    CTFontShapeGlyphs(ctFont, glyphs, advancesPair, originsPair, indices,
-        pair, 2, kCTFontShapeWithClusterComposition | kCTFontShapeWithKerning, nullptr, nullptr);
-    float pairAdvance0 = static_cast<float>(advancesPair[0].width);
-
-    // V-138: query the natural advance for the SOLO glyph using
-    // CTFontGetAdvancesForGlyphs (no shaping; pure font-metric width)
-    // rather than calling CTFontShapeGlyphs again. This is what Mac
-    // CT considers the "no kerning" advance.
-    CGSize advanceSolo = CGSizeZero;
-    CGGlyph glyphSolo = glyphs[0];
-    CTFontGetAdvancesForGlyphs(ctFont, kCTFontOrientationHorizontal, &glyphSolo, &advanceSolo, 1);
-    float soloAdvance = static_cast<float>(advanceSolo.width);
-
-    return pairAdvance0 - soloAdvance;
+// Legacy stub — kept so the cache + populate signature still compiles; the
+// V-138 v4 path uses the per-glyph naturalAdvanceForGlyph + per-call shaped
+// advance subtraction.
+static float computeMacPairKerningOnce(CTFontRef, uint8_t, uint8_t)
+{
+    return 0.0f;
 }
 
 static void populateMacKerningCellOnce(uint16_t fontId, uint16_t sizePx,
@@ -1175,8 +1173,10 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
         return;
     auto pairs = std::span<const KerningPair> { kKerningPairs }.subspan(cell->pairsOffset, cell->pairsCount);
 
-    populateMacKerningCellOnce(fontId, sizePx, ctFont, pairs);
-
+    // V-138 v4: at each glyph, natural advance (no kerning) is queried
+    // via CTFontGetAdvancesForGlyphs. Mac kerning = shaped_advance -
+    // natural. Then delta = iphone_kerning - mac_kerning. This bypasses
+    // the v1-v3 CTFontShapeGlyphs-returns-zero bug.
     for (unsigned i = beginningGlyphIndex; i + 1 < glyphBuffer.size(); ++i) {
         char32_t leftCp = recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex);
         char32_t rightCp = recoverCodepointFromGlyph(glyphBuffer, i + 1, text, beginningStringIndex);
@@ -1187,23 +1187,17 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
         if (!p)
             continue;
         float iphoneKerning = static_cast<float>(p->kerningQ8) / 256.0f;
-        float macKerning = lookupMacPairKerning(fontId, sizePx,
-            static_cast<uint8_t>(leftCp), static_cast<uint8_t>(rightCp));
+        float natural = naturalAdvanceForGlyph(ctFont, static_cast<uint8_t>(leftCp));
+        float shaped = WebCore::width(glyphBuffer.advanceAt(i));
+        float macKerning = shaped - natural;
         float delta = iphoneKerning - macKerning;
         if (std::abs(delta) < 0.001f)
             continue;
-        // V-138 RUNTIME GATE: Mac kerning recovery via CTFontShapeGlyphs +
-        // CTFontGetAdvancesForGlyphs returns nonsense advances (pair_advance
-        // ~0 instead of natural+kerning). Without correct macKerning we
-        // cannot compute delta correctly. Empirical: applying delta with
-        // macKerning=0 produces 161.73→159.88 (wrong direction); using
-        // CTFontGetAdvancesForGlyphs as solo produces 161.73→210.74 (over-
-        // correction). Override DISABLED until macKerning recovery is
-        // fixed. Diagnostic logging retained.
-        WTFLogAlways("[Driftstack-V138] pair=%c%c iphone=%.4f mac=%.4f delta=%.4f (GATED)",
-            (char)leftCp, (char)rightCp, iphoneKerning, macKerning, delta);
-        // glyphBuffer.expandAdvance(i, delta);  // DISABLED — see comment above
+        WTFLogAlways("[Driftstack-V138] pair=%c%c iphone=%.4f mac=%.4f (shaped=%.4f natural=%.4f) delta=%.4f",
+            (char)leftCp, (char)rightCp, iphoneKerning, macKerning, shaped, natural, delta);
+        glyphBuffer.expandAdvance(i, delta);
     }
+    (void)populateMacKerningCellOnce; (void)lookupMacPairKerning; // unused in v4
 }
 
 } // anonymous namespace
