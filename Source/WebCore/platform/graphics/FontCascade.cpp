@@ -1622,6 +1622,11 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         uint32_t strikeOrSize; // strike (Composite) or sizePx (Ascii)
         String asciiCssFamily; // V-127: empty for Composite
         uint32_t asciiCodepoint; // V-127: 0 for Composite
+        // V-141: color slot resolved at pre-flight time from context.fillColor().
+        // 0 for v1/v2 atlases (single implicit black slot) or for Composite hits.
+        // Threaded to draw-time entryFor lookup so the matching pre-tinted glyph
+        // is selected; also gates the stencil-and-tint pipeline.
+        uint8_t colorIdx { 0 };
     };
     Vector<AtlasHit, 8> atlasHits;
     if (!source.isEmpty() && glyphBuffer.size()) {
@@ -1756,6 +1761,39 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             const String cssFamily = firstFamily.name;
             const float ptSize = primaryFont().platformData().size();
             const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
+
+            // V-141: color-aware dispatch. For v3 atlas (colorVariantCount > 1),
+            // resolve context.fillColor() to a colorIdx; on miss (color not in
+            // captured set), abandon atlas dispatch so native CT renders and
+            // the diagnostic log surfaces the missing color value (POC pass
+            // criterion #5 — bounded miss rate). For v1/v2 atlases
+            // (colorVariantCount == 1), preserve existing behavior: dispatch
+            // with implicit colorIdx=0 + stencil-and-tint to arbitrary fill
+            // colors at draw time.
+            uint8_t resolvedColorIdx = 0;
+            bool skipAsciiDispatch = false;
+            const bool atlasIsColorAware = (asciiAtlas.colorVariantCount() > 1);
+            if (atlasIsColorAware) {
+                Color tint = context.fillColor();
+                auto [tr, tg, tb, ta] = tint.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                uint8_t r = static_cast<uint8_t>(std::clamp(roundf(tr * 255.0f), 0.0f, 255.0f));
+                uint8_t g = static_cast<uint8_t>(std::clamp(roundf(tg * 255.0f), 0.0f, 255.0f));
+                uint8_t b = static_cast<uint8_t>(std::clamp(roundf(tb * 255.0f), 0.0f, 255.0f));
+                uint8_t a = static_cast<uint8_t>(std::clamp(roundf(ta * 255.0f), 0.0f, 255.0f));
+                resolvedColorIdx = asciiAtlas.colorIdxFor(r, g, b, a);
+                if (resolvedColorIdx == 0xFF) {
+                    // POC pass criterion #5: log every miss with the missing
+                    // color value. Surfaces what colors real probes need that
+                    // the captured 16-color set lacks. Capped at 200 lines to
+                    // avoid log explosion on uncovered probes.
+                    static unsigned colorMisses = 0;
+                    if (++colorMisses <= 200) {
+                        WTFLogAlways("[Driftstack-V141] color MISS r=%u g=%u b=%u a=%u (atlas has %u colors); native CT fallback",
+                            r, g, b, a, asciiAtlas.colorVariantCount());
+                    }
+                    skipAsciiDispatch = true;
+                }
+            }
             // V-122 founder Tier-2 ack: when the resolved primary family is a
             // Generic-kind family (CSS sans-serif/serif/etc. resolved to Mac's
             // per-page-settings default), atlas may not have an entry for the
@@ -1824,7 +1862,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     break;
             }
             const bool mixedDispatch = hasAscii && hasNonAscii;
-            if (!mixedDispatch) {
+            if (!mixedDispatch && !skipAsciiDispatch) {
                 for (size_t i = 0; i < glyphBuffer.size(); ++i) {
                     // Skip glyphs already covered by a composite atlas hit.
                     bool alreadyHit = false;
@@ -1844,9 +1882,10 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     // covered. If yes, store the WINNING key in the AtlasHit;
                     // draw-time lookup re-queries with the subpixelQuant from
                     // the layout fractional X.
+                    // V-141: probe at the resolved colorIdx (0 for v1/v2 atlas).
                     String winningKey;
                     for (const auto& key : familyKeysToTry) {
-                        auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0);
+                        auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0, resolvedColorIdx);
                         if (!entry.empty()) {
                             winningKey = key;
                             break;
@@ -1861,6 +1900,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     h.strikeOrSize = static_cast<uint32_t>(sizePx);
                     h.asciiCssFamily = winningKey;
                     h.asciiCodepoint = static_cast<uint32_t>(cp);
+                    h.colorIdx = resolvedColorIdx; // V-141
                     atlasHits.append(std::move(h));
                 }
                 std::sort(atlasHits.begin(), atlasHits.end(),
@@ -1906,14 +1946,17 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             fracX = origin.x() - floorf(origin.x());
             if (fracX < 0.0f) fracX += 1.0f;
             quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
+            // V-141: thread the colorIdx resolved at pre-flight (0 for v1/v2).
             pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
-                                            hit.asciiCodepoint, quant);
+                                            hit.asciiCodepoint, quant, hit.colorIdx);
             if (pngBytes.empty()) {
                 // Fall back to subpixel-0 if the specific quant has no
                 // entry (atlas v1 or pre-V-127 atlas missing higher
-                // quants).
+                // quants). Same colorIdx (don't fall back to color 0
+                // for v3 — that would draw black where caller asked for
+                // a different color).
                 pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
-                                                hit.asciiCodepoint, 0);
+                                                hit.asciiCodepoint, 0, hit.colorIdx);
             }
         }
         WTFLogAlways("[Driftstack-Atlas] draw start kind=%s hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strikeOrSize=%u",
@@ -1955,15 +1998,28 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
             if (!nativeImg) { WTFLogAlways("[Driftstack-Atlas] Ascii nativeImg NULL"); return; }
 
-            // Capture current fill color (the text color the caller intended).
-            Color tint = context.fillColor();
-
-            context.beginTransparencyLayer(1.0f);
-            context.fillRect(destRect, tint);
-            context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::DestinationIn });
-            context.endTransparencyLayer();
-            WTFLogAlways("[Driftstack-Atlas] Ascii draw COMPLETE dest=%.1fx%.1f at %.1f,%.1f",
-                (float)destRect.width(), (float)destRect.height(), (float)destRect.x(), (float)destRect.y());
+            // V-141: stencil-and-tint inversion. v1/v2 atlas entries are
+            // BLACK glyphs on TRANSPARENT — must be tinted at draw time to
+            // match the context's fillColor. v3 atlas entries are PRE-TINTED
+            // in iPhone's exact rendering of the matched colorIdx — drawing
+            // them via stencil-and-tint would RE-tint already-tinted pixels
+            // (compounding the wrong color). For v3, draw the bitmap
+            // directly via SourceOver; for v1/v2, keep the existing
+            // stencil-and-tint pipeline.
+            auto& asciiAtlasForDraw = DriftstackAsciiAtlas::singleton();
+            if (asciiAtlasForDraw.colorVariantCount() > 1) {
+                // v3: pre-tinted; direct draw.
+                context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
+            } else {
+                // v1/v2: stencil-and-tint with context fillColor.
+                Color tint = context.fillColor();
+                context.beginTransparencyLayer(1.0f);
+                context.fillRect(destRect, tint);
+                context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::DestinationIn });
+                context.endTransparencyLayer();
+            }
+            WTFLogAlways("[Driftstack-Atlas] Ascii draw COMPLETE dest=%.1fx%.1f at %.1f,%.1f colorIdx=%u",
+                (float)destRect.width(), (float)destRect.height(), (float)destRect.x(), (float)destRect.y(), (unsigned)hit.colorIdx);
             return;
         }
 
