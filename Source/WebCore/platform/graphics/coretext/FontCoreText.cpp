@@ -851,6 +851,32 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         return iphoneAdvance;
     }
 
+    // V-145: Apple Color Emoji has a SPACE glyph (U+0020) at width 19/21/22/23/25
+    // for sizes 14/16/18/20/24 (per stage-f-emoji-ascii capture). Mac CT
+    // returns ~3.89 (Helvetica fallback width) which causes the cumulative-rig
+    // Apple Color Emoji probe 5px diff. Override Apple Color Emoji's space
+    // glyph specifically.
+    if (platformData().size() > 0.f) {
+        const auto& familyName = m_platformData.familyName();
+        if (familyName == "Apple Color Emoji"_s || familyName == ".Apple Color Emoji UI"_s) {
+            // Determine if this glyph is the space character.
+            UniChar ch = 0x20;
+            CGGlyph spaceGlyph = 0;
+            CTFontGetGlyphsForCharacters(protect(ctFont()).get(), &ch, &spaceGlyph, 1);
+            if (spaceGlyph && glyph == spaceGlyph) {
+                const uint16_t sizePx = static_cast<uint16_t>(roundf(platformData().size()));
+                switch (sizePx) {
+                    case 14: return 19.f;
+                    case 16: return 21.f;
+                    case 18: return 22.f;
+                    case 20: return 23.f;
+                    case 24: return 25.f;
+                    default: break;
+                }
+            }
+        }
+    }
+
     // V-121 closure: per-glyph ASCII advance override at the configured
     // (font, size, codepoint) combinations. iPhone reference data captured
     // via stage-f-ascii-advances probe (1900 entries × 4 fonts × 5 sizes ×
@@ -886,6 +912,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             else if (familyName == "-webkit-sans-serif"_s) atlasKey = "sans-serif";
             else if (familyName == "-webkit-serif"_s) atlasKey = "serif";
             else if (familyName == "-webkit-system-font"_s) atlasKey = "system-ui";
+            // V-145 diagnostic: log every (familyName, atlasKey) resolution.
+            WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f",
+                familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize);
             if (atlasKey) {
                 // Build glyph→codepoint reverse map for ASCII range on first use.
                 if (!m_driftstackAsciiReverseMapBuilt) {
@@ -919,10 +948,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                             if (e.fontId > fontId)
                                 break;
                             if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
-                                static unsigned hits = 0;
-                                if (++hits <= 5)
-                                    WTFLogAlways("[Driftstack-V121] HIT family='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
-                                        atlasKey, sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
+                                // V-145 diagnostic: log all HITs (was capped at 5)
+                                WTFLogAlways("[Driftstack-V121] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                    atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
                                 return e.widthPx;
                             }
                         }
