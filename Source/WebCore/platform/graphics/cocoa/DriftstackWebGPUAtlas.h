@@ -46,7 +46,7 @@
  *      fall through (avoids substituting wrong-size data).
  *
  * Default atlas binary path:
- *   /Users/john/code/driftstack/reference/driftstack_webgpu_atlas/driftstack-webgpu-atlas.bin
+ *   <DRIFTSTACK_REPO_ROOT>/reference/driftstack_webgpu_atlas/driftstack-webgpu-atlas.bin
  * Override via DRIFTSTACK_WEBGPU_ATLAS_PATH (with __XPC_ mirror for
  * WebContent XPC sandbox propagation).
  */

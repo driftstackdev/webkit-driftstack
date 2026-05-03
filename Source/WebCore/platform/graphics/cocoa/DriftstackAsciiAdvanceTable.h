@@ -1,7 +1,7 @@
 /*
  * DriftstackAsciiAdvanceTable.h — generated from stage-f-ascii-advances iPhone capture.
  * V-121 closure: per-glyph measureText.width override for Font::platformWidthForGlyph.
- * Source: /Users/john/code/driftstack/reference/iphone17pro_ios26_bs/2026-05-02T11-04-53-643Z_stageFAsciiAdvances_iphone17pro.json
+ * Source: <DRIFTSTACK_REPO_ROOT>/reference/iphone17pro_ios26_bs/2026-05-02T11-04-53-643Z_stageFAsciiAdvances_iphone17pro.json
  * DO NOT EDIT BY HAND. Re-run captures/v2/stage-f-ascii-advances-table-gen.py to regenerate.
  */
 

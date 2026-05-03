@@ -8,7 +8,7 @@
  * different pixels).
  *
  * Atlas format documented at
- * /Users/john/code/driftstack/docs/architecture/option-b-stage-f1-atlas-format.md
+ * <DRIFTSTACK_REPO_ROOT>/docs/architecture/option-b-stage-f1-atlas-format.md
  */
 
 #pragma once
