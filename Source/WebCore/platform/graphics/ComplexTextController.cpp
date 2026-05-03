@@ -876,15 +876,14 @@ void ComplexTextController::adjustGlyphsAndAdvances()
 
 #if PLATFORM(DRIFTSTACK)
             // V-148-Complex: pair-kerning override for ASCII pairs in the
-            // ComplexTextController code path. Mirrors V-138 v4 (which only
-            // fires in the Simple path via Font::applyTransforms). When the
-            // PREVIOUS character + glyph is ASCII printable, look up V-138
+            // ComplexTextController code path. Mirrors V-138 v4 (which fires
+            // in the Simple path via Font::applyTransforms). When the
+            // previous character + glyph is ASCII printable, look up V-138
             // pair table; if non-zero delta, adjust the previous glyph's
-            // advance (last entry in m_adjustedBaseAdvances) toward iPhone-
-            // equivalent kerning.
-            //
-            // Tracked via the previousCharacterIndex variable already in
-            // scope; we need the previous character codepoint specifically.
+            // advance toward iPhone-equivalent kerning. Driftstack-V149
+            // Q8-snap rounding lives inside driftstackPairKerningDelta()
+            // and applies here too — the Complex path inherits the same
+            // sub-Q8 noise suppression as the Simple path.
             if (!m_adjustedBaseAdvances.isEmpty() && character >= 0x20 && character <= 0x7E
                 && m_lastDriftstackAsciiCharacter >= 0x20 && m_lastDriftstackAsciiCharacter <= 0x7E) {
                 float prevAdvanceWidth = m_adjustedBaseAdvances.last().width();
@@ -897,9 +896,6 @@ void ComplexTextController::adjustGlyphsAndAdvances()
                     m_totalAdvance.expand(delta, 0);
                 }
             }
-            // Track the current character for the next pair lookup. Only
-            // track if it's ASCII printable; non-ASCII clears the state so
-            // we don't emit pair adjustments across script boundaries.
             m_lastDriftstackAsciiCharacter = (character >= 0x20 && character <= 0x7E) ? character : 0;
 #endif
 

@@ -1108,7 +1108,10 @@ float Font::driftstackPairKerningDelta(uint8_t leftCp, uint8_t rightCp, float ma
     CTFontGetAdvancesForGlyphs(ctf, kCTFontOrientationHorizontal, &glyph, &adv, 1);
     float natural = static_cast<float>(adv.width);
     float macKerning = macShapedAdvanceL - natural;
-    return iphoneKerning - macKerning;
+    // V-149: snap Mac kerning to Q8 precision before delta — see comment
+    // in applyDriftstackPairKerningOverride (Simple-path twin).
+    float macKerningQ8Snapped = roundf(macKerning * 256.0f) / 256.0f;
+    return iphoneKerning - macKerningQ8Snapped;
 }
 
 RetainPtr<CGImageRef> Font::driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const
@@ -1297,6 +1300,18 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
     // via CTFontGetAdvancesForGlyphs. Mac kerning = shaped_advance -
     // natural. Then delta = iphone_kerning - mac_kerning. This bypasses
     // the v1-v3 CTFontShapeGlyphs-returns-zero bug.
+    //
+    // V-149 closure: Mac CTFontShapeGlyphs returns shaped advances at
+    // sub-Q8 precision (e.g., -87.5/256 px between two Q8 steps). iPhone
+    // CT's measureText effectively snaps kerning to Q8 boundaries
+    // (consistent with the captured Q8.8 storage). Computing delta against
+    // raw Mac shaped subtracts a sub-Q8 noise component that iPhone does
+    // NOT actually apply, leaking 1 ULP / pair into the cumulative rig
+    // (V-148-PM diagnostic confirmed -apple-system 0.002 px residual was
+    // exactly this). Round Mac's measured kerning to Q8 first; only fire
+    // when iPhone disagrees on the Q8-snapped value. Pixel rendering snap
+    // is 1/16 px or coarser, so 1/256-precision suppression cannot change
+    // canvas-fp pixel results.
     for (unsigned i = beginningGlyphIndex; i + 1 < glyphBuffer.size(); ++i) {
         char32_t leftCp = recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex);
         char32_t rightCp = recoverCodepointFromGlyph(glyphBuffer, i + 1, text, beginningStringIndex);
@@ -1310,11 +1325,8 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
         float natural = naturalAdvanceForGlyph(ctFont, static_cast<uint8_t>(leftCp));
         float shaped = WebCore::width(glyphBuffer.advanceAt(i));
         float macKerning = shaped - natural;
-        float delta = iphoneKerning - macKerning;
-        // V-148: removed 0.001 threshold; ULP-level pair deltas accumulate
-        // to bridge measureText residuals. Emoji-containing canvas.measureText
-        // uses Complex path which bypasses this hook — deferred follow-up
-        // for ComplexTextController integration.
+        float macKerningQ8Snapped = roundf(macKerning * 256.0f) / 256.0f;
+        float delta = iphoneKerning - macKerningQ8Snapped;
         if (delta == 0.0f)
             continue;
         glyphBuffer.expandAdvance(i, delta);
