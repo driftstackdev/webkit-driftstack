@@ -222,6 +222,44 @@ std::span<const uint8_t> DriftstackWebGPUAtlas::entryFor(std::span<const uint8_t
     return { };
 }
 
+std::span<const uint8_t> DriftstackWebGPUAtlas::entryByByteCount(uint32_t expectedByteCount) const
+{
+    if (m_dataPayloadSpan.empty() || m_indexSpan.empty() || !m_numEntries)
+        return { };
+
+    // Linear scan — entries are sorted by hash, not byte count. v1 atlas
+    // has 1 entry; cost trivial. v2 (when graph hashing is plumbed) will
+    // use entryFor() exclusively.
+    size_t firstMatch = static_cast<size_t>(-1);
+    size_t matchCount = 0;
+    for (size_t i = 0; i < m_numEntries; ++i) {
+        auto e = readWebGPUEntry(m_indexSpan, i);
+        if (e.readbackByteCount == expectedByteCount) {
+            ++matchCount;
+            if (firstMatch == static_cast<size_t>(-1))
+                firstMatch = i;
+        }
+    }
+
+    if (matchCount == 0)
+        return { };
+
+    if (matchCount > 1) {
+        static unsigned ambig = 0;
+        if (++ambig <= 50)
+            WTFLogAlways("[Driftstack-DSWA-BYTECOUNT-AMBIGUOUS] %zu entries match byteCount=%u; falling through (canonical command-sequence hash discrimination needed)",
+                matchCount, expectedByteCount);
+        return { };
+    }
+
+    auto e = readWebGPUEntry(m_indexSpan, firstMatch);
+    static unsigned hits = 0;
+    if (++hits <= 50)
+        WTFLogAlways("[Driftstack-DSWA-HIT-by-bytecount] bytes=%u (entry %zu of %zu)",
+            e.readbackByteCount, firstMatch, m_numEntries);
+    return m_dataPayloadSpan.subspan(e.dataOffset, e.readbackByteCount);
+}
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

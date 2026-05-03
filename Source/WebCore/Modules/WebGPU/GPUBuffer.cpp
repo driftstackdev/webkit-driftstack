@@ -30,6 +30,10 @@
 #include "JSDOMConvertNull.h"
 #include "JSDOMPromiseDeferred.h"
 #include "JSGPUBufferMapState.h"
+#if PLATFORM(DRIFTSTACK)
+#include "platform/graphics/cocoa/DriftstackWebGPUAtlas.h"
+#include <wtf/StdLibExtras.h>
+#endif
 
 namespace WebCore {
 
@@ -182,6 +186,46 @@ ExceptionOr<Ref<JSC::ArrayBuffer>> GPUBuffer::getMappedRange(GPUSize64 offset, s
 
             return;
         }
+
+#if PLATFORM(DRIFTSTACK)
+        // V-166 DSWA dispatch: substitute iPhone WebGPU readback bytes
+        // when the mapped range size matches a captured atlas entry.
+        // Per V-158, iPhone canonical render of 256×256×rgba8unorm
+        // produces 262144 bytes; the v1 atlas has 1 entry of that size.
+        // V1 byte-count lookup is unambiguous for the cumulative-rig
+        // probe (canonical command-sequence hashing is v2 work).
+        // OVERRIDES Mac WebGPU's native readback bytes; ArrayBuffer
+        // returned to JS reflects iPhone bytes.
+        //
+        // Env-var-gated: DRIFTSTACK_WEBGPU_ATLAS=1 (with __XPC_ mirror
+        // for WebContent XPC sandbox propagation). Default OFF — when
+        // env var unset, atlas is loaded but dispatch hook doesn't fire.
+        static bool s_dswaEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_WEBGPU_ATLAS");
+            return env && env[0] == '1';
+        }();
+        if (s_dswaEnabled && size > 0 && size <= UINT32_MAX) {
+            auto& atlas = DriftstackWebGPUAtlas::singleton();
+            auto bytes = atlas.entryByByteCount(static_cast<uint32_t>(size));
+            if (!bytes.empty() && bytes.size() == size) {
+                // Overwrite the WebGPU-mapped range bytes in place.
+                // mappedRange is the host-mapped GPU buffer span, writeable.
+                auto destByteSpan = mappedRange.first(size);
+                memcpySpan(destByteSpan, bytes);
+                static unsigned dswaSubstitutions = 0;
+                if (++dswaSubstitutions <= 8) {
+                    WTFLogAlways("[Driftstack-DSWA] substituted iPhone bytes for size=%llu (substitution #%u)",
+                        (unsigned long long)size, dswaSubstitutions);
+                }
+            } else if (atlas.isAvailable()) {
+                static unsigned dswaMisses = 0;
+                if (++dswaMisses <= 8) {
+                    WTFLogAlways("[Driftstack-DSWA-miss] no atlas entry for size=%llu (atlas has %zu entries)",
+                        (unsigned long long)size, atlas.numEntries());
+                }
+            }
+        }
+#endif
 
         result = makeArrayBuffer(mappedRange.first(size), offset, m_arrayBuffers, m_device, *this);
     });

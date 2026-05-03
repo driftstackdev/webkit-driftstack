@@ -83,6 +83,15 @@ public:
     std::span<const uint8_t> entryFor(std::span<const uint8_t, 16> commandSequenceHash,
                                       uint32_t expectedByteCount) const;
 
+    // V1 fallback lookup: returns the FIRST atlas entry matching the
+    // given readback byte count. Used by the v1 dispatch hook in
+    // GPUBuffer::getMappedRange when canonical command-sequence hashing
+    // isn't available (the v1 cumulative-rig has 1 canonical probe at
+    // 256x256x4 = 262144 bytes, so byte-count lookup is unambiguous).
+    // Returns empty span on no-match OR if multiple entries match
+    // (ambiguous → fall through to native).
+    std::span<const uint8_t> entryByByteCount(uint32_t expectedByteCount) const;
+
     bool isAvailable() const { return !m_dataPayloadSpan.empty(); }
     size_t numEntries() const { return m_numEntries; }
 
