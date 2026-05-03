@@ -1156,15 +1156,11 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
     bool enableKerning, CTFontRef ctFont, const String& familyName,
     float ptSize, StringView text)
 {
-    WTFLogAlways("[Driftstack-V138] entry: enableKerning=%d familyName='%s' ptSize=%.2f glyphs=%u",
-        enableKerning ? 1 : 0, familyName.utf8().data(), ptSize,
-        static_cast<unsigned>(glyphBuffer.size() - beginningGlyphIndex));
     if (!enableKerning)
         return;
     if (glyphBuffer.size() <= beginningGlyphIndex + 1)
         return;
     uint16_t fontId = resolveKerningFontId(familyName);
-    WTFLogAlways("[Driftstack-V138] fontId=%u (0xFFFF=miss)", fontId);
     if (fontId == 0xFFFF)
         return;
     uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
@@ -1193,8 +1189,6 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
         float delta = iphoneKerning - macKerning;
         if (std::abs(delta) < 0.001f)
             continue;
-        WTFLogAlways("[Driftstack-V138] pair=%c%c iphone=%.4f mac=%.4f (shaped=%.4f natural=%.4f) delta=%.4f",
-            (char)leftCp, (char)rightCp, iphoneKerning, macKerning, shaped, natural, delta);
         glyphBuffer.expandAdvance(i, delta);
     }
     (void)populateMacKerningCellOnce; (void)lookupMacPairKerning; // unused in v4
