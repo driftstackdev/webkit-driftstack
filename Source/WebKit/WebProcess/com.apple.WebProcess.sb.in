@@ -105,26 +105,27 @@
 
 #if PLATFORM(DRIFTSTACK)
 ;;; Driftstack: allow WebContent read access to the iOS font binary
-;;; install dir for Stage B font registration. Path is configurable
-;;; via DRIFTSTACK_FONTS_DIR env var (forwarded through XPC bootstrap
-;;; per wave-1-8-fix-4); these subpaths cover the dev default
-;;; (/Users/john/code/driftstack-fonts) and the production fleet
-;;; default (/var/driftstack/fonts) per stage-b rollout doc.
-;;; V-090 / Phase F.1.B: also allow the emoji atlas binary path
-;;; (mmap'd by DriftstackEmojiAtlas singleton at WebContent init).
-;;; Configurable via DRIFTSTACK_EMOJI_ATLAS_PATH env var; subpaths
-;;; below cover the dev default (the repo's reference dir) and the
-;;; production fleet default (/var/driftstack/atlas).
-;;; V-117 / Stage F root cause B: same allow for ASCII atlas path
-;;; (mmap'd by DriftstackAsciiAtlas singleton). Configurable via
-;;; DRIFTSTACK_ASCII_ATLAS_PATH; dev default is the repo's reference
-;;; dir, production default is /var/driftstack/atlas.
+;;; install dir + atlas binaries. Path conventions:
+;;;   - dev:        ~/code/driftstack-fonts   ~/code/driftstack/reference/driftstack_*_atlas
+;;;   - production: /var/driftstack/fonts     /var/driftstack/atlas
+;;;   - production: /var/lib/driftstack/data  (V-166 forward-looking convention)
+;;; All paths configurable via DRIFTSTACK_FONTS_DIR + DRIFTSTACK_*_ATLAS_PATH
+;;; env vars (forwarded through XPC bootstrap per wave-1-8-fix-4).
+;;; V-090 / Phase F.1.B: emoji atlas binary path (mmap'd by
+;;; DriftstackEmojiAtlas singleton at WebContent init).
+;;; V-117 / Stage F root cause B: ASCII atlas path (mmap'd by
+;;; DriftstackAsciiAtlas singleton).
+;;; V-158 / DSWA: WebGPU readback atlas (DriftstackWebGPUAtlas).
+;;; V-166 / DASA: audio substitution atlas (planned, post-POC-v2).
 (allow file-read*
     (subpath "/Users/john/code/driftstack-fonts")
     (subpath "/var/driftstack/fonts")
     (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
-    (subpath "/var/driftstack/atlas"))
+    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath "/var/driftstack/atlas")
+    (subpath "/var/lib/driftstack/data"))
 #endif
 
 ;;; Allow reading internal profiles on development builds
