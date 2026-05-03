@@ -58,12 +58,14 @@ namespace WebCore {
 
 // Index entry struct exposed for the .mm-side reader.
 // V-127 v2: 20 bytes (was 16 in v1; added subpixelQuant field).
+// V-141 v3: 24 bytes (added colorIndex field).
 struct DriftstackAsciiAtlas_IndexEntry {
     uint16_t fontId;
     uint16_t sizePx;
     uint32_t codepoint;
     uint8_t subpixelQuant;
-    // 3 bytes implicit padding
+    uint8_t colorIndex; // V-141: 0 for v1/v2 atlases (single implicit black/transparent slot)
+    // 2 bytes implicit padding
     uint32_t dataOffset;
     uint32_t pngLen;
 };
@@ -72,21 +74,49 @@ class DriftstackAsciiAtlas {
 public:
     static DriftstackAsciiAtlas& singleton();
 
-    // V-127 lookup with sub-pixel quantization. subpixelQuant ∈ [0, subpixelVariantCount()).
+    // V-141: 5-key lookup with explicit colorIdx.
+    // For v1/v2 atlases, only colorIdx == 0 returns entries (single slot).
     std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx,
-                                      uint32_t codepoint, uint8_t subpixelQuant) const;
+                                      uint32_t codepoint, uint8_t subpixelQuant,
+                                      uint8_t colorIdx) const;
 
-    // V-117 v1-compat: same as entryFor(..., 0). For callers that don't
+    // V-127 4-key lookup (back-compat — defaults colorIdx to 0).
+    std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx,
+                                      uint32_t codepoint, uint8_t subpixelQuant) const
+    {
+        return entryFor(fontCssName, sizePx, codepoint, subpixelQuant, 0);
+    }
+
+    // V-117 v1-compat: same as entryFor(..., 0, 0). For callers that don't
     // care about sub-pixel positioning (integer-aligned drawing).
     std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx, uint32_t codepoint) const
     {
-        return entryFor(fontCssName, sizePx, codepoint, 0);
+        return entryFor(fontCssName, sizePx, codepoint, 0, 0);
     }
 
     // V-127: subpixelVariantCount returns 1 for v1 atlas (no sub-pixel
     // variants captured), 1..4 for v2 atlas. Caller uses this to size
     // the quantizer.
     uint8_t subpixelVariantCount() const { return m_subpixelVariantCount; }
+
+    // V-141: colorVariantCount returns 1 for v1/v2 (single implicit black slot),
+    // 1..16 for v3. Dispatch uses this to gate color-aware lookup behavior.
+    uint8_t colorVariantCount() const { return m_colorVariantCount; }
+
+    // V-141: exact-match lookup for color slot. Returns 0xFF on miss.
+    // Caller computes (r,g,b,a) from context.fillColor() bytes.
+    // For v1/v2 atlases (colorVariantCount=1), this returns 0 only for
+    // (0,0,0,255) — but callers should gate on colorVariantCount() > 1
+    // to skip lookup entirely on legacy atlases.
+    uint8_t colorIdxFor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) const;
+
+    struct ColorRGBA { uint8_t r, g, b, a; };
+    ColorRGBA colorAt(uint8_t idx) const
+    {
+        if (idx >= m_colorVariantCount)
+            return { 0, 0, 0, 0 };
+        return m_colorTable[idx];
+    }
 
     bool isAvailable() const { return !m_dataPayloadSpan.empty(); }
     const Vector<String>& fontNames() const { return m_fontNames; }
@@ -109,10 +139,18 @@ private:
     size_t m_numEntries { 0 };
     // V-127 v2 metadata. v1 atlas → m_atlasVersion=1, m_subpixelVariantCount=1,
     // m_entryStride=16. v2 atlas → m_atlasVersion=2, count from header,
-    // m_entryStride=20.
+    // m_entryStride=20. v3 atlas → m_atlasVersion=3, m_entryStride=24,
+    // m_colorVariantCount per header.
     uint32_t m_atlasVersion { 0 };
     uint8_t m_subpixelVariantCount { 1 };
+    uint8_t m_colorVariantCount { 1 };
     size_t m_entryStride { 16 };
+    // V-141: 16-element color table. For v1/v2 atlases:
+    //   m_colorTable[0] = {0,0,0,255} (canonical black; the v1/v2 atlas
+    //   always rendered black on transparent; stencil-and-tint applied
+    //   the actual fill color at draw time). v3 atlases populate the
+    //   real captured colors.
+    std::array<ColorRGBA, 16> m_colorTable { { { 0, 0, 0, 255 } } };
 };
 
 } // namespace WebCore
