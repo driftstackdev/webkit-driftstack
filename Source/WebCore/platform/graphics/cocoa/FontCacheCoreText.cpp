@@ -1160,6 +1160,81 @@ static RetainPtr<CTFontRef> lookupFallbackFont(CTFontRef font, FontSelectionValu
     return result;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Track 9 (V-161 closure): Mac's lookupFallbackFont returns a different physical
+// font for Korean Hangul characters than iOS does. Mac falls back via its own
+// catalog (often AppleGothic or system-specific Hangul font); iOS uses
+// AppleSDGothicNeo for ALL serif/sans-serif/system contexts. The 2 surfaces
+// in V-157 (serif|hangul_jamo, serif|korean_hangul) and additional Hangul
+// probes downstream all close when the fallback resolution returns iOS's
+// AppleSDGothicNeo binary directly.
+//
+// Hangul Unicode ranges (per Unicode 15.x):
+//   U+1100-U+11FF  Hangul Jamo
+//   U+3130-U+318F  Hangul Compatibility Jamo
+//   U+A960-U+A97F  Hangul Jamo Extended-A
+//   U+AC00-U+D7AF  Hangul Syllables (precomposed; covers '한', '안녕', etc.)
+//   U+D7B0-U+D7FF  Hangul Jamo Extended-B
+//
+// Returns nullptr if the cluster is not Hangul OR if AppleSDGothicNeo isn't
+// in the Stage B installed font map (silent — does NOT log MISS like the
+// Stage B path does for missing CSS family lookups).
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHangulCluster(StringView cluster, const FontDescription& description, float size)
+{
+    if (cluster.isEmpty())
+        return nullptr;
+    char32_t cp = cluster[0];
+    bool isHangul = (cp >= 0x1100 && cp <= 0x11FF)
+                 || (cp >= 0x3130 && cp <= 0x318F)
+                 || (cp >= 0xA960 && cp <= 0xA97F)
+                 || (cp >= 0xAC00 && cp <= 0xD7AF)
+                 || (cp >= 0xD7B0 && cp <= 0xD7FF);
+    if (!isHangul)
+        return nullptr;
+
+    initializeDriftstackIOSFontMapIfNeeded();
+    Locker locker(driftstackIOSFontMapLock);
+    auto& map = driftstackIOSFontMap();
+
+    // Try the canonical iOS Hangul family name. The .ttc may register under
+    // either the spaced or unspaced lowercase form depending on which
+    // Unicode name table the font binary exposes; check both silently.
+    static const std::array<ASCIILiteral, 2> hangulCandidates {
+        "apple sd gothic neo"_s,
+        "applesdgothicneo"_s,
+    };
+    for (auto candidate : hangulCandidates) {
+        auto it = map.find(String(candidate));
+        if (it == map.end())
+            continue;
+        const auto& variants = it->value;
+        if (variants.isEmpty())
+            continue;
+        // Pick the variant closest to requested weight/italic. Track 9's
+        // failing probes use 14px font with default weight/style.
+        const float requestedWeight = (static_cast<float>(description.weight()) - 400.f) / 400.f;
+        const bool requestedItalic = isItalic(description.fontStyleSlope());
+        DriftstackIOSFontVariant chosen = variants[0];
+        float bestScore = std::numeric_limits<float>::infinity();
+        for (const auto& v : variants) {
+            float italicMismatch = (v.italic != requestedItalic) ? 1.0f : 0.0f;
+            float weightDelta = std::abs(v.weight - requestedWeight);
+            float score = italicMismatch * 10.0f + weightDelta;
+            if (score < bestScore) {
+                bestScore = score;
+                chosen = v;
+            }
+        }
+        RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(chosen.url.get()));
+        if (!descs || !CFArrayGetCount(descs.get()))
+            continue;
+        CTFontDescriptorRef fd = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs.get(), 0);
+        return adoptCF(CTFontCreateWithFontDescriptor(fd, size, nullptr));
+    }
+    return nullptr;
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription& description, const Font& originalFontData, IsForPlatformFont isForPlatformFont, PreferColoredFont, StringView characterCluster)
 {
     const FontPlatformData& platformData = originalFontData.platformData();
@@ -1170,6 +1245,21 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
         m_fontNamesRequiringSystemFallbackForPrewarming.add(fullName);
 
     auto result = lookupFallbackFont(ctFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), characterCluster);
+#if PLATFORM(DRIFTSTACK)
+    // Track 9 / V-161: short-circuit Mac's fallback resolution to prefer the
+    // iOS Hangul font binary (AppleSDGothicNeo from Stage B). When the cluster
+    // is Hangul and the override font loads, it replaces Mac's pick BEFORE
+    // preparePlatformFont normalizes the result. If the cluster is not Hangul
+    // OR AppleSDGothicNeo isn't installed, this is a no-op.
+    if (auto driftstackHangulFont = driftstackIOSFallbackFontForHangulCluster(
+            characterCluster, description, platformData.size())) {
+        static unsigned hitCount = 0;
+        if (++hitCount <= 8)
+            WTFLogAlways("[Driftstack-Track9] Hangul fallback override fired (%u so far); cluster first cp = U+%04X",
+                hitCount, (unsigned)characterCluster[0]);
+        result = WTF::move(driftstackHangulFont);
+    }
+#endif
     result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
 
     if (!result)
