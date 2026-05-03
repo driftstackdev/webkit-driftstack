@@ -881,6 +881,11 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             else if (familyName == "Helvetica"_s) atlasKey = "Helvetica";
             else if (familyName == ".AppleSystemUIFont"_s) atlasKey = "-apple-system";
             else if (familyName == "Times"_s || familyName == "Times Roman"_s) atlasKey = "serif";
+            // V-144: Mac resolves CSS generic keywords to internal -webkit-*
+            // names (per V-138 instrumentation). Add fallbacks.
+            else if (familyName == "-webkit-sans-serif"_s) atlasKey = "sans-serif";
+            else if (familyName == "-webkit-serif"_s) atlasKey = "serif";
+            else if (familyName == "-webkit-system-font"_s) atlasKey = "system-ui";
             if (atlasKey) {
                 // Build glyph→codepoint reverse map for ASCII range on first use.
                 if (!m_driftstackAsciiReverseMapBuilt) {
