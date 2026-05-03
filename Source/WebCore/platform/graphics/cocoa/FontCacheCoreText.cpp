@@ -1179,39 +1179,20 @@ static RetainPtr<CTFontRef> lookupFallbackFont(CTFontRef font, FontSelectionValu
 // Returns nullptr if the cluster is not Hangul OR if AppleSDGothicNeo isn't
 // in the Stage B installed font map (silent — does NOT log MISS like the
 // Stage B path does for missing CSS family lookups).
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHangulCluster(StringView cluster, const FontDescription& description, float size)
+// Helper: look up a font by family-name candidates in the Stage B map.
+// Silent on miss; returns the variant matching requested weight/italic at size.
+static RetainPtr<CTFontRef> driftstackLookupIOSFontByCandidates(std::span<const ASCIILiteral> candidates, const FontDescription& description, float size)
 {
-    if (cluster.isEmpty())
-        return nullptr;
-    char32_t cp = cluster[0];
-    bool isHangul = (cp >= 0x1100 && cp <= 0x11FF)
-                 || (cp >= 0x3130 && cp <= 0x318F)
-                 || (cp >= 0xA960 && cp <= 0xA97F)
-                 || (cp >= 0xAC00 && cp <= 0xD7AF)
-                 || (cp >= 0xD7B0 && cp <= 0xD7FF);
-    if (!isHangul)
-        return nullptr;
-
     initializeDriftstackIOSFontMapIfNeeded();
     Locker locker(driftstackIOSFontMapLock);
     auto& map = driftstackIOSFontMap();
-
-    // Try the canonical iOS Hangul family name. The .ttc may register under
-    // either the spaced or unspaced lowercase form depending on which
-    // Unicode name table the font binary exposes; check both silently.
-    static const std::array<ASCIILiteral, 2> hangulCandidates {
-        "apple sd gothic neo"_s,
-        "applesdgothicneo"_s,
-    };
-    for (auto candidate : hangulCandidates) {
+    for (auto candidate : candidates) {
         auto it = map.find(String(candidate));
         if (it == map.end())
             continue;
         const auto& variants = it->value;
         if (variants.isEmpty())
             continue;
-        // Pick the variant closest to requested weight/italic. Track 9's
-        // failing probes use 14px font with default weight/style.
         const float requestedWeight = (static_cast<float>(description.weight()) - 400.f) / 400.f;
         const bool requestedItalic = isItalic(description.fontStyleSlope());
         DriftstackIOSFontVariant chosen = variants[0];
@@ -1232,6 +1213,63 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHangulCluster(StringView
         return adoptCF(CTFontCreateWithFontDescriptor(fd, size, nullptr));
     }
     return nullptr;
+}
+
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHangulCluster(StringView cluster, const FontDescription& description, float size)
+{
+    if (cluster.isEmpty())
+        return nullptr;
+    char32_t cp = cluster[0];
+    bool isHangul = (cp >= 0x1100 && cp <= 0x11FF)
+                 || (cp >= 0x3130 && cp <= 0x318F)
+                 || (cp >= 0xA960 && cp <= 0xA97F)
+                 || (cp >= 0xAC00 && cp <= 0xD7AF)
+                 || (cp >= 0xD7B0 && cp <= 0xD7FF);
+    if (!isHangul)
+        return nullptr;
+    static const std::array<ASCIILiteral, 2> candidates {
+        "apple sd gothic neo"_s,
+        "applesdgothicneo"_s,
+    };
+    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+}
+
+// Track 10 Hebrew: REMOVED post-V-165 validation. Empirical result was a wash:
+// the SFHebrew override closed 3 sans-serif|hebrew surfaces but BROKE 3
+// serif|hebrew surfaces (Mac's native serif Hebrew was already matching iPhone;
+// the override forced SFHebrew for both serif AND sans-serif contexts, which
+// matches iPhone for sans-serif but diverges for serif). Per-context font
+// discrimination (sans-serif vs serif vs system in the originating CSS request)
+// is not available at the systemFallbackForCharacterCluster call site without
+// additional plumbing. Hebrew override is deferred until that discrimination
+// is available, OR until empirical capture of iPhone's serif|hebrew font
+// identifies the specific iOS font binary so we can override per-context.
+
+// Track 10 (V-165 closure): Devanagari fallback. Mac's lookupFallbackFont
+// returns macOS's native Devanagari font for U+0900-U+097F cluster; iOS uses
+// Kohinoor Devanagari (in Stage B as Kohinoor.ttc) or DevanagariSangamMN.ttc.
+// The 3 surfaces in V-159 (serif|devanagari) close when fallback returns
+// iOS's Kohinoor binary. Devanagari Unicode range:
+//   U+0900-U+097F  Devanagari
+//   U+A8E0-U+A8FF  Devanagari Extended
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(StringView cluster, const FontDescription& description, float size)
+{
+    if (cluster.isEmpty())
+        return nullptr;
+    char32_t cp = cluster[0];
+    bool isDevanagari = (cp >= 0x0900 && cp <= 0x097F)
+                     || (cp >= 0xA8E0 && cp <= 0xA8FF);
+    if (!isDevanagari)
+        return nullptr;
+    // Kohinoor Devanagari is iOS's primary modern Devanagari font (Stage B
+    // file: LanguageSupport/Kohinoor.ttc). Try it first; fall back to legacy
+    // Devanagari Sangam MN.
+    static const std::array<ASCIILiteral, 3> candidates {
+        "kohinoor devanagari"_s,
+        "kohinoordevanagari"_s,
+        "devanagari sangam mn"_s,
+    };
+    return driftstackLookupIOSFontByCandidates(candidates, description, size);
 }
 #endif // PLATFORM(DRIFTSTACK)
 
@@ -1258,6 +1296,16 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             WTFLogAlways("[Driftstack-Track9] Hangul fallback override fired (%u so far); cluster first cp = U+%04X",
                 hitCount, (unsigned)characterCluster[0]);
         result = WTF::move(driftstackHangulFont);
+    // Track 10 Hebrew dispatch removed post-V-165 validation (see comment block
+    // above driftstackIOSFallbackFontForDevanagariCluster). Re-enable when
+    // per-context (sans-serif vs serif) discrimination is plumbed through.
+    } else if (auto driftstackDevanagariFont = driftstackIOSFallbackFontForDevanagariCluster(
+            characterCluster, description, platformData.size())) {
+        static unsigned hitCount = 0;
+        if (++hitCount <= 8)
+            WTFLogAlways("[Driftstack-Track10-Devanagari] Devanagari fallback override fired (%u so far); cluster first cp = U+%04X",
+                hitCount, (unsigned)characterCluster[0]);
+        result = WTF::move(driftstackDevanagariFont);
     }
 #endif
     result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
