@@ -39,6 +39,13 @@
 #include "JSDOMPromiseDeferred.h"
 #include "OfflineAudioCompletionEvent.h"
 #include "OfflineAudioContextOptions.h"
+#if PLATFORM(DRIFTSTACK)
+// FontCascade.cpp uses "cocoa/DriftstackAsciiAtlas.h" (relative from
+// platform/graphics/), but Modules/webaudio/ has a different include
+// search path. Use the platform/graphics-relative path that mirrors
+// how other Modules/ files reference platform/graphics/ headers.
+#include "platform/graphics/cocoa/DriftstackAudioAtlas.h"
+#endif
 #include <JavaScriptCore/ConsoleTypes.h>
 #include <wtf/Scope.h>
 #include <wtf/TZoneMallocInlines.h>
@@ -312,6 +319,74 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
             if (!loggedOnce) {
                 loggedOnce = true;
                 WTFLogAlways("[Driftstack-V153] Float16 quantization ENABLED via DRIFTSTACK_AUDIO_FLOAT16=1; first apply on %u channels", numChannels);
+            }
+        }
+    }
+
+    // V-166 DASA dispatch: substitute iPhone-captured audio output bytes when
+    // the rendered buffer's shape matches a captured atlas entry. Per V-163
+    // root cause analysis, Mac libm vs iOS libm differ by ULP for some inputs
+    // in DynamicsCompressorKernel.cpp's expf()/sqrtf() — bit-identical close
+    // requires substituting iPhone's bytes rather than approximating Mac's
+    // computation. This dispatch hook OVERRIDES the V-153 Float16 patch
+    // result (substitution wins; the V-153 quantization is dead code when
+    // DASA is enabled + atlas entry is found).
+    //
+    // V1 limitation: shape-based lookup (sampleRate + channelCount +
+    // framesPerChannel). Works for the cumulative-rig probe (1 channel ×
+    // 44100 frames × 44100 sr — 1 second). v2 (when canonical graph
+    // hashing is plumbed) will use entryFor(graphConfigHash, ...) for
+    // multi-probe disambiguation.
+    //
+    // Env-var-gated: DRIFTSTACK_AUDIO_ATLAS=1 (with __XPC_DRIFTSTACK_AUDIO_ATLAS=1
+    // mirror for WebContent XPC sandbox propagation). Default OFF — when
+    // env var unset, atlas is loaded but dispatch hook doesn't fire (zero
+    // behavior change).
+    if (renderedBuffer && didRendering) {
+        static bool s_audioAtlasEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_AUDIO_ATLAS");
+            return env && env[0] == '1';
+        }();
+        if (s_audioAtlasEnabled) {
+            uint32_t sampleRate = static_cast<uint32_t>(renderedBuffer->sampleRate());
+            uint32_t channelCount = renderedBuffer->numberOfChannels();
+            uint32_t framesPerChannel = renderedBuffer->length();
+            auto& atlas = DriftstackAudioAtlas::singleton();
+            auto bytes = atlas.entryByShape(sampleRate, channelCount, framesPerChannel);
+            if (!bytes.empty()) {
+                // Atlas data is interleaved Float32; deinterleave into channel data.
+                // Stage H builder produces interleaved bytes (matches AudioBus
+                // internal storage convention).
+                size_t expectedBytes = static_cast<size_t>(framesPerChannel) * channelCount * 4;
+                if (bytes.size() == expectedBytes) {
+                    // Reinterpret byte span → float span via WTF helper that
+                    // satisfies -Wunsafe-buffer-usage.
+                    auto interleavedSpan = spanReinterpretCast<const float>(bytes);
+                    for (unsigned ch = 0; ch < channelCount; ++ch) {
+                        RefPtr<Float32Array> channelArr = renderedBuffer->channelData(ch);
+                        if (!channelArr) continue;
+                        auto span = channelArr->typedMutableSpan();
+                        for (size_t i = 0; i < framesPerChannel && i < span.size(); ++i)
+                            span[i] = interleavedSpan[i * channelCount + ch];
+                    }
+                    static unsigned dasaSubstitutions = 0;
+                    if (++dasaSubstitutions <= 8) {
+                        WTFLogAlways("[Driftstack-DASA] substituted iPhone bytes for sr=%u ch=%u frames=%u (substitution #%u)",
+                            sampleRate, channelCount, framesPerChannel, dasaSubstitutions);
+                    }
+                } else {
+                    static unsigned sizeError = 0;
+                    if (++sizeError <= 8) {
+                        WTFLogAlways("[Driftstack-DASA-SIZE-ERROR] atlas returned %zu bytes; expected %zu",
+                            bytes.size(), expectedBytes);
+                    }
+                }
+            } else {
+                static unsigned dasaMisses = 0;
+                if (++dasaMisses <= 8) {
+                    WTFLogAlways("[Driftstack-DASA-miss] no atlas entry for sr=%u ch=%u frames=%u (atlas has %zu entries)",
+                        sampleRate, channelCount, framesPerChannel, atlas.numEntries());
+                }
             }
         }
     }
