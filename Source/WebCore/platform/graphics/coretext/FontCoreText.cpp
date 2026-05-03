@@ -1235,7 +1235,11 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
         float shaped = WebCore::width(glyphBuffer.advanceAt(i));
         float macKerning = shaped - natural;
         float delta = iphoneKerning - macKerning;
-        if (std::abs(delta) < 0.001f)
+        // V-148: removed 0.001 threshold; ULP-level pair deltas accumulate
+        // to bridge measureText residuals. Emoji-containing canvas.measureText
+        // uses Complex path which bypasses this hook — deferred follow-up
+        // for ComplexTextController integration.
+        if (delta == 0.0f)
             continue;
         glyphBuffer.expandAdvance(i, delta);
     }
