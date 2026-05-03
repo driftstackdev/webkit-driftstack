@@ -266,6 +266,57 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
     RefPtr<AudioBuffer> renderedBuffer = renderTarget();
     ASSERT(renderedBuffer);
 
+#if PLATFORM(DRIFTSTACK)
+    // V-153 Stage E hypothesis (env-var-gated, default INACTIVE):
+    // iOS 26.4 collapsed audio offline-render hashes across A16/A17/A19
+    // chips to a single canonical value. Many-to-one collapse signature
+    // suggests a precision-reduction step. Most likely candidate:
+    // Float32 → Float16 → Float32 round-trip after offline render.
+    // Float16's 11-bit mantissa clips chip-specific FP variation in
+    // the low 4-8 mantissa bits.
+    //
+    // Patch is INACTIVE by default — gate via env var
+    // DRIFTSTACK_AUDIO_FLOAT16=1 (with __XPC_DRIFTSTACK_AUDIO_FLOAT16=1
+    // mirror for WebContent XPC sandbox propagation).
+    //
+    // Validation plan: when iPhone audio.rawSamples capture lands
+    // (post-V-141 td016 recapture), enable env var, run cumulative rig,
+    // check if audio.offlineFingerprint10x.value.hashes[0] matches
+    // iPhone reference 9f48a830... — and per-sample diff via
+    // audio.rawSamples confirms byte-exact match.
+    //
+    // If hypothesis fails: leave gate off (zero customer-visible effect),
+    // pursue fallback hypotheses per docs/architecture/option-b-stage-e-audio-rendering.md
+    // §"Fallback hypotheses".
+    if (renderedBuffer && didRendering) {
+        static bool s_audioFloat16Enabled = []() {
+            const char* env = getenv("DRIFTSTACK_AUDIO_FLOAT16");
+            return env && env[0] == '1';
+        }();
+        if (s_audioFloat16Enabled) {
+            unsigned numChannels = renderedBuffer->numberOfChannels();
+            for (unsigned ch = 0; ch < numChannels; ++ch) {
+                RefPtr<Float32Array> channelArr = renderedBuffer->channelData(ch);
+                if (!channelArr) continue;
+                // typedMutableSpan() — preferred over raw data() per WebKit's
+                // -Wunsafe-buffer-usage rule.
+                auto span = channelArr->typedMutableSpan();
+                for (size_t i = 0; i < span.size(); ++i) {
+                    // Float32 → Float16 → Float32 round-trip via ARM __fp16
+                    // (standard Clang on Apple Silicon).
+                    __fp16 h = span[i];
+                    span[i] = static_cast<float>(h);
+                }
+            }
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-V153] Float16 quantization ENABLED via DRIFTSTACK_AUDIO_FLOAT16=1; first apply on %u channels", numChannels);
+            }
+        }
+    }
+#endif
+
     if (didRendering) {
         queueTaskToDispatchEvent(*this, TaskSource::MediaElement, OfflineAudioCompletionEvent::create(*renderedBuffer));
         settleRenderingPromise(renderedBuffer.releaseNonNull());
