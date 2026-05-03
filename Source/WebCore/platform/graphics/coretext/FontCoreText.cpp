@@ -35,6 +35,10 @@
 #include <unordered_set>
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/text/AtomString.h>
+namespace WebCore::Driftstack {
+extern thread_local const char* g_currentPrimaryFamilyCStr;
+}
 #endif
 
 #include "Color.h"
@@ -848,6 +852,17 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             iphoneAdvance = 19.f + (ptSize - 14.f) * (25.f - 19.f) / (24.f - 14.f);
         else
             iphoneAdvance = 25.f + (ptSize - 24.f) * (48.f - 25.f) / (48.f - 24.f);
+        // V-147 / V-143 Option A: when primary font is NOT Apple Color Emoji
+        // (i.e., emoji is rendered via fallback), iPhone CT adds +1 px to
+        // the natural emoji width. Per stage-f-emoji-advances capture:
+        //   "14px Apple Color Emoji" 😃/🍕 = 19 (primary)
+        //   "14px -apple-system" 😃/🍕 = 20 (fallback +1)
+        //   "14px sans-serif" 😃/🍕 = 19 (fallback +0 — only -apple-system gets +1)
+        // So the +1 only applies when primary is -apple-system (or system-ui
+        // which resolves to .AppleSystemUIFont same as -apple-system).
+        const char* primary = Driftstack::g_currentPrimaryFamilyCStr;
+        if (primary && (std::string_view(primary) == "-apple-system" || std::string_view(primary) == "system-ui"))
+            iphoneAdvance += 1.f;
         return iphoneAdvance;
     }
 
