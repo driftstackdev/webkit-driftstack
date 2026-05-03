@@ -30,6 +30,11 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
+#include "DriftstackKerningTable.h"
+#include <unordered_map>
+#include <unordered_set>
+#include <wtf/Lock.h>
+#include <wtf/NeverDestroyed.h>
 #endif
 
 #include "Color.h"
@@ -1002,6 +1007,208 @@ RetainPtr<CGImageRef> Font::driftstackAtlasImageForCodepoint(uint32_t codepoint,
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+namespace {
+
+using namespace DriftstackKerning;
+
+static uint16_t resolveKerningFontId(const String& familyName)
+{
+    auto utf8 = familyName.utf8();
+    auto utf8sv = std::string_view(utf8.data(), utf8.length());
+    for (size_t i = 0; i < kKerningFonts.size(); ++i) {
+        if (utf8sv == kKerningFonts[i])
+            return static_cast<uint16_t>(i);
+    }
+    // V-138 fallback: Mac CT resolves CSS keywords to internal names.
+    // Map them back to the analyzer's CSS-keyword ids.
+    if (familyName == ".AppleSystemUIFont"_s || familyName == ".SF NS"_s) {
+        for (size_t i = 0; i < kKerningFonts.size(); ++i)
+            if (std::string_view(kKerningFonts[i]) == "-apple-system")
+                return static_cast<uint16_t>(i);
+    }
+    if (familyName == "-webkit-sans-serif"_s || familyName == "Helvetica"_s) {
+        for (size_t i = 0; i < kKerningFonts.size(); ++i)
+            if (std::string_view(kKerningFonts[i]) == "sans-serif")
+                return static_cast<uint16_t>(i);
+    }
+    if (familyName == "-webkit-serif"_s || familyName == "Times"_s) {
+        for (size_t i = 0; i < kKerningFonts.size(); ++i)
+            if (std::string_view(kKerningFonts[i]) == "serif")
+                return static_cast<uint16_t>(i);
+    }
+    return 0xFFFF;
+}
+
+static const KerningCell* findKerningCell(uint16_t fontId, uint16_t sizePx)
+{
+    size_t lo = 0, hi = kKerningCells.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        const auto& c = kKerningCells[mid];
+        if (c.fontId < fontId || (c.fontId == fontId && c.sizePx < sizePx))
+            lo = mid + 1;
+        else if (c.fontId > fontId || (c.fontId == fontId && c.sizePx > sizePx))
+            hi = mid;
+        else
+            return &c;
+    }
+    return nullptr;
+}
+
+static const KerningPair* findKerningPair(std::span<const KerningPair> pairs, uint8_t left, uint8_t right)
+{
+    size_t lo = 0, hi = pairs.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        const auto& p = pairs[mid];
+        if (p.leftCp < left || (p.leftCp == left && p.rightCp < right))
+            lo = mid + 1;
+        else if (p.leftCp > left || (p.leftCp == left && p.rightCp > right))
+            hi = mid;
+        else
+            return &p;
+    }
+    return nullptr;
+}
+
+struct MacKerningCache {
+    std::unordered_map<uint64_t, float> values;
+    std::unordered_set<uint64_t> populatedCells;
+    Lock mutex;
+};
+
+static MacKerningCache& macKerningCache()
+{
+    static NeverDestroyed<MacKerningCache> cache;
+    return cache.get();
+}
+
+static float computeMacPairKerningOnce(CTFontRef ctFont, uint8_t left, uint8_t right)
+{
+    UniChar pair[2] = { static_cast<UniChar>(left), static_cast<UniChar>(right) };
+    CGGlyph glyphs[2] = { 0, 0 };
+    CTFontGetGlyphsForCharacters(ctFont, pair, glyphs, 2);
+    if (!glyphs[0] || !glyphs[1])
+        return 0.0f;
+
+    CGSize advancesPair[2] = { CGSizeZero, CGSizeZero };
+    CGPoint originsPair[2] = { CGPointZero, CGPointZero };
+    CFIndex indices[2] = { 0, 1 };
+    CTFontShapeGlyphs(ctFont, glyphs, advancesPair, originsPair, indices,
+        pair, 2, kCTFontShapeWithClusterComposition | kCTFontShapeWithKerning, nullptr, nullptr);
+    float pairAdvance0 = static_cast<float>(advancesPair[0].width);
+
+    // V-138: query the natural advance for the SOLO glyph using
+    // CTFontGetAdvancesForGlyphs (no shaping; pure font-metric width)
+    // rather than calling CTFontShapeGlyphs again. This is what Mac
+    // CT considers the "no kerning" advance.
+    CGSize advanceSolo = CGSizeZero;
+    CGGlyph glyphSolo = glyphs[0];
+    CTFontGetAdvancesForGlyphs(ctFont, kCTFontOrientationHorizontal, &glyphSolo, &advanceSolo, 1);
+    float soloAdvance = static_cast<float>(advanceSolo.width);
+
+    return pairAdvance0 - soloAdvance;
+}
+
+static void populateMacKerningCellOnce(uint16_t fontId, uint16_t sizePx,
+    CTFontRef ctFont, std::span<const KerningPair> iPhonePairs)
+{
+    auto& cache = macKerningCache();
+    Locker locker { cache.mutex };
+    uint64_t cellKey = (static_cast<uint64_t>(fontId) << 16) | sizePx;
+    if (cache.populatedCells.contains(cellKey))
+        return;
+    for (const auto& p : iPhonePairs) {
+        uint64_t key = (cellKey << 16) | (static_cast<uint64_t>(p.leftCp) << 8) | p.rightCp;
+        cache.values[key] = computeMacPairKerningOnce(ctFont, p.leftCp, p.rightCp);
+    }
+    cache.populatedCells.insert(cellKey);
+}
+
+static float lookupMacPairKerning(uint16_t fontId, uint16_t sizePx, uint8_t left, uint8_t right)
+{
+    auto& cache = macKerningCache();
+    Locker locker { cache.mutex };
+    uint64_t cellKey = (static_cast<uint64_t>(fontId) << 16) | sizePx;
+    uint64_t key = (cellKey << 16) | (static_cast<uint64_t>(left) << 8) | right;
+    auto it = cache.values.find(key);
+    return it == cache.values.end() ? 0.0f : it->second;
+}
+
+static char32_t recoverCodepointFromGlyph(const GlyphBuffer& gb, unsigned glyphIdx,
+    StringView source, unsigned beginningStringIndex)
+{
+    unsigned offset = static_cast<unsigned>(gb.uncheckedStringOffsetAt(glyphIdx)) + beginningStringIndex;
+    if (offset >= source.length())
+        return 0;
+    if (source.is8Bit())
+        return static_cast<char32_t>(source[offset]);
+    UChar ch = source[offset];
+    if (ch >= 0xD800 && ch <= 0xDBFF && offset + 1 < source.length()) {
+        UChar low = source[offset + 1];
+        if (low >= 0xDC00 && low <= 0xDFFF)
+            return static_cast<char32_t>(0x10000 + ((ch - 0xD800) << 10) + (low - 0xDC00));
+    }
+    return static_cast<char32_t>(ch);
+}
+
+static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
+    unsigned beginningGlyphIndex, unsigned beginningStringIndex,
+    bool enableKerning, CTFontRef ctFont, const String& familyName,
+    float ptSize, StringView text)
+{
+    WTFLogAlways("[Driftstack-V138] entry: enableKerning=%d familyName='%s' ptSize=%.2f glyphs=%u",
+        enableKerning ? 1 : 0, familyName.utf8().data(), ptSize,
+        static_cast<unsigned>(glyphBuffer.size() - beginningGlyphIndex));
+    if (!enableKerning)
+        return;
+    if (glyphBuffer.size() <= beginningGlyphIndex + 1)
+        return;
+    uint16_t fontId = resolveKerningFontId(familyName);
+    WTFLogAlways("[Driftstack-V138] fontId=%u (0xFFFF=miss)", fontId);
+    if (fontId == 0xFFFF)
+        return;
+    uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
+    const KerningCell* cell = findKerningCell(fontId, sizePx);
+    if (!cell)
+        return;
+    auto pairs = std::span<const KerningPair> { kKerningPairs }.subspan(cell->pairsOffset, cell->pairsCount);
+
+    populateMacKerningCellOnce(fontId, sizePx, ctFont, pairs);
+
+    for (unsigned i = beginningGlyphIndex; i + 1 < glyphBuffer.size(); ++i) {
+        char32_t leftCp = recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex);
+        char32_t rightCp = recoverCodepointFromGlyph(glyphBuffer, i + 1, text, beginningStringIndex);
+        if (leftCp < 0x20 || leftCp > 0x7E || rightCp < 0x20 || rightCp > 0x7E)
+            continue;
+        const KerningPair* p = findKerningPair(pairs,
+            static_cast<uint8_t>(leftCp), static_cast<uint8_t>(rightCp));
+        if (!p)
+            continue;
+        float iphoneKerning = static_cast<float>(p->kerningQ8) / 256.0f;
+        float macKerning = lookupMacPairKerning(fontId, sizePx,
+            static_cast<uint8_t>(leftCp), static_cast<uint8_t>(rightCp));
+        float delta = iphoneKerning - macKerning;
+        if (std::abs(delta) < 0.001f)
+            continue;
+        // V-138 RUNTIME GATE: Mac kerning recovery via CTFontShapeGlyphs +
+        // CTFontGetAdvancesForGlyphs returns nonsense advances (pair_advance
+        // ~0 instead of natural+kerning). Without correct macKerning we
+        // cannot compute delta correctly. Empirical: applying delta with
+        // macKerning=0 produces 161.73→159.88 (wrong direction); using
+        // CTFontGetAdvancesForGlyphs as solo produces 161.73→210.74 (over-
+        // correction). Override DISABLED until macKerning recovery is
+        // fixed. Diagnostic logging retained.
+        WTFLogAlways("[Driftstack-V138] pair=%c%c iphone=%.4f mac=%.4f delta=%.4f (GATED)",
+            (char)leftCp, (char)rightCp, iphoneKerning, macKerning, delta);
+        // glyphBuffer.expandAdvance(i, delta);  // DISABLED — see comment above
+    }
+}
+
+} // anonymous namespace
+#endif // PLATFORM(DRIFTSTACK)
+
 GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned beginningGlyphIndex, unsigned beginningStringIndex, bool enableKerning, bool requiresShaping, const AtomString& locale, StringView text, TextDirection textDirection) const
 {
     UNUSED_PARAM(requiresShaping);
@@ -1113,6 +1320,16 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
 
     ASSERT(numberOfInputGlyphs || glyphBuffer.size() == beginningGlyphIndex);
     ASSERT(numberOfInputGlyphs || (!initialAdvance.width && !initialAdvance.height));
+
+#if PLATFORM(DRIFTSTACK)
+    // V-126 closure: Mac CT and iOS CT apply different per-pair kerning.
+    // After CTFontShapeGlyphs has applied Mac kerning, replace those
+    // contributions with iPhone-equivalent kerning (delta-adjustment).
+    // See /docs/architecture/v126-kerning-override-design.md.
+    applyDriftstackPairKerningOverride(glyphBuffer, beginningGlyphIndex,
+        beginningStringIndex, enableKerning, ctFont.get(),
+        m_platformData.familyName(), m_platformData.size(), text);
+#endif
 
     for (unsigned i = 0; i < glyphBuffer.size() - beginningGlyphIndex; ++i)
         glyphBuffer.offsetsInString(beginningGlyphIndex)[i] += beginningStringIndex;
