@@ -365,6 +365,85 @@ Per-patch detail; commit hashes resolve via `git log driftstack-main`.
 - **Commit:** `8f051fcb`
 - **Status:** Documented above under wave-3-9.
 
+## Wave 4 — Substitution atlases (V-141 / Stage F.1 / DSWA / DASA / Track 7-9-10)
+
+The Wave 4 family addresses fingerprint surfaces where Mac and iPhone produce structurally divergent bytes that cannot be closed by per-field overrides — only byte-level substitution against a captured iPhone reference works. The pattern: capture iPhone canonical output → store as a binary atlas in `/reference/` → wire a dispatch hook in WebKit that intercepts the relevant call, looks up the entry by content-derived key, and substitutes the iPhone bytes. Default-OFF env-var gating where the atlas isn't yet locked-archetype-specific.
+
+### wave-4-1: V-141 ASCII atlas substitution (DriftstackAsciiAtlas)
+
+- **Commits:** `af4ca0ca97` (V-127 multi-subpixel dispatch), `3d536ac7d0` (V-131 closure paths 1+2), `14947a9a6a` (V-135 revert V-131 path 2), `74c4c742f9` (V-141 color-aware dispatch), `c462a1c775` (DSAS v3 multicolor reader), `86249ee70b` (V-140 wraparound destRect fix), additional V-138/V-143/V-144/V-145/V-146/V-147 incremental fixes
+- **Files:** `Source/WebCore/platform/graphics/cocoa/DriftstackAsciiAtlas.{h,mm}` (new) + dispatch in `Source/WebCore/platform/graphics/FontCascade.cpp` lines 1737-1900+
+- **Surface:** ASCII glyph rendering in `<canvas>` 2D `fillText` — iPhone CT vs Mac CT produce non-byte-matching pixel output for printable ASCII (U+0020 .. U+007E)
+- **Description:** Per-glyph atlas substitution at FontCascade dispatch. Atlas binary at `/reference/driftstack_ascii_atlas/` (DSAS v3 format: magic `DSAS` + version 3 + multi-color variants). Currently 5-font partial atlas; POC v2 capture (autopilot-running 2026-05-04) builds the full 13-font × 16-color atlas. V-131 mixed-dispatch gate at line 1845-1864 abandons dispatch when source has BOTH ASCII + non-ASCII codepoints — Tier-2 ack required to tighten per V-171.
+
+### wave-4-2: Composite atlas (ZWJ emoji sequences) — DriftstackCompositeAtlas
+
+- **Files:** `Source/WebCore/platform/graphics/cocoa/DriftstackCompositeAtlas.{h,mm}` (new) + dispatch in `FontCascade.cpp` line 1701
+- **Surface:** ZWJ-joined emoji sequences (e.g., 👨‍👩‍👧‍👦 family-of-four) — iPhone CT renders as a single composite glyph, Mac CT renders as separate glyphs side-by-side
+- **Description:** Atlas keyed on ZWJ-sequence codepoint tuple, binary at `/reference/driftstack_emoji_atlas/driftstack-composite-atlas.bin` (504 entries × 4 strikes, 5.7 MiB). Dispatch reads the cluster's RGI (Recommended-for-General-Interchange) sequence, looks up an entry, draws via CGContextDrawImage. Companion to wave-4-3 single-emoji atlas.
+
+### wave-4-3: Stage F.1 single-emoji atlas — DriftstackEmojiAtlas
+
+- **Files:** `Source/WebCore/platform/graphics/cocoa/DriftstackEmojiAtlas.{h,mm}` (new) + dispatch in `Source/WebCore/platform/graphics/coretext/FontCascadeCoreText.cpp` line 414 (inside `drawGlyphsWithAdvances`)
+- **Surface:** Single-codepoint color emoji rendering (😃 🍕 etc.) — pixel-level Mac/iPhone divergence per F.1.B-2 V-090 finding
+- **Description:** Per-glyph image substitution. Atlas binary at `/reference/driftstack_emoji_atlas/driftstack-emoji-atlas.bin` (DSEA v1 format: magic `DSEA` + 4 strikes 40/64/96/160 PPEM × 5704 codepoints, 70.6 MiB). Dispatch fires for color glyphs with codepoint > U+FFFF (V-106 BMP exclusion to preserve text-vs-emoji-presentation behavior). Default-on; no env var.
+
+### wave-4-4: V-153 Float16 quantization (REFUTED — env-var-gated dead code)
+
+- **Commit:** `fb68074b43`
+- **Files:** `Source/WebCore/Modules/webaudio/OfflineAudioContext.cpp` lines ~286-330
+- **Surface:** `audio.offlineFingerprint10x` (was hypothesized to close via Float16 round-trip)
+- **Status:** **REFUTED per V-160.** When enabled (`DRIFTSTACK_AUDIO_FLOAT16=1` + `__XPC_` mirror), Float16 quantization fires correctly but audio hash still diverges from iPhone reference (libm divergence is the actual cause; Float16 doesn't address it). Patch retained behind env var as default-OFF; no production purpose. Will be removed in a hygiene pass or superseded by DASA (wave-4-9).
+
+### wave-4-5: Track 9 — Hangul fallback override (V-162)
+
+- **Commit:** `81721b367b`
+- **Files:** `Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp` (function `driftstackIOSFallbackFontForHangulCluster`) + dispatch in `systemFallbackForCharacterCluster`
+- **Surface:** `serif|*hangul*` measureText surfaces in `canvas.measureText.complexScripts`
+- **Description:** When the cluster's first codepoint is in U+1100..U+11FF / U+3130..U+318F / U+A960..U+A97F / U+AC00..U+D7AF / U+D7B0..U+D7FF (Hangul ranges), substitute the iOS-shipped Apple SD Gothic Neo font from the Stage B `/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1/` install. Default-on (no env var). Validated against td016: 6/6 Hangul probes match iPhone (was 4/2 before); locked-archetype validation pending recapture.
+
+### wave-4-6: Track 10 — Devanagari fallback override (V-165)
+
+- **Commit:** `d8a75147bf`
+- **Files:** `Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp` (function `driftstackIOSFallbackFontForDevanagariCluster`)
+- **Surface:** `*|devanagari` measureText surfaces
+- **Description:** Cluster-codepoint-in-Devanagari-range → substitute Kohinoor Devanagari (iOS canonical). Companion was Hebrew (Track 10 candidate B) — DROPPED post-validation (Mac native serif Hebrew already matches iPhone serif Hebrew; SFHebrew override would close sans-serif but break serif). Re-enable after per-context discrimination plumbed through. Default-on for Devanagari only.
+
+### wave-4-7: Track 7 candidate (d) — CJK + Emoji fallback (V-164 / V-166)
+
+- **Commit:** `c9cc1a57c9`
+- **Files:** `Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp` (functions `driftstackIOSFallbackFontForCJKCluster` + `driftstackIOSFallbackFontForEmojiCluster` + `driftstackTrack7CandidateDEnabled`)
+- **Surface:** `unicodeRendering.value[0,2,3].h` (CJK + emoji-presentation height)
+- **Description:** **Env-var-gated** (`DRIFTSTACK_TRACK7_CANDIDATE_D=1` + `__XPC_` mirror). CJK cluster (U+3400-U+4DBF, U+4E00-U+9FFF, etc.) → PingFang SC; emoji-presentation cluster → Apple Color Emoji canonical .ttc. Requires Stage B font install: `/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1/Core/PingFangSC.ttc` + `/Core/AppleColorEmoji.ttc`. Default-OFF until physical iPhone session lands binaries (cap_only-recapture-manifest deliverable #2).
+
+### wave-4-8: DSWA — WebGPU readback substitution (V-169 / V-170)
+
+- **Commits:** `82da005d22` (reader), `cf8ff2312e` (dispatch hook)
+- **Files:** `Source/WebCore/platform/graphics/cocoa/DriftstackWebGPUAtlas.{h,mm}` (new) + dispatch in `Source/WebCore/Modules/WebGPU/GPUBuffer.cpp` line ~200 (inside `getMappedRange` callback)
+- **Surface:** `webgpu.renderHash10x` (10 surfaces) — WebGPU readback bytes vary across GPU classes
+- **Description:** **Env-var-gated** (`DRIFTSTACK_WEBGPU_ATLAS=1` + `__XPC_` mirror). Atlas keyed on byte-count (v1 fallback; v2 will hash on shader+inputs). Atlas binary at `/reference/driftstack_webgpu_atlas/driftstack-webgpu-atlas.bin` (DSWA v1 format). **CRITICAL CAVEAT (V-170):** current atlas was captured from BS pool iPhone 17 Pro / iOS 26.x via Stage G — same Apple Silicon GPU class as Mac fork → atlas data hash is byte-identical to Mac fork's WebGPU output → substitution is functionally correct but a NO-OP against the locked iPhone 16 Pro / iOS 26.4.1 archetype. Resolution: physical iPhone 16 Pro Stage G recapture (cap_only-recapture-manifest deliverable #3) → DSWA atlas v2 with iPhone 16 Pro bytes → 10 webgpu surfaces close.
+
+### wave-4-9: DASA — Audio output substitution (V-169)
+
+- **Commit:** `70a12604b8`
+- **Files:** `Source/WebCore/platform/graphics/cocoa/DriftstackAudioAtlas.{h,mm}` (new) + dispatch in `Source/WebCore/Modules/webaudio/OfflineAudioContext.cpp` `finishedRendering()` (after V-153 Float16 block)
+- **Surface:** `audio.offlineFingerprint10x` (10 surfaces) — iPhone vs Mac libm divergence (V-163 root cause)
+- **Description:** **Env-var-gated** (`DRIFTSTACK_AUDIO_ATLAS=1` + `__XPC_` mirror). Atlas keyed on (sampleRate, channelCount, framesPerChannel) shape (v1 fallback; v2 will key on graph-config SHA-256). Atlas binary at `/reference/driftstack_audio_atlas/driftstack-audio-atlas.bin` (DASA v1 format). Atlas not yet built; needs Stage H capture (cap_only-recapture-manifest deliverable #4) on physical iPhone 16 Pro. Same cross-archetype risk as wave-4-8: if iPhone 17 Pro audio is bit-identical to Mac fork audio (libm convergence), Stage H must fire on physical iPhone 16 Pro to produce closure-relevant bytes.
+
+### wave-4-10: Sandbox extension for atlas + Stage B font paths (V-167)
+
+- **Commit:** `f2de1a53c5`
+- **Files:** `Source/WebKit/WebProcess/com.apple.WebProcess.sb.in`
+- **Surface:** N/A (sandbox infrastructure)
+- **Description:** Extends WebContent process file-read allow-list to cover atlas binaries (`/Users/john/code/driftstack/reference/driftstack_*_atlas/`), Stage B font binaries (`/Users/john/code/driftstack-fonts/`), and `/var/lib/driftstack/` (production-equivalent path; not yet provisioned). All paths configurable via env vars per individual atlas reader. Hygiene gap noted in `phase-2-closure-status.md` known-limitations: `/Users/john/...` paths still in profile; needs `/var/lib/driftstack/` sudo creation + rig env-var-rigging coordination before production.
+
+### wave-4-11: Hygiene comment-only sanitization (V-167)
+
+- **Commit:** `5082671ecf`
+- **Files:** 3 .mm header comments in `DriftstackAsciiAtlas.mm` + `DriftstackCompositeAtlas.mm` + `DriftstackEmojiAtlas.mm`
+- **Surface:** N/A (source-comment cleanup)
+- **Description:** Removed `/Users/john/...` references from header comment blocks (replaced with abstract path descriptions). Code-default fallback paths (`kDefaultAtlasPath = "/Users/john/code/driftstack/reference/..."`) remain — those are guarded by env-var override and only active during dev; production deployment uses `DRIFTSTACK_*_ATLAS_PATH` env vars to point at `/var/lib/driftstack/` paths.
+
 ## Phase 2.5 — Option B Stages B + C + D
 
 (Stages B = iOS font binary install + cache filter; C = ICU/CLDR
