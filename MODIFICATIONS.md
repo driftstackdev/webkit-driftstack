@@ -444,6 +444,22 @@ The Wave 4 family addresses fingerprint surfaces where Mac and iPhone produce st
 - **Surface:** N/A (source-comment cleanup)
 - **Description:** Removed `/Users/john/...` references from header comment blocks (replaced with abstract path descriptions). Code-default fallback paths (`kDefaultAtlasPath = "/Users/john/code/driftstack/reference/..."`) remain — those are guarded by env-var override and only active during dev; production deployment uses `DRIFTSTACK_*_ATLAS_PATH` env vars to point at `/var/lib/driftstack/` paths.
 
+### wave-4-12: V-171 Option A — V-131 per-glyph dispatch gate (env-var-gated)
+
+- **Commit:** `ce49c92dd3`
+- **Files:** `Source/WebCore/platform/graphics/FontCascade.cpp` (helper at top of `drawGlyphBuffer` + gate logic at lines ~1845-1864)
+- **Surface:** `canvas.fingerprint10x.{hashes, sampleDataUrls}` (13 surfaces) — formerly entirely V-131-blocked when text contains both ASCII and non-ASCII codepoints
+- **Description:** **Env-var-gated** (`DRIFTSTACK_DISPATCH_PER_GLYPH=1` + `__XPC_` mirror; default-OFF). When enabled, the V-131 mixed-dispatch outer gate at FontCascade.cpp:1864 is bypassed (`dispatchAllowed = (!mixedDispatch || perGlyphDispatch) && !skipAsciiDispatch`). Inner per-glyph loop already filters non-ASCII codepoints; ASCII glyphs go to V-141 atlas, non-ASCII glyphs fall through to native CT (which routes color emoji via DriftstackEmojiAtlas in FontCascadeCoreText.cpp `drawGlyphsWithAdvances` — confirmed operational per V-090 / F.1.B-2 / V-173 atlas-binary read showing 😃 + 🍕 at all 4 strikes). Founder Tier-2 ack 2026-05-04.
+- **Empirical post-build (V-178):** canvas-fp pixel diff 38.4%→20.9% RGB / 37.8%→4.9% alpha (45.6% RGB / 87% alpha reduction). 870 atlas-hit log lines vs 0 pre-V-171. Scoreboard hashes still differ because residual ~21% pixel diff persists; needs follow-up sub-pixel positioning / AA-edge-mixing investigation. Default-OFF until residual closes.
+
+### wave-4-13: V-174 Track 10 Hebrew per-context dispatch (env-var-gated)
+
+- **Commit:** `8dd5d03521`
+- **Files:** `Source/WebCore/platform/graphics/cocoa/FontCacheCoreText.cpp` (function `driftstackIOSFallbackFontForHebrewCluster` + `driftstackTrack10HebrewEnabled` + dispatch in `systemFallbackForCharacterCluster`)
+- **Surface:** `canvas.measureText.complexScripts.value.sans-serif|hebrew_*` (3-4 surfaces post-iPhone-recapture)
+- **Description:** **Env-var-gated** (`DRIFTSTACK_TRACK10_HEBREW=1` + `__XPC_` mirror; default-OFF). Re-enables V-165's Hebrew override that was deactivated because forcing SFHebrew for both serif AND sans-serif contexts broke serif|hebrew (Mac native already matched iPhone serif Hebrew). Per-context discrimination via `originalFontData.platformData().familyName()` at the dispatch site: only fire override when originating family matches sans-serif synonyms (Helvetica / Arial / SF Pro / .SF / .AppleSystemUI / *sans*). Founder Tier-1 ack 2026-05-04.
+- **Empirical post-V-179 (with env var enabled):** dispatch fires correctly (5+ Hebrew clusters logged, originatingFamily=Helvetica). However, sans-serif|hebrew_* measureText surfaces still differ from iPhone — Mac CoreText shaping of SFHebrew.ttf produces different metrics than iPhone CoreText shaping of the same binary (width 31.78 vs 28.04 = ~13% diff). Investigation pending — likely needs additional measureText override layer specifically for Hebrew scripts.
+
 ## Phase 2.5 — Option B Stages B + C + D
 
 (Stages B = iOS font binary install + cache filter; C = ICU/CLDR
