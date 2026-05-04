@@ -1234,16 +1234,61 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHangulCluster(StringView
     return driftstackLookupIOSFontByCandidates(candidates, description, size);
 }
 
-// Track 10 Hebrew: REMOVED post-V-165 validation. Empirical result was a wash:
-// the SFHebrew override closed 3 sans-serif|hebrew surfaces but BROKE 3
-// serif|hebrew surfaces (Mac's native serif Hebrew was already matching iPhone;
-// the override forced SFHebrew for both serif AND sans-serif contexts, which
-// matches iPhone for sans-serif but diverges for serif). Per-context font
-// discrimination (sans-serif vs serif vs system in the originating CSS request)
-// is not available at the systemFallbackForCharacterCluster call site without
-// additional plumbing. Hebrew override is deferred until that discrimination
-// is available, OR until empirical capture of iPhone's serif|hebrew font
-// identifies the specific iOS font binary so we can override per-context.
+// Track 10 Hebrew (V-174 founder Tier-1 ack 2026-05-04 — re-enabled with
+// per-context discrimination). V-165 wash was caused by SFHebrew override
+// firing for BOTH serif AND sans-serif contexts; Mac native serif Hebrew
+// already matches iPhone serif Hebrew, so forcing SFHebrew for serif breaks
+// what was working. V-174 finding: originalFontData.platformData().familyName()
+// at the systemFallbackForCharacterCluster call site is sufficient to
+// discriminate sans-serif from serif (originating font name typically starts
+// with "Helvetica" / "Arial" / "SF Pro" for sans-serif, "Times" for serif).
+// This function fires SFHebrew override ONLY when the originating font name
+// matches a sans-serif synonym list. Env-var-gated via
+// DRIFTSTACK_TRACK10_HEBREW=1 (with __XPC_ mirror). Default-OFF until
+// physical iPhone 16 Pro / iOS 26.4.1 cumulative-rig recapture validates
+// post-recapture sans-serif|hebrew_* surfaces close.
+static bool driftstackTrack10HebrewEnabled()
+{
+    static bool s_enabled = []() {
+        const char* env = getenv("DRIFTSTACK_TRACK10_HEBREW");
+        return env && env[0] == '1';
+    }();
+    return s_enabled;
+}
+
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHebrewCluster(
+    StringView cluster, const FontDescription& description,
+    const String& originatingFamily, float size)
+{
+    if (!driftstackTrack10HebrewEnabled())
+        return nullptr;
+    if (cluster.isEmpty())
+        return nullptr;
+    char32_t cp = cluster[0];
+    // Hebrew Unicode block + presentation forms.
+    bool isHebrew = (cp >= 0x0590 && cp <= 0x05FF)
+                 || (cp >= 0xFB1D && cp <= 0xFB4F);
+    if (!isHebrew)
+        return nullptr;
+    // Per-context discrimination: only fire override for sans-serif requests.
+    // Mac native serif Hebrew matches iPhone serif Hebrew per V-165 empirical;
+    // overriding for serif would break what's already working.
+    String lower = originatingFamily.convertToASCIILowercase();
+    bool isSansSerifContext =
+           lower.startsWith("helvetica"_s)
+        || lower.startsWith("arial"_s)
+        || lower.startsWith("sf pro"_s)
+        || lower.startsWith("sfpro"_s)
+        || lower.startsWith(".sf "_s)
+        || lower.startsWith(".applesystemui"_s)
+        || lower.contains("sans"_s);
+    if (!isSansSerifContext)
+        return nullptr;
+    static const std::array<ASCIILiteral, 3> candidates {
+        "sfhebrew"_s, "sf hebrew"_s, "applegothic"_s,
+    };
+    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+}
 
 // Track 7 candidate (d) (V-164 / V-166 — env-var-gated, default-OFF until
 // physical iPhone 16 Pro / iOS 26.4.1 binary acquisition lands). When
@@ -1438,6 +1483,15 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             WTFLogAlways("[Driftstack-Track10-Devanagari] Devanagari fallback override fired (%u so far); cluster first cp = U+%04X",
                 hitCount, (unsigned)characterCluster[0]);
         result = WTF::move(driftstackDevanagariFont);
+    } else if (auto driftstackHebrewFont = driftstackIOSFallbackFontForHebrewCluster(
+            characterCluster, description, platformData.familyName(), platformData.size())) {
+        // Env-var-gated: DRIFTSTACK_TRACK10_HEBREW=1 (V-174 / V-178). Per-context
+        // discrimination via originatingFamily — only fires for sans-serif.
+        static unsigned hitCount = 0;
+        if (++hitCount <= 8)
+            WTFLogAlways("[Driftstack-Track10-Hebrew] Hebrew fallback override fired (%u so far); cluster first cp = U+%04X originatingFamily=%s",
+                hitCount, (unsigned)characterCluster[0], platformData.familyName().utf8().data());
+        result = WTF::move(driftstackHebrewFont);
     } else if (auto driftstackCJKFont = driftstackIOSFallbackFontForCJKCluster(
             characterCluster, description, platformData.size())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
