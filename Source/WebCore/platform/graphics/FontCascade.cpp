@@ -1597,6 +1597,30 @@ inline bool NODELETE shouldDrawIfLoading(const Font& font, FontCascade::CustomFo
     return !font.isInterstitial() || font.visibility() == Font::Visibility::Visible || customFontNotReadyAction == FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-171 Option A (founder Tier-2 ack 2026-05-04): per-glyph dispatch gate.
+// When `DRIFTSTACK_DISPATCH_PER_GLYPH=1` is set in the WebContent env (with
+// __XPC_DRIFTSTACK_DISPATCH_PER_GLYPH=1 mirror per launchd convention),
+// the V-131 mixed-dispatch outer gate is bypassed: V-141 ASCII atlas is
+// attempted per-glyph (inner loop already filters cp < 0x20 || cp > 0x7E),
+// non-ASCII glyphs fall through to native CT, which routes color emoji
+// through DriftstackEmojiAtlas dispatch in FontCascadeCoreText.cpp
+// drawGlyphsWithAdvances (V-090 / F.1.B-2 — empirically operational per
+// V-173 atlas-binary read confirming 😃+🍕 entries at all 4 strikes).
+// Result: ASCII glyphs substitute as iPhone bytes, color-emoji glyphs
+// substitute as iPhone bytes — the composite hash matches iPhone's
+// pure-CT-iPhone canvas-fp output without the V-131 hybrid concern.
+// Default-OFF until cumulative-rig + scoreboard.py validate clean.
+static bool driftstackDispatchPerGlyphEnabled()
+{
+    static bool s_enabled = []() {
+        const char* env = getenv("DRIFTSTACK_DISPATCH_PER_GLYPH");
+        return env && env[0] == '1';
+    }();
+    return s_enabled;
+}
+#endif
+
 // This function assumes the GlyphBuffer's initial advance has already been incorporated into the start point.
 void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer, FloatPoint& point, CustomFontNotReadyAction customFontNotReadyAction, StringView source) const
 {
@@ -1849,6 +1873,17 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // match iPhone's pure-CT render. Abandon atlas dispatch for
             // the entire run; fall through to native CT path. The pre-flight
             // for-loop below stays gated on the !mixed condition.
+            //
+            // V-171 Option A (founder Tier-2 ack 2026-05-04): when
+            // DRIFTSTACK_DISPATCH_PER_GLYPH=1 is set, the mixedDispatch
+            // outer-gate is bypassed (per-glyph dispatch). Inner loop
+            // already filters non-ASCII codepoints (cp < 0x20 || cp > 0x7E
+            // continue), so ASCII glyphs go to V-141 atlas + non-ASCII
+            // glyphs fall through to native CT (which routes color emoji
+            // via DriftstackEmojiAtlas in FontCascadeCoreText.cpp drawGlyphs
+            // WithAdvances). Both halves substitute to iPhone bytes; V-131's
+            // hybrid concern doesn't apply when the non-ASCII side is
+            // covered by an iPhone-byte atlas too. See V-171 / V-173 / V-175.
             bool hasAscii = false;
             bool hasNonAscii = false;
             for (size_t i = 0; i < glyphBuffer.size(); ++i) {
@@ -1862,7 +1897,9 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     break;
             }
             const bool mixedDispatch = hasAscii && hasNonAscii;
-            if (!mixedDispatch && !skipAsciiDispatch) {
+            const bool perGlyphDispatch = driftstackDispatchPerGlyphEnabled();
+            const bool dispatchAllowed = (!mixedDispatch || perGlyphDispatch) && !skipAsciiDispatch;
+            if (dispatchAllowed) {
                 for (size_t i = 0; i < glyphBuffer.size(); ++i) {
                     // Skip glyphs already covered by a composite atlas hit.
                     bool alreadyHit = false;
