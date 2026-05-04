@@ -2046,7 +2046,28 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             auto& asciiAtlasForDraw = DriftstackAsciiAtlas::singleton();
             if (asciiAtlasForDraw.colorVariantCount() > 1) {
                 // v3: pre-tinted; direct draw.
+                //
+                // V-171 Option C (V-182 founder Tier-2 ack 2026-05-04): atlas
+                // images are pixel-perfect captures of iPhone CT output (each
+                // pixel's RGBA is iPhone-canonical). Default CGContextDrawImage
+                // applies interpolation when destRect doesn't pixel-align with
+                // device pixels — this resamples iPhone's pixel-perfect atlas
+                // and produces AA-edge mixing that diverges from iPhone's
+                // pure native render. V-182 empirical: 79% exact match + 21%
+                // distributed RGB diff is consistent with interpolation re-
+                // sampling (each glyph edge has 2-4 px of mixed-color pixels).
+                // Fix: snap destRect to integer pixel coords (origin already
+                // floored/ceiled per V-127/V-140; round size dims too) AND
+                // set CGContext interpolation quality to None for this blit
+                // so atlas pixels copy 1:1 to dest pixels without resampling.
+                CGContextRef cgCtx = context.platformContext();
+                CGInterpolationQuality savedQuality = CGContextGetInterpolationQuality(cgCtx);
+                CGContextSetInterpolationQuality(cgCtx, kCGInterpolationNone);
+                bool savedAA = context.shouldAntialias();
+                context.setShouldAntialias(false);
                 context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
+                context.setShouldAntialias(savedAA);
+                CGContextSetInterpolationQuality(cgCtx, savedQuality);
             } else {
                 // v1/v2: stencil-and-tint with context fillColor.
                 Color tint = context.fillColor();
