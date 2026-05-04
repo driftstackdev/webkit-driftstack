@@ -88,6 +88,9 @@
 #include "TextMetrics.h"
 #include "TextRun.h"
 #include "TextShapingResultAndDisplayList.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackMeasureTextOverrides.h"
+#endif
 #include "TextUtil.h"
 #include "WebCodecsVideoFrame.h"
 #include <JavaScriptCore/ConsoleTypes.h>
@@ -3079,6 +3082,51 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
     glyphOverflow.computeBounds = true;
     float fontWidth = font.width(textRun, &glyphOverflow);
     metrics->setWidth(fontWidth);
+
+#if PLATFORM(DRIFTSTACK)
+    // V-184: canonical-probe override. Founder Tier-2 ack 2026-05-04.
+    // Lookup (primary-family, textRun text) in the iPhone-canonical reference
+    // table. If matched, set width + actual/font bounding box to iPhone
+    // canonical values. Mac CoreText vs iPhone CoreText shaping diverges by
+    // ~1px on CJK / Japanese / Hebrew / Arabic / etc. even with byte-identical
+    // font binaries (V-179 / V-183 empirical). Override is probe-shape-specific:
+    // arbitrary canvas measureText calls fall through to native Mac CT.
+    static bool s_overrideEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_overrideEnabled) {
+        const auto& family = font.fontDescription().firstFamily().name;
+        String familyLower = family.string().convertToASCIILowercase();
+        // CSS generic family names resolve to -webkit-<generic> internally.
+        // Strip -webkit- prefix so table lookups match the canonical CSS form
+        // (e.g., "-webkit-serif" → "serif", "-webkit-sans-serif" → "sans-serif").
+        if (familyLower.startsWith("-webkit-"_s))
+            familyLower = familyLower.substring(8);
+        CString textUtf8 = textRun.text().toString().utf8();
+        for (const auto& entry : kCanonicalMetrics) {
+            auto entryTextView = StringView::fromLatin1(entry.text);
+            if (textUtf8.length() != entryTextView.length()) continue;
+            auto runText = StringView::fromLatin1(textUtf8.data());
+            if (runText != entryTextView) continue;
+            if (familyLower != StringView::fromLatin1(entry.family)) continue;
+            metrics->setWidth(entry.width);
+            FloatPoint offset = textOffset(entry.width, textRun.direction());
+            metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent);
+            metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent);
+            metrics->setFontBoundingBoxAscent(entry.fontBoundingBoxAscent - offset.y());
+            metrics->setFontBoundingBoxDescent(entry.fontBoundingBoxDescent + offset.y());
+            metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
+            metrics->setEmHeightDescent(fontMetrics.descent() + offset.y());
+            metrics->setHangingBaseline(fontMetrics.ascent() - offset.y());
+            metrics->setAlphabeticBaseline(-offset.y());
+            metrics->setIdeographicBaseline(-fontMetrics.descent() - offset.y());
+            metrics->setActualBoundingBoxLeft(0 - offset.x());
+            metrics->setActualBoundingBoxRight(entry.width + offset.x());
+            return metrics;
+        }
+    }
+#endif
 
     FloatPoint offset = textOffset(fontWidth, textRun.direction());
     auto ascent = fontMetrics.ascent();
