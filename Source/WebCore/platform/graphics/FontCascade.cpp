@@ -1966,6 +1966,13 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         }
         if (variantCount == 2)
             return fracX < 0.5f ? 0 : 1;
+        if (variantCount == 16) {
+            // V-198: V-127 Path 2 root closure — 16-bucket sub-pixel
+            // quantization matching iPhone CT. Per platform-precision-
+            // rules.md §2.1 round-half-away-from-zero (roundf semantics).
+            int q = static_cast<int>(roundf(fracX * 16.0f)) & 15;
+            return static_cast<uint8_t>(q);
+        }
         return 0;
     };
 
