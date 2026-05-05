@@ -132,13 +132,23 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
         // the iPhone quota tier without needing to track the actual
         // iOS quota algorithm.
         // V-199-D (2026-05-05): retired the V-074 `estimate.usage = 0`
-        // override. iOS Safari behavior changed since V-074 — real
-        // iPhone 16 Pro / iOS 18.7 / Safari 26.4 reference recapture
-        // (2026-05-04T19-24-11Z) reports usage=8 (was: 0 at V-074 time).
-        // Mac native returns 8 already; let it pass through.
+        // override based on a single iPhone capture (2026-05-04T19-24-11Z)
+        // reporting usage=8.
+        // V-221 (2026-05-06): RE-INSTATED the usage=0 zero-out per
+        // V-218 path-a empirical re-capture finding + feedback_population_not_point_match
+        // memory rule. Surface is iPhone session-state-dependent:
+        //   - 2026-05-04 capture: usage=8 (warmed Safari session)
+        //   - 2026-05-05 path-a capture: usage=0 (fresh-cleared Safari session)
+        // Mac MiniBrowser returns 8 (always; no real session-state tracking).
+        // iPhone in fresh-cleared / cold-cache state returns 0.
+        // Driftstack customer sessions = fresh MiniBrowser per session = cleared
+        // state by construction. Match iPhone fresh-state: clamp usage=0.
+        // V-199-D's "let Mac value pass" framing was wrong (single capture as
+        // canonical for runtime-determined surface).
         if (!result.hasException()) {
             auto estimate = result.returnValue();
             estimate.quota = estimate.quota / 2;
+            estimate.usage = 0;
             promise.resolve(estimate);
             return;
         }
