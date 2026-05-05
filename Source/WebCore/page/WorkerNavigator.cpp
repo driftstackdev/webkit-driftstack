@@ -57,6 +57,16 @@ WorkerNavigator::~WorkerNavigator() = default;
 
 const String& WorkerNavigator::userAgent() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-205 Bug 2 (founder ack 2026-05-05 V-203 escalation): Wave 1.2
+    // UA override applied to main-thread Navigator only. Workers
+    // inherited Mac WebKit default UA, producing cross-context
+    // divergence (CreepJS catches main UA != worker UA instantly).
+    // Override here too so all contexts return the same iPhone UA.
+    // Mirror Navigator.cpp line 98 string verbatim.
+    static NeverDestroyed<String> driftstackDefaultUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
+    return driftstackDefaultUA.get();
+#endif
     return m_userAgent;
 }
 
