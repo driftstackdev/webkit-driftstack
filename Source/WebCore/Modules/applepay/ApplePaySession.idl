@@ -33,16 +33,17 @@
 
     const unsigned short STATUS_SUCCESS = 0;
     const unsigned short STATUS_FAILURE = 1;
-    // Driftstack: iPhone Safari (iOS 26.4.1) exposes the legacy non-POSTAL
-    // names. Mac WebKit upstream renamed these to POSTAL_ADDRESS variants
-    // around iOS 11/12 to clarify semantics, but iOS Safari still ships
-    // the original names. Rig V-078 enumeration confirmed reference iPhone
-    // exposes STATUS_INVALID_BILLING_ADDRESS + STATUS_INVALID_SHIPPING_ADDRESS
-    // and NOT the POSTAL_ versions. JS-visible name only — internal C++
-    // constexpr in ApplePaySession.h keeps the POSTAL_ identifier so all
-    // existing C++ switch cases remain valid.
-    const unsigned short STATUS_INVALID_BILLING_ADDRESS = 2;
-    const unsigned short STATUS_INVALID_SHIPPING_ADDRESS = 3;
+    // V-199 (2026-05-05): iOS Safari behavior changed since V-078. Real
+    // iPhone 16 Pro / iOS 18.7 / Safari 26.4 reference recapture
+    // (2026-05-04T19-24-11Z) reports both STATUS_INVALID_BILLING_ADDRESS
+    // and STATUS_INVALID_SHIPPING_ADDRESS as `undefined`. iPhone no longer
+    // exposes the legacy non-POSTAL names. The earlier V-078/V-094
+    // declarations have been retired to match current iOS behavior.
+    // STATUS_SUCCESS, STATUS_FAILURE, STATUS_INVALID_SHIPPING_CONTACT,
+    // STATUS_PIN_* are still present per the recapture (typeof === number).
+    // The corresponding `STATUS_INVALID_BILLING_ADDRESS` /
+    // `STATUS_INVALID_SHIPPING_ADDRESS` aliases under PLATFORM(DRIFTSTACK)
+    // in ApplePaySession.h are also retired (no IDL referent).
     const unsigned short STATUS_INVALID_SHIPPING_CONTACT = 4;
     const unsigned short STATUS_PIN_REQUIRED = 5;
     const unsigned short STATUS_PIN_INCORRECT = 6;

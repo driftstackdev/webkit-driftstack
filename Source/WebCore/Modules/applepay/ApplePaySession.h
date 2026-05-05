@@ -74,13 +74,11 @@ public:
     static constexpr auto STATUS_FAILURE = ApplePayPaymentAuthorizationResult::Failure;
     static constexpr auto STATUS_INVALID_BILLING_POSTAL_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidBillingPostalAddress;
     static constexpr auto STATUS_INVALID_SHIPPING_POSTAL_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidShippingPostalAddress;
-#if PLATFORM(DRIFTSTACK)
-    // Driftstack: aliases for the legacy (non-POSTAL) names exposed to JS
-    // by iPhone Safari. Required so the IDL-generated static_assert can
-    // resolve ApplePaySession::STATUS_INVALID_BILLING_ADDRESS.
-    static constexpr auto STATUS_INVALID_BILLING_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidBillingPostalAddress;
-    static constexpr auto STATUS_INVALID_SHIPPING_ADDRESS = ApplePayPaymentAuthorizationResult::InvalidShippingPostalAddress;
-#endif
+    // V-199 (2026-05-05): legacy STATUS_INVALID_BILLING_ADDRESS /
+    // STATUS_INVALID_SHIPPING_ADDRESS aliases retired — IDL no longer
+    // declares them (real iPhone 16 Pro / iOS 18.7 reference recapture
+    // shows both as undefined). The POSTAL_ADDRESS variants stay (still
+    // referenced by C++ switch cases on ApplePayPaymentAuthorizationResult).
     static constexpr auto STATUS_INVALID_SHIPPING_CONTACT = ApplePayPaymentAuthorizationResult::InvalidShippingContact;
     static constexpr auto STATUS_PIN_REQUIRED = ApplePayPaymentAuthorizationResult::PINRequired;
     static constexpr auto STATUS_PIN_INCORRECT = ApplePayPaymentAuthorizationResult::PINIncorrect;
