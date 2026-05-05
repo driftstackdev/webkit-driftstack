@@ -438,7 +438,7 @@
 #include "QuickLook.h"
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 #include "TouchEvent.h"
 #endif
 
@@ -7077,7 +7077,12 @@ ExceptionOr<Ref<Event>> Document::createEvent(const String& type)
         return Ref<Event> { DeviceOrientationEvent::createForBindings() };
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
+    // V-191: extend createEvent('TouchEvent') registration to the
+    // DRIFTSTACK_TOUCH_STUBS gate so JS-visible Touch / TouchEvent / TouchList
+    // constructors are reachable on Mac fork. iPhone Safari supports
+    // document.createEvent('TouchEvent'); FingerprintJS v3 touchSupport probe
+    // calls it as a feature test.
     if (equalLettersIgnoringASCIICase(type, "touchevent"_s))
         return Ref<Event> { TouchEvent::createForBindings() };
 #endif
