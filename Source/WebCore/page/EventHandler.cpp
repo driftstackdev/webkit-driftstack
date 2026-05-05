@@ -5785,4 +5785,12 @@ HandleUserInputEventResult EventHandler::passMouseMoveEventToSubframe(MouseEvent
 }
 #endif // !PLATFORM(COCOA) && !PLATFORM(WIN)
 
+// V-197 AFP Layer 2 event injection scaffolding lives at
+// Source/WebCore/page/cocoa/EventHandlerDriftstack.mm.
+// EventHandler.h declares driftstackSynthesizeBehavioralStream();
+// the implementation must include DriftstackBehavioralModel.h, which
+// is at platform/cocoa/ and not in EventHandler.cpp's WebCore-target
+// header search path. Splitting the impl into a sibling .mm avoids
+// the cross-directory include path issue.
+
 } // namespace WebCore

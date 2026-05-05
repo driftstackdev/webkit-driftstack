@@ -432,6 +432,30 @@ public:
 
     ScrollableArea* enclosingScrollableArea(Node*) const;
 
+#if PLATFORM(DRIFTSTACK)
+    // V-197: AFP Layer 2 event injection scaffolding per
+    // /docs/architecture/afp-layer-design.md §3.3.4 LOCKED design (event
+    // injection point = Source/WebCore/page/EventHandler.cpp dispatch-up
+    // pattern). Default-OFF; gated on DRIFTSTACK_BEHAVIORAL_SYNTHESIS=1
+    // env var. Synthesis only fires when harness commands a high-level
+    // intent (per /docs/architecture/afp-harness-configuration.md scope).
+    //
+    // Per Phase E.3 of afp-layer-design.md §4: this scaffolding declares
+    // the entry point + intent enum + skeleton dispatch logic. Actual
+    // event-emission (sampling from loaded DriftstackBehavioralModel +
+    // calling handleMousePressEvent / handleWheelEvent / etc.) is future
+    // V-N work; current implementation logs intent + returns. Default-OFF
+    // guarantee preserves Phase 2 cumulative rig diff=0.
+    enum class DriftstackBehavioralIntent : uint8_t {
+        IdleDwell,           // emit no synthetic events for durationMs
+        ScrollFreeForm,      // emit wheel/scroll/pointer events
+        TapSequence,         // emit touch+pointer events at given coords
+        TypeText,            // emit keyboard events with per-key timing
+        PinchRotate,         // emit gesture events
+    };
+    WEBCORE_EXPORT void driftstackSynthesizeBehavioralStream(DriftstackBehavioralIntent, double durationMs);
+#endif
+
 private:
 #if ENABLE(DRAG_SUPPORT)
     static DragState& NODELETE dragState();

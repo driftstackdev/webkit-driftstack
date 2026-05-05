@@ -203,6 +203,84 @@ Vector<String> DriftstackBehavioralModel::signalNames() const
     return names;
 }
 
+// V-197: AFP Layer 2 event injection scaffolding per
+// /docs/architecture/afp-layer-design.md §3.3.4 LOCKED 2026-05-05
+// (event injection point = Source/WebCore/page/EventHandler.cpp dispatch-up
+// pattern). Implementation lives here in the same .mm as the model loader to
+// avoid the cross-directory include path issue (EventHandler.cpp is at
+// Source/WebCore/page/ and cannot include platform/cocoa/DriftstackBehavioralModel.h
+// without xcodeproj header-search-path changes; co-locating the impl here
+// sidesteps that).
+//
+// Phase E.3 of afp-layer-design.md §4. Default-OFF; gated on
+// DRIFTSTACK_BEHAVIORAL_SYNTHESIS=1 env var. Synthesis only fires when harness
+// commands a high-level intent. Per-call randomness comes from drawing fresh
+// samples from the loaded distribution model.
+//
+// SCAFFOLDING (V-197): logs intent + skeleton dispatch logic. Actual event-
+// emission (sampling from DriftstackDistributionParams + calling
+// handleMousePressEvent / handleWheelEvent / dispatchTouchEvent / keyEvent /
+// dispatchGestureEvent) is future V-N work. Default-OFF + log-only stub
+// guarantees Phase 2 cumulative rig diff=0 unaffected.
+
+} // namespace WebCore
+
+#include "EventHandler.h"
+
+namespace WebCore {
+
+void EventHandler::driftstackSynthesizeBehavioralStream(DriftstackBehavioralIntent intent, double durationMs)
+{
+    static bool s_synthesisEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_BEHAVIORAL_SYNTHESIS");
+        return env && env[0] == '1';
+    }();
+    if (!s_synthesisEnabled)
+        return;
+
+    const auto& model = DriftstackBehavioralModel::singleton();
+    if (!model.isAvailable())
+        return;
+
+    const char* intentName = "unknown";
+    const char* primarySignal = "n/a";
+    switch (intent) {
+    case DriftstackBehavioralIntent::IdleDwell:
+        intentName = "IdleDwell";
+        primarySignal = "(no events; passive duration)";
+        break;
+    case DriftstackBehavioralIntent::ScrollFreeForm:
+        intentName = "ScrollFreeForm";
+        primarySignal = "scrollWheelDelta + scrollIntervalMs";
+        break;
+    case DriftstackBehavioralIntent::TapSequence:
+        intentName = "TapSequence";
+        primarySignal = "touchPressure + touchDuration + mouseVelocity";
+        break;
+    case DriftstackBehavioralIntent::TypeText:
+        intentName = "TypeText";
+        primarySignal = "interKeyDelayMs + keyHoldDurationMs";
+        break;
+    case DriftstackBehavioralIntent::PinchRotate:
+        intentName = "PinchRotate";
+        primarySignal = "gestureScaleRate + gestureRotationRate";
+        break;
+    }
+
+    auto interKeyParams = model.distributionFor("interKeyDelayMs"_s);
+    WTFLogAlways("[Driftstack-BehavioralSynth] intent=%s durationMs=%.0f primarySignal=%s "
+                 "model.archetype=%s model.signals=%u sampleCheck=interKeyDelayMs:%s",
+        intentName, durationMs, primarySignal,
+        model.archetype().utf8().data(),
+        static_cast<unsigned>(model.signalNames().size()),
+        interKeyParams ? "present" : "absent");
+
+    // Phase E.3.5 (future): per-intent event-emission loop here.
+    // Each handle*Event call dispatches up through the existing EventHandler
+    // tree as if from native UI input. isTrusted: true via WebCore-internal
+    // API (NOT JS dispatchEvent).
+}
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)
