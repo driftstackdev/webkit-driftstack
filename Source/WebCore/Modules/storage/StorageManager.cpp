@@ -131,14 +131,14 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
         // from disk free space; halving on Driftstack approximates
         // the iPhone quota tier without needing to track the actual
         // iOS quota algorithm.
-        // V-074 finding: usage also differs (Mac=8 bytes background,
-        // iPhone=0 for fresh origin). Zero out usage on Driftstack
-        // for fingerprint match — pages reading usage to detect storage
-        // see iPhone-equivalent 0.
+        // V-199-D (2026-05-05): retired the V-074 `estimate.usage = 0`
+        // override. iOS Safari behavior changed since V-074 — real
+        // iPhone 16 Pro / iOS 18.7 / Safari 26.4 reference recapture
+        // (2026-05-04T19-24-11Z) reports usage=8 (was: 0 at V-074 time).
+        // Mac native returns 8 already; let it pass through.
         if (!result.hasException()) {
             auto estimate = result.returnValue();
             estimate.quota = estimate.quota / 2;
-            estimate.usage = 0;
             promise.resolve(estimate);
             return;
         }
