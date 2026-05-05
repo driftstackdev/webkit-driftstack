@@ -133,7 +133,10 @@ void DriftstackAsciiAtlas::mapAtlas()
                 numColorsField, colorVariantCount);
             munmap(base, st.st_size); close(fd); return;
         }
-        if (subpixelVariantCount == 0 || subpixelVariantCount > 4) {
+        if (subpixelVariantCount == 0 || subpixelVariantCount > 16) {
+            // V-199: bound lifted from 4 → 16 for V-198 Path 2 V-127-16x atlas.
+            // FontCascade.cpp dispatch quantizer extension (V-198 commit
+            // f74276df77) handles variantCount=16 via roundf(fracX * 16.0f) & 15.
             WTFLogAlways("[Driftstack] AsciiAtlas: v3 invalid subpixelVariantCount=%u", subpixelVariantCount);
             munmap(base, st.st_size); close(fd); return;
         }
@@ -156,7 +159,9 @@ void DriftstackAsciiAtlas::mapAtlas()
             subpixelVariantCount = readU32(24);
             headerBytes = 28;
             entryStride = 20;
-            if (subpixelVariantCount == 0 || subpixelVariantCount > 4) {
+            if (subpixelVariantCount == 0 || subpixelVariantCount > 16) {
+                // V-199: bound lifted from 4 → 16 for V-198 Path 2 V-127-16x atlas
+                // (matches v3 path; same FontCascade.cpp dispatch quantizer support).
                 WTFLogAlways("[Driftstack] AsciiAtlas: v2 invalid subpixelVariantCount=%u", subpixelVariantCount);
                 munmap(base, st.st_size); close(fd); return;
             }
