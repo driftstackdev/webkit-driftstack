@@ -52,6 +52,23 @@ bool DOMCSSNamespace::supports(Document& document, const String& property, const
     parserContext.mode = HTMLStandardMode;
 
     auto propertyNameWithoutWhitespace = property;
+
+#if PLATFORM(DRIFTSTACK)
+    // V-260: iPhone Safari 26.4 returns false for these properties even though
+    // Mac WebKit ships them enabled. Empirical: V-259 BS Automate iOS 18.6
+    // CSS.supports() reference vs local fork capture — 3 divergences. Block
+    // these properties unconditionally on PLATFORM(DRIFTSTACK) to match iPhone.
+    auto folded = property.convertToASCIILowercase();
+    if (folded == "anchor-name"_s || folded == "position-anchor"_s)
+        return false;
+    if (folded == "animation-timeline"_s) {
+        // iPhone iOS 18.6 disables scroll()/view() timeline functions.
+        // Plain 'auto' / 'none' still parse on iPhone, but 'scroll()' returns false.
+        if (value.contains("scroll("_s) || value.contains("view("_s))
+            return false;
+    }
+#endif
+
     CSSPropertyID propertyID = cssPropertyID(propertyNameWithoutWhitespace);
     if (propertyID == CSSPropertyInvalid && isCustomPropertyName(propertyNameWithoutWhitespace)) {
         auto dummyStyle = MutableStyleProperties::create();
