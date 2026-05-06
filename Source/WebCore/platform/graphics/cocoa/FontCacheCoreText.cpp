@@ -1096,68 +1096,29 @@ static void registerFontsInFamilyIfNeeded(const String& family)
 }
 
 #if PLATFORM(DRIFTSTACK)
-// V-237 (2026-05-06 overnight Phase B): Mac-only font denylist. Per
-// founder direction "100% match across everything ... full iOS iphone
-// bit identical" — these 22 fonts are detectable on Mac but NOT on
-// iPhone iOS 18.x (per BS Automate browserleaks-fonts probe capture
-// matrix, 5 sessions all deterministic = 171 iPhone fonts; fork before
-// V-237 detected 22 extra Mac fonts not on iPhone). Returning nullptr
-// for these family-name resolutions causes FontCascade to fall back
-// to the next family or monospace baseline → measureText width matches
-// monospace baseline → browserleaks-style font detection reports them
-// as "not installed", matching iPhone behavior.
+// V-237 / V-237.2 / V-253 — Mac-only font denylist (multi-archetype as
+// of V-253). Per founder direction "100% match across everything …
+// full iOS iphone bit identical". Returning nullptr for denied family
+// names causes FontCascade to fall through to the next family or the
+// monospace baseline → browserleaks-style measureText probes report
+// these fonts as "not installed", matching iPhone.
 //
-// Comparison set: lowercase-folded for case-insensitive match (CSS
-// font-family resolution is case-insensitive).
-//
-// Source: /Users/john/code/driftstack/captures/v3/diff-browserleaks-fonts.py
-// finding 2026-05-06: 22 fork-detected fonts NOT on iPhone iOS 18.6 list.
-static bool driftstackIsMacOnlyDenylistedFamily(const AtomString& family)
-{
-    if (family.isEmpty())
-        return false;
-    static constexpr ASCIILiteral kDenylist[] = {
-        "al bayan"_s,
-        "al tarikh"_s,
-        "andale mono"_s,
-        "arial black"_s,
-        "arial narrow"_s,
-        "brush script mt"_s,
-        "comic sans ms"_s,
-        "geneva"_s,
-        "gujarati sangam mn"_s,
-        "gurmukhi mn"_s,
-        "kannada sangam mn"_s,
-        "lucida grande"_s,
-        "microsoft sans serif"_s,
-        "oriya sangam mn"_s,
-        "plantagenet cherokee"_s,
-        "simsun"_s,
-        "tahoma"_s,
-        "trattatello"_s,
-        "webdings"_s,
-        "wingdings"_s,
-        "wingdings 2"_s,
-        "wingdings 3"_s,
-    };
-    auto folded = family.string().convertToASCIILowercase();
-    for (auto& deny : kDenylist) {
-        if (folded == deny)
-            return true;
-    }
-    return false;
-}
+// V-253: per-archetype denylist moved to DriftstackFontsDenylist.h.
+// iPhone iOS 18.6 has 22 Mac-only false-positives (V-237.2 derived);
+// iPhone iOS 26.4 archetype empty pending founder iOS 26.4 fonts
+// capture via V-242 URL.
+#include "../DriftstackFontsDenylist.h"
 #endif
 
 std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomString& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
 {
 #if PLATFORM(DRIFTSTACK)
-    // V-237: Mac-only font denylist. Reject family-name resolution for
-    // 22 fonts that exist on Mac but not on iPhone iOS 18.x. Returning
-    // nullptr causes FontCascade to fall through to the next family /
-    // monospace baseline → browserleaks-style font detection sees these
-    // as "not installed", matching real iPhone.
-    if (driftstackIsMacOnlyDenylistedFamily(family))
+    // V-237 / V-253: Mac-only font denylist (multi-archetype lookup).
+    // Reject family-name resolution for fonts in the current-archetype
+    // denylist. Returning nullptr causes FontCascade to fall through to
+    // the next family / monospace baseline → browserleaks-style font
+    // detection sees these as "not installed", matching real iPhone.
+    if (driftstackFamilyDenylisted(family))
         return nullptr;
 #endif
     registerFontsInFamilyIfNeeded(family);

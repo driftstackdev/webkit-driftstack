@@ -190,48 +190,13 @@ ASCIILiteral FontCache::alternateFamilyName(const String& familyName)
 }
 
 #if PLATFORM(DRIFTSTACK)
-// V-237 follow-up (overnight 2026-05-06): SimSun residual fix. The
-// V-237 createFontPlatformData denylist returned nullptr for "SimSun"
-// but cachedFontPlatformData (this function) then called
-// alternateFamilyName("SimSun") which resolved to a Mac-shipped Apple
-// Chinese font (Songti SC family) — bypassing the denylist on the
-// recursive lookup. Hook the denylist at THIS layer too: skip the
-// alternate-name fallback when the original family is denylisted.
-static bool driftstackFamilyIsDenylisted(const AtomString& family)
-{
-    if (family.isEmpty())
-        return false;
-    static constexpr ASCIILiteral kDenylist[] = {
-        "al bayan"_s,
-        "al tarikh"_s,
-        "andale mono"_s,
-        "arial black"_s,
-        "arial narrow"_s,
-        "brush script mt"_s,
-        "comic sans ms"_s,
-        "geneva"_s,
-        "gujarati sangam mn"_s,
-        "gurmukhi mn"_s,
-        "kannada sangam mn"_s,
-        "lucida grande"_s,
-        "microsoft sans serif"_s,
-        "oriya sangam mn"_s,
-        "plantagenet cherokee"_s,
-        "simsun"_s,
-        "tahoma"_s,
-        "trattatello"_s,
-        "webdings"_s,
-        "wingdings"_s,
-        "wingdings 2"_s,
-        "wingdings 3"_s,
-    };
-    auto folded = family.string().convertToASCIILowercase();
-    for (auto& deny : kDenylist) {
-        if (folded == deny)
-            return true;
-    }
-    return false;
-}
+// V-237.2 / V-253 — SimSun residual fix at cachedFontPlatformData
+// layer. Hook denylist BEFORE alternateFamilyName fallback: denylisted
+// families return nullptr unconditionally so FontCascade falls through
+// to next family / monospace baseline (no alias-resolution recursion).
+//
+// V-253: per-archetype denylist moved to DriftstackFontsDenylist.h.
+#include "DriftstackFontsDenylist.h"
 #endif
 
 FontPlatformData* FontCache::cachedFontPlatformData(const FontDescription& fontDescription, const String& passedFamilyName, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
@@ -255,12 +220,12 @@ FontPlatformData* FontCache::cachedFontPlatformData(const FontDescription& fontD
     });
 
 #if PLATFORM(DRIFTSTACK)
-    // V-237 follow-up: short-circuit BEFORE createFontPlatformData +
+    // V-237.2 / V-253: short-circuit BEFORE createFontPlatformData +
     // BEFORE alternateFamilyName fallback. Denylisted families return
-    // nullptr unconditionally, so FontCascade falls through to the next
-    // CSS family / monospace baseline (matches iPhone iOS 18.x behavior
-    // for Mac-only fonts).
-    if (driftstackFamilyIsDenylisted(familyName))
+    // nullptr unconditionally → FontCascade falls through to next CSS
+    // family / monospace baseline (matches iPhone behavior for current
+    // archetype's Mac-only fonts; V-253 per-archetype lookup).
+    if (driftstackFamilyDenylisted(familyName))
         return nullptr;
 #endif
 
