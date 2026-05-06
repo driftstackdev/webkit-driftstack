@@ -691,10 +691,19 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // Per founder overnight direction: bit-identical iPhone canvas across
     // every vendor by per-shape iPhone-byte substitution. iOS 18.4/18.6
     // captures (BS Automate) cover the iOS-pre-26.4 archetype class.
+    // V-241 (2026-05-06 overnight): content-aware dispatch via
+    // lastFillText() (now always-tracked on PLATFORM(DRIFTSTACK) per
+    // CanvasBase::recordLastFillText V-241 patch). Closes the V-236
+    // botd_220x30 vs rig_220x30_canonical collision: same dimensions
+    // but different fillText content → different table entries.
     if (s_canvasFp10xOverrideEnabled
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        if (const char* canonical = lookupCanvasFp10xCanonical(width(), height())) {
-            WTFLogAlways("[Driftstack-V236] canvas-fp canonical substitution FIRED (%dx%d PNG)", width(), height());
+        auto fillText = lastFillText();
+        const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), fillText);
+        if (!canonical)
+            canonical = lookupCanvasFp10xCanonical(width(), height());
+        if (canonical) {
+            WTFLogAlways("[Driftstack-V241] canvas-fp canonical substitution FIRED (%dx%d PNG, lastFillText=%d chars)", width(), height(), fillText.length());
             return UncachedString { String::fromLatin1(canonical) };
         }
     }

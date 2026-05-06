@@ -16,7 +16,7 @@ namespace WebCore {
 // Captured from 8 BS Automate iPhone 16 Pro / iOS 18.6 sessions.
 // Cross-session determinism: browserleaks_240x50 (8 sessions): deterministic / fpjs_geometry_240x60 (8 sessions): deterministic / fpjs_text_280x60 (8 sessions): deterministic / creepjs_data_250x50 (8 sessions): deterministic / botd_220x30 (8 sessions): deterministic / rig_220x30_canonical (8 sessions): deterministic / fpjs_pro_320x80 (8 sessions): deterministic / small_100x30 (8 sessions): deterministic / wide_600x60 (8 sessions): deterministic.
 
-// Driftstack cumulative-rig canvas.fingerprint10x baseline (220x30)
+// Driftstack cumulative-rig canvas.fingerprint10x baseline (220x30) — lastFillText: 'Cwm fjordbank glyphs vext quiz, 😃🍕'
 static constexpr char kCanvasFp10x_rig220x30[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAANwAAAAeCAYAAABHenA+AAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -82,7 +82,7 @@ static constexpr char kCanvasFp10x_rig220x30[] =
     "vsEBw+B8Q04GlUuEA4bBLRFBGsfwDQ4YBucbcjKoXCIc+B9wVU1KsvBN1gAAAABJRU5ErkJg"
     "gg==";
 
-// browserleaks.com/canvas canonical probe (240x50)
+// browserleaks.com/canvas canonical probe (240x50) — lastFillText: 'BrowserLeaks,com <canvas> 1.0'
 static constexpr char kCanvasFp10x_browserleaks240x50[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAPAAAAAyCAYAAABidVYtAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -204,7 +204,7 @@ static constexpr char kCanvasFp10x_browserleaks240x50[] =
     "QCAgEBAICAQEAgIBgYBAQCAgEBAICAQEAgIBgYBAQCAgEBAICAQEAgIBgYBAQCAgELipEfhf"
     "b5OL3PKi1UEAAAAASUVORK5CYII=";
 
-// FingerprintJS v3 geometry probe (240x60)
+// FingerprintJS v3 geometry probe (240x60) — lastFillText: 'Cwm fjordbank glyphs vext quiz, 😃'
 static constexpr char kCanvasFp10x_fpjsGeometry240x60[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAPAAAAA8CAYAAABYfzddAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -402,7 +402,7 @@ static constexpr char kCanvasFp10x_fpjsGeometry240x60[] =
     "x0AeA3kM5DGQx0AeA3kM5DGQx0AeA3kM5DGQx0AeA3kM5DGQx0AeA3kM5DGQx0AeA3kM5DGQ"
     "x0AeA3kM5DGQx0AeA3kMDBkG/h+RWBdht27mnQAAAABJRU5ErkJggg==";
 
-// FingerprintJS basic text-rendering probe (280x60)
+// FingerprintJS basic text-rendering probe (280x60) — lastFillText: 'Cwm fjordbank glyphs vext quiz, 😃'
 static constexpr char kCanvasFp10x_fpjsText280x60[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAARgAAAA8CAYAAAC9xKUYAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -570,7 +570,7 @@ static constexpr char kCanvasFp10x_fpjsText280x60[] =
     "uS/kkdDaEGAH7XCAVA4tAQG5L1pCL8gyNCcCvF8mmObE85LKkvvikuCTM7dABPigmnwtUK42"
     "KZLcF22y21t1o3mykrdVt/BaapzcF9dSb8myNgGB/weH6q0IDAiL4wAAAABJRU5ErkJggg==";
 
-// CreepJS canvas2d data probe (250x50)
+// CreepJS canvas2d data probe (250x50) — lastFillText: '😀'
 static constexpr char kCanvasFp10x_creepjs250x50[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAPoAAAAyCAYAAAB1V8bkAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -639,10 +639,78 @@ static constexpr char kCanvasFp10x_creepjs250x50[] =
     "BAFBQBAQBAQBQUAQEAQEAUFAEBAEBAFBQBAQBAQBQUAQEAQEAUFAEBAEBAFBQBAQBAQBQUAQ"
     "EAQEAUFAEBAEBAFBQBAQBAQBQUAQOHMQ+D+ehVqjHqNsRgAAAABJRU5ErkJggg==";
 
-// SKIPPED (botd_220x30): botd canvas probe — DUPLICATE 220x30 (same dims as rig)
-// Same dimensions (220x30) as another shape; first-match wins.
+// botd canvas probe — uses 220x30 (collision-fixed via V-241 fillText dispatch) (220x30) — lastFillText: 'botd-canvas-probe'
+static constexpr char kCanvasFp10x_botd220x30[] =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAANwAAAAeCAYAAABHenA+AAAAAXNSR0IArs4c6QAAAERlWElm"
+    "TU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAA3KAD"
+    "AAQAAAABAAAAHgAAAAD5twneAAANYUlEQVR4Ae1bCXRU1Rn+3ixvlsxMkpmQQBLCThAEZXMD"
+    "RDxSEeuBKi6gh6IiSxFxQ4pWDhyXat2O2ALBglTkuECNohgIyi6yyOKpoDVsQlgSksxkMpl9"
+    "3vS7LyQnEmMppaexvX/OZGbuve9///3yf/dfHijJCUhCSotBQFkIpcUYIw254AgYLrhGqVAi"
+    "IBFoFgFJuGahkRMSgQuPgCTchcdUapQINIvADwgXg7HZhRdi4j+t/0LY2OJ0TCgwtzibpEHn"
+    "jUAD4U7DCRXzUILM81JWinTMx+Bmrz3GeaH/ONKaXSMnzkLg7sWtOBLFxAVdzpqRX3+mCDQQ"
+    "rrH959O2XICrsQo9G6tp9vP56G9W2f/LRFJ2L/8X/tRNCKdx5GgGED/P7DLB62uszUMj5oV+"
+    "8S7l3BBw2KpN43ejz9QSWM7tCrmqpSJgOtuwt3EZPkQeTqAdfoG/41W8Czdq9WUfoxfewuVY"
+    "i4uQBT8exqcYjy1YxjGRTkZgwkDbVHxofA1q2IRpuF2PehbEMRbbzr5Vk+8iQj6P67Ef2eiH"
+    "I3gA6zAcX0Pj4T4X1+LPGIjv4WFyGsSN+Jtum0rdb6M/1iNfHxe2iFrxDuzES1iuj8/Er7AV"
+    "f2BKG9fvuQ0dMRljOPY8amDFDNzMO3VDFVK48yo8jiLcie362mdxg743P2y86jRm4yOMwFdN"
+    "bBcDwo7VuJgaY1iJS3SMJmIT77VRXy9s24zOKGf6vhWd8Ab+wrygBK9zXyvQl/tuA0ywfwqD"
+    "Nh0LJu+pv0k46hi9snDGPZWVba2YYC5CwjgNi8ZX6fMTF9yEpDKHnzvzdQxK8nkUTHqz/lr5"
+    "3rIQaBJnitCDrvlXUukVHEIG7iVVhAiyjcJEknA/x5/gTxEewm14E1eQVjt14g3CAbyPBfr6"
+    "SXTZvWiLT/CaPrYG3fXx5n5tob8I/ePwBak2U38fQ61lcOE90m82bsJSLCYdHtLfBflWoI+u"
+    "zge7TkZB7C/xDMcL9O8f4FIeAyU6SVfS/nopwCDSoZQUipEMd+r32IHfc2QGqblH33OAwWQz"
+    "uuA5DEMxqV3B42USyTOOP7XNBBphh8DDxrLrW8zScXwcIxvs9J6xswdOkmpLeLQdxhSM5qer"
+    "8CwKsY+7pOyDZliHCQVkX50kNdzQqfPO6U5HxXUc6QhjYpE+M2n+AJKtkK9XEDfl6MQTnycu"
+    "GHHmUvnWwhBoQrhp+Axd6YJ5llO4170Kmz0ZOOS04XVlAK5hxLsHn0NVQ7jeuR0jPOvxRnoP"
+    "hK0azEjAbAkiYY0hqBpQlNaWzrQBFyvHkesoxXj3x3C7TyDEtXEYGKPUhpeIYIJUggRCv1GN"
+    "YEjqTizzvIia1BiuVveRBk+jNw/wUzYV1elRdPfsw2G3CVWOOkQzEMAMy0qoDj96ppSgv3sv"
+    "9ntsqHXEcTfjyRK1P06yX1PN+CPuNYF0ipiAmenvYqmyGB5DDY44rWjtPgqH5yS+Tbfp+wnR"
+    "zne4foc9Cze6N2Ov52H40yPwq8YG+8VexB6EiCg60/Ih4s4Q+jn269e8nZ7fkGY7mAf8lvP9"
+    "HfsQdEWwypOLKepaDFJKwNQRo297clFGxjG1bc6+qR3zv7IJnUZT7NUePdd9d/OI2eXd8rcW"
+    "ejylI69/p/cl/OPdz+ktjGobO120td3VQ5ZU5OR880Vm5pFHpmxnKiClxSFAl/uhiCilcSik"
+    "AoP9J+BLZuG404kTTjNu9pfo46ddgDsADAhU4EW1J7x0eo2nuha2wkGNB02pKPfnMoE6rBMi"
+    "ZgSG+kuZhLZChGvnMz18jWmcduYxhEjt9jGdGoCDiLAJXq9/OK8Rdhwm4V/wDsd6c0c47FXo"
+    "Xl2LinguDOZvEEhlPRiLo3XED40+L+rH1CBg8vFGRoc+Pza2Cb0jc7gHF7ZbLkbHSAVjykFU"
+    "0p0r4y5MT47CAd4jW/Gigy+MqmQOVLsBmc7jeDe6EHNNg1Bg60mdKfh1YicetX6EWc5rMbfq"
+    "FiSTdUQTexDSB0dhVyKoYrXlCgF9vT4sNl8On5N2JuNoF6lkAAMCtLM86IY/3AqDY4d0nKLE"
+    "Lr1N+SGvN3sHm7kZvS4t7HTkSD7slsBmqs4wWeGqqfGs9PmyXqgKtM5LTT3VjWvbqGq4KOD3"
+    "WHaU3hKNhFMSNmtNadyM3HF7kFjSGz7dMPmrRSDQhHAHSYoO/BvxgMbGeCcRt9A1VI02znJs"
+    "VTpgPB2FQQyOMBiLuqBrxAcGHSStUYBjQrKTjCN0rm3UdI2lDJ4ariVB4tSVElJwn3MzE8Nd"
+    "jHMU+msmK6nWjD1fJtshSEdVWWoJ/aJuGxQpwcvaEBxJZmJz9FVk+7wwJZhXKU+TsAYYeTok"
+    "DSK+1PU+jXxLI+GSnFM0E8zUlWc8raeWReE+KLZ2w8TIJp2cPosRo6unsNbchA9q18KpRbCb"
+    "Nqww9oHCro5IATsaylCcnItDioptlh6YEh2L3uGjmBPegkeZwOp3PbMHkUJ/TbLGWMsq3K0g"
+    "/hfJzsiPVsFGeBIWVpeROjsVvuUH/TymrNiudMRgS7l+iM2b/V4U6d6+Xm/OUi0BxWKpRTiS"
+    "0olIVSeiKD9+sutQpo6wpdTutadUV/n8WeVj75s2ifrMPjOOrF70bHsCpCgKInaNNQEk4YSb"
+    "tRTRfb6xMX/CNXrKVxbz4I8YwrpqNzyxiN6kWG/ogrXGfKgxBWtY64kmxwhWajoBDSE2WtL0"
+    "xoORVBhFQhUYB+rP3XyMIoI8QsS1Iq3KpTs7UrzQPF6c8sQx3LMJO8y5KDZ21despv7fUXsO"
+    "/SUWs8CdDDIGVsNnV/Cyu5+eVoZtWoPD1+9BELCxCMcWLi6aFwvDQ3HY7MJow3ad2Gw+MDpa"
+    "0B6VsBoiOOpS8YznSrhcp1FjNrL2c7NSfAz7422R54+im/kYPGknGN59SKaEaNsP9xDkySIi"
+    "9DzSW2Gbd0OyG+u/7mzP7ICFxNcaGWeinU6eUCOJ3zzDQOYCGbotcFc9IeznmbIuFrUEDYYE"
+    "YnHLbyJBm2l54VMeku1+vlZk9dpUlp5W+olR0a7bUHzPiHjI7ji1a9AQsxr+PCOt9K5kEvZI"
+    "pDES8nNLQKBJhMujEw3FgygztsUg7TDTv2WI0omGMemr0tbgYe12TDcleYqn0hWL9UZCBeev"
+    "ShzBiywbeuFJrpzFtsVbGJMYz7bKRATNaRiX2K0TNMZrmWHqIiKASLuE3MFUtkz7GA9oY2A2"
+    "xajJwO7dUj36PWhbhQdid6KLbSaMxhgG+07il9ox3qcLFPdndQr+yW/h2FMTd2B4rARmaxAB"
+    "RuXMcJStkkI8rozAS65+qAml4TH/RuxI9sYhUy4GWXaxVbIWIw2TENaM8Fc78IhSjGEqU2Wm"
+    "iCISN96DjUdJtlaDT43dsNDYlzVeFtFYxeR5DwRGhsbPQuoCHRYSp/HaXcRpAhImKo0oo0io"
+    "YZg/+XvLyh4dEgkzSzQcW71m2tpQMNXKL+u41ckZCaRcMWDFhv3fXPvI6fIOTxd+MCPh87au"
+    "5fyyqufmzFIvLVC5RSktDAHl7P+eI3zigFuFgQVFZz+bIGRHJf1AHM4ZfsBvMeA7pwPd/TWw"
+    "R5MI8696mvPpfHJgDyt6U0OxRJDFtcz02Iiw8GRPIq8mKhwHlSytRF2Wy6Z2owO/AZYAGy7f"
+    "uey4yB/Q0zCxtoL6s720KyUFDiWMHD/Pf4qo10TTRKSQwvHF9wDrsjZcWy9lrPFEBBbzQkTK"
+    "6k1htOE+cyppI23SmH/tcTuQXxtgKpsUGZu+J3FvcV+x9utUJ7r7amGLaxA16al0oBX3KDLp"
+    "ehGPRsQ/ANhifQoHHCloHwzRNq2hLvWw7rUz6tTQxgDtaNOouhLRNWAw44XJtbb27RE9uget"
+    "jQoyc1S2hcuh7YtnX1HtbR0qvnX37tn7YS4LMl8HYvP749CtW13u6uOdLm+bc3D7oiv93qlF"
+    "UENZyE8oOPlGHz7LkNJiEGgS4YRlVlYWLhYMpexzCecTDiuaJEJcEQ1djX5UsnFSSWflNFIZ"
+    "pUTNJZK3DKafZXY+EHKzdqJDtwtEdMKcpIMKcXDtmaBWN3DWb0dUQ2c6fgX1i1xQpF7CUQU5"
+    "O4RqdcIKu4SIushBBxbNhnMVG9cLkgrHF2QTYmD+1TVYw3SVhRJfYlgQVOgVrxSu7cz5Ktok"
+    "8BDNGRfnG5NNV9ToV6ZWiygJW0py6Rhxvbhnc5ITiNKuKExl6HGsQj+jouZaHJg9BNHZ62FK"
+    "dZ8IpWaeKLtvJy45YYBBSaCmTYgdGsryq/xVk77asyuhIY/zeSSbpibgnXeZJFtzeP+3xptE"
+    "uMaGCOcSzlfvmI3nxGcRDX8sSok54ZSNrxPfheOJKHeu0px+MS50/yu6/t171l/fnE1i/n0+"
+    "uBCv+dbFDZH2p9bX62z8PqeAGfcGGEg0JqxNZbboBv3E/K3vQV1+G09MKS0SgZ8kXIu0+Gdg"
+    "1I+ltudqtvwf3+eK1M9zHWOFlAuNgHg0IR5HSJEISAQkAhIBiYBEQCIgEZAISAQkAhIBiYBE"
+    "QCIgEZAISAQkAhIBiYBEQCIgEZAISAQkAhIBiYBEQCIgEZAISAQkAueHwD8AbXbg4r6KsAcA"
+    "AAAASUVORK5CYII=";
 
-// FingerprintJS Pro extended probe approximation (320x80)
+// FingerprintJS Pro extended probe approximation (320x80) — lastFillText: '💪🔥'
 static constexpr char kCanvasFp10x_fpjsPro320x80[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAYAAABoMayFAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -824,7 +892,7 @@ static constexpr char kCanvasFp10x_fpjsPro320x80[] =
     "gEHAIGAQMAgYBAwCBgGDgEHAIGAQMAgYBAwCBgGDgEHAIGAQaG4I/H8J+SYlBjDQ0AAAAABJ"
     "RU5ErkJggg==";
 
-// Generic small vendor probe shape (100x30)
+// Generic small vendor probe shape (100x30) — lastFillText: 'test'
 static constexpr char kCanvasFp10x_small100x30[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAeCAYAAADaW7vzAAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -843,7 +911,7 @@ static constexpr char kCanvasFp10x_small100x30[] =
     "qV8xuFluNvjz+5o9JNUMxm8upAoxqpEY2E97afXacbpPJyAsWenTKJItAmRItkivMw8Zsk5Q"
     "NI0IEAEiQASIABEgAkSACBABIkAEiAARyEcC/wBDE75rwT4VHwAAAABJRU5ErkJggg==";
 
-// Generic wide vendor probe shape (600x60)
+// Generic wide vendor probe shape (600x60) — lastFillText: '中文測試'
 static constexpr char kCanvasFp10x_wide600x60[] =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAlgAAAA8CAYAAAC6nMS5AAAAAXNSR0IArs4c6QAAAERlWElm"
@@ -1021,21 +1089,42 @@ static constexpr char kCanvasFp10x_wide600x60[] =
 struct CanvasFp10xCanonicalEntry {
     int width;
     int height;
+    const char* lastFillText; // V-241 content-aware dispatch key
     const char* dataURL;
     const char* tag;
 };
 
 static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
-    { 220,  30, kCanvasFp10x_rig220x30, "rig_220x30_canonical" },
-    { 240,  50, kCanvasFp10x_browserleaks240x50, "browserleaks_240x50" },
-    { 240,  60, kCanvasFp10x_fpjsGeometry240x60, "fpjs_geometry_240x60" },
-    { 280,  60, kCanvasFp10x_fpjsText280x60, "fpjs_text_280x60" },
-    { 250,  50, kCanvasFp10x_creepjs250x50, "creepjs_data_250x50" },
-    { 320,  80, kCanvasFp10x_fpjsPro320x80, "fpjs_pro_320x80" },
-    { 100,  30, kCanvasFp10x_small100x30, "small_100x30" },
-    { 600,  60, kCanvasFp10x_wide600x60, "wide_600x60" },
+    { 220,  30, "Cwm fjordbank glyphs vext quiz, 😃🍕", kCanvasFp10x_rig220x30, "rig_220x30_canonical" },
+    { 240,  50, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_browserleaks240x50, "browserleaks_240x50" },
+    { 240,  60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjsGeometry240x60, "fpjs_geometry_240x60" },
+    { 280,  60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjsText280x60, "fpjs_text_280x60" },
+    { 250,  50, "😀", kCanvasFp10x_creepjs250x50, "creepjs_data_250x50" },
+    { 220,  30, "botd-canvas-probe", kCanvasFp10x_botd220x30, "botd_220x30" },
+    { 320,  80, "💪🔥", kCanvasFp10x_fpjsPro320x80, "fpjs_pro_320x80" },
+    { 100,  30, "test", kCanvasFp10x_small100x30, "small_100x30" },
+    { 600,  60, "中文測試", kCanvasFp10x_wide600x60, "wide_600x60" },
 };
 
+// V-241 content-aware dispatch (preferred). Matches on (width, height,
+// last-fillText). Returns iPhone canonical bytes for known canonical-probe
+// shapes; nullptr if unknown. Uses String::fromUTF8 because canonical
+// fillText values include emoji (non-Latin1).
+inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, const String& fillText)
+{
+    for (const auto& entry : kCanvasFp10xCanonicalTable) {
+        if (entry.width != width || entry.height != height)
+            continue;
+        if (fillText == String::fromUTF8(entry.lastFillText))
+            return entry.dataURL;
+    }
+    return nullptr;
+}
+
+// V-236 dimension-only fallback (used when fillText is empty or doesn't
+// match any entry). Returns FIRST table entry matching the dimensions —
+// preserves backward compatibility with V-236 behavior for shapes whose
+// fillText we don't track.
 inline const char* lookupCanvasFp10xCanonical(int width, int height)
 {
     for (const auto& entry : kCanvasFp10xCanonicalTable) {

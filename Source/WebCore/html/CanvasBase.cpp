@@ -274,9 +274,22 @@ bool CanvasBase::shouldInjectNoiseBeforeReadback() const
 
 void CanvasBase::recordLastFillText(const String& text)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-241 (overnight 2026-05-06): always track lastFillText on
+    // PLATFORM(DRIFTSTACK), independent of the AFP/noise-injection gate.
+    // V-185 + V-236 multi-shape canvas substitution dispatches on
+    // (width, height) currently — collides for dimension-equal shapes
+    // (e.g. botd_220x30 vs rig_220x30_canonical). Adding lastFillText
+    // as a third dispatch key resolves the collision: each known
+    // canonical probe shape has a unique fillText content + dimension
+    // signature.
+    m_lastFillText = text;
+    return;
+#else
     if (!shouldInjectNoiseBeforeReadback())
         return;
     m_lastFillText = text;
+#endif
 }
 
 void CanvasBase::addCanvasNeedingPreparationForDisplayOrFlush()
