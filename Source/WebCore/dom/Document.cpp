@@ -11735,11 +11735,43 @@ void Document::resetObservationSizeForContainIntrinsicSize(Element& target)
 OptionSet<NoiseInjectionPolicy> Document::noiseInjectionPolicies() const
 {
     OptionSet<NoiseInjectionPolicy> policies;
+#if PLATFORM(DRIFTSTACK)
+    // V-232: Force AFP noise injection always-on. iOS Safari's
+    // AdvancedPrivacyProtections::FingerprintingProtections fires per-site
+    // via ATFP classifier — for tracker-context domains and Private
+    // Browsing default. Per founder direction 2026-05-06 ("100% bit-identical
+    // canvas, not partial"; "any canvas test"), Driftstack sessions must
+    // produce iPhone-AFP-noisy output on every site, not just classifier-
+    // flagged ones. Detection vendors that compare fork canvas-fp vs
+    // expected iPhone AFP noise distribution then classify fork as iPhone.
+    //
+    // Per-eTLD+1 deterministic seed at noiseInjectionHashSaltForDomain
+    // preserves within-session stability: same site within session sees
+    // same noise; cross-site / cross-session shows variation. Matches
+    // iOS Safari per-site AFP behavior.
+    //
+    // V-185 substitution layer at HTMLCanvasElement::toDataURL fires
+    // BEFORE AFP injection — canonical-probe canvases get byte-identical
+    // V-185 substitution; non-canonical (browserleaks, fingerprintjs,
+    // CreepJS, custom probes) get AFP-noisy output. Cumulative rig
+    // canonical-probe surfaces remain byte-identical via V-185.
+    //
+    // Both Minimal + Enhanced enabled: Minimal applies basic canvas/audio
+    // noise; Enhanced adds Script Tracking Privacy (per-category constants
+    // returned for tracker contexts).
+    //
+    // Phase 2 process-startup gate per file 105 — branch is build-time;
+    // no runtime cost.
+    policies.add(NoiseInjectionPolicy::Minimal);
+    policies.add(NoiseInjectionPolicy::Enhanced);
+    return policies;
+#else
     if (advancedPrivacyProtections().contains(AdvancedPrivacyProtections::FingerprintingProtections) || quirks().mayBenefitFromFingerprintingProtectionQuirk(topURL()))
         policies.add(NoiseInjectionPolicy::Minimal);
     if (advancedPrivacyProtections().contains(AdvancedPrivacyProtections::ScriptTrackingPrivacy))
         policies.add(NoiseInjectionPolicy::Enhanced);
     return policies;
+#endif
 }
 
 OptionSet<AdvancedPrivacyProtections> Document::advancedPrivacyProtections() const
