@@ -683,16 +683,20 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         const char* env = getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE");
         return env && env[0] == '1';
     }();
-    // Detection: canvas 220x30 + PNG mime is unique to the cumulative-rig
-    // canvas.fingerprint10x probe in our locked archetype reference.
-    // lastFillText() returns empty here (likely tracked on CanvasRenderingContext2D
-    // not the element); use canvas dimensions as the signal. Env var being OFF
-    // by default prevents production false-positives.
+    // V-236 (2026-05-06): multi-shape dispatch. lookupCanvasFp10xCanonical
+    // returns the iPhone canonical dataURL for known canvas-fp probe shapes
+    // (browserleaks 240×50, FPJS variants, CreepJS, FPJS Pro, etc.) or
+    // nullptr for unknown shapes. Dispatch on (width, height) — collisions
+    // go to first-match (220x30 → rig_220x30_canonical wins over botd_220x30).
+    // Per founder overnight direction: bit-identical iPhone canvas across
+    // every vendor by per-shape iPhone-byte substitution. iOS 18.4/18.6
+    // captures (BS Automate) cover the iOS-pre-26.4 archetype class.
     if (s_canvasFp10xOverrideEnabled
-        && width() == 220 && height() == 30
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        WTFLogAlways("[Driftstack-V185] canvas-fp canonical substitution FIRED (220x30 PNG)");
-        return UncachedString { String::fromLatin1(kCanvasFp10xCanonicalDataURL) };
+        if (const char* canonical = lookupCanvasFp10xCanonical(width(), height())) {
+            WTFLogAlways("[Driftstack-V236] canvas-fp canonical substitution FIRED (%dx%d PNG)", width(), height());
+            return UncachedString { String::fromLatin1(canonical) };
+        }
     }
 #endif
 
