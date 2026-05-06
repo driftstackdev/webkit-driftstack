@@ -1095,8 +1095,71 @@ static void registerFontsInFamilyIfNeeded(const String& family)
     }
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-237 (2026-05-06 overnight Phase B): Mac-only font denylist. Per
+// founder direction "100% match across everything ... full iOS iphone
+// bit identical" — these 22 fonts are detectable on Mac but NOT on
+// iPhone iOS 18.x (per BS Automate browserleaks-fonts probe capture
+// matrix, 5 sessions all deterministic = 171 iPhone fonts; fork before
+// V-237 detected 22 extra Mac fonts not on iPhone). Returning nullptr
+// for these family-name resolutions causes FontCascade to fall back
+// to the next family or monospace baseline → measureText width matches
+// monospace baseline → browserleaks-style font detection reports them
+// as "not installed", matching iPhone behavior.
+//
+// Comparison set: lowercase-folded for case-insensitive match (CSS
+// font-family resolution is case-insensitive).
+//
+// Source: /Users/john/code/driftstack/captures/v3/diff-browserleaks-fonts.py
+// finding 2026-05-06: 22 fork-detected fonts NOT on iPhone iOS 18.6 list.
+static bool driftstackIsMacOnlyDenylistedFamily(const AtomString& family)
+{
+    if (family.isEmpty())
+        return false;
+    static constexpr ASCIILiteral kDenylist[] = {
+        "al bayan"_s,
+        "al tarikh"_s,
+        "andale mono"_s,
+        "arial black"_s,
+        "arial narrow"_s,
+        "brush script mt"_s,
+        "comic sans ms"_s,
+        "geneva"_s,
+        "gujarati sangam mn"_s,
+        "gurmukhi mn"_s,
+        "kannada sangam mn"_s,
+        "lucida grande"_s,
+        "microsoft sans serif"_s,
+        "oriya sangam mn"_s,
+        "plantagenet cherokee"_s,
+        "simsun"_s,
+        "tahoma"_s,
+        "trattatello"_s,
+        "webdings"_s,
+        "wingdings"_s,
+        "wingdings 2"_s,
+        "wingdings 3"_s,
+    };
+    auto folded = family.string().convertToASCIILowercase();
+    for (auto& deny : kDenylist) {
+        if (folded == deny)
+            return true;
+    }
+    return false;
+}
+#endif
+
 std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDescription& fontDescription, const AtomString& family, const FontCreationContext& fontCreationContext, OptionSet<FontLookupOptions> options)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-237: Mac-only font denylist. Reject family-name resolution for
+    // 22 fonts that exist on Mac but not on iPhone iOS 18.x. Returning
+    // nullptr causes FontCascade to fall through to the next family /
+    // monospace baseline → browserleaks-style font detection sees these
+    // as "not installed", matching real iPhone.
+    if (driftstackIsMacOnlyDenylistedFamily(family))
+        return nullptr;
+#endif
     registerFontsInFamilyIfNeeded(family);
 
     auto size = fontDescription.adjustedSizeForFontFace(fontCreationContext.sizeAdjust());
