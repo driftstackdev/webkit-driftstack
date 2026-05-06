@@ -545,6 +545,41 @@ Vector<String> FontCache::systemFontFamilies()
 
     auto availableFontFamilies = adoptCF(CTFontManagerCopyAvailableFontFamilyNames());
     CFIndex count = CFArrayGetCount(availableFontFamilies.get());
+
+#if PLATFORM(DRIFTSTACK)
+    // V-230: filter Mac-system font enumeration to iOS-installed family
+    // allowlist. Mac's CTFontManagerCopyAvailableFontFamilyNames returns
+    // ~500 fonts (Mac system + Stage B-registered iOS); detection vendors
+    // (browserleaks /fonts, /canvasfont, fingerprintjs fontPreferences,
+    // CreepJS native font enumeration) probe this list. iPhone Safari's
+    // equivalent surface is ~99 family names. Mac-only fonts (Avenir Next,
+    // Gill Sans, etc. that exist on Mac but not iOS — actually those ARE
+    // on iOS; the Mac-only set is much smaller, ~30-50 families) leak
+    // identification.
+    //
+    // Stage B's driftstackIOSFontMap (keyed lowercase) holds the iOS
+    // family allowlist; filter Mac-returned list to include ONLY families
+    // whose lowercase form is in the map. Net effect: all iOS-installed
+    // fonts visible (whether Mac-shared or iOS-only); Mac-only fonts
+    // hidden from JS-side enumeration. Phase 2 process-startup gate per
+    // file 105 — driftstackIOSFontMap initialized once on first font lookup.
+    initializeDriftstackIOSFontMapIfNeeded();
+    Locker mapLocker(driftstackIOSFontMapLock);
+    auto& iosFontMap = driftstackIOSFontMap();
+    for (CFIndex i = 0; i < count; ++i) {
+        RetainPtr fontName = dynamic_cf_cast<CFStringRef>(CFArrayGetValueAtIndex(availableFontFamilies.get(), i));
+        if (!fontName) {
+            ASSERT_NOT_REACHED();
+            continue;
+        }
+        if (fontNameIsSystemFont(fontName.get()))
+            continue;
+        String name = fontName.get();
+        if (iosFontMap.contains(name.convertToASCIILowercase()))
+            fontFamilies.append(name);
+    }
+    return fontFamilies;
+#else
     for (CFIndex i = 0; i < count; ++i) {
         RetainPtr fontName = dynamic_cf_cast<CFStringRef>(CFArrayGetValueAtIndex(availableFontFamilies.get(), i));
         if (!fontName) {
@@ -559,6 +594,7 @@ Vector<String> FontCache::systemFontFamilies()
     }
 
     return fontFamilies;
+#endif
 }
 
 static inline bool NODELETE isSystemFont(const String& family)
