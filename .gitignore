@@ -4,6 +4,7 @@
 .DS_Store
 .directory
 /WebKitBuild/
+Source/WebKit/build/
 /.clangd
 .claude/agents/
 /update-compile-commands-symlink.conf
