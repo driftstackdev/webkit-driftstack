@@ -1308,7 +1308,7 @@ bool LocalDOMWindow::offscreenBuffering() const
 int LocalDOMWindow::outerHeight() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // Driftstack archetype iPhone 16 Pro / iOS 26.4.1: outer = full screen
+    // V-074: archetype iPhone 16 Pro / iOS 18.7 Safari 26.4: outer = full screen
     // height in CSS pixels (874). MiniBrowser's actual NSWindow height on
     // Mac is unrelated to iPhone — match reference unconditionally.
     return 874;
@@ -1343,6 +1343,7 @@ int LocalDOMWindow::outerHeight() const
 int LocalDOMWindow::outerWidth() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-074: archetype iPhone 16 Pro outer width = 402 CSS pixels (matches screen.width).
     return 402;
 #else
     RefPtr frame = this->frame();
@@ -1375,7 +1376,7 @@ int LocalDOMWindow::outerWidth() const
 int LocalDOMWindow::innerHeight() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // Driftstack archetype iPhone 16 Pro / iOS 26.4.1: layout viewport
+    // V-074: archetype iPhone 16 Pro / iOS 18.7 Safari 26.4: layout viewport
     // height with default URL bar chrome = 714 CSS pixels (874 - 160).
     return 714;
 #else
@@ -1401,6 +1402,7 @@ int LocalDOMWindow::innerHeight() const
 int LocalDOMWindow::innerWidth() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-074: archetype iPhone 16 Pro inner width = 402 CSS pixels.
     return 402;
 #else
     if (!frame())
@@ -1425,7 +1427,7 @@ int LocalDOMWindow::innerWidth() const
 int LocalDOMWindow::screenX() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // Driftstack: iPhone fullscreen Safari has no NSWindow placement —
+    // V-072: iPhone fullscreen Safari has no NSWindow placement —
     // window covers the screen at (0, 0).
     return 0;
 #else
@@ -1444,6 +1446,7 @@ int LocalDOMWindow::screenX() const
 int LocalDOMWindow::screenY() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-072: iPhone fullscreen Safari window covers the screen at (0, 0).
     return 0;
 #else
     RefPtr frame = this->frame();
@@ -1794,6 +1797,7 @@ double LocalDOMWindow::devicePixelRatio() const
     // since page zoom is applied globally for rendering.
     auto frameScaleRatio = frame->frameScaleFactor() * frame->pageZoomFactor();
 #if PLATFORM(DRIFTSTACK)
+    // V-075: iPhone 16 Pro Super Retina XDR — devicePixelRatio = 3.0.
     return 3.0 * frameScaleRatio;
 #endif
     return page->deviceScaleFactor() * frameScaleRatio;

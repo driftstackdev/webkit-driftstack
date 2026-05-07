@@ -84,6 +84,7 @@ int Screen::height() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Height);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone 16 Pro portrait screen height (CSS pixels).
     return 874;
 #endif
 
@@ -102,6 +103,7 @@ int Screen::width() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Width);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone 16 Pro portrait screen width (CSS pixels).
     return 402;
 #endif
 
@@ -131,6 +133,7 @@ int Screen::availLeft() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailLeft);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone has no window-server multi-monitor; available area starts at 0.
     return 0;
 #endif
 
@@ -146,6 +149,7 @@ int Screen::availTop() const
     if (!frame)
         return 0;
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone has no menu bar / window chrome; available area starts at 0.
     return 0;
 #endif
 
@@ -168,6 +172,7 @@ int Screen::availHeight() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailHeight);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone Safari fullscreen — availHeight matches screen.height.
     return 874;
 #endif
 
@@ -187,6 +192,7 @@ int Screen::availWidth() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailWidth);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-074: iPhone Safari fullscreen — availWidth matches screen.width.
     return 402;
 #endif
 

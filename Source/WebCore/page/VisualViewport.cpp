@@ -121,6 +121,7 @@ double VisualViewport::pageTop() const
 double VisualViewport::width() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-074: visualViewport.width = 402 matching iPhone 16 Pro CSS layout viewport.
     return 402;
 #else
     if (!frame())
@@ -134,6 +135,7 @@ double VisualViewport::width() const
 double VisualViewport::height() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-074: visualViewport.height = 714 (innerHeight; layout viewport with URL bar).
     return 714;
 #else
     if (!frame())

@@ -97,6 +97,7 @@ String NavigatorBase::appVersion() const
 String NavigatorBase::platform() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-072: navigator.platform returns "iPhone" matching iOS Safari archetype.
     return "iPhone"_s;
 #elif OS(LINUX)
     static NeverDestroyed<String> platformName = [] {
@@ -192,6 +193,7 @@ int NavigatorBase::hardwareConcurrency(ScriptExecutionContext& context)
     }
 
 #if PLATFORM(DRIFTSTACK)
+    // V-077 (Wave 1.6): iPhone navigator.hardwareConcurrency = 4 (A18 Pro).
     return 4;
 #endif
 
