@@ -299,6 +299,10 @@ bool screenHasInvertedColors()
 
 int screenDepth(Widget* widget)
 {
+#if PLATFORM(DRIFTSTACK)
+    UNUSED_PARAM(widget);
+    return 24;
+#else
     if (auto data = screenProperties(widget)) {
         ASSERT(data->screenDepth);
         return data->screenDepth;
@@ -306,10 +310,15 @@ int screenDepth(Widget* widget)
 
     ASSERT(hasProcessPrivilege(ProcessPrivilege::CanCommunicateWithWindowServer));
     return NSBitsPerPixelFromDepth(protect(screen(widget)).get().depth);
+#endif
 }
 
 int screenDepthPerComponent(Widget* widget)
 {
+#if PLATFORM(DRIFTSTACK)
+    UNUSED_PARAM(widget);
+    return 8;
+#else
     if (auto data = screenProperties(widget)) {
         ASSERT(data->screenDepthPerComponent);
         return data->screenDepthPerComponent;
