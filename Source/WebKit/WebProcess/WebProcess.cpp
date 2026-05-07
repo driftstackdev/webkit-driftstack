@@ -618,8 +618,17 @@ void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters,
     if (!parameters.overrideLanguages.isEmpty()) {
         LOG_WITH_STREAM(Language, stream << "Web Process initialization is setting overrideLanguages: " << parameters.overrideLanguages);
         overrideUserPreferredLanguages(parameters.overrideLanguages);
-    } else
+    }
+#if PLATFORM(DRIFTSTACK)
+    else {
+        Vector<String> driftstackDefaultLanguages = { "en-US"_s };
+        LOG_WITH_STREAM(Language, stream << "PLATFORM(DRIFTSTACK): forcing default overrideLanguages = en-US to match iPhone Safari archetype");
+        overrideUserPreferredLanguages(driftstackDefaultLanguages);
+    }
+#else
+    else
         LOG(Language, "Web process initialization is not setting overrideLanguages");
+#endif
 
     m_textCheckerState = parameters.textCheckerState;
 
