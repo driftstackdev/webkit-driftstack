@@ -33,6 +33,22 @@
 #include "config.h"
 #include "CanvasRenderingContext2DBase.h"
 
+#if PLATFORM(DRIFTSTACK)
+// V-373 Driftstack canvas-fp getImageData substitution. Forward
+// declarations here (rather than including the header from
+// Source/WebCore/html/) avoid cross-directory header-search-path
+// issues; symbols are defined in
+// Source/WebCore/html/DriftstackCanvasFingerprint10xRGBA.mm.
+#include <cstdint>
+#include <span>
+#include <wtf/Logging.h>
+namespace WTF { class String; }
+namespace WebCore { namespace Driftstack {
+bool isCanvasFp10xOverrideEnabled();
+bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& lastFillText, std::span<const uint8_t>& outRGBA);
+} }
+#endif
+
 #include "BitmapImage.h"
 #include "ContainerNodeInlines.h"
 #include "CSSFontSelector.h"
@@ -2655,6 +2671,34 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         if (auto imageData = makeImageDataIfContentsCached(imageDataRect, computedColorSpace))
             return imageData.releaseNonNull();
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // V-373 (Gap 1 closure 2026-05-07): mirror V-185/V-241 toDataURL
+    // canvas-fp dispatch on the getImageData readback path. CreepJS,
+    // FingerprintJS Pro, and browserleaks /canvas hash via getImageData
+    // alongside or instead of toDataURL; V-185 substituting only the
+    // toDataURL path leaves getImageData emitting Mac CG bytes (per
+    // V-372 Gap 1 finding). Substitute the decoded RGBA from the
+    // existing override table when (sx, sy) == (0, 0), the requested
+    // rect spans the whole canvas backing store, output format is
+    // RGBA8Unorm, and the canvas state matches a V-185 entry.
+    if (Driftstack::isCanvasFp10xOverrideEnabled()
+        && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
+        && sx == 0 && sy == 0
+        && sw > 0 && sh > 0
+        && static_cast<unsigned>(sw) == canvasBase().width()
+        && static_cast<unsigned>(sh) == canvasBase().height()) {
+        std::span<const uint8_t> rgba;
+        if (Driftstack::getCanvasFp10xRGBAForCanvasState(sw, sh, canvasBase().lastFillTextForDispatch(), rgba)) {
+            WTFLogAlways("[Driftstack-V373] canvas-fp getImageData substitution FIRED (%dx%d RGBA, lastFillText=%u chars)",
+                sw, sh, static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
+            PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
+            IntSize substSize { sw, sh };
+            if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, rgba))
+                return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+        }
+    }
+#endif
 
     RefPtr<ImageBuffer> buffer = canvasBase().makeRenderingResultsAvailable();
     if (!buffer)

@@ -119,6 +119,13 @@ public:
 
     bool postProcessPixelBufferResults(Ref<PixelBuffer>&&) const;
     void recordLastFillText(const String&);
+#if PLATFORM(DRIFTSTACK)
+    // V-373 (Gap 1 closure): public accessor so non-derived call sites
+    // (CanvasRenderingContext2DBase::getImageData) can dispatch on the
+    // V-185/V-241 lookup keys. The protected accessor below remains for
+    // existing call sites in HTMLCanvasElement (V-185 toDataURL path).
+    String lastFillTextForDispatch() const { return lastFillText(); }
+#endif
 
     void setNoiseInjectionSalt(NoiseInjectionHashSalt salt) { m_canvasNoiseHashSalt = salt; }
     bool havePendingCanvasNoiseInjection() const { return m_canvasNoiseInjection.haveDirtyRects(); }
