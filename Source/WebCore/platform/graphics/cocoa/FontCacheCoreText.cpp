@@ -1146,6 +1146,29 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
     if (fontDescription.shouldAllowUserInstalledFonts() == AllowUserInstalledFonts::No)
         m_seenFamiliesForPrewarming.add(FontCascadeDescription::foldedFamilyName(family));
 
+#if PLATFORM(DRIFTSTACK)
+    // V-405-B Phase 1 Stage B audit (founder Tier-2 ack 2026-05-07): when
+    // DRIFTSTACK_FONT_AUDIT=1, log every (requested-family → resolved-CTFont)
+    // mapping. Audit goal: verify V-405 fuzzer text probes hit Stage B iOS
+    // fonts (e.g., /System/Library/PrivateFrameworks/.../Helvetica.ttc) vs
+    // Mac default fonts (/System/Library/Fonts/...). Mismatch = font-loading
+    // divergence at FontCache level → Stage B not winning against Mac defaults.
+    static bool fontAuditEnabled = []() {
+        return getenv("DRIFTSTACK_FONT_AUDIT") != nullptr;
+    }();
+    if (fontAuditEnabled) {
+        auto url = adoptCF(static_cast<CFURLRef>(CTFontCopyAttribute(font.get(), kCTFontURLAttribute)));
+        auto postScriptName = adoptCF(CTFontCopyPostScriptName(font.get()));
+        auto urlString = url ? adoptCF(CFURLCopyPath(url.get())) : RetainPtr<CFStringRef>();
+        WTFLogAlways("DRIFTSTACK_FONT_AUDIT requested='%s' size=%.1f weight=%.0f resolved_ps='%s' resolved_url='%s'",
+            family.string().utf8().data(),
+            static_cast<float>(size),
+            static_cast<float>(fontDescription.weight()),
+            postScriptName ? String(postScriptName.get()).utf8().data() : "null",
+            urlString ? String(urlString.get()).utf8().data() : "null");
+    }
+#endif
+
     auto [syntheticBold, syntheticOblique] = computeNecessarySynthesis(font.get(), fontDescription, options).boldObliquePair();
 
     FontPlatformData platformData(font.get(), size, syntheticBold, syntheticOblique, fontDescription.orientation(), fontDescription.widthVariant(), fontDescription.textRenderingMode());
