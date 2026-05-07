@@ -33,6 +33,15 @@
 #include "ExceptionOr.h"
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(DRIFTSTACK)
+#include "BaseAudioContext.h"
+#include "DriftstackRealtimeAnalyserOverride.h"
+#include <JavaScriptCore/Float32Array.h>
+#include <JavaScriptCore/Uint8Array.h>
+#include <wtf/Logging.h>
+#include <wtf/StdLibExtras.h>
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(AnalyserNode);
@@ -191,6 +200,75 @@ double AnalyserNode::tailTime() const
 {
     return RealtimeAnalyser::MaxFFTSize / static_cast<double>(context().sampleRate());
 }
+
+#if PLATFORM(DRIFTSTACK)
+
+// V-374 (Gap 2 closure 2026-05-07): substitute iPhone-canonical
+// realtime AnalyserNode bytes for canonical fingerprint topologies
+// (FPJS open-source v3, CreepJS, FPJS Pro variant, biquad-lowpass)
+// before falling through to the native RealtimeAnalyser compute path.
+//
+// Dispatch keys: (sampleRate, fftSize). Vendors typically use distinct
+// fftSize values per topology so collision domain is small. Founder
+// architectural rationale 2026-05-07: substitution-at-hook means fork
+// never runs native FFT compute when atlas hits → bit-identical to
+// iOS 18.6 reference output regardless of fork's WebKit 625.x pipeline.
+//
+// Gate: DRIFTSTACK_REALTIME_ANALYSER_OVERRIDE env var (read at static
+// init in WebContent process). Fall through silently when env unset
+// (default behaviour preserved).
+
+template<typename ArrayType, typename ElementType>
+static bool driftstackSubstituteAnalyserData(BaseAudioContext& context, RealtimeAnalyser& analyser, ArrayType& destinationArray, Driftstack::AnalyserBufferKind kind, const char* probeName)
+{
+    if (!Driftstack::isRealtimeAnalyserOverrideEnabled())
+        return false;
+    uint32_t sampleRate = static_cast<uint32_t>(context.sampleRate());
+    uint32_t fftSize = analyser.fftSize();
+    std::span<const uint8_t> overrideBytes;
+    if (!Driftstack::getRealtimeAnalyserOverrideBytes(sampleRate, fftSize, kind, overrideBytes))
+        return false;
+
+    size_t destByteCount = destinationArray.length() * sizeof(ElementType);
+    size_t copyBytes = std::min(destByteCount, overrideBytes.size());
+    if (!copyBytes)
+        return false;
+    auto destByteSpan = asMutableByteSpan(destinationArray.mutableSpan());
+    memcpySpan(destByteSpan.first(copyBytes), overrideBytes.first(copyBytes));
+    WTFLogAlways("[Driftstack-V374] AnalyserNode %s substitution FIRED (sampleRate=%u, fftSize=%u, bytes=%zu)",
+        probeName, sampleRate, fftSize, copyBytes);
+    return true;
+}
+
+void AnalyserNode::getFloatFrequencyData(const Ref<JSC::Float32Array>& array)
+{
+    if (driftstackSubstituteAnalyserData<JSC::Float32Array, float>(context(), m_analyser, array.get(), Driftstack::AnalyserBufferKind::FloatFrequency, "getFloatFrequencyData"))
+        return;
+    m_analyser.getFloatFrequencyData(array.get());
+}
+
+void AnalyserNode::getByteFrequencyData(const Ref<JSC::Uint8Array>& array)
+{
+    if (driftstackSubstituteAnalyserData<JSC::Uint8Array, uint8_t>(context(), m_analyser, array.get(), Driftstack::AnalyserBufferKind::ByteFrequency, "getByteFrequencyData"))
+        return;
+    m_analyser.getByteFrequencyData(array.get());
+}
+
+void AnalyserNode::getFloatTimeDomainData(const Ref<JSC::Float32Array>& array)
+{
+    if (driftstackSubstituteAnalyserData<JSC::Float32Array, float>(context(), m_analyser, array.get(), Driftstack::AnalyserBufferKind::FloatTimeDomain, "getFloatTimeDomainData"))
+        return;
+    m_analyser.getFloatTimeDomainData(array.get());
+}
+
+void AnalyserNode::getByteTimeDomainData(const Ref<JSC::Uint8Array>& array)
+{
+    if (driftstackSubstituteAnalyserData<JSC::Uint8Array, uint8_t>(context(), m_analyser, array.get(), Driftstack::AnalyserBufferKind::ByteTimeDomain, "getByteTimeDomainData"))
+        return;
+    m_analyser.getByteTimeDomainData(array.get());
+}
+
+#endif // PLATFORM(DRIFTSTACK)
 
 } // namespace WebCore
 

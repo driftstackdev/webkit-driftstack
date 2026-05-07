@@ -453,6 +453,7 @@ platform/graphics/cocoa/CMUtilities.mm @nonARC @no-unify
 platform/graphics/cocoa/ColorCocoa.mm @nonARC
 platform/graphics/cocoa/CVPixelBufferUtilities.cpp
 html/DriftstackCanvasFingerprint10xRGBA.mm @nonARC
+Modules/webaudio/DriftstackRealtimeAnalyserOverride.mm @nonARC
 platform/graphics/cocoa/DriftstackAsciiAtlas.mm @nonARC
 platform/graphics/cocoa/DriftstackAudioAtlas.mm @nonARC
 platform/graphics/cocoa/DriftstackCompositeAtlas.mm @nonARC

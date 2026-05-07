@@ -54,10 +54,21 @@ public:
     ExceptionOr<void> setSmoothingTimeConstant(double);
     double smoothingTimeConstant() const { return m_analyser.smoothingTimeConstant(); }
 
+#if PLATFORM(DRIFTSTACK)
+    // V-374 (Gap 2 closure): out-of-line dispatch so substitution can
+    // consult the V-374 override table at the AnalyserNode level
+    // (where sampleRate is reachable via context().sampleRate()) before
+    // forwarding to the upstream RealtimeAnalyser readback compute.
+    void getFloatFrequencyData(const Ref<JSC::Float32Array>& array);
+    void getByteFrequencyData(const Ref<JSC::Uint8Array>& array);
+    void getFloatTimeDomainData(const Ref<JSC::Float32Array>& array);
+    void getByteTimeDomainData(const Ref<JSC::Uint8Array>& array);
+#else
     void getFloatFrequencyData(const Ref<JSC::Float32Array>& array) { m_analyser.getFloatFrequencyData(array.get()); }
     void getByteFrequencyData(const Ref<JSC::Uint8Array>& array) { m_analyser.getByteFrequencyData(array.get()); }
     void getFloatTimeDomainData(const Ref<JSC::Float32Array>& array) { m_analyser.getFloatTimeDomainData(array.get()); }
     void getByteTimeDomainData(const Ref<JSC::Uint8Array>& array) { m_analyser.getByteTimeDomainData(array.get()); }
+#endif
 
 private:
     AnalyserNode(BaseAudioContext&);
