@@ -201,6 +201,7 @@ static float deviceScaleFactor(const FeatureEvaluationContext& context)
     auto mediaType = protect(frame->view())->mediaType();
 
 #if PLATFORM(DRIFTSTACK)
+    // V-075: iPhone 16 Pro Super Retina XDR — devicePixelRatio = 3.0.
     if (mediaType == screenAtom())
         return 3.0f;
 #endif
@@ -237,6 +238,7 @@ static const IdentifierSchema& anyHoverFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-072: iPhone has no hover support (touch-only); any-hover = None.
             (void)context;
             return MatchingIdentifiers { CSSValueNone };
 #else
@@ -259,6 +261,7 @@ static const IdentifierSchema& anyPointerFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-072: iPhone has touchscreen only — any-pointer = Coarse.
             (void)context;
             MatchingIdentifiers identifiers;
             identifiers.append(CSSValueCoarse);
@@ -357,6 +360,7 @@ static const LengthSchema& deviceHeightFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-074: device-height = iPhone 16 Pro screen.height (874).
             (void)context;
             return LayoutUnit { 874.0f };
 #else
@@ -388,6 +392,7 @@ static const LengthSchema& deviceWidthFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-074: device-width = iPhone 16 Pro screen.width (402).
             (void)context;
             return LayoutUnit { 402.0f };
 #else
@@ -471,6 +476,7 @@ static const IdentifierSchema& hoverFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-072: iPhone has no hover support — hover = None.
             (void)context;
             return MatchingIdentifiers { CSSValueNone };
 #else
@@ -539,11 +545,11 @@ static const IdentifierSchema& orientationFeatureSchema()
         MediaQueryDynamicDependency::Viewport,
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
-            (void)context;
-            // Driftstack archetype is iPhone in portrait orientation
-            // (matches Wave 1.5 screen.orientation.type = portrait-primary).
+            // V-076 (Wave 1.5): archetype is iPhone in portrait orientation.
+            // matches screen.orientation.type = portrait-primary.
             // MiniBrowser window may be landscape-sized but matchMedia
             // surface returns portrait.
+            (void)context;
             return MatchingIdentifiers { CSSValuePortrait };
 #else
             if (context.document->quirks().shouldPreventOrientationMediaQueryFromEvaluatingToLandscape())
@@ -567,6 +573,7 @@ static const IdentifierSchema& pointerFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
+            // V-072: iPhone primary pointing device is touchscreen — pointer = Coarse.
             (void)context;
             MatchingIdentifiers identifiers;
             identifiers.append(CSSValueCoarse);
