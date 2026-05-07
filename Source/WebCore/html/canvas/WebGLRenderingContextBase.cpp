@@ -28,6 +28,12 @@
 
 #if ENABLE(WEBGL)
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackWebGLReadPixelsOverride.h"
+#include <wtf/Logging.h>
+#include <wtf/StdLibExtras.h>
+#endif
+
 #include "ANGLEInstancedArrays.h"
 #include "BitmapImage.h"
 #include "CachedImage.h"
@@ -3030,6 +3036,37 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
     clearIfComposited(CallerTypeOther);
     auto data = pixels.mutableSpan().subspan(packSizes->initialSkipBytes, packSizes->imageBytes);
     const bool packReverseRowOrder = false;
+#if PLATFORM(DRIFTSTACK)
+    // V-375 (Gap 3 closure 2026-05-07): substitute iPhone-canonical
+    // RGBA bytes for canonical WebGL fingerprinting probe shapes
+    // before the native graphicsContextGL readPixels. Vendors that
+    // hash full-canvas readPixels output (browserleaks /webgl, FPJS
+    // WebGL hash, CreepJS WebGL probe) bypass V-185 toDataURL
+    // dispatch entirely; V-375 closes that bypass at the readPixels
+    // entry. Gate: full-canvas (x=y=0, w=drawingBufferWidth,
+    // h=drawingBufferHeight) + table hit on (w, h, format, type).
+    if (Driftstack::isWebGLReadPixelsOverrideEnabled()
+        && rect.x() == 0 && rect.y() == 0
+        && rect.width() > 0 && rect.height() > 0
+        && rect.width() == drawingBufferWidth()
+        && rect.height() == drawingBufferHeight()) {
+        std::span<const uint8_t> overrideBytes;
+        if (Driftstack::getWebGLReadPixelsOverrideBytes(
+                static_cast<uint32_t>(rect.width()),
+                static_cast<uint32_t>(rect.height()),
+                static_cast<uint32_t>(format),
+                static_cast<uint32_t>(type),
+                overrideBytes)) {
+            size_t copyBytes = std::min(data.size_bytes(), overrideBytes.size());
+            if (copyBytes) {
+                memcpySpan(data.first(copyBytes), overrideBytes.first(copyBytes));
+                WTFLogAlways("[Driftstack-V375] WebGL readPixels substitution FIRED (%dx%d format=0x%x type=0x%x bytes=%zu)",
+                    rect.width(), rect.height(), static_cast<unsigned>(format), static_cast<unsigned>(type), copyBytes);
+                return;
+            }
+        }
+    }
+#endif
     graphicsContextGL()->readPixels(rect, format, type, data, m_packParameters.alignment, m_packParameters.rowLength, packReverseRowOrder);
 }
 
