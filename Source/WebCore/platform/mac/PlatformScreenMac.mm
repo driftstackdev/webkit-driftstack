@@ -300,6 +300,8 @@ bool screenHasInvertedColors()
 int screenDepth(Widget* widget)
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-412: Mac NSBitsPerPixelFromDepth typically returns 32 on Apple Silicon;
+    // iPhone iOS hardcodes 24 (rdar://9378829). Match iPhone for screen.colorDepth.
     UNUSED_PARAM(widget);
     return 24;
 #else

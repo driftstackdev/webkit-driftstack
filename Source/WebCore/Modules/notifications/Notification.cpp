@@ -400,6 +400,7 @@ auto Notification::permission(ScriptExecutionContext& context) -> Permission
         return Permission::Denied;
 
 #if PLATFORM(DRIFTSTACK)
+    // V-205 Bug 3 / Wave 1.7: iPhone Safari archetype Notification.permission='denied'.
     return Permission::Denied;
 #endif
 

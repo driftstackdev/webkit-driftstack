@@ -95,6 +95,7 @@ const String& Navigator::userAgent() const
         ResourceLoadObserver::singleton().logNavigatorAPIAccessed(*protect(frame->document()), NavigatorAPIsAccessed::UserAgent);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-202 / Wave 1.2: hardcoded iPhone 16 Pro / iOS 18.7 / Safari 26.4 UA.
     static NeverDestroyed<String> driftstackDefaultUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
     return driftstackDefaultUA.get();
 #endif

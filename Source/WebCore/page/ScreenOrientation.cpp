@@ -180,6 +180,7 @@ ExceptionOr<void> ScreenOrientation::unlock()
 auto ScreenOrientation::type() const -> Type
 {
 #if PLATFORM(DRIFTSTACK)
+    // V-076 (Wave 1.5): iPhone archetype is portrait-primary by default.
     return Type::PortraitPrimary;
 #endif
     RefPtr manager = this->manager();

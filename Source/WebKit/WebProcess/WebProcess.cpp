@@ -621,6 +621,9 @@ void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters,
     }
 #if PLATFORM(DRIFTSTACK)
     else {
+        // V-413: force en-US default when no harness override supplied (e.g.,
+        // MiniBrowser dev launches). Matches iPhone Safari archetype
+        // navigator.language / navigator.languages = ['en-US'].
         Vector<String> driftstackDefaultLanguages = { "en-US"_s };
         LOG_WITH_STREAM(Language, stream << "PLATFORM(DRIFTSTACK): forcing default overrideLanguages = en-US to match iPhone Safari archetype");
         overrideUserPreferredLanguages(driftstackDefaultLanguages);
