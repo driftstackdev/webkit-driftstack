@@ -345,7 +345,19 @@ bool defaultBuiltInNotificationsEnabled()
 #if ENABLE(DEVICE_ORIENTATION)
 SUPPRESS_NODELETE bool defaultDeviceOrientationPermissionAPIEnabled()
 {
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(DRIFTSTACK)
+    // V-392-A (2026-05-07): expose DeviceMotionEvent.requestPermission +
+    // DeviceOrientationEvent.requestPermission as functions. Vendors
+    // (CreepJS, FPJS, fingerprint vendors) check
+    // `typeof DeviceMotionEvent.requestPermission === 'function'` to
+    // detect iOS. Mac fork without this exposes Mac architecture.
+    // iPhone Safari exposes these as functions per W3C device-orientation
+    // spec; pre-permission they return Promise<'granted'|'denied'>.
+    // Fork has no actual sensors (IMPOSSIBLE-WITHOUT-HARDWARE per V-383),
+    // so requestPermission() will resolve 'denied' at runtime — the API
+    // surface needs to be present for vendor checks to pass.
+    return true;
+#elif PLATFORM(IOS_FAMILY)
     return linkedOnOrAfterSDKWithBehavior(SDKAlignedBehavior::SupportsDeviceOrientationAndMotionPermissionAPI);
 #else
     return false;
