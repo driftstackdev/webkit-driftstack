@@ -305,6 +305,17 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // Stage B audit moves Times from MAC_DEFAULT_FAIL → STAGE_B_PASS.
     else if (lowercase == "times"_s)
         lowercase = "times new roman"_s;
+    // V-521.A.2 (2026-05-08): Heiti SC/TC are legacy iOS CJK font families
+    // that browserleaks /fonts probe detects on iPhone (width 4292 for
+    // 'mmmmmmmmlli' test string). They alias to PingFang SC/TC equivalents
+    // on iPhone (Heiti was Apple's pre-PingFang Chinese system font;
+    // CTFontManager resolves Heiti requests to PingFang fallback). Fork
+    // mirrors that alias chain so /fonts probe detects Heiti SC/TC as
+    // installed (any width != monospace base = "detected" boolean).
+    else if (lowercase == "heiti sc"_s)
+        lowercase = "pingfang sc"_s;
+    else if (lowercase == "heiti tc"_s)
+        lowercase = "pingfang tc"_s;
     // V-098 Track 8: iOS system font (SFUI.ttf) registers under family
     // ".SF UI" via CoreText's platform-0 Unicode name (preferred over
     // the platform-3 'System Font' name). Empirical (V-099 cumulative):
