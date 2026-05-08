@@ -1396,6 +1396,16 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHebrewCluster(
         || lower.contains("sans"_s);
     if (!isSansSerifContext)
         return nullptr;
+    // V-490 ROLLBACK (V-491 empirical): adding `.sf hebrew` dot-prefix
+    // candidate to the lookup made Hebrew dispatch fire with SFHebrew.ttf,
+    // but its metrics regress sans-serif|hebrew ABBA (10.03 → 11.06; ref=10.015).
+    // Mac's default fallback for sans-serif Hebrew (which fires when Hebrew
+    // dispatch returns nullptr) is empirically closer to iPhone metrics than
+    // SFHebrew. Restored original 3-candidate list; sans-serif Hebrew
+    // remains 6/6 divergent but width/ABBA/ABBD deltas all SMALLER under
+    // Mac default than under .sf hebrew dispatch. Future investigation:
+    // identify which iOS font Safari ACTUALLY uses for sans-serif|Hebrew
+    // (possibly SF Pro Text's Hebrew character set, not SFHebrew.ttf).
     static const std::array<ASCIILiteral, 3> candidates {
         "sfhebrew"_s, "sf hebrew"_s, "applegothic"_s,
     };
