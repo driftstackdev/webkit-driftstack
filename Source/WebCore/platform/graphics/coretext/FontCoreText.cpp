@@ -439,6 +439,20 @@ void Font::platformInit()
     } else
         m_emojiType = NoEmojiGlyphs { };
 
+    // V-493 ROLLED BACK 2026-05-08 — empirically refuted (V-log V-2026-05-08-493).
+    // V-484 hypothesis (FontMetrics override family closes 32 complexScripts
+    // diffs) was wrong-layer. Pre-V-493 Mac CTFont infrastructure
+    // (CTFontGetAscent + kLineHeightAdjustment hack at line ~205) ALREADY
+    // produces iPhone-matching fontBoundingBoxAscent/Descent for the iOS
+    // Stage B fonts (Hiragino 14pt = 13/2; PingFang HK 14pt = 15/5; both
+    // matched iPhone canonical). V-493 forced raw hhea values, breaking 14
+    // previously-correct surfaces. V-220 already documented this exact
+    // failure mode. The 32 complexScripts residuals (actualBoundingBoxAscent/
+    // Descent + width per text run) are downstream of FontMetrics — likely
+    // in Font::platformBoundsForGlyph for complex-script glyphs or in the
+    // text shaping / glyph buffer construction layer. V-484 needs redesign
+    // at the correct layer; not landing FontMetrics override.
+
     m_fontMetrics.setUnitsPerEm(unitsPerEm);
     m_fontMetrics.setAscent(ascent);
     m_fontMetrics.setDescent(descent);
