@@ -1636,6 +1636,41 @@ FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
 #if PLATFORM(DRIFTSTACK)
     if (colorGlyphType(glyph) == ColorGlyphType::Color)
         return driftstackEmojiBboxForSize(m_platformData.size());
+
+    // V-484 redesign empirical PROBE — diagnostic-only, no behavioural change.
+    // Logs (font-family, glyph-id, point-size, bounds) for iOS Stage B
+    // complex-script fonts at canonical probe sizes. Output feeds layer
+    // identification for V-484 redesign (per-glyph clamp vs TextMetrics
+    // substitution vs glyph-buffer construction). Gated by env var
+    // DRIFTSTACK_V484_PROBE=1 to keep production builds noise-free; the
+    // rig launcher /tmp/v481b-track7d-cumulative.sh sets this when active.
+    {
+        static const bool probeEnabled = []() {
+            const char* v = std::getenv("DRIFTSTACK_V484_PROBE");
+            return v && *v && *v != '0';
+        }();
+        if (probeEnabled) {
+            auto familyRef = adoptCF(CTFontCopyFamilyName(protect(ctFont()).get()));
+            if (familyRef) {
+                auto family = String(familyRef.get());
+                bool isTargetFamily =
+                       family == "PingFang SC"_s || family == "PingFang HK"_s
+                    || family == "PingFang TC"_s || family == "Hiragino Sans"_s
+                    || family == "Hiragino Mincho ProN"_s || family == "Hiragino Mincho Pro"_s
+                    || family == "Geeza Pro"_s || family == ".SF Hebrew"_s
+                    || family == ".SF Hebrew Rounded"_s || family == "Times"_s
+                    || family == "Times New Roman"_s || family == "serif"_s;
+                if (isTargetFamily) {
+                    static unsigned probeCount = 0;
+                    if (++probeCount <= 200) {
+                        WTFLogAlways("[Driftstack-V484-PROBE] family='%s' size=%.2f glyph=%u bounds={x=%.4f,y=%.4f,w=%.4f,h=%.4f}",
+                            family.utf8().data(), m_platformData.size(), glyph,
+                            boundingBox.x(), boundingBox.y(), boundingBox.width(), boundingBox.height());
+                    }
+                }
+            }
+        }
+    }
 #endif
 
     return boundingBox;
