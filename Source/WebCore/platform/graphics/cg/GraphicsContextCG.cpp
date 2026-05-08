@@ -853,13 +853,53 @@ void GraphicsContextCG::strokePath(const Path& path)
     if (strokePattern())
         applyStrokePattern();
 
-    if (auto line = path.singleDataLine()) {
+#if PLATFORM(DRIFTSTACK)
+    // V-505 Phase 3b.3 (post-V-504 strokeArc NULL EFFECT): rebuild Path with
+    // pixel-aligned endpoints. V-405 fuzzer genStrokes() generates 5-15
+    // moveTo+lineTo+stroke() per probe, all routed through this drawPathWithCGContext
+    // call (singleDataLine fast path skipped for >1 segment). V-471 anti-aliasing,
+    // V-472 strokeRect-bbox alignment, V-504 strokeArc-bbox alignment all NULL.
+    // Per V-452 §3b.3 "HIGH RISK" but V-405 fuzzer paths are line-only (no curves)
+    // so endpoint rounding is curve-safe in this scope. For QuadCurve / BezierCurve
+    // we round only the segment endpoint, keep control points unmodified for shape
+    // fidelity per V-452 design.
+    Path alignedPath;
+    path.applyElements([&](const PathElement& elem) {
+        auto roundPt = [&](const FloatPoint& p) -> FloatPoint {
+            FloatRect bbox(p.x(), p.y(), 0.0f, 0.0f);
+            FloatRect rounded = roundToDevicePixels(bbox);
+            return FloatPoint(rounded.x(), rounded.y());
+        };
+        switch (elem.type) {
+        case PathElement::Type::MoveToPoint:
+            alignedPath.moveTo(roundPt(elem.points[0]));
+            break;
+        case PathElement::Type::AddLineToPoint:
+            alignedPath.addLineTo(roundPt(elem.points[0]));
+            break;
+        case PathElement::Type::AddQuadCurveToPoint:
+            alignedPath.addQuadCurveTo(elem.points[0], roundPt(elem.points[1]));
+            break;
+        case PathElement::Type::AddCurveToPoint:
+            alignedPath.addBezierCurveTo(elem.points[0], elem.points[1], roundPt(elem.points[2]));
+            break;
+        case PathElement::Type::CloseSubpath:
+            alignedPath.closeSubpath();
+            break;
+        }
+    });
+    const Path& strokeInputPath = alignedPath;
+#else
+    const Path& strokeInputPath = path;
+#endif
+
+    if (auto line = strokeInputPath.singleDataLine()) {
         CGPoint cgPoints[2] { line->start(), line->end() };
         CGContextStrokeLineSegments(context, cgPoints, 2);
         return;
     }
 
-    drawPathWithCGContext(context, kCGPathStroke, path);
+    drawPathWithCGContext(context, kCGPathStroke, strokeInputPath);
 }
 
 void GraphicsContextCG::fillRect(const FloatRect& rect, RequiresClipToRect requiresClipToRect)
@@ -1384,9 +1424,27 @@ void GraphicsContextCG::strokeArc(const PathArc& arc)
         // V-405-A Phase 3a: parallel to strokePath() — force iPhone-equivalent
         // anti-aliasing for strokeArc. Same precision-drift profile rationale.
         CGContextSetShouldAntialias(context, true);
-#endif
+
+        // V-504 Phase 3b.2: pixel-align arc bbox (parallel to V-472 strokeRect
+        // 3b.1). Construct bbox from center±radius, round to device pixels,
+        // derive aligned center + radius. V-503 fuzzer measured Strokes 0%
+        // post-V-472 strokeRect alignment alone — most random stroke probes
+        // hit strokePath/strokeArc, not strokeRect. Per V-452 §3b.2 MEDIUM RISK
+        // (arc center may shift up to 0.5px / radius up to 1px).
+        FloatRect arcBBox(arc.center.x() - arc.radius, arc.center.y() - arc.radius,
+                          arc.radius * 2.0f, arc.radius * 2.0f);
+        FloatRect alignedBBox = roundToDevicePixels(arcBBox);
+        FloatPoint alignedCenter(alignedBBox.x() + alignedBBox.width() / 2.0f,
+                                 alignedBBox.y() + alignedBBox.height() / 2.0f);
+        float alignedRadius = alignedBBox.width() / 2.0f;
+        CGContextStrokeArc(context, alignedCenter.x(), alignedCenter.y(),
+                           alignedRadius, arc.startAngle, arc.endAngle,
+                           arc.direction == RotationDirection::Counterclockwise);
+        return;
+#else
         CGContextStrokeArc(context, arc.center.x(), arc.center.y(), arc.radius, arc.startAngle, arc.endAngle, arc.direction == RotationDirection::Counterclockwise);
         return;
+#endif
     }
 #endif
     GraphicsContext::strokeArc(arc);
