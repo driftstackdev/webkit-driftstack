@@ -691,10 +691,15 @@ void initV510AtlasOnce()
         return;
     state.initialized = true;
 
-    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas.bin";
+    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_audio_atlas/driftstack-canvas-fuzz-atlas.bin";
     constexpr size_t kHeaderBytes = 32;
     constexpr size_t kIndexEntryStride = 28;
 
+    // V-511 multi-archetype foundation: orchestrator sets DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
+    // explicitly per archetype (driftstack-canvas-fuzz-atlas-{archetype}.bin). WebKit
+    // dispatch reads single env var; archetype dispatch happens above the WebKit layer
+    // (harness / GUI / agent service per file 04 architecture). Avoids unsafe-buffer-usage
+    // path templating in C++ side.
     const char* envPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
     const char* path = envPath ? envPath : kDefaultPath;
 
