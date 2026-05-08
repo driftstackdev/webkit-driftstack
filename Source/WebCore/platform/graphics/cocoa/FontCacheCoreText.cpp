@@ -143,6 +143,8 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(fontURL.get()));
         if (!descs) {
             ++parseFailedCount;
+            // V-487: log which font binary CTFontManager failed to parse.
+            WTFLogAlways("[Driftstack-V487-PARSEFAIL] %s", fullPath.c_str());
             continue;
         }
         CFIndex count = CFArrayGetCount(descs.get());
@@ -246,6 +248,17 @@ static void initializeDriftstackIOSFontMapIfNeeded()
     size_t parseFailed = 0;
     driftstackWalkFontDir(root, driftstackIOSFontMap(), mapped, parseFailed);
     WTFLogAlways("[Driftstack] FontCache: %zu families mapped to iOS font binaries (parseFailed=%zu, dir=%s)", mapped, parseFailed, root.c_str());
+
+    // V-486 diagnostic: dump all registered family keys containing 'ping' (CJK
+    // PingFang) to identify the actual lowercase form for Track 7 D candidates.
+    {
+        auto& map = driftstackIOSFontMap();
+        for (auto it = map.begin(); it != map.end(); ++it) {
+            const String& key = it->key;
+            if (key.contains("ping"_s))
+                WTFLogAlways("[Driftstack-V486-PINGFANG] registered family key='%s' variants=%zu", key.utf8().data(), it->value.size());
+        }
+    }
 }
 
 static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, const FontDescription& fontDescription, float size)
@@ -1279,6 +1292,14 @@ static RetainPtr<CTFontRef> driftstackLookupIOSFontByCandidates(std::span<const 
     auto& map = driftstackIOSFontMap();
     for (auto candidate : candidates) {
         auto it = map.find(String(candidate));
+        // V-485 diagnostic: log every candidate lookup result.
+        {
+            static unsigned probeCount = 0;
+            if (++probeCount <= 12) {
+                WTFLogAlways("[Driftstack-V485-LOOKUP] candidate='%s' result=%s",
+                    candidate.characters(), it == map.end() ? "MISS" : "HIT");
+            }
+        }
         if (it == map.end())
             continue;
         const auto& variants = it->value;
@@ -1429,13 +1450,17 @@ static bool driftstackTrack7CandidateDEnabled()
 // check if the cluster contains Hiragana/Katakana → defer to Hiragino instead.
 static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cluster, const FontDescription& description, float size)
 {
-    // V-482 diagnostic probe — distinguish env-propagation vs candidate-list-miss hypotheses.
+    // V-485 diagnostic probe — capture EVERY entry, especially CJK Han clusters
+    // that V-482's probeCount<=3 limit may have hidden behind emoji surrogates.
     {
         static unsigned probeCount = 0;
-        if (++probeCount <= 3) {
+        char32_t cp = cluster.isEmpty() ? 0u : (unsigned)cluster[0];
+        // Always log if CJK Han range; otherwise sample first 5.
+        bool isCJKHan = (cp >= 0x4E00 && cp <= 0x9FFF);
+        if (isCJKHan || ++probeCount <= 5) {
             const char* env = getenv("DRIFTSTACK_TRACK7_CANDIDATE_D");
-            WTFLogAlways("[Driftstack-Track7d-CJK-PROBE] entered cluster=U+%04X env='%s'",
-                cluster.isEmpty() ? 0u : (unsigned)cluster[0], env ? env : "(null)");
+            WTFLogAlways("[Driftstack-V485-CJK-PROBE] entered cluster=U+%04X clusterLen=%u env='%s'%s",
+                (unsigned)cp, (unsigned)cluster.length(), env ? env : "(null)", isCJKHan ? " HAN" : "");
         }
     }
     if (!driftstackTrack7CandidateDEnabled())
@@ -1455,7 +1480,16 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
               || (cp >= 0x31350 && cp <= 0x323AF);
     if (!isCJK)
         return nullptr;
-    static const std::array<ASCIILiteral, 4> candidates {
+    // V-486 (V-485 empirical finding): iOS PingFang.ttc registers under
+    // dot-prefixed iOS-internal family names (kCTFontFamilyNameAttribute returns
+    // ".PingFang SC", ".PingFang HK", etc. — confirmed via mdls
+    // com_apple_ats_name_family attr on the .ttc file). Mac WebKit's public-name
+    // requests for "PingFang SC" miss because the dot-prefix variant is what's
+    // actually registered. List the dot-prefixed names first; non-dot variants
+    // retained as defensive fallback in case future iOS versions normalize.
+    static const std::array<ASCIILiteral, 6> candidates {
+        ".pingfang sc"_s,
+        ".pingfang"_s,
         "pingfang sc"_s,
         "pingfangsc"_s,
         "ping fang sc"_s,
