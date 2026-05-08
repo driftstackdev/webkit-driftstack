@@ -1291,7 +1291,7 @@ void GraphicsContextCG::clearRect(const FloatRect& r)
     CGContextClearRect(platformContext(), r);
 }
 
-void GraphicsContextCG::strokeRect(const FloatRect& rect, float lineWidth)
+void GraphicsContextCG::strokeRect(const FloatRect& inputRect, float lineWidth)
 {
     CGContextRef context = platformContext();
 
@@ -1299,6 +1299,16 @@ void GraphicsContextCG::strokeRect(const FloatRect& rect, float lineWidth)
     // V-405-A Phase 3a: parallel to strokePath() — force iPhone-equivalent
     // anti-aliasing for strokeRect. Same precision-drift profile rationale.
     CGContextSetShouldAntialias(context, true);
+
+    // V-472 Phase 3b.1 (post-V-471 NULL EFFECT empirical signal):
+    // pixel-align rectangle bounds at strokeRect entry. V-471 fuzzer
+    // showed Phase 3a anti-aliasing alone had 0% impact (precision-
+    // drift profile per V-441 byte-delta-profile auto-memory; sub-
+    // mechanism is NOT anti-aliasing). Trying pixel-aligned positioning
+    // next sub-mechanism per V-452 design 3b.1 ranked LOW RISK.
+    FloatRect rect = roundToDevicePixels(inputRect);
+#else
+    const FloatRect& rect = inputRect;
 #endif
 
     if (RefPtr strokeGradient = this->strokeGradient()) {
