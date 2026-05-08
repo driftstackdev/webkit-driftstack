@@ -109,15 +109,32 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
     if (!dir)
         return;
 
+    // V-520.G (2026-05-08) — read all entries into a Vector + sort by name,
+    // then iterate in sorted order. readdir() returns entries in filesystem
+    // (inode) order on macOS APFS, which is NON-DETERMINISTIC across
+    // processes. CTFontManagerRegisterFontsForURL() invocation order
+    // affects subsequent text rendering — V-520.E/F empirically proved
+    // text rasterization across two back-to-back fork processes was 0%
+    // bit-identical with Stage B ON, vs 100% bit-identical with Stage B
+    // OFF. Sorted enumeration → deterministic text rasterization across
+    // processes → V-507 sha-keyed atlas dispatch reliable for text path.
+    struct DirEntry { String name; bool isDir; };
+    Vector<DirEntry> entries;
     while (struct dirent* entry = readdir(dir)) {
         if (entry->d_name[0] == '.')
             continue;
-        // Use WTF::String for safe extension comparison (avoids -Wunsafe-buffer-usage
-        // -in-libc-call from strlen/strcasecmp/etc.).
         String name = String::fromUTF8(unsafeSpan(entry->d_name));
+        entries.append({ WTF::move(name), entry->d_type == DT_DIR });
+    }
+    std::sort(entries.begin(), entries.end(), [](const DirEntry& a, const DirEntry& b) {
+        return codePointCompare(a.name, b.name) < 0;
+    });
+
+    for (const auto& entry : entries) {
+        const String& name = entry.name;
         std::string fullPath = root + "/" + name.utf8().data();
 
-        if (entry->d_type == DT_DIR) {
+        if (entry.isDir) {
             driftstackWalkFontDir(fullPath, map, mappedCount, parseFailedCount);
             continue;
         }
