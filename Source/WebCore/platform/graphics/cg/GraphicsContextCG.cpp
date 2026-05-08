@@ -814,6 +814,13 @@ void GraphicsContextCG::strokePath(const Path& path)
             auto layer = adoptCF(CGLayerCreateWithContext(context, layerSize, 0));
             CGContextRef layerContext = CGLayerGetContext(layer.get());
             CGContextSetLineWidth(layerContext, lineWidth);
+#if PLATFORM(DRIFTSTACK)
+            // V-446 (V-405-A Phase 3a extension): the CGLayer-wrapped stroke
+            // path creates a separate layerContext. Force iPhone-equivalent
+            // anti-aliasing on it too — CGLayer-spawned contexts may inherit
+            // a different default than the parent context.
+            CGContextSetShouldAntialias(layerContext, true);
+#endif
 
             // Compensate for the line width, otherwise the layer's top-left corner would be
             // aligned with the rect's top-left corner. This would result in leaving pixels out of
@@ -1305,6 +1312,11 @@ void GraphicsContextCG::strokeRect(const FloatRect& rect, float lineWidth)
 
             CGContextRef layerContext = CGLayerGetContext(layer.get());
             CGContextSetLineWidth(layerContext, lineWidth);
+#if PLATFORM(DRIFTSTACK)
+            // V-446 (V-405-A Phase 3a extension): same iPhone-equivalent
+            // anti-aliasing alignment for strokeRect's CGLayer path.
+            CGContextSetShouldAntialias(layerContext, true);
+#endif
 
             // Compensate for the line width, otherwise the layer's top-left corner would be
             // aligned with the rect's top-left corner. This would result in leaving pixels out of
