@@ -1429,6 +1429,15 @@ static bool driftstackTrack7CandidateDEnabled()
 // check if the cluster contains Hiragana/Katakana → defer to Hiragino instead.
 static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cluster, const FontDescription& description, float size)
 {
+    // V-482 diagnostic probe — distinguish env-propagation vs candidate-list-miss hypotheses.
+    {
+        static unsigned probeCount = 0;
+        if (++probeCount <= 3) {
+            const char* env = getenv("DRIFTSTACK_TRACK7_CANDIDATE_D");
+            WTFLogAlways("[Driftstack-Track7d-CJK-PROBE] entered cluster=U+%04X env='%s'",
+                cluster.isEmpty() ? 0u : (unsigned)cluster[0], env ? env : "(null)");
+        }
+    }
     if (!driftstackTrack7CandidateDEnabled())
         return nullptr;
     if (cluster.isEmpty())
