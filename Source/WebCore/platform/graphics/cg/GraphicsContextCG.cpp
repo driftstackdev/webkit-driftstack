@@ -787,6 +787,20 @@ void GraphicsContextCG::strokePath(const Path& path)
 
     CGContextRef context = platformContext();
 
+#if PLATFORM(DRIFTSTACK)
+    // V-405-A Phase 3a: force iPhone-equivalent anti-aliasing default for
+    // stroke rasterization. Mac and iPhone both default kCGContextShouldAntialias
+    // to ON for arbitrary CGContexts, but the propagation through CTM transforms,
+    // clip paths, and CGLayer-wrapped strokes (gradient + dropShadow path above)
+    // may diverge. Empirical signature (V-429-DEEP avg 44-byte byteCount delta
+    // / 96.2% structural / max +360) classifies this as precision-drift profile,
+    // matching the class V-429 Phase 3 was designed for. Forcing-true here is a
+    // no-op when CG default is already ON (which is the Mac-stroke-default case
+    // observed); aligns iPhone-equivalent if ANY upstream call toggled it OFF.
+    // Verification gated on next WebKit rebuild + V-405 fuzzer rerun.
+    CGContextSetShouldAntialias(context, true);
+#endif
+
     if (RefPtr strokeGradient = this->strokeGradient()) {
         if (hasDropShadow()) {
             FloatRect rect = path.fastBoundingRect();
@@ -1274,6 +1288,12 @@ void GraphicsContextCG::strokeRect(const FloatRect& rect, float lineWidth)
 {
     CGContextRef context = platformContext();
 
+#if PLATFORM(DRIFTSTACK)
+    // V-405-A Phase 3a: parallel to strokePath() — force iPhone-equivalent
+    // anti-aliasing for strokeRect. Same precision-drift profile rationale.
+    CGContextSetShouldAntialias(context, true);
+#endif
+
     if (RefPtr strokeGradient = this->strokeGradient()) {
         if (hasDropShadow()) {
             const float doubleLineWidth = lineWidth * 2;
@@ -1338,6 +1358,11 @@ void GraphicsContextCG::strokeArc(const PathArc& arc)
             applyStrokePattern();
 
         CGContextRef context = platformContext();
+#if PLATFORM(DRIFTSTACK)
+        // V-405-A Phase 3a: parallel to strokePath() — force iPhone-equivalent
+        // anti-aliasing for strokeArc. Same precision-drift profile rationale.
+        CGContextSetShouldAntialias(context, true);
+#endif
         CGContextStrokeArc(context, arc.center.x(), arc.center.y(), arc.radius, arc.startAngle, arc.endAngle, arc.direction == RotationDirection::Counterclockwise);
         return;
     }
