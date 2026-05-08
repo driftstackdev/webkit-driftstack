@@ -267,6 +267,14 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
         || lowercase == "plantagenet cherokee"_s
         || lowercase == "gurmukhi mn"_s)
         lowercase = "helvetica"_s;
+    // V-479 Times-family alias (V-442 TRIGGER C closure 2026-05-08):
+    // iOS Stage B install ships TimesNewRoman.ttf, registered under
+    // family 'times new roman'. Mac CSS and CT_FONT_NAME 'Times'
+    // doesn't directly map to it. iPhone resolves CSS 'Times' to
+    // TimesNewRoman.ttf via family alias; mirror that here so V-442
+    // Stage B audit moves Times from MAC_DEFAULT_FAIL → STAGE_B_PASS.
+    else if (lowercase == "times"_s)
+        lowercase = "times new roman"_s;
     // V-098 Track 8: iOS system font (SFUI.ttf) registers under family
     // ".SF UI" via CoreText's platform-0 Unicode name (preferred over
     // the platform-3 'System Font' name). Empirical (V-099 cumulative):
