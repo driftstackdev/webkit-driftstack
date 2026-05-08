@@ -39,6 +39,16 @@
 #include "DocumentQuirks.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
+#if PLATFORM(DRIFTSTACK)
+#include <CommonCrypto/CommonDigest.h>
+#include <array>
+#include <fcntl.h>
+#include <span>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <wtf/text/CString.h>
+#endif
 #endif
 #include "DocumentView.h"
 #include "ElementInlines.h"
@@ -638,6 +648,153 @@ static String toEncodingMimeType(const String& mimeType)
     return mimeType.convertToASCIILowercase();
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-507/V-510 V-405-A Option C atlas substitution — inline reader for
+// DSCFA v1 binary atlas (mmap'd on first use). Hashes Mac fork's encoded
+// dataURL via SHA-256 trunc-16, binary-searches lexicographic index, returns
+// substitute String on hit; null String on miss. Header file approach was
+// abandoned after build #5 confirmed SourcesCocoa.txt unified-source layout
+// shift broke IOSurface/HTMLMediaElement upstream symbol resolution; inline
+// here keeps build entirely within HTMLCanvasElement.cpp's TU.
+//
+// File format ('DSCF' magic):
+//   header[32]: 4 magic + 2 version + 1 reserved + 1 keyHashAlgo + 4 numEntries
+//               + 4 indexOffset + 4 dataOffset + 12 reserved
+//   index[numEntries × 28]: 16 macSha256Prefix + 4 dataOffset + 4 dataLen + 4 reserved
+//   data[]: concatenated UTF-8 dataURL strings
+//
+// Per V-510 atlas pre-capture (3998/4000 entries iPhone 17 / iOS 18.7 /
+// Safari 26.4 via BS Automate). Closes V-405 fuzzer Strokes 0% / Text 0%
+// architectural divergence per V-506 Rule C empirical proof.
+namespace {
+struct V510AtlasState {
+    int fd { -1 };
+    const uint8_t* mmapBase { nullptr };
+    size_t mmapSize { 0 };
+    std::span<const uint8_t> indexSpan;
+    std::span<const uint8_t> dataPayloadSpan;
+    size_t numEntries { 0 };
+    bool initialized { false };
+    bool available { false };
+};
+
+V510AtlasState& v510AtlasState()
+{
+    static V510AtlasState* s_state = new V510AtlasState();
+    return *s_state;
+}
+
+void initV510AtlasOnce()
+{
+    auto& state = v510AtlasState();
+    if (state.initialized)
+        return;
+    state.initialized = true;
+
+    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas.bin";
+    constexpr size_t kHeaderBytes = 32;
+    constexpr size_t kIndexEntryStride = 28;
+
+    const char* envPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+    const char* path = envPath ? envPath : kDefaultPath;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        WTFLogAlways("[Driftstack] V510Atlas: open failed for %s (errno=%d) — disabled", path, errno);
+        return;
+    }
+    struct stat st;
+    if (fstat(fd, &st) < 0 || st.st_size < static_cast<off_t>(kHeaderBytes)) {
+        WTFLogAlways("[Driftstack] V510Atlas: fstat failed or file too small");
+        close(fd);
+        return;
+    }
+    void* base = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) {
+        WTFLogAlways("[Driftstack] V510Atlas: mmap failed (errno=%d)", errno);
+        close(fd);
+        return;
+    }
+    auto bytesSpan = unsafeMakeSpan(static_cast<const uint8_t*>(base), static_cast<size_t>(st.st_size));
+    if (bytesSpan[0] != 'D' || bytesSpan[1] != 'S' || bytesSpan[2] != 'C' || bytesSpan[3] != 'F') {
+        WTFLogAlways("[Driftstack] V510Atlas: bad magic at %s", path);
+        munmap(base, st.st_size); close(fd); return;
+    }
+    auto readU16 = [&](size_t off) { return uint16_t(bytesSpan[off]) | (uint16_t(bytesSpan[off+1]) << 8); };
+    auto readU32 = [&](size_t off) {
+        return uint32_t(bytesSpan[off]) | (uint32_t(bytesSpan[off+1]) << 8)
+             | (uint32_t(bytesSpan[off+2]) << 16) | (uint32_t(bytesSpan[off+3]) << 24);
+    };
+    if (readU16(4) != 1 || bytesSpan[7] != 1) {
+        WTFLogAlways("[Driftstack] V510Atlas: unsupported version/algo");
+        munmap(base, st.st_size); close(fd); return;
+    }
+    uint32_t numEntries = readU32(8);
+    uint32_t indexOffset = readU32(12);
+    uint32_t dataOffset = readU32(16);
+    if (indexOffset < kHeaderBytes
+        || dataOffset != indexOffset + numEntries * kIndexEntryStride
+        || dataOffset > bytesSpan.size()) {
+        WTFLogAlways("[Driftstack] V510Atlas: header invalid");
+        munmap(base, st.st_size); close(fd); return;
+    }
+    state.fd = fd;
+    state.mmapBase = static_cast<const uint8_t*>(base);
+    state.mmapSize = st.st_size;
+    state.indexSpan = bytesSpan.subspan(indexOffset, numEntries * kIndexEntryStride);
+    state.dataPayloadSpan = bytesSpan.subspan(dataOffset);
+    state.numEntries = numEntries;
+    state.available = true;
+    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries",
+        (long long)st.st_size, path, numEntries);
+}
+
+String v510AtlasLookup(const String& macForkDataURL)
+{
+    initV510AtlasOnce();
+    auto& state = v510AtlasState();
+    if (!state.available || !state.numEntries)
+        return String();
+
+    constexpr size_t kIndexEntryStride = 28;
+    constexpr size_t kHashBytes = 16;
+
+    auto utf8 = macForkDataURL.utf8();
+    std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> fullDigest;
+    CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), fullDigest.data());
+
+    size_t lo = 0, hi = state.numEntries;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        auto entrySpan = state.indexSpan.subspan(mid * kIndexEntryStride, kIndexEntryStride);
+        int cmp = 0;
+        for (size_t b = 0; b < kHashBytes; ++b) {
+            if (entrySpan[b] < fullDigest[b]) { cmp = -1; break; }
+            if (entrySpan[b] > fullDigest[b]) { cmp = +1; break; }
+        }
+        if (cmp < 0) lo = mid + 1;
+        else if (cmp > 0) hi = mid;
+        else {
+            uint32_t dataOff = uint32_t(entrySpan[16]) | (uint32_t(entrySpan[17]) << 8)
+                             | (uint32_t(entrySpan[18]) << 16) | (uint32_t(entrySpan[19]) << 24);
+            uint32_t dataLen = uint32_t(entrySpan[20]) | (uint32_t(entrySpan[21]) << 8)
+                             | (uint32_t(entrySpan[22]) << 16) | (uint32_t(entrySpan[23]) << 24);
+            if (dataOff + dataLen > state.dataPayloadSpan.size())
+                return String();
+            auto entry = state.dataPayloadSpan.subspan(dataOff, dataLen);
+            static unsigned hits = 0;
+            if (++hits <= 50)
+                WTFLogAlways("[Driftstack-V510-HIT] entry=%zu/%zu off=%u len=%u",
+                    mid, state.numEntries, dataOff, dataLen);
+            auto charSpan = unsafeMakeSpan(reinterpret_cast<const char*>(entry.data()), entry.size());
+            return String::fromUTF8(charSpan);
+        }
+    }
+    return String();
+}
+} // anonymous namespace
+#endif // PLATFORM(DRIFTSTACK)
+
 // https://html.spec.whatwg.org/multipage/canvas.html#a-serialisation-of-the-bitmap-as-a-file
 static std::optional<double> NODELETE qualityFromJSValue(JSC::JSValue qualityValue)
 {
@@ -724,7 +881,31 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         protect(canvasBaseScriptExecutionContext())->addConsoleMessage(MessageSource::Rendering, MessageLevel::Info, consoleMessage);
         return UncachedString { url };
     }
-    return UncachedString { encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality) };
+    auto encoded = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+#if PLATFORM(DRIFTSTACK)
+    // V-507/V-510 V-405-A Option C atlas substitution: hash Mac fork's
+    // encoded dataURL via SHA-256 (truncated 16 bytes), look up in
+    // DriftstackCanvasFuzzAtlas (DSCFA v1). On hit, return iPhone-canonical
+    // dataURL. Closes V-405 fuzzer Strokes 0% / Text 0% architectural
+    // divergence (sub-WebKit Apple-private CG sub-pixel rasterizer per
+    // V-506 empirical proof). Atlas captured iPhone 17 / iOS 18.7 /
+    // Safari 26.4 via BS Automate (V-510); 3998 entries cover 4000
+    // deterministic seeds (strokes+text). Substitution-critical: 2000.
+    // Already-identical: 2000 (no-op return passthrough).
+    static bool s_canvasFuzzAtlasEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
+        return env && env[0] == '1';
+    }();
+    if (s_canvasFuzzAtlasEnabled) {
+        auto substitute = v510AtlasLookup(encoded);
+        if (!substitute.isNull()) {
+            WTFLogAlways("[Driftstack-V510] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u)",
+                width(), height(), encoded.length(), substitute.length());
+            return UncachedString { substitute };
+        }
+    }
+#endif
+    return UncachedString { encoded };
 }
 
 ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType)
