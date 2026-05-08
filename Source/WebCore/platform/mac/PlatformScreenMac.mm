@@ -328,6 +328,7 @@ int screenDepthPerComponent(Widget* widget)
 
     ASSERT(hasProcessPrivilege(ProcessPrivilege::CanCommunicateWithWindowServer));
     return NSBitsPerSampleFromDepth(protect(screen(widget)).get().depth);
+#endif
 }
 
 FloatRect screenRectForDisplay(PlatformDisplayID displayID)
