@@ -11843,6 +11843,14 @@ OptionSet<AdvancedPrivacyProtections> Document::advancedPrivacyProtections() con
         if (driftstackIsKnownTrackerHost(m_url.host().toString()))
             policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
     }
+    // V-538.A.verify env-var test hook: DRIFTSTACK_FORCE_AFP=1 forces
+    // FingerprintingProtections on every document, regardless of host.
+    // Used to empirically verify the AFP rendering pipeline path produces
+    // noisy canvas / audio per real iPhone behavior. NOT for production —
+    // prod policy gating is via tracker-host classifier above.
+    static const bool forceAFP = getenv("DRIFTSTACK_FORCE_AFP") && getenv("DRIFTSTACK_FORCE_AFP")[0] == '1';
+    if (forceAFP)
+        policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
 #endif
 
     return policies;
