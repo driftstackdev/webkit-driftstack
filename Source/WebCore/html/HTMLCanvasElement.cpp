@@ -41,13 +41,20 @@
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #if PLATFORM(DRIFTSTACK)
 #include <CommonCrypto/CommonDigest.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
 #include <array>
 #include <fcntl.h>
 #include <span>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <wtf/RetainPtr.h>
+#include <wtf/StdLibExtras.h>
+#include <wtf/Vector.h>
+#include <wtf/text/Base64.h>
 #include <wtf/text/CString.h>
+#include <wtf/text/MakeString.h>
 #endif
 #endif
 #include "DocumentView.h"
@@ -674,6 +681,7 @@ struct V510AtlasState {
     std::span<const uint8_t> indexSpan;
     std::span<const uint8_t> dataPayloadSpan;
     size_t numEntries { 0 };
+    uint16_t formatVersion { 1 };  // V-578: 1 = full PNG dataURL strings, 2 = pixel-delta encoding
     bool initialized { false };
     bool available { false };
 };
@@ -730,10 +738,12 @@ void initV510AtlasOnce()
         return uint32_t(bytesSpan[off]) | (uint32_t(bytesSpan[off+1]) << 8)
              | (uint32_t(bytesSpan[off+2]) << 16) | (uint32_t(bytesSpan[off+3]) << 24);
     };
-    if (readU16(4) != 1 || bytesSpan[7] != 1) {
-        WTFLogAlways("[Driftstack] V510Atlas: unsupported version/algo");
+    uint16_t version = readU16(4);
+    if ((version != 1 && version != 2) || bytesSpan[7] != 1) {
+        WTFLogAlways("[Driftstack] V510Atlas: unsupported version=%u/algo=%u", version, bytesSpan[7]);
         munmap(base, st.st_size); close(fd); return;
     }
+    state.formatVersion = version;
     uint32_t numEntries = readU32(8);
     uint32_t indexOffset = readU32(12);
     uint32_t dataOffset = readU32(16);
@@ -750,8 +760,151 @@ void initV510AtlasOnce()
     state.dataPayloadSpan = bytesSpan.subspan(dataOffset);
     state.numEntries = numEntries;
     state.available = true;
-    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries",
-        (long long)st.st_size, path, numEntries);
+    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries; format=v%u",
+        (long long)st.st_size, path, numEntries, state.formatVersion);
+}
+
+// V-578: apply delta-pixel substitution to a Mac dataURL.
+//
+// For DSCFA v2 entries: instead of replacing the entire dataURL with iPhone bytes,
+// the atlas stores only the pixel locations where Mac and iPhone diverge (~50 pixels
+// per ~95k pixel canvas, per V-573 empirical). We:
+//   1. Decode the Mac PNG dataURL to a raw RGBA pixel buffer
+//   2. Apply the delta list (overwrite divergent pixels with iPhone RGBA values)
+//   3. Re-encode through Mac CG with kCGImageAlphaLast + sRGB (the V-578 mode that
+//      empirically reproduces iPhone Safari's PNG byte stream exactly)
+//
+// V-578 round-trip empirically validated 10/10 bit-identical at the Python level.
+// Per V-578 verifier: kCGImageAlphaLast (non-premultiplied) is the only mode that
+// produces iPhone-byte-identical PNG; premultipliedLast/premultipliedFirst etc.
+// produce different byte sequences.
+static String applyV2DeltaAndReEncode(const String& macForkDataURL, std::span<const uint8_t> entryBytes)
+{
+    // 1. Parse v2 entry header: u16 W + u16 H + u32 numDeltas + N×8-byte deltas
+    if (entryBytes.size() < 8)
+        return String();
+    uint16_t canvasW = uint16_t(entryBytes[0]) | (uint16_t(entryBytes[1]) << 8);
+    uint16_t canvasH = uint16_t(entryBytes[2]) | (uint16_t(entryBytes[3]) << 8);
+    uint32_t numDeltas = uint32_t(entryBytes[4]) | (uint32_t(entryBytes[5]) << 8)
+                       | (uint32_t(entryBytes[6]) << 16) | (uint32_t(entryBytes[7]) << 24);
+    if (entryBytes.size() != size_t(8) + size_t(numDeltas) * 8)
+        return String();
+
+    // 2. Strip "data:image/png;base64," prefix and base64-decode
+    static constexpr ASCIILiteral kPrefix = "data:image/png;base64,"_s;
+    if (!macForkDataURL.startsWith(kPrefix))
+        return String();
+    auto b64View = StringView(macForkDataURL).substring(kPrefix.length());
+    auto pngBytesOpt = base64Decode(b64View);
+    if (!pngBytesOpt)
+        return String();
+    auto pngBytes = *pngBytesOpt;
+
+    // 3. Decode PNG via CGImageSource
+    auto cfData = adoptCF(CFDataCreate(kCFAllocatorDefault,
+        pngBytes.span().data(), static_cast<CFIndex>(pngBytes.size())));
+    if (!cfData)
+        return String();
+    auto imageSource = adoptCF(CGImageSourceCreateWithData(cfData.get(), nullptr));
+    if (!imageSource || CGImageSourceGetCount(imageSource.get()) == 0)
+        return String();
+    auto cgImage = adoptCF(CGImageSourceCreateImageAtIndex(imageSource.get(), 0, nullptr));
+    if (!cgImage)
+        return String();
+
+    size_t imgW = CGImageGetWidth(cgImage.get());
+    size_t imgH = CGImageGetHeight(cgImage.get());
+    if (imgW != canvasW || imgH != canvasH) {
+        WTFLogAlways("[Driftstack-V578] dim mismatch: dataURL=%zux%zu, atlas=%ux%u",
+            imgW, imgH, canvasW, canvasH);
+        return String();
+    }
+
+    // 4. Render the CGImage into a non-premultiplied RGBA buffer.
+    //    CGBitmapContext doesn't support kCGImageAlphaLast (non-premultiplied), so
+    //    we render into a premultipliedLast buffer first, then un-premultiply
+    //    to recover canonical RGBA bytes. Empirically (V-578 round-trip), this
+    //    matches the bytes that produce iPhone-byte-identical re-encoded PNG.
+    Vector<uint8_t> pmBuffer(imgW * imgH * 4);
+    auto srgb = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+    auto bitmapCtx = adoptCF(CGBitmapContextCreate(pmBuffer.mutableSpan().data(), imgW, imgH, 8, imgW * 4,
+        srgb.get(),
+        static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) | static_cast<uint32_t>(kCGBitmapByteOrder32Big)));
+    if (!bitmapCtx)
+        return String();
+    CGContextSetBlendMode(bitmapCtx.get(), kCGBlendModeCopy);
+    CGContextDrawImage(bitmapCtx.get(), CGRectMake(0, 0, imgW, imgH), cgImage.get());
+
+    // Un-premultiply to canonical RGBA
+    Vector<uint8_t> rgbaBuffer(imgW * imgH * 4);
+    for (size_t i = 0; i < imgW * imgH; ++i) {
+        uint8_t r = pmBuffer[i*4 + 0];
+        uint8_t g = pmBuffer[i*4 + 1];
+        uint8_t b = pmBuffer[i*4 + 2];
+        uint8_t a = pmBuffer[i*4 + 3];
+        if (a == 0) {
+            rgbaBuffer[i*4 + 0] = 0;
+            rgbaBuffer[i*4 + 1] = 0;
+            rgbaBuffer[i*4 + 2] = 0;
+            rgbaBuffer[i*4 + 3] = 0;
+        } else {
+            rgbaBuffer[i*4 + 0] = uint8_t((uint32_t(r) * 255 + (a / 2)) / a);
+            rgbaBuffer[i*4 + 1] = uint8_t((uint32_t(g) * 255 + (a / 2)) / a);
+            rgbaBuffer[i*4 + 2] = uint8_t((uint32_t(b) * 255 + (a / 2)) / a);
+            rgbaBuffer[i*4 + 3] = a;
+        }
+    }
+
+    // 5. Apply deltas
+    for (uint32_t i = 0; i < numDeltas; ++i) {
+        size_t off = 8 + size_t(i) * 8;
+        uint16_t x = uint16_t(entryBytes[off]) | (uint16_t(entryBytes[off+1]) << 8);
+        uint16_t y = uint16_t(entryBytes[off+2]) | (uint16_t(entryBytes[off+3]) << 8);
+        uint8_t r = entryBytes[off+4];
+        uint8_t g = entryBytes[off+5];
+        uint8_t b = entryBytes[off+6];
+        uint8_t a = entryBytes[off+7];
+        if (x >= canvasW || y >= canvasH)
+            continue;
+        size_t pixIdx = (size_t(y) * canvasW + x) * 4;
+        rgbaBuffer[pixIdx + 0] = r;
+        rgbaBuffer[pixIdx + 1] = g;
+        rgbaBuffer[pixIdx + 2] = b;
+        rgbaBuffer[pixIdx + 3] = a;
+    }
+
+    // 6. Re-encode patched RGBA via CGImage with kCGImageAlphaLast + sRGB.
+    //    Per V-578 empirical: this is the unique mode that produces iPhone-byte-
+    //    identical PNG output for the same RGBA bytes. Using a CGDataProvider
+    //    (not a CGBitmapContext) because CGBitmapContext doesn't support .last.
+    auto rgbaCFData = adoptCF(CFDataCreate(kCFAllocatorDefault, rgbaBuffer.span().data(),
+        static_cast<CFIndex>(rgbaBuffer.size())));
+    if (!rgbaCFData)
+        return String();
+    auto provider = adoptCF(CGDataProviderCreateWithCFData(rgbaCFData.get()));
+    if (!provider)
+        return String();
+    auto patchedImage = adoptCF(CGImageCreate(canvasW, canvasH, 8, 32, canvasW * 4,
+        srgb.get(),
+        static_cast<uint32_t>(kCGImageAlphaLast),
+        provider.get(), nullptr, false, kCGRenderingIntentDefault));
+    if (!patchedImage)
+        return String();
+
+    auto outCFData = adoptCF(CFDataCreateMutable(kCFAllocatorDefault, 0));
+    auto destination = adoptCF(CGImageDestinationCreateWithData(outCFData.get(),
+        CFSTR("public.png"), 1, nullptr));
+    if (!destination)
+        return String();
+    CGImageDestinationAddImage(destination.get(), patchedImage.get(), nullptr);
+    if (!CGImageDestinationFinalize(destination.get()))
+        return String();
+
+    // 7. Wrap as base64 dataURL
+    auto encodedSpan = unsafeMakeSpan(CFDataGetBytePtr(outCFData.get()),
+        static_cast<size_t>(CFDataGetLength(outCFData.get())));
+    auto b64Out = base64Encoded(encodedSpan);
+    return makeString("data:image/png;base64,"_s, b64Out);
 }
 
 String v510AtlasLookup(const String& macForkDataURL)
@@ -789,8 +942,11 @@ String v510AtlasLookup(const String& macForkDataURL)
             auto entry = state.dataPayloadSpan.subspan(dataOff, dataLen);
             static unsigned hits = 0;
             if (++hits <= 50)
-                WTFLogAlways("[Driftstack-V510-HIT] entry=%zu/%zu off=%u len=%u",
-                    mid, state.numEntries, dataOff, dataLen);
+                WTFLogAlways("[Driftstack-V510-HIT] entry=%zu/%zu off=%u len=%u format=v%u",
+                    mid, state.numEntries, dataOff, dataLen, state.formatVersion);
+            // V-578: dispatch by atlas format version
+            if (state.formatVersion == 2)
+                return applyV2DeltaAndReEncode(macForkDataURL, entry);
             auto charSpan = unsafeMakeSpan(reinterpret_cast<const char*>(entry.data()), entry.size());
             return String::fromUTF8(charSpan);
         }
