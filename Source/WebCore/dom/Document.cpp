@@ -11845,7 +11845,8 @@ OptionSet<AdvancedPrivacyProtections> Document::advancedPrivacyProtections() con
     // user directly navigates a top-level frame to a tracker domain
     // (rare but possible), that also gets AFP.
     if (!policies.contains(AdvancedPrivacyProtections::FingerprintingProtections)) {
-        if (driftstackIsKnownTrackerHost(m_url.host().toString()))
+        URL docURL = m_url;
+        if (driftstackIsKnownTrackerHost(docURL.host().toString()))
             policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
     }
     // V-542 (2026-05-09): replace DRIFTSTACK_FORCE_AFP env var (V-538.A.verify
