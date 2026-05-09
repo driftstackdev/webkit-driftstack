@@ -33,6 +33,7 @@
 
 #include <pal/system/ios/UserInterfaceIdiom.h>
 #include <ranges>
+#include <string_view>
 #include <wtf/cf/TypeCastsCF.h>
 
 namespace WebCore {
@@ -57,6 +58,32 @@ RetainPtr<CTFontRef> SystemFontDatabaseCoreText::createSystemUIFont(const Cascad
     // We need to use the system locale in this case.
     if (locale && !CFStringGetLength(locale))
         locale = nullptr;
+
+#if PLATFORM(DRIFTSTACK)
+    // V-521.A.B (2026-05-09): route -apple-system / system-ui / -webkit-system-font
+    // through iOS Stage B SFUI.ttf instead of Mac CTFontUIFontSystem.
+    // Real iPhone resolves these CSS pseudo-families to the iOS .SF UI
+    // family from the iOS system font binary (PostScript name .SFUI-*);
+    // Mac CTFontCreateUIFontForLanguage returns the Mac .AppleSystemUIFont
+    // variant which has different metrics (browserleaks /fonts probe
+    // detects this divergence). Stage B install registers iOS SFUI*.ttf
+    // via WKWebView's user-installed-fonts private dir
+    // (DRIFTSTACK_FONTS_DIR), so CTFontCreateWithName(".SF UI") returns
+    // the iOS variant when Stage B is loaded. PostScript-name guard
+    // ensures we only commit if we got the iOS font (not a Mac fallback).
+    auto iosName = adoptCF(CFStringCreateWithCString(kCFAllocatorDefault, ".SF UI", kCFStringEncodingUTF8));
+    if (auto iosResult = adoptCF(CTFontCreateWithName(iosName.get(), parameters.size, nullptr))) {
+        auto psName = adoptCF(CTFontCopyPostScriptName(iosResult.get()));
+        if (psName) {
+            char buf[64];
+            if (CFStringGetCString(psName.get(), buf, sizeof(buf), kCFStringEncodingUTF8)
+                && std::string_view(buf).starts_with(".SFUI")) {
+                return createFontByApplyingWeightWidthItalicsAndFallbackBehavior(iosResult.get(), parameters.weight, parameters.width, parameters.italic, parameters.size, parameters.allowUserInstalledFonts);
+            }
+        }
+    }
+#endif
+
     auto result = adoptCF(CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, parameters.size, locale));
     ASSERT(result);
     return createFontByApplyingWeightWidthItalicsAndFallbackBehavior(result.get(), parameters.weight, parameters.width, parameters.italic, parameters.size, parameters.allowUserInstalledFonts);
