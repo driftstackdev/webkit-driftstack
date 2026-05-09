@@ -1746,15 +1746,15 @@ String Quirks::advancedPrivacyProtectionSubstituteDataURLForScriptWithFeatures(c
         return { };
 #else
     // V-538.A.quirks (2026-05-09): real iPhone Safari fires this narrow
-    // FingerprintJS Pro quirk regardless of session-specific noise-salt /
+    // tracker-script-substitution quirk regardless of session-specific noise-salt /
     // canvasFingerprintingQuirkEnabled state — both bits are derived from
     // ITP classification of the loading frame, which the fork's local
     // fork-browse / cloud-Mac sessions don't have. To match real iPhone
-    // behavior on the FPJS-Pro probe shape (single hard-coded match below),
+    // behavior on the tracker-script probe shape (single hard-coded match below),
     // bypass these gates on DRIFTSTACK builds. The remaining checks
     // (lastDrawnText magic string + canvas 280x60 + JS source code length
     // 212053 OR 219192) ARE the narrow match — only fires for the
-    // real-iPhone-targeted FPJS Pro probe, not general canvas reads.
+    // real-iPhone-targeted tracker-script-substitution probe, not general canvas reads.
     // Per V-538 founder authorization (a) narrow quirk match. Per
     // V-538.A.canvas-quirks finding (V-log 2026-05-09): real iPhone Safari
     // does NOT have general AFP for tracker domains; canvas-side anti-FP

@@ -1,11 +1,11 @@
 // V-253 (overnight 2026-05-06) multi-archetype fonts denylist.
 // Per-archetype list of Mac-only font families to reject in
 // FontCache::cachedFontPlatformData / FontCache::createFontPlatformData
-// so that browserleaks-style measureText probes report these as
+// so that content-derived measureText probes report these as
 // "not installed" (matching real iPhone behavior).
 //
 // Currently derived from V-237.2 BS Automate iPhone 16 Pro / iOS 18.6
-// browserleaks-fonts probe (171 detected on iPhone vs 193 detected on
+// tracker-probe-fonts probe (171 detected on iPhone vs 193 detected on
 // fork pre-V-237 → 22 Mac-only false-positives).
 //
 // For iOS 26.4 archetype: denylist will be derived analogously after
@@ -33,7 +33,7 @@ struct DriftstackFontsDenylistEntry {
 static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
     // iphone16pro_ios18_6 archetype — V-237.2 BS Automate iOS 18.6
     // capture identified these 22 Mac fonts as fork-detected but
-    // iPhone-iOS-18.6-undetected (browserleaks-style measureText).
+    // iPhone-iOS-18.6-undetected (content-derived measureText).
     { "iphone16pro_ios18_6", "al bayan" },
     { "iphone16pro_ios18_6", "al tarikh" },
     { "iphone16pro_ios18_6", "andale mono" },

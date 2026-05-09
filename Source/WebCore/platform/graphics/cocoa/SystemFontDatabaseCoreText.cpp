@@ -65,7 +65,7 @@ RetainPtr<CTFontRef> SystemFontDatabaseCoreText::createSystemUIFont(const Cascad
     // Real iPhone resolves these CSS pseudo-families to the iOS .SF UI
     // family from the iOS system font binary (PostScript name .SFUI-*);
     // Mac CTFontCreateUIFontForLanguage returns the Mac .AppleSystemUIFont
-    // variant which has different metrics (browserleaks /fonts probe
+    // variant which has different metrics (font-enumeration probe
     // detects this divergence). Stage B install registers iOS SFUI*.ttf
     // via WKWebView's user-installed-fonts private dir
     // (DRIFTSTACK_FONTS_DIR), so CTFontCreateWithName(".SF UI") returns

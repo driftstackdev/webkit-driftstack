@@ -2674,8 +2674,8 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
 
 #if PLATFORM(DRIFTSTACK)
     // V-373 (Gap 1 closure 2026-05-07): mirror V-185/V-241 toDataURL
-    // canvas-fp dispatch on the getImageData readback path. CreepJS,
-    // FingerprintJS Pro, and browserleaks /canvas hash via getImageData
+    // canvas-fp dispatch on the getImageData readback path. tracker-detector-suite,
+    // tracker-script-substitution, and canvas-fp probe hash via getImageData
     // alongside or instead of toDataURL; V-185 substituting only the
     // toDataURL path leaves getImageData emitting Mac CG bytes (per
     // V-372 Gap 1 finding). Substitute the decoded RGBA from the

@@ -3,7 +3,7 @@
  *
  * WebGL readPixels substitution for canonical fingerprinting probe
  * shapes. Vendors using `WebGLRenderingContext.readPixels` to hash
- * GPU pixel output (browserleaks /webgl, FPJS WebGL hash, CreepJS
+ * GPU pixel output (WebGL pixel-readback probe, tracker-script WebGL hash, tracker-detector-suite
  * WebGL probe) bypass the V-185 toDataURL canvas-fp dispatch entirely
  * (per V-372 Gap 3 finding). V-375 closes that bypass.
  *

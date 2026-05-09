@@ -306,7 +306,7 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     else if (lowercase == "times"_s)
         lowercase = "times new roman"_s;
     // V-521.A.2 (2026-05-08): Heiti SC/TC are legacy iOS CJK font families
-    // that browserleaks /fonts probe detects on iPhone (width 4292 for
+    // that font-enumeration probe detects on iPhone (width 4292 for
     // 'mmmmmmmmlli' test string). They alias to PingFang SC/TC equivalents
     // on iPhone (Heiti was Apple's pre-PingFang Chinese system font;
     // CTFontManager resolves Heiti requests to PingFang fallback). Fork
@@ -599,8 +599,8 @@ Vector<String> FontCache::systemFontFamilies()
     // V-230: filter Mac-system font enumeration to iOS-installed family
     // allowlist. Mac's CTFontManagerCopyAvailableFontFamilyNames returns
     // ~500 fonts (Mac system + Stage B-registered iOS); detection vendors
-    // (browserleaks /fonts, /canvasfont, fingerprintjs fontPreferences,
-    // CreepJS native font enumeration) probe this list. iPhone Safari's
+    // (font-enumeration probe, /canvasfont, fingerprint-library fontPreferences,
+    // tracker-detector-suite native font enumeration) probe this list. iPhone Safari's
     // equivalent surface is ~99 family names. Mac-only fonts (Avenir Next,
     // Gill Sans, etc. that exist on Mac but not iOS — actually those ARE
     // on iOS; the Mac-only set is much smaller, ~30-50 families) leak
@@ -1149,7 +1149,7 @@ static void registerFontsInFamilyIfNeeded(const String& family)
 // of V-253). Per founder direction "100% match across everything …
 // full iOS iphone bit identical". Returning nullptr for denied family
 // names causes FontCascade to fall through to the next family or the
-// monospace baseline → browserleaks-style measureText probes report
+// monospace baseline → content-derived measureText probes report
 // these fonts as "not installed", matching iPhone.
 //
 // V-253: per-archetype denylist moved to DriftstackFontsDenylist.h.
@@ -1165,7 +1165,7 @@ std::unique_ptr<FontPlatformData> FontCache::createFontPlatformData(const FontDe
     // V-237 / V-253: Mac-only font denylist (multi-archetype lookup).
     // Reject family-name resolution for fonts in the current-archetype
     // denylist. Returning nullptr causes FontCascade to fall through to
-    // the next family / monospace baseline → browserleaks-style font
+    // the next family / monospace baseline → content-derived font
     // detection sees these as "not installed", matching real iPhone.
     if (driftstackFamilyDenylisted(family))
         return nullptr;

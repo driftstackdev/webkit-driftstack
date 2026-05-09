@@ -39,7 +39,7 @@ String standardUserAgentWithApplicationName(const String& applicationName, const
     // V-228: HTTP User-Agent header iPhone override. Wave 1.2 (V-2026-04-29)
     // overrode Navigator::userAgent() (the JS-level navigator.userAgent
     // getter) but the network-layer HTTP User-Agent header sent on outgoing
-    // requests comes from this function — was returning Mac UA. Browserleaks
+    // requests comes from this function — was returning Mac UA. Tracker probes
     // /useragent + many detection vendors read both JS UA + HTTP UA + flag
     // any divergence as "spoofing detected". Match Wave 1.2 + V-205 Bug 2
     // (WorkerNavigator) UA string here.

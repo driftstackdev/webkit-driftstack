@@ -3,8 +3,8 @@
  *
  * Realtime audio-fp substitution table for AnalyserNode readback paths.
  * Companion to DriftstackAudioAtlas (DASA — OFFLINE path, V-216 Phase C);
- * V-374 closes the realtime path that FPJS open-source v3 / CreepJS
- * audio-fp / FPJS Pro tampering detection actually probe.
+ * V-374 closes the realtime path that fingerprint-library v3 / tracker-detector-suite
+ * audio-fp / tracker-script-substitution tampering detection actually probe.
  *
  * Phase classification (file 105):
  *   - Phase 2 (process-startup, lazy): base64 decode + cache of iPhone-
@@ -17,7 +17,7 @@
  *   Each AnalyserNode has a (sampleRate, fftSize) tuple available at
  *   readback time. We dispatch on this tuple; the first matching row in
  *   the table wins. Vendors typically use distinct fftSize values
- *   (FPJS=1024, FPJS Pro=4096, CreepJS=8192, biquad=2048) so the
+ *   (FP-1024, tracker-script-substitution=4096, tracker-detector-suite=8192, biquad=2048) so the
  *   collision domain is small. Future V-374-prime can refine the key
  *   with topology-walk hashing if collisions surface.
  *
@@ -48,7 +48,7 @@ namespace WebCore {
 
 struct RealtimeAnalyserOverrideEntry {
     const char* archetype;            // e.g. "iphone16pro_ios18_bs"
-    const char* topologyKey;          // e.g. "fpjs_oss_v3_oscillator_compressor_analyser"
+    const char* topologyKey;          // e.g. "oscillator_compressor_analyser_44100hz_fft1024"
     uint32_t sampleRate;              // e.g. 44100
     uint32_t fftSize;                 // e.g. 1024
     uint32_t frequencyBinCount;       // = fftSize / 2

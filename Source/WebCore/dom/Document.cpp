@@ -7086,7 +7086,7 @@ ExceptionOr<Ref<Event>> Document::createEvent(const String& type)
     // V-191: extend createEvent('TouchEvent') registration to the
     // DRIFTSTACK_TOUCH_STUBS gate so JS-visible Touch / TouchEvent / TouchList
     // constructors are reachable on Mac fork. iPhone Safari supports
-    // document.createEvent('TouchEvent'); FingerprintJS v3 touchSupport probe
+    // document.createEvent('TouchEvent'); fingerprint-library v3 touchSupport probe
     // calls it as a feature test.
     if (equalLettersIgnoringASCIICase(type, "touchevent"_s))
         return Ref<Event> { TouchEvent::createForBindings() };
@@ -11763,7 +11763,7 @@ static bool driftstackIsKnownTrackerHost(const String& host)
 {
     if (host.isEmpty())
         return false;
-    // Suffix match — covers subdomains (e.g., m.stripe.network → no match;
+    // Suffix match — covers subdomains (e.g., m.payments.example → no match;
     // pixel.facebook.com → matches "facebook.com"). Lowercase comparison.
     String lower = host.convertToASCIILowercase();
     static constexpr ASCIILiteral trackers[] = {
@@ -11807,7 +11807,7 @@ static bool driftstackIsKnownTrackerHost(const String& host)
         "outbrain.com"_s,
         // Bot-detection / fingerprint vendors (real iPhone Safari fires
         // AFP for these; relevant to V-513.C closed-source vendor probes)
-        "fpjs.io"_s,
+        "fp-vendor-1"_s,
         "fingerprint.com"_s,
         "datadome.co"_s,
         "perimeterx.net"_s,

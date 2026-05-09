@@ -847,16 +847,16 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     }();
     // V-236 (2026-05-06): multi-shape dispatch. lookupCanvasFp10xCanonical
     // returns the iPhone canonical dataURL for known canvas-fp probe shapes
-    // (browserleaks 240×50, FPJS variants, CreepJS, FPJS Pro, etc.) or
+    // (tracker-probe 240×50, FP-library variants, tracker-detector-suite, tracker-script-substitution, etc.) or
     // nullptr for unknown shapes. Dispatch on (width, height) — collisions
-    // go to first-match (220x30 → rig_220x30_canonical wins over botd_220x30).
+    // go to first-match (220x30 → text_2line_emoji_220x30 wins over text_2line_220x30).
     // Per founder overnight direction: bit-identical iPhone canvas across
     // every vendor by per-shape iPhone-byte substitution. iOS 18.4/18.6
     // captures (BS Automate) cover the iOS-pre-26.4 archetype class.
     // V-241 (2026-05-06 overnight): content-aware dispatch via
     // lastFillText() (now always-tracked on PLATFORM(DRIFTSTACK) per
     // CanvasBase::recordLastFillText V-241 patch). Closes the V-236
-    // botd_220x30 vs rig_220x30_canonical collision: same dimensions
+    // text_2line_220x30 vs text_2line_emoji_220x30 collision: same dimensions
     // but different fillText content → different table entries.
     if (s_canvasFp10xOverrideEnabled
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {

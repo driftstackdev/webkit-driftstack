@@ -44,7 +44,7 @@ namespace { constexpr RealtimeAnalyserOverrideEntry kRealtimeAnalyserOverrideTab
     },
     {
         "iphone16pro_ios18_bs",
-        "creepjs_oscillator_analyser_fft8192",
+        "oscillator_analyser_44100hz_fft8192",
         44100u, // sampleRate
         8192u, // fftSize
         4096u, // frequencyBinCount
@@ -59,7 +59,7 @@ namespace { constexpr RealtimeAnalyserOverrideEntry kRealtimeAnalyserOverrideTab
     },
     {
         "iphone16pro_ios18_bs",
-        "fpjs_oss_v3_oscillator_compressor_analyser",
+        "oscillator_compressor_analyser_44100hz_fft1024",
         44100u, // sampleRate
         1024u, // fftSize
         512u, // frequencyBinCount
@@ -74,7 +74,7 @@ namespace { constexpr RealtimeAnalyserOverrideEntry kRealtimeAnalyserOverrideTab
     },
     {
         "iphone16pro_ios18_bs",
-        "fpjs_pro_oscillator_compressor_44100",
+        "oscillator_compressor_44100hz_fft4096",
         44100u, // sampleRate
         4096u, // fftSize
         2048u, // frequencyBinCount

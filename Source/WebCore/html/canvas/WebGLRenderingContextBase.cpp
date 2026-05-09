@@ -3040,8 +3040,8 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
     // V-375 (Gap 3 closure 2026-05-07): substitute iPhone-canonical
     // RGBA bytes for canonical WebGL fingerprinting probe shapes
     // before the native graphicsContextGL readPixels. Vendors that
-    // hash full-canvas readPixels output (browserleaks /webgl, FPJS
-    // WebGL hash, CreepJS WebGL probe) bypass V-185 toDataURL
+    // hash full-canvas readPixels output (WebGL pixel-readback probe, FP-library
+    // WebGL hash, tracker-detector-suite WebGL probe) bypass V-185 toDataURL
     // dispatch entirely; V-375 closes that bypass at the readPixels
     // entry. Gate: full-canvas (x=y=0, w=drawingBufferWidth,
     // h=drawingBufferHeight) + table hit on (w, h, format, type).

@@ -279,7 +279,7 @@ void CanvasBase::recordLastFillText(const String& text)
     // PLATFORM(DRIFTSTACK), independent of the AFP/noise-injection gate.
     // V-185 + V-236 multi-shape canvas substitution dispatches on
     // (width, height) currently — collides for dimension-equal shapes
-    // (e.g. botd_220x30 vs rig_220x30_canonical). Adding lastFillText
+    // (e.g. text_2line_220x30 vs text_2line_emoji_220x30). Adding lastFillText
     // as a third dispatch key resolves the collision: each known
     // canonical probe shape has a unique fillText content + dimension
     // signature.
