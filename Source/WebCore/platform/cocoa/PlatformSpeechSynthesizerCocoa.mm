@@ -301,16 +301,22 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             //   com.apple.speech.synthesis.voice.Hysterical → "Jester"     (Mac: "Hysterical")
             //   com.apple.speech.synthesis.voice.Princess   → "Superstar"  (Mac: "Princess")
             //   com.apple.speech.synthesis.voice.Organ      → "Organ"      (Mac: "Pipe Organ")
-            // Also Samantha tier mapping (V-074 follow-up): iPhone uses
-            // "compact", Mac uses "super-compact" — remap identifier.
             //
             // Earlier blacklist approach was WRONG: iPhone reference HAS all
             // those novelty voices (Albert, Bad News, etc.) — only their
             // names changed for the 4 renamed entries. Filtering them out
             // broke the cumulative-rig speech.voices match.
-            if ([identifier isEqualToString:@"com.apple.voice.super-compact.en-US.Samantha"])
-                identifier = @"com.apple.voice.compact.en-US.Samantha";
-            else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
+            //
+            // V-525.A.1 (2026-05-08): Samantha tier mapping per V-074 follow-up
+            // was BACKWARDS. V-525 empirical proof — fork V-525 output had
+            // 'compact.en-US.Samantha' while iPhone 17 / Safari 26.4 V-525.A
+            // BS Automate capture has 'super-compact.en-US.Samantha'. V-074
+            // comment ("iPhone uses 'compact', Mac uses 'super-compact' —
+            // remap identifier") was wrong-direction. REMOVED the
+            // super-compact → compact remap; iPhone reports super-compact
+            // and fork now exposes whatever AVSpeechSynthesisVoice returns
+            // natively (which V-525.A.1 verifies post-build).
+            if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
                 displayName = @"Wobble";
             else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Hysterical"])
                 displayName = @"Jester";
