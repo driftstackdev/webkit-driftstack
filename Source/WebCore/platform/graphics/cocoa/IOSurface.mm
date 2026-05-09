@@ -258,12 +258,7 @@ static NSDictionary *optionsForBiplanarSurface(IntSize size, unsigned pixelForma
         (id)kIOSurfaceHeight: @(height),
         (id)kIOSurfacePixelFormat: @(pixelFormat),
         (id)kIOSurfaceAllocSize: @(totalBytes),
-#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
-        // V-572 (Rule N source-level continuation 2026-05-09): V-569 only
-        // patched the createSurfaceViaCoreVideo path. Canvas/2D rendering
-        // ImageBuffers go through optionsForBiplanarSurface (this fn) and
-        // optionsForSurface (below). Aligning cache mode here so canvas
-        // IOSurfaces get WriteCombine on PLATFORM(DRIFTSTACK), matching iOS.
+#if PLATFORM(IOS_FAMILY)
         (id)kIOSurfaceCacheMode: @(kIOMapWriteCombineCache),
 #endif
         (id)kIOSurfacePlaneInfo: planeInfo,
@@ -292,12 +287,7 @@ static NSDictionary *optionsForSurface(IntSize size, unsigned bitsPerPixel, unsi
         (id)kIOSurfaceBytesPerElement: @(bytesPerElement),
         (id)kIOSurfaceBytesPerRow: @(bytesPerRow),
         (id)kIOSurfaceAllocSize: @(totalBytes),
-#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
-        // V-572 (Rule N source-level continuation 2026-05-09): canvas 32-bit
-        // BGRA ImageBuffer IOSurfaces flow through this path. Aligning cache
-        // mode to iOS WriteCombine on PLATFORM(DRIFTSTACK) — V-569 only
-        // patched createSurfaceViaCoreVideo, missing this primary canvas
-        // creation path.
+#if PLATFORM(IOS_FAMILY)
         (id)kIOSurfaceCacheMode: @(kIOMapWriteCombineCache),
 #endif
         (id)kIOSurfaceElementHeight: @(1),
