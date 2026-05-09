@@ -3451,19 +3451,6 @@ RefPtr<ImageBuffer> CanvasRenderingContext2DBase::allocateImageBuffer() const
     if (!scriptExecutionContext)
         return nullptr;
     RenderingMode renderingMode = !willReadFrequently() && canvasBase().shouldAccelerate() ? RenderingMode::Accelerated : RenderingMode::Unaccelerated;
-#if PLATFORM(DRIFTSTACK)
-    // V-564 (Path 1 investigation 2026-05-09, founder Rule N lock): Mac fork
-    // canvas defaults to Accelerated (GPU-backed via IOSurface). Hypothesis:
-    // Mac CG GPU shaders for stroke/glyph rasterization diverge from iOS
-    // shader path even with all Stage A AA flags aligned (V-405 atlas-OFF
-    // shows strokes/text 0% natural match). Force Unaccelerated (CPU CG
-    // rasterization) on PLATFORM(DRIFTSTACK) to test if CPU path produces
-    // iOS-equivalent bytes. Empirical-verify gate: post-build V-405
-    // atlas-OFF strokes match rate must move from 0% — if it does, GPU
-    // shader divergence is the root cause and we have a real lever. If
-    // not, divergence is below the rendering-mode level (deeper SPI work).
-    renderingMode = RenderingMode::Unaccelerated;
-#endif
     if (auto renderingModeForTesting = this->renderingModeForTesting())
         renderingMode = *renderingModeForTesting;
     return ImageBuffer::create(canvasBase().size(), renderingMode, RenderingPurpose::Canvas, 1, colorSpace(), pixelFormat(), scriptExecutionContext->graphicsClient());
