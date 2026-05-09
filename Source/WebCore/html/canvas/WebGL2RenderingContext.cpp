@@ -2677,7 +2677,13 @@ std::optional<WebGLExtensionAny> WebGL2RenderingContext::getExtension(const Stri
     ENABLE_IF_REQUESTED(WebGLCompressedTexturePVRTC, m_webglCompressedTexturePVRTC, "WEBKIT_WEBGL_compressed_texture_pvrtc"_s, WebGLCompressedTexturePVRTC::supported(*context));
     ENABLE_IF_REQUESTED(WebGLCompressedTextureS3TC, m_webglCompressedTextureS3TC, "WEBGL_compressed_texture_s3tc"_s, WebGLCompressedTextureS3TC::supported(*context));
     ENABLE_IF_REQUESTED(WebGLCompressedTextureS3TCsRGB, m_webglCompressedTextureS3TCsRGB, "WEBGL_compressed_texture_s3tc_srgb"_s, WebGLCompressedTextureS3TCsRGB::supported(*context));
+#if PLATFORM(DRIFTSTACK)
+    // V-540.B.k: see WebGLRenderingContext.cpp note. Disable on DRIFTSTACK
+    // to match iPhone Safari behavior (extension not exposed).
+    ENABLE_IF_REQUESTED(WebGLDebugRendererInfo, m_webglDebugRendererInfo, "WEBGL_debug_renderer_info"_s, false);
+#else
     ENABLE_IF_REQUESTED(WebGLDebugRendererInfo, m_webglDebugRendererInfo, "WEBGL_debug_renderer_info"_s, true);
+#endif
     ENABLE_IF_REQUESTED(WebGLDebugShaders, m_webglDebugShaders, "WEBGL_debug_shaders"_s, WebGLDebugShaders::supported(*context));
     ENABLE_IF_REQUESTED(WebGLDrawInstancedBaseVertexBaseInstance, m_webglDrawInstancedBaseVertexBaseInstance, "WEBGL_draw_instanced_base_vertex_base_instance"_s, WebGLDrawInstancedBaseVertexBaseInstance::supported(*context) && enableDraftExtensions);
     ENABLE_IF_REQUESTED(WebGLLoseContext, m_webglLoseContext, "WEBGL_lose_context"_s, true);
@@ -2734,7 +2740,11 @@ std::optional<Vector<String>> WebGL2RenderingContext::getSupportedExtensions()
     APPEND_IF_SUPPORTED("WEBKIT_WEBGL_compressed_texture_pvrtc", WebGLCompressedTexturePVRTC::supported(*context))
     APPEND_IF_SUPPORTED("WEBGL_compressed_texture_s3tc", WebGLCompressedTextureS3TC::supported(*context))
     APPEND_IF_SUPPORTED("WEBGL_compressed_texture_s3tc_srgb", WebGLCompressedTextureS3TCsRGB::supported(*context))
+#if PLATFORM(DRIFTSTACK)
+    APPEND_IF_SUPPORTED("WEBGL_debug_renderer_info", false)
+#else
     APPEND_IF_SUPPORTED("WEBGL_debug_renderer_info", true)
+#endif
     APPEND_IF_SUPPORTED("WEBGL_debug_shaders", WebGLDebugShaders::supported(*context))
     APPEND_IF_SUPPORTED("WEBGL_draw_instanced_base_vertex_base_instance", WebGLDrawInstancedBaseVertexBaseInstance::supported(*context) && enableDraftExtensions)
     APPEND_IF_SUPPORTED("WEBGL_lose_context", true)
