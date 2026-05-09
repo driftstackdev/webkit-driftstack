@@ -3453,21 +3453,7 @@ RefPtr<ImageBuffer> CanvasRenderingContext2DBase::allocateImageBuffer() const
     RenderingMode renderingMode = !willReadFrequently() && canvasBase().shouldAccelerate() ? RenderingMode::Accelerated : RenderingMode::Unaccelerated;
     if (auto renderingModeForTesting = this->renderingModeForTesting())
         renderingMode = *renderingModeForTesting;
-#if PLATFORM(DRIFTSTACK)
-    // V-574 (founder Rule N "creative trick" investigation 2026-05-09):
-    // 2x supersample backing IOSurface + auto-downsample at readback. Per
-    // V-573 empirical diff, Mac M-series GPU AA sub-pixel sampler diverges
-    // from iPhone A-series at 1x backing. Hypothesis: iPhone CG uses 4x4
-    // sub-pixel supersampling internally; Mac CG may use a different sample
-    // pattern. Forcing Mac canvas backing to 2x (= 4 samples per output
-    // pixel) lets WebKit's existing scale mechanic do supersample +
-    // downsample. The averaged output should converge to true area
-    // coverage and may match iPhone's hardware-internal supersampled AA
-    // closer than 1x→1x rendering does.
-    return ImageBuffer::create(canvasBase().size(), renderingMode, RenderingPurpose::Canvas, 2.0f, colorSpace(), pixelFormat(), scriptExecutionContext->graphicsClient());
-#else
     return ImageBuffer::create(canvasBase().size(), renderingMode, RenderingPurpose::Canvas, 1, colorSpace(), pixelFormat(), scriptExecutionContext->graphicsClient());
-#endif
 }
 
 } // namespace WebCore
