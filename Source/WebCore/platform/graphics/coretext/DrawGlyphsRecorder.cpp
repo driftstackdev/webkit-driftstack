@@ -519,7 +519,18 @@ void DrawGlyphsRecorder::drawNativeText(CTFontRef font, CGFloat fontSize, CTLine
     m_owner.translate(lineRect.origin.x, lineRect.origin.y + lineRect.size.height);
     m_owner.scale(FloatSize(1, -1));
 
+    // V-571 (founder Rule N source-level investigation 2026-05-09): Mac
+    // default uses FontSmoothingMode::SubpixelAntialiased for line drawing
+    // (LCD-style subpixel font AA). iOS uses grayscale Antialiased mode.
+    // Aligning to iOS Antialiased on PLATFORM(DRIFTSTACK) — closes one of
+    // the unaligned text-rendering paths. Stage A's CGContextSetShouldSmoothFonts
+    // skip is per-canvas-context; this is the FontSmoothingMode hint passed
+    // through GraphicsContext's font path.
+#if PLATFORM(DRIFTSTACK)
+    prepareInternalContext(Font::create(FontPlatformData(font, fontSize)), FontSmoothingMode::Antialiased);
+#else
     prepareInternalContext(Font::create(FontPlatformData(font, fontSize)), FontSmoothingMode::SubpixelAntialiased);
+#endif
     RetainPtr context = m_internalContext->platformContext();
     CGContextSetTextPosition(context.get(), 0, 0);
     CTLineDraw(line, context.get());
