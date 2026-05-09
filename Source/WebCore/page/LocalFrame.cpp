@@ -135,6 +135,11 @@
 #include <wtf/HexNumber.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/SystemTracing.h>
+#if PLATFORM(DRIFTSTACK)
+#include <CoreFoundation/CoreFoundation.h>
+#include <wtf/RetainPtr.h>
+#include <mutex>
+#endif
 #include <wtf/text/MakeString.h>
 #include <wtf/text/StringBuilder.h>
 #include <wtf/text/TextStream.h>
@@ -1417,9 +1422,33 @@ String LocalFrame::customNavigatorPlatform() const
 
 OptionSet<AdvancedPrivacyProtections> LocalFrame::advancedPrivacyProtections() const
 {
+    OptionSet<AdvancedPrivacyProtections> policies;
     if (auto* documentLoader = loader().activeDocumentLoader())
-        return documentLoader->advancedPrivacyProtections();
-    return { };
+        policies = documentLoader->advancedPrivacyProtections();
+#if PLATFORM(DRIFTSTACK)
+    // V-538.A.frame (2026-05-09): Page::shouldApplyScreenFingerprintingProtections
+    // uses Page::advancedPrivacyProtections → mainFrame()->advancedPrivacyProtections
+    // (this method) — NOT Document::advancedPrivacyProtections. The earlier
+    // V-538.A patch on Document was off-path. AFP canvas/audio gating queries
+    // here. Mirror the V-538.A logic at this layer:
+    //   1. Tracker-host suffix match → add FingerprintingProtections
+    //   2. NSUserDefaults DriftstackForceAFP override → add FingerprintingProtections
+    static std::once_flag prefsFlag;
+    static bool forceAFP = false;
+    std::call_once(prefsFlag, []() {
+        for (auto* domain : { kCFPreferencesCurrentApplication, CFSTR("com.apple.WebKit.WebContent"), CFSTR("org.webkit.MiniBrowser") }) {
+            auto val = adoptCF(CFPreferencesCopyAppValue(CFSTR("DriftstackForceAFP"), domain));
+            if (val && CFGetTypeID(val.get()) == CFBooleanGetTypeID() && CFBooleanGetValue(static_cast<CFBooleanRef>(val.get()))) {
+                forceAFP = true;
+                break;
+            }
+        }
+        WTFLogAlways("[Driftstack] V-538.A.frame NSUserDefaults DriftstackForceAFP=%d (one-time read)", forceAFP);
+    });
+    if (forceAFP)
+        policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
+#endif
+    return policies;
 }
 
 AutoplayPolicy LocalFrame::autoplayPolicy() const

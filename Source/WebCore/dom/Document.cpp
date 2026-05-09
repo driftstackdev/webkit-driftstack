@@ -375,6 +375,11 @@
 #include <wtf/ASCIICType.h>
 #include <wtf/Assertions.h>
 #include <wtf/Borrow.h>
+#if PLATFORM(DRIFTSTACK)
+#include <CoreFoundation/CoreFoundation.h>
+#include <wtf/RetainPtr.h>
+#include <mutex>
+#endif
 #include <wtf/CryptographicallyRandomNumber.h>
 #include <wtf/HexNumber.h>
 #include <wtf/Language.h>
@@ -11843,12 +11848,29 @@ OptionSet<AdvancedPrivacyProtections> Document::advancedPrivacyProtections() con
         if (driftstackIsKnownTrackerHost(m_url.host().toString()))
             policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
     }
-    // V-538.A.verify env-var test hook: DRIFTSTACK_FORCE_AFP=1 forces
-    // FingerprintingProtections on every document, regardless of host.
-    // Used to empirically verify the AFP rendering pipeline path produces
-    // noisy canvas / audio per real iPhone behavior. NOT for production —
-    // prod policy gating is via tracker-host classifier above.
-    static const bool forceAFP = getenv("DRIFTSTACK_FORCE_AFP") && getenv("DRIFTSTACK_FORCE_AFP")[0] == '1';
+    // V-542 (2026-05-09): replace DRIFTSTACK_FORCE_AFP env var (V-538.A.verify
+    // attempt 1) with NSUserDefaults / CFPreferences read. Env var
+    // DRIFTSTACK_FORCE_AFP=1 was filtered through XPC sandbox in WebProcess
+    // (verified empirically: V-535 stripe canvas sha bit-identical with vs
+    // without env var on atlas-OFF launcher). CFPreferencesCopyAppValue reads
+    // from the current process's bundle preferences (com.apple.WebKit.WebContent
+    // for WebProcess), set via:
+    //   defaults write com.apple.WebKit.WebContent DriftstackForceAFP -bool YES
+    // This XPC-survives by design (NSUserDefaults / CFPreferences explicitly
+    // designed for cross-process settings transport).
+    static std::once_flag prefsFlag;
+    static bool forceAFP = false;
+    std::call_once(prefsFlag, []() {
+        // Try multiple bundle IDs since WebProcess can have varying IDs
+        for (auto* domain : { kCFPreferencesCurrentApplication, CFSTR("com.apple.WebKit.WebContent"), CFSTR("org.webkit.MiniBrowser") }) {
+            auto val = adoptCF(CFPreferencesCopyAppValue(CFSTR("DriftstackForceAFP"), domain));
+            if (val && CFGetTypeID(val.get()) == CFBooleanGetTypeID() && CFBooleanGetValue(static_cast<CFBooleanRef>(val.get()))) {
+                forceAFP = true;
+                break;
+            }
+        }
+        WTFLogAlways("[Driftstack] V-542 NSUserDefaults DriftstackForceAFP=%d (one-time read)", forceAFP);
+    });
     if (forceAFP)
         policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
 #endif
