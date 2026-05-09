@@ -185,18 +185,7 @@ std::optional<WebGLExtensionAny> WebGLRenderingContext::getExtension(const Strin
     ENABLE_IF_REQUESTED(WebGLCompressedTexturePVRTC, m_webglCompressedTexturePVRTC, "WEBKIT_WEBGL_compressed_texture_pvrtc", WebGLCompressedTexturePVRTC::supported(*graphicsContext));
     ENABLE_IF_REQUESTED(WebGLCompressedTextureS3TC, m_webglCompressedTextureS3TC, "WEBGL_compressed_texture_s3tc", WebGLCompressedTextureS3TC::supported(*graphicsContext));
     ENABLE_IF_REQUESTED(WebGLCompressedTextureS3TCsRGB, m_webglCompressedTextureS3TCsRGB, "WEBGL_compressed_texture_s3tc_srgb", WebGLCompressedTextureS3TCsRGB::supported(*graphicsContext));
-#if PLATFORM(DRIFTSTACK)
-    // V-540.B.k (2026-05-09): real iPhone Safari does NOT expose
-    // WEBGL_debug_renderer_info — getExtension() returns null + the
-    // extension is absent from getSupportedExtensions(). Stripe FP
-    // GraphicsConfigurationExtractor relies on this null-check to
-    // emit empty (k=""). Disable the extension on PLATFORM(DRIFTSTACK)
-    // so UNMASKED_VENDOR_WEBGL / UNMASKED_RENDERER_WEBGL are unavailable
-    // (matches iPhone behavior).
-    ENABLE_IF_REQUESTED(WebGLDebugRendererInfo, m_webglDebugRendererInfo, "WEBGL_debug_renderer_info", false);
-#else
     ENABLE_IF_REQUESTED(WebGLDebugRendererInfo, m_webglDebugRendererInfo, "WEBGL_debug_renderer_info", true);
-#endif
     ENABLE_IF_REQUESTED(WebGLDebugShaders, m_webglDebugShaders, "WEBGL_debug_shaders", WebGLDebugShaders::supported(*graphicsContext));
     ENABLE_IF_REQUESTED(WebGLDepthTexture, m_webglDepthTexture, "WEBGL_depth_texture", WebGLDepthTexture::supported(*graphicsContext));
     ENABLE_IF_REQUESTED(WebGLDrawBuffers, m_webglDrawBuffers, "WEBGL_draw_buffers", supportsDrawBuffers());
@@ -254,11 +243,7 @@ std::optional<Vector<String>> WebGLRenderingContext::getSupportedExtensions()
     APPEND_IF_SUPPORTED("WEBKIT_WEBGL_compressed_texture_pvrtc", WebGLCompressedTexturePVRTC::supported(*graphicsContext))
     APPEND_IF_SUPPORTED("WEBGL_compressed_texture_s3tc", WebGLCompressedTextureS3TC::supported(*graphicsContext))
     APPEND_IF_SUPPORTED("WEBGL_compressed_texture_s3tc_srgb", WebGLCompressedTextureS3TCsRGB::supported(*graphicsContext))
-#if PLATFORM(DRIFTSTACK)
-    APPEND_IF_SUPPORTED("WEBGL_debug_renderer_info", false)
-#else
     APPEND_IF_SUPPORTED("WEBGL_debug_renderer_info", true)
-#endif
     APPEND_IF_SUPPORTED("WEBGL_debug_shaders", WebGLDebugShaders::supported(*graphicsContext))
     APPEND_IF_SUPPORTED("WEBGL_depth_texture", WebGLDepthTexture::supported(*graphicsContext))
     APPEND_IF_SUPPORTED("WEBGL_draw_buffers", supportsDrawBuffers())
