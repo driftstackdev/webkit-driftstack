@@ -61,6 +61,10 @@ Applies to every commit going forward without exception. If a tool's default app
 
 **Particularly load-bearing here because this repo is public**; commit-message bodies are visible to anyone browsing the GitHub repo, and AI-tooling references in public commit history are exactly the kind of presentation breakage the policy exists to prevent.
 
+**Enforcement update (V-205-CLEANUP, executed 2026-05-09):**
+- Historical violations on this repo's `driftstack-main` branch cleaned via `git filter-repo --refs driftstack-main` + force-push (V-368 runbook). 299 commits rewritten; 183 → 0 `Co-Authored-By: Claude` trailers; all authors normalized to `Driftstack <dev@driftstack.dev>`. Backup branch `backup-driftstack-main-pre-attribution-rewrite-20260509` preserved locally for rollback. Upstream `main` branch untouched.
+- `.git/hooks/commit-msg` rejects commits with banned patterns (`Co-Authored-By: Claude`, `Anthropic`, `Claude`, `GPT`, `Copilot`, `🤖`, `noreply@anthropic.com`). Verify hook present + executable after cloning.
+
 ## ⚠️ Customer-facing copy policy
 
 Marketing site, customer dashboard, admin panel, FAQ, docs, and any public-facing surfaces:
