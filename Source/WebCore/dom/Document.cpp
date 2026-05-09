@@ -11742,16 +11742,110 @@ OptionSet<NoiseInjectionPolicy> Document::noiseInjectionPolicies() const
     return policies;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-538.A (2026-05-09): ITP-classifier-gated AFP activation. Real iPhone
+// Safari fires AFP (FingerprintingProtections) for known-tracker scripts
+// via ITP. Mac WebKit's loader-driven advancedPrivacyProtections never
+// gets FingerprintingProtections set in fork-browse / cloud-mac scenarios
+// because there's no UIProcess wiring. Embedded tracker-domain list +
+// host suffix match here mirrors iPhone's ITP behavior at the Document
+// level (per-script-context AFP is a deeper slice — V-538.B pending).
+// List sourced from publicly-known tracker classifications (Disconnect.me
+// services.json that Apple's TrackingProtection.plist derives from);
+// payment processors (Stripe / PayPal) are NOT classified as trackers
+// per real-iPhone behavior.
+static bool driftstackIsKnownTrackerHost(const String& host)
+{
+    if (host.isEmpty())
+        return false;
+    // Suffix match — covers subdomains (e.g., m.stripe.network → no match;
+    // pixel.facebook.com → matches "facebook.com"). Lowercase comparison.
+    String lower = host.convertToASCIILowercase();
+    static constexpr ASCIILiteral trackers[] = {
+        // Adtech / measurement
+        "doubleclick.net"_s,
+        "googletagmanager.com"_s,
+        "google-analytics.com"_s,
+        "googlesyndication.com"_s,
+        "googleadservices.com"_s,
+        "googletagservices.com"_s,
+        "adservice.google.com"_s,
+        "ads.google.com"_s,
+        // Facebook tracking
+        "connect.facebook.net"_s,
+        "facebook.com"_s,
+        "fbsbx.com"_s,
+        "fbcdn.net"_s,
+        // Analytics platforms
+        "segment.io"_s,
+        "segment.com"_s,
+        "mixpanel.com"_s,
+        "amplitude.com"_s,
+        "fullstory.com"_s,
+        "hotjar.com"_s,
+        "scorecardresearch.com"_s,
+        "quantserve.com"_s,
+        "chartbeat.com"_s,
+        "newrelic.com"_s,
+        // Adobe analytics / DTM
+        "adobedtm.com"_s,
+        "demdex.net"_s,
+        "omtrdc.net"_s,
+        // Other adtech
+        "adsrvr.org"_s,
+        "rubiconproject.com"_s,
+        "openx.net"_s,
+        "pubmatic.com"_s,
+        "criteo.com"_s,
+        "criteo.net"_s,
+        "taboola.com"_s,
+        "outbrain.com"_s,
+        // Bot-detection / fingerprint vendors (real iPhone Safari fires
+        // AFP for these; relevant to V-513.C closed-source vendor probes)
+        "fpjs.io"_s,
+        "fingerprint.com"_s,
+        "datadome.co"_s,
+        "perimeterx.net"_s,
+        "px-cloud.net"_s,
+        "hcaptcha.com"_s,
+        "bot-detector.com"_s,
+    };
+    for (auto& t : trackers) {
+        // Suffix match: host ends with "." + tracker OR equals tracker
+        if (lower == t)
+            return true;
+        if (lower.length() > t.length() + 1
+            && lower.endsWith(t)
+            && lower[lower.length() - t.length() - 1] == '.')
+            return true;
+    }
+    return false;
+}
+#endif
+
 OptionSet<AdvancedPrivacyProtections> Document::advancedPrivacyProtections() const
 {
     RefPtr mainFrameDocument = this->mainFrameDocument();
     if (!mainFrameDocument)
         return { };
 
+    OptionSet<AdvancedPrivacyProtections> policies;
     if (auto* loader = mainFrameDocument->loader())
-        return loader->advancedPrivacyProtections();
+        policies = loader->advancedPrivacyProtections();
 
-    return { };
+#if PLATFORM(DRIFTSTACK)
+    // V-538.A: union loader-driven policy with tracker-host-derived AFP.
+    // Check both this document's URL host AND the main frame's host —
+    // 3rd-party iframes loaded from tracker domains get AFP, AND if a
+    // user directly navigates a top-level frame to a tracker domain
+    // (rare but possible), that also gets AFP.
+    if (!policies.contains(AdvancedPrivacyProtections::FingerprintingProtections)) {
+        if (driftstackIsKnownTrackerHost(m_url.host().toString()))
+            policies.add(AdvancedPrivacyProtections::FingerprintingProtections);
+    }
+#endif
+
+    return policies;
 }
 
 std::optional<uint64_t> Document::noiseInjectionHashSalt() const
