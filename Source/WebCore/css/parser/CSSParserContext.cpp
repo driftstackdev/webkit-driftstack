@@ -128,6 +128,21 @@ CSSParserContext::CSSParserContext(const Settings& settings)
     , cssAttrSubstitutionFunctionEnabled { settings.cssAttrSubstitutionFunctionEnabled() }
     , propertySettings { CSSPropertySettings { settings } }
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-527.A.1 (2026-05-09): force-enable CSS feature flags that real
+    // iPhone Safari 26.4 reports as supported via CSS.supports() but
+    // fork's runtime path leaves disabled despite YAML default=true.
+    // Empirical (V-527-A): anchor-name / position-anchor / animation-timeline
+    // all returned False on fork pre-patch. CSSAnchorPositioningEnabled
+    // YAML default=true at compile time (WebPreferencesDefinitions.h:677)
+    // but propertySettings.cssAnchorPositioningEnabled was constructed
+    // false from the WebProcess Settings copy — IPC propagation gap not
+    // localized in source dive. Force-true here for iPhone-archetype
+    // parity; propertySettings is the parser's authority over which
+    // properties parse without fallback. Same pattern as
+    // applyUASheetBehaviorsToContext line 62.
+    propertySettings.cssAnchorPositioningEnabled = true;
+#endif
 }
 
 void add(Hasher& hasher, const CSSParserContext& context)
