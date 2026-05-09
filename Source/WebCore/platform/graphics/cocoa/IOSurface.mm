@@ -196,8 +196,14 @@ static RetainPtr<IOSurfaceRef> createSurfaceViaCoreVideo(IntSize size, IOSurface
 
     RetainPtr<NSDictionary> additionalProperties = @{
         (id)kCVPixelBufferIOSurfacePropertiesKey: @{
-#if PLATFORM(IOS_FAMILY)
-            // FIXME: Determine what hardware/platforms this should be used on.
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+            // V-569 (founder Rule N source-level investigation 2026-05-09):
+            // iOS sets WriteCombineCache mode for IOSurface; Mac default is
+            // CopyBack (write-back). Different cache modes affect GPU memory
+            // write ordering for sub-pixel rasterization coverage values.
+            // Aligning to iOS WriteCombine on PLATFORM(DRIFTSTACK) to test if
+            // memory ordering is part of the strokes/text 0.04% AA edge
+            // divergence.
             (id)kIOSurfaceCacheMode: @(kIOMapWriteCombineCache),
 #endif
             (id)kIOSurfaceName: surfaceNameToNSString(name).get()
@@ -620,7 +626,7 @@ RetainPtr<CGContextRef> IOSurface::createPlatformContext(PlatformDisplayID displ
     ensureColorSpace();
     auto cgContext = adoptCF(CGIOSurfaceContextCreate(m_surface.get(), m_size.width(), m_size.height(), configuration.bitsPerComponent, bitsPerPixel, protect(m_colorSpace->platformColorSpace()).get(), configuration.bitmapInfo));
 
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
     if (auto displayMask = primaryOpenGLDisplayMask()) {
         if (displayID)
             displayMask = displayMaskForDisplay(displayID);
@@ -629,6 +635,13 @@ ALLOW_DEPRECATED_DECLARATIONS_BEGIN
 ALLOW_DEPRECATED_DECLARATIONS_END
     }
 #else
+    // V-569 (founder Rule N source-level investigation 2026-05-09):
+    // iOS does NOT call CGIOSurfaceContextSetDisplayMask. The display mask
+    // tells CG which display the context renders for, which affects Metal
+    // shader compilation per-display. iOS doesn't have multi-display so
+    // skips this. On PLATFORM(DRIFTSTACK), skip to match iOS — if Mac is
+    // compiling display-specific Metal shaders that differ from iOS shader
+    // path, this aligns it.
     UNUSED_PARAM(displayID);
 #endif
 #if HAVE(CG_CONTEXT_SET_OWNER_IDENTITY)
