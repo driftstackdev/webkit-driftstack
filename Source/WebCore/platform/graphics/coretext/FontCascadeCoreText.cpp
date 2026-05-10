@@ -338,6 +338,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // V-583.B-DIAG: opt-in glyph trace via DRIFTSTACK_GLYPH_DIAG env var.
+    // Off by default; for advance-mismatch root-cause analysis only.
+    if (std::getenv("DRIFTSTACK_GLYPH_DIAG")) {
+        WTFLogAlways("[Driftstack-V583B-DIAG] drawGlyphs anchor=(%.3f,%.3f) ptSize=%.2f n=%zu g0=%u adv0=%.3f",
+            (double)anchorPoint.x(), (double)anchorPoint.y(),
+            (double)platformData.size(), glyphs.size(),
+            glyphs.size() ? static_cast<unsigned>(glyphs[0]) : 0u,
+            glyphs.size() ? (double)advances[0].width : 0.0);
+    }
+#endif
+
     RetainPtr<CGContextRef> cgContext = context.platformContext();
 
     if (!font.allowsAntialiasing())
@@ -458,40 +470,6 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             p.cp = static_cast<uint32_t>(cp);
                             p.pngBytes = entry;
                             anyAtlasHit = true;
-                        }
-                        // V-583.B mini empirical: when ptSize == 16, prefer the
-                        // iPhone-pristine BS-Automate-captured override for
-                        // U+1F62E + U+1F63D (codepoints in V-405 text seed=250)
-                        // over the strike=40 atlas downscale. Confirms whether
-                        // per-ptSize capture closes the residual emoji-glyph
-                        // pixel diff. Override paths sandbox-allowed via
-                        // (subpath driftstack_emoji_atlas).
-                        if (ptSize == 16.0f && (cp == 0x1F62Eu || cp == 0x1F63Du)) {
-                            const char* path = (cp == 0x1F62Eu)
-                                ? "/Users/john/code/driftstack/reference/driftstack_emoji_atlas/v583b-mini/U1F62E-strike16.png"
-                                : "/Users/john/code/driftstack/reference/driftstack_emoji_atlas/v583b-mini/U1F63D-strike16.png";
-                            // Use FileSystem to read the override PNG bytes.
-                            int fd = open(path, O_RDONLY);
-                            if (fd >= 0) {
-                                struct stat st;
-                                if (fstat(fd, &st) == 0 && st.st_size > 0 && st.st_size < (8 << 20)) {
-                                    void* buf = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-                                    if (buf != MAP_FAILED) {
-                                        // Leak intentionally — atlas refs persist for proc lifetime.
-                                        p.atlasHit = true;
-                                        p.cp = static_cast<uint32_t>(cp);
-                                        p.pngBytes = unsafeMakeSpan(static_cast<const uint8_t*>(buf), static_cast<size_t>(st.st_size));
-                                        // V-583.B mini override is captured at strike==ptSize=16,
-                                        // canvasDim=40. Setting perGlyphStrike=16 makes the rendering
-                                        // loop compute scale=1.0, imageDim=40, no downscale.
-                                        p.perGlyphStrike = 16;
-                                        anyAtlasHit = true;
-                                        WTFLogAlways("[Driftstack-V583B] override loaded for U+%04X at ptSize=16, %lld bytes",
-                                            static_cast<uint32_t>(cp), (long long)st.st_size);
-                                    }
-                                }
-                                close(fd);
-                            }
                         }
                     }
                 }
