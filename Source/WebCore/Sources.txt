@@ -1717,6 +1717,7 @@ html/canvas/CanvasRenderingContext2D.cpp @header:RenderStyleGetters
 html/canvas/CanvasRenderingContext2DBase.cpp @header:RenderStyleGetters
 html/canvas/CanvasStyle.cpp
 html/canvas/DriftstackWebGLReadPixelsOverride.cpp
+html/canvas/OpSequenceRecorder.cpp
 html/canvas/EXTBlendMinMax.cpp
 html/canvas/EXTClipControl.cpp
 html/canvas/EXTColorBufferFloat.cpp

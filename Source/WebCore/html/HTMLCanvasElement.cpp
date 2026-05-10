@@ -39,6 +39,14 @@
 #include "DocumentQuirks.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
+// V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
+// (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
+// in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).
+// HTMLCanvasElement.cpp only invokes the standalone self-test entry point;
+// no class-type visibility needed here. Phase C-3.B will register the header
+// when CanvasRenderingContext2DBase.h needs to declare an OpSequenceRecorder
+// member (which is same-dir, so include resolves there without xcodeproj).
+namespace WebCore { void runOpSequenceRecorderSelfTestIfRequested(); }
 #if PLATFORM(DRIFTSTACK)
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -698,6 +706,12 @@ void initV510AtlasOnce()
     if (state.initialized)
         return;
     state.initialized = true;
+
+    // V-581 Phase C-3.A: run OpSequenceRecorder canonical-serializer self-test
+    // exactly once if DRIFTSTACK_TEST_OPSEQ=1. Placed before the atlas-file
+    // checks so a missing/unreadable atlas does not skip the test. No-ops when
+    // env var unset; logs PASS/FAIL via WTFLogAlways; never aborts startup.
+    runOpSequenceRecorderSelfTestIfRequested();
 
     constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_audio_atlas/driftstack-canvas-fuzz-atlas.bin";
     constexpr size_t kHeaderBytes = 32;
