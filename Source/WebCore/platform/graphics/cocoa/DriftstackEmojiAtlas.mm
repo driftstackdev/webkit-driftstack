@@ -47,7 +47,8 @@ void DriftstackEmojiAtlas::mapAtlas()
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        WTFLogAlways("[Driftstack] EmojiAtlas: open failed for %s (errno=%d)", path, errno);
+        WTFLogAlways("[Driftstack] EmojiAtlas: open failed for %s (errno=%d, pid=%d, prog=%s)",
+            path, errno, (int)getpid(), getprogname());
         return;
     }
 
@@ -110,8 +111,8 @@ void DriftstackEmojiAtlas::mapAtlas()
     m_mmapBase = static_cast<const uint8_t*>(base);
     m_mmapSize = st.st_size;
 
-    WTFLogAlways("[Driftstack] EmojiAtlas: mapped %lld bytes from %s; %u entries × %u strikes",
-        (long long)st.st_size, path, numEntries, numStrikes);
+    WTFLogAlways("[Driftstack] EmojiAtlas: mapped %lld bytes from %s; %u entries × %u strikes (pid=%d, prog=%s)",
+        (long long)st.st_size, path, numEntries, numStrikes, (int)getpid(), getprogname());
 }
 
 // Read an IndexEntry from the byte span at logical entry index i.

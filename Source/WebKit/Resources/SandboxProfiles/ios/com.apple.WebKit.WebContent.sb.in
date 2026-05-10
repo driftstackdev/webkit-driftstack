@@ -71,6 +71,24 @@
 (allow file-read*
     (subpath "/private/var/MobileAsset/PreinstalledAssetsV2/InstallWithOs"))
 
+#if PLATFORM(DRIFTSTACK)
+;;; Driftstack: allow WebContent read access to the iOS font binary
+;;; install dir + atlas binaries. See WebProcess/com.apple.WebProcess.sb.in
+;;; for full path-convention rationale. This file is ALSO compiled and
+;;; embedded for the .Development XPC service used on macOS development
+;;; builds (per Source/WebKit/DerivedSources.make), so the driftstack
+;;; allow rules must live here too — not only in com.apple.WebProcess.sb.in.
+(allow file-read*
+    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath "/var/driftstack/fonts")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath "/var/driftstack/atlas")
+    (subpath "/var/lib/driftstack/data"))
+#endif
+
 ;; FIXME: Remove when rdar://141156558 has been fixed.
 #if ENABLE(REMOVE_XPC_AND_MACH_SANDBOX_EXTENSIONS_IN_WEBCONTENT)
 (allow file-read*

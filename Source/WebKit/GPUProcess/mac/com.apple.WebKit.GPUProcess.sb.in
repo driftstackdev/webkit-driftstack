@@ -134,6 +134,24 @@
     (subpath "/usr/lib")
     (subpath "/usr/share"))))
 
+#if PLATFORM(DRIFTSTACK)
+;;; Driftstack: GPU process renders canvas (drawGlyphs / display-list replay)
+;;; when GPUProcessForCanvasRendering is enabled (default in modern WebKit2).
+;;; DriftstackEmojiAtlas singleton mmap()s the atlas binary in the rendering
+;;; process; on macOS that's GPU process. Mirrors WebProcess.sb.in /
+;;; com.apple.WebKit.WebContent.sb.in subpath rules — same dev/prod path
+;;; conventions per V-090 / V-117 / V-158 / V-166. (V-582 Path A.)
+(allow file-read*
+    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath "/var/driftstack/fonts")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
+    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath "/var/driftstack/atlas")
+    (subpath "/var/lib/driftstack/data"))
+#endif
+
 ;;; Allow mapping of system frameworks + dylibs
 (allow file-map-executable
     (subpath "/System/Library/Frameworks")

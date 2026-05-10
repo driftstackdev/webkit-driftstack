@@ -459,6 +459,10 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
 
             if (anyAtlasHit) {
                 didCompositePath = true;
+                int hitCount = 0;
+                for (auto& p : plans) if (p.atlasHit) ++hitCount;
+                WTFLogAlways("[Driftstack-V582] EmojiAtlas dispatch fired: %d/%zu glyphs atlas-HIT (pid=%d, prog=%s, ptSize=%.1f, strike=%u)",
+                    hitCount, glyphs.size(), (int)getpid(), getprogname(), (double)ptSize, strike);
                 // Compute glyph positions in CTM coords (no text-matrix flip).
                 Vector<CGPoint, 256> positions;
                 positions.reserveInitialCapacity(glyphs.size());

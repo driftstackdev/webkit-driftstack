@@ -126,6 +126,13 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
+;;; V-582: dev-only canvas dump dir for empirical diff vs iPhone reference.
+;;; Triggered by DRIFTSTACK_DUMP_CANVAS_DIR env var; writes one .b64 per
+;;; canvas toDataURL() call. Limited to /tmp/v405-dump-mac-postfix to keep
+;;; blast radius tight; production builds do not set the env var.
+(allow file-read* file-write*
+    (subpath "/tmp/v405-dump-mac-postfix")
+    (subpath "/private/tmp/v405-dump-mac-postfix"))
 #endif
 
 ;;; Allow reading internal profiles on development builds
