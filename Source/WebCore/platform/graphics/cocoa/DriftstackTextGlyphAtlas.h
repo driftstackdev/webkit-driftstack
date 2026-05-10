@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <span>
+#include <vector>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -59,8 +60,13 @@ public:
     // Resolve CSS-name → font_id. Mirrors V-149 ASCII font enum.
     static uint16_t fontIdForFamily(const String& familyName);
 
-private:
+    // Enumerate all codepoints present in atlas (used for reverse-map build).
+    // Returns sorted unique set of codepoints.
+    std::vector<uint32_t> allCodepoints() const;
+
     DriftstackTextGlyphAtlas();
+
+private:
     ~DriftstackTextGlyphAtlas() = default;
     DriftstackTextGlyphAtlas(const DriftstackTextGlyphAtlas&) = delete;
     DriftstackTextGlyphAtlas& operator=(const DriftstackTextGlyphAtlas&) = delete;

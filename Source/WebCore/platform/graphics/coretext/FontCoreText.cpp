@@ -30,6 +30,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
+#include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "DriftstackKerningTable.h"
 #include <unordered_map>
 #include <unordered_set>
@@ -1042,6 +1043,52 @@ char32_t Font::driftstackCodepointForColorGlyph(Glyph glyph) const
 
     auto it = m_driftstackEmojiReverseMap.find(glyph);
     return it != m_driftstackEmojiReverseMap.end() ? it->value : 0;
+}
+
+// V-583.K-text Phase 3b: glyph→codepoint reverse map for DriftstackTextGlyphAtlas.
+// Built lazily on first call. Iterates atlas's complete codepoint enumeration
+// (all V-405 codepoints covered: ASCII + CJK + Arabic + Devanagari + Emoji),
+// queries CTFont for each codepoint's glyph, stores reverse mapping.
+// Cost: ~14000 CTFontGetGlyphsForCharacters calls per font; one-time at first
+// text-render with atlas-available.
+char32_t Font::driftstackCodepointForTextGlyph(Glyph glyph) const
+{
+    if (!m_driftstackTextGlyphReverseMapBuilt) {
+        const auto& atlas = DriftstackTextGlyphAtlas::singleton();
+        if (!atlas.isAvailable()) {
+            m_driftstackTextGlyphReverseMapBuilt = true;
+            return 0;
+        }
+
+        RetainPtr<CTFontRef> font = ctFont();
+        auto codepoints = atlas.allCodepoints();
+        for (uint32_t cp : codepoints) {
+            std::array<UniChar, 2> codeUnits {};
+            std::array<CGGlyph, 2> glyphs {};
+            CFIndex len;
+            if (cp > 0xFFFFu) {
+                uint32_t scalar = cp - 0x10000u;
+                codeUnits[0] = 0xD800u | (scalar >> 10);
+                codeUnits[1] = 0xDC00u | (scalar & 0x3FFu);
+                len = 2;
+            } else {
+                codeUnits[0] = static_cast<UniChar>(cp);
+                len = 1;
+            }
+            if (CTFontGetGlyphsForCharacters(font.get(), codeUnits.data(), glyphs.data(), len)) {
+                if (glyphs[0])
+                    m_driftstackTextGlyphReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
+            }
+        }
+        m_driftstackTextGlyphReverseMapBuilt = true;
+        WTFLogAlways("[Driftstack-V583K-text] reverse map built for family='%s', %u entries (atlas cps=%zu)",
+            m_platformData.familyName().utf8().data(),
+            static_cast<unsigned>(m_driftstackTextGlyphReverseMap.size()),
+            codepoints.size());
+    }
+
+    auto it = m_driftstackTextGlyphReverseMap.find(glyph);
+    return it != m_driftstackTextGlyphReverseMap.end() ? it->value : 0;
 }
 
 // V-090 / Phase F.1.B-2: decode atlas PNG bytes into a CGImageRef and

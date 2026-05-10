@@ -271,6 +271,10 @@ public:
     // forward glyph map for each. Returns 0 if glyph is not a known
     // single-codepoint color emoji.
     char32_t driftstackCodepointForColorGlyph(Glyph) const;
+    // V-583.K-text Phase 3b: glyph→codepoint resolution for atlas substitution.
+    // Returns 0 if glyph is not in atlas reverse-map. Lazy-builds reverse map
+    // from DriftstackTextGlyphAtlas codepoint enumeration on first call.
+    char32_t driftstackCodepointForTextGlyph(Glyph) const;
     // V-090 / Phase F.1.B-2: decoded atlas PNG → CGImageRef cache lookup.
     // pngBytes must remain valid for the lifetime of the returned image
     // (atlas mmap'd region — singleton lifetime is process lifetime).
@@ -409,6 +413,12 @@ private:
     // per codepoint at first use.
     mutable HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_driftstackAsciiReverseMap;
     mutable bool m_driftstackAsciiReverseMapBuilt { false };
+    // V-583.K-text Phase 3b: glyph→codepoint reverse map for all codepoints
+    // covered by DriftstackTextGlyphAtlas (ASCII + CJK + Arabic + Devanagari).
+    // Populated lazily on first text-render-with-atlas access; iterates atlas's
+    // codepoint set and queries CTFont for glyph mapping.
+    mutable HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_driftstackTextGlyphReverseMap;
+    mutable bool m_driftstackTextGlyphReverseMapBuilt { false };
 #endif
 
 #if PLATFORM(COCOA)

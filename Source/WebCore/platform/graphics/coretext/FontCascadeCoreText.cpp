@@ -577,9 +577,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             }
         }
     }
-    // V-583.K-text Phase 3a (logging-only): observe how many text glyphs would
-    // be candidates for atlas substitution. Dispatch hook to be enabled after
-    // verifying atlas coverage + correctness via empirical comparison.
+    // V-583.K-text Phase 3b (reverse-map-only): resolve glyph→codepoint for each
+    // text glyph, count atlas hits per dispatch. Still routes glyphs through CT
+    // (no PNG substitution yet). Phase 3c will add CGImage decode + render.
     if (!didCompositePath) {
         auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
         if (textAtlas.isAvailable() && glyphs.size() > 0) {
@@ -588,10 +588,20 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             const float ptSize = font.platformData().size();
             const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
             if (fontId != UINT16_MAX) {
+                unsigned hits = 0, misses = 0;
+                for (auto g : glyphs) {
+                    char32_t cp = font.driftstackCodepointForTextGlyph(g);
+                    if (cp) {
+                        auto bytes = textAtlas.lookup(fontId, ptSizeRound, static_cast<uint32_t>(cp));
+                        if (!bytes.empty()) ++hits;
+                        else ++misses;
+                    } else
+                        ++misses;
+                }
                 static unsigned logCount = 0;
-                if (++logCount <= 20) {
-                    WTFLogAlways("[Driftstack-V583K-text] would-dispatch family='%s' fontId=%u ptSize=%u glyphCount=%zu (atlas-loaded; substitution gated)",
-                        familyName.utf8().data(), fontId, ptSizeRound, glyphs.size());
+                if (++logCount <= 30) {
+                    WTFLogAlways("[Driftstack-V583K-text] dispatch family='%s' fontId=%u ptSize=%u glyphCount=%zu hits=%u misses=%u",
+                        familyName.utf8().data(), fontId, ptSizeRound, glyphs.size(), hits, misses);
                 }
             }
         }

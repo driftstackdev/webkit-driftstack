@@ -8,6 +8,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <algorithm>
 #include <fcntl.h>
 #include <span>
 #include <sys/mman.h>
@@ -54,9 +55,9 @@ void DriftstackTextGlyphAtlas::loadAtlas()
         return;
     }
 
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     auto* base = static_cast<const uint8_t*>(p);
 
-    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     // Magic check
     if (base[0] != 'D' || base[1] != 'T' || base[2] != 'G' || base[3] != 'A') {
         munmap(p, st.st_size);
@@ -132,6 +133,30 @@ std::span<const uint8_t> DriftstackTextGlyphAtlas::lookup(uint16_t fontId, uint1
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     return std::span<const uint8_t>(m_pngBlob + entry->pngOffset, entry->pngSize);
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+}
+
+std::vector<uint32_t> DriftstackTextGlyphAtlas::allCodepoints() const
+{
+    std::vector<uint32_t> cps;
+    if (!m_index || !m_indexCount)
+        return cps;
+
+    cps.reserve(m_indexCount);
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+    uint32_t lastCp = UINT32_MAX;
+    for (uint32_t i = 0; i < m_indexCount; ++i) {
+        uint32_t cp = m_index[i].codepoint;
+        if (cp != lastCp) {
+            cps.push_back(cp);
+            lastCp = cp;
+        }
+    }
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+    // Dedup (index sorted by font_id+ptSize+cp, so same cp may appear interleaved).
+    std::sort(cps.begin(), cps.end());
+    cps.erase(std::unique(cps.begin(), cps.end()), cps.end());
+    return cps;
 }
 
 uint16_t DriftstackTextGlyphAtlas::fontIdForFamily(const String& familyName)
