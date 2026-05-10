@@ -921,7 +921,7 @@ static String applyV2DeltaAndReEncode(const String& macForkDataURL, std::span<co
     return makeString("data:image/png;base64,"_s, b64Out);
 }
 
-String v510AtlasLookup(const String& macForkDataURL)
+String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA256Hex = String())
 {
     initV510AtlasOnce();
     auto& state = v510AtlasState();
@@ -931,9 +931,39 @@ String v510AtlasLookup(const String& macForkDataURL)
     constexpr size_t kIndexEntryStride = 28;
     constexpr size_t kHashBytes = 16;
 
-    auto utf8 = macForkDataURL.utf8();
+    // V-581 Phase C-3.C: dispatch by atlas format version.
+    //   v1/v2 atlas (keyHashAlgo=1, formatVersion=1|2): key = first 16 bytes
+    //     of CC_SHA256(macForkDataURL.utf8()) — backwards compatible.
+    //   v3 atlas (keyHashAlgo=2, formatVersion=3): key = first 16 bytes of
+    //     opSequenceSHA256Hex (the JS-side / C++-side op-sequence canonical hash).
+    //     If opSeqSha is empty (e.g. no canvas ops were recorded, or the canvas
+    //     context is not 2D), v3 lookup is skipped and atlas miss returned.
     std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> fullDigest;
-    CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), fullDigest.data());
+    if (state.formatVersion == 3) {
+        if (opSequenceSHA256Hex.length() < 32)
+            return String();  // need at least 16 bytes (32 hex chars) of key
+        // Decode first 16 bytes from hex.
+        for (size_t i = 0; i < kHashBytes; ++i) {
+            char hi = opSequenceSHA256Hex[i * 2];
+            char lo = opSequenceSHA256Hex[i * 2 + 1];
+            auto fromHex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hiV = fromHex(hi), loV = fromHex(lo);
+            if (hiV < 0 || loV < 0)
+                return String();
+            fullDigest[i] = static_cast<uint8_t>((hiV << 4) | loV);
+        }
+        // Zero-fill remaining bytes (only first 16 used for index lookup).
+        for (size_t i = kHashBytes; i < CC_SHA256_DIGEST_LENGTH; ++i)
+            fullDigest[i] = 0;
+    } else {
+        auto utf8 = macForkDataURL.utf8();
+        CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), fullDigest.data());
+    }
 
     size_t lo = 0, hi = state.numEntries;
     while (lo < hi) {
@@ -1072,10 +1102,21 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         return env && env[0] == '1';
     }();
     if (s_canvasFuzzAtlasEnabled) {
-        auto substitute = v510AtlasLookup(encoded);
+        // V-581 Phase C-3.C: compute opSeqSha for v3 atlas dispatch (no-op for
+        // v1/v2 atlases). Only meaningful if the canvas has a 2D context with
+        // recorded ops; non-2D contexts (WebGL, WebGPU, ImageBitmap) return
+        // empty String here and v510AtlasLookup falls back to v1/v2 hashing.
+        String opSeqSha;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
+        }
+        auto substitute = v510AtlasLookup(encoded, opSeqSha);
         if (!substitute.isNull()) {
-            WTFLogAlways("[Driftstack-V510] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u)",
-                width(), height(), encoded.length(), substitute.length());
+            WTFLogAlways("[Driftstack-V510] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u, opSeq=%s)",
+                width(), height(), encoded.length(), substitute.length(),
+                opSeqSha.isEmpty() ? "<v1/v2>" : opSeqSha.left(16).utf8().data());
             return UncachedString { substitute };
         }
     }
