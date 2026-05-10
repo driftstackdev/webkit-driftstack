@@ -459,6 +459,7 @@ platform/graphics/cocoa/DriftstackAsciiAtlas.mm @nonARC
 platform/graphics/cocoa/DriftstackAudioAtlas.mm @nonARC
 platform/graphics/cocoa/DriftstackCompositeAtlas.mm @nonARC
 platform/graphics/cocoa/DriftstackEmojiAtlas.mm @nonARC
+platform/graphics/cocoa/DriftstackTextGlyphAtlas.cpp
 platform/graphics/cocoa/DriftstackWebGPUAtlas.mm @nonARC
 platform/graphics/cocoa/FloatRectCocoa.mm @nonARC
 platform/graphics/cocoa/FontCacheCocoa.mm @nonARC
