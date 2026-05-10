@@ -671,6 +671,9 @@ void CanvasRenderingContext2DBase::setFillColorImpl(Color&& color, String&& unpa
 
 void CanvasRenderingContext2DBase::setLineWidth(double width)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetLineWidth(width);
+#endif
     if (!(std::isfinite(width) && width > 0))
         return;
     if (state().lineWidth == width)
@@ -685,6 +688,12 @@ void CanvasRenderingContext2DBase::setLineWidth(double width)
 
 void CanvasRenderingContext2DBase::setLineCap(CanvasLineCap canvasLineCap)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-405 fuzzer + JS canonical strings: "butt" / "round" / "square".
+    ASCIILiteral canonical = canvasLineCap == CanvasLineCap::Butt ? "butt"_s
+        : canvasLineCap == CanvasLineCap::Round ? "round"_s : "square"_s;
+    driftstackOpSequenceRecorder().recordSetLineCap(canonical);
+#endif
     auto lineCap = fromCanvasLineCap(canvasLineCap);
     if (state().lineCap == lineCap)
         return;
@@ -713,6 +722,12 @@ void CanvasRenderingContext2DBase::setLineCap(const String& stringValue)
 
 void CanvasRenderingContext2DBase::setLineJoin(CanvasLineJoin canvasLineJoin)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-405 fuzzer + JS canonical strings: "miter" / "round" / "bevel".
+    ASCIILiteral canonical = canvasLineJoin == CanvasLineJoin::Miter ? "miter"_s
+        : canvasLineJoin == CanvasLineJoin::Round ? "round"_s : "bevel"_s;
+    driftstackOpSequenceRecorder().recordSetLineJoin(canonical);
+#endif
     auto lineJoin = fromCanvasLineJoin(canvasLineJoin);
     if (state().lineJoin == lineJoin)
         return;
@@ -741,6 +756,9 @@ void CanvasRenderingContext2DBase::setLineJoin(const String& stringValue)
 
 void CanvasRenderingContext2DBase::setMiterLimit(double limit)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetMiterLimit(limit);
+#endif
     if (!(std::isfinite(limit) && limit > 0))
         return;
     if (state().miterLimit == limit)
@@ -856,6 +874,9 @@ void CanvasRenderingContext2DBase::applyLineDash() const
 
 void CanvasRenderingContext2DBase::setGlobalAlpha(double alpha)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetGlobalAlpha(alpha);
+#endif
     if (!(alpha >= 0 && alpha <= 1))
         return;
     if (state().globalAlpha == alpha)
@@ -870,6 +891,9 @@ void CanvasRenderingContext2DBase::setGlobalAlpha(double alpha)
 
 void CanvasRenderingContext2DBase::setGlobalCompositeOperation(const String& operation)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetGlobalCompositeOperation(operation);
+#endif
     CompositeOperator op = CompositeOperator::SourceOver;
     BlendMode blendMode = BlendMode::Normal;
     if (!parseCompositeAndBlendOperator(operation, op, blendMode))
@@ -912,6 +936,9 @@ void CanvasRenderingContext2DBase::setFilterString(const String& filterString)
 
 void CanvasRenderingContext2DBase::scale(double sx, double sy)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordScale(sx, sy);
+#endif
     GraphicsContext* c = effectiveDrawingContext();
     if (!c)
         return;
@@ -938,6 +965,9 @@ void CanvasRenderingContext2DBase::scale(double sx, double sy)
 
 void CanvasRenderingContext2DBase::rotate(double angleInRadians)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordRotate(angleInRadians);
+#endif
     GraphicsContext* c = effectiveDrawingContext();
     if (!c)
         return;
@@ -960,6 +990,9 @@ void CanvasRenderingContext2DBase::rotate(double angleInRadians)
 
 void CanvasRenderingContext2DBase::translate(double tx, double ty)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordTranslate(tx, ty);
+#endif
     GraphicsContext* c = effectiveDrawingContext();
     if (!c)
         return;
@@ -1126,6 +1159,9 @@ void CanvasRenderingContext2DBase::setFillColor(float r, float g, float b, float
 
 void CanvasRenderingContext2DBase::beginPath()
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordBeginPath();
+#endif
     m_path.clear();
 }
 
@@ -1165,11 +1201,17 @@ static WindRule NODELETE toWindRule(CanvasFillRule rule)
 
 void CanvasRenderingContext2DBase::fill(CanvasFillRule windingRule)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordFill();
+#endif
     fillInternal(m_path, windingRule);
 }
 
 void CanvasRenderingContext2DBase::stroke()
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordStroke();
+#endif
     strokeInternal(m_path);
 }
 
@@ -1381,6 +1423,9 @@ bool CanvasRenderingContext2DBase::isPointInStrokeInternal(const Path& path, dou
 
 void CanvasRenderingContext2DBase::clearRect(double x, double y, double width, double height)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordClearRect(x, y, width, height);
+#endif
     if (!validateRectForCanvas(x, y, width, height))
         return;
     auto* context = effectiveDrawingContext();
@@ -1418,6 +1463,9 @@ void CanvasRenderingContext2DBase::clearRect(double x, double y, double width, d
 
 void CanvasRenderingContext2DBase::fillRect(double x, double y, double width, double height)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordFillRect(x, y, width, height);
+#endif
     if (!validateRectForCanvas(x, y, width, height))
         return;
 
@@ -1468,6 +1516,9 @@ void CanvasRenderingContext2DBase::fillRect(double x, double y, double width, do
 
 void CanvasRenderingContext2DBase::strokeRect(double x, double y, double width, double height)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordStrokeRect(x, y, width, height);
+#endif
     if (!validateRectForCanvas(x, y, width, height))
         return;
 
@@ -2144,6 +2195,9 @@ CanvasRenderingContext2DBase::StyleVariant CanvasRenderingContext2DBase::strokeS
 
 void CanvasRenderingContext2DBase::setStrokeStyle(String&& colorString)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetStrokeStyle(colorString);
+#endif
     if (colorString == state().unparsedStrokeColor)
         return;
 
@@ -2182,6 +2236,9 @@ CanvasRenderingContext2DBase::StyleVariant CanvasRenderingContext2DBase::fillSty
 
 void CanvasRenderingContext2DBase::setFillStyle(String&& colorString)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetFillStyle(colorString);
+#endif
     if (colorString == state().unparsedFillColor)
         return;
 
@@ -2855,6 +2912,18 @@ Ref<Path2D> CanvasRenderingContext2DBase::getPath() const
 
 void CanvasRenderingContext2DBase::setTextAlign(CanvasTextAlign canvasTextAlign)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Canonical strings: "start" / "end" / "left" / "right" / "center".
+    ASCIILiteral canonical;
+    switch (canvasTextAlign) {
+    case CanvasTextAlign::Start:  canonical = "start"_s; break;
+    case CanvasTextAlign::End:    canonical = "end"_s; break;
+    case CanvasTextAlign::Left:   canonical = "left"_s; break;
+    case CanvasTextAlign::Right:  canonical = "right"_s; break;
+    case CanvasTextAlign::Center: canonical = "center"_s; break;
+    }
+    driftstackOpSequenceRecorder().recordSetTextAlign(canonical);
+#endif
     auto textAlign = fromCanvasTextAlign(canvasTextAlign);
     if (state().textAlign == textAlign)
         return;
@@ -2864,6 +2933,19 @@ void CanvasRenderingContext2DBase::setTextAlign(CanvasTextAlign canvasTextAlign)
 
 void CanvasRenderingContext2DBase::setTextBaseline(CanvasTextBaseline canvasTextBaseline)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Canonical strings: "top" / "hanging" / "middle" / "alphabetic" / "ideographic" / "bottom".
+    ASCIILiteral canonical;
+    switch (canvasTextBaseline) {
+    case CanvasTextBaseline::Top:         canonical = "top"_s; break;
+    case CanvasTextBaseline::Hanging:     canonical = "hanging"_s; break;
+    case CanvasTextBaseline::Middle:      canonical = "middle"_s; break;
+    case CanvasTextBaseline::Alphabetic:  canonical = "alphabetic"_s; break;
+    case CanvasTextBaseline::Ideographic: canonical = "ideographic"_s; break;
+    case CanvasTextBaseline::Bottom:      canonical = "bottom"_s; break;
+    }
+    driftstackOpSequenceRecorder().recordSetTextBaseline(canonical);
+#endif
     auto textBaseline = fromCanvasTextBaseline(canvasTextBaseline);
     if (state().textBaseline == textBaseline)
         return;
