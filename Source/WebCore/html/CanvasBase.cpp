@@ -230,6 +230,30 @@ void CanvasBase::setSize(const IntSize& size)
 
 bool CanvasBase::shouldAccelerate() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-633.C — force Unaccelerated 2D Canvas to match iOS canvas pipeline.
+    //
+    // V-633.A empirical (2026-05-11): Mac canvas defaults to
+    // RenderingMode::Accelerated → GPU/IOSurface-backed CGContext.
+    // `CGBitmapContextGetData()` returned NULL on every Phase 3c
+    // dispatch sample, meaning our software CG draw chain (transparency
+    // layer + DestinationIn + DrawImage) emitted commands against a
+    // buffer that toDataURL's GPU-backed pixel-readback path does not
+    // honor. Atlas-ON substitution (Path A insurance) therefore could
+    // not change canvas SHAs even when the substitution was correct.
+    //
+    // Forcing RenderingMode::Unaccelerated routes canvas draws through
+    // a CPU bitmap context — same pipeline iOS canvas uses (Memory rule
+    // N: "ImageBuffer rendering mode (Accelerated vs Unaccelerated) is
+    // the first tactical knob to flip empirically — Mac defaults to
+    // GPU, iOS may use different shader path → different output").
+    //
+    // Dual benefit: (a) Path A atlas-ON dispatch becomes pixel-effective;
+    // (b) Layer 4 (CG rasterizer) atlas-OFF gap (V-653 scope) likely
+    // narrows because CPU CG and iOS CG share more of their rasterizer
+    // implementation than GPU CG does.
+    return false;
+#else
     size_t area = size().unclampedArea();
     RefPtr scriptExecutionContext = this->scriptExecutionContext();
 #if USE(CA) || USE(SKIA)
@@ -245,6 +269,7 @@ bool CanvasBase::shouldAccelerate() const
 #else
     UNUSED_PARAM(area);
     return false;
+#endif
 #endif
 }
 

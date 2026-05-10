@@ -260,6 +260,26 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
                 } else {
                     Rr = Rg = Rb = 0.0;
                 }
+            } else if (op == CompositeOperator::DestinationAtop && blendMode == BlendMode::Normal) {
+                // V-590-revisit: W3C destination-atop (Porter-Duff Fa=(1-αb), Fb=αs):
+                //   co = αs*Cs*(1-αb) + αb*Cb*αs
+                //   αo = αs*(1-αb) + αb*αs = αs
+                Ra = Sa;
+                if (Ra > 0.0) {
+                    Rr = ((1.0 - Ba) * Sr) + (Ba * Br);
+                    Rg = ((1.0 - Ba) * Sg) + (Ba * Bg);
+                    Rb = ((1.0 - Ba) * Sb) + (Ba * Bb);
+                } else {
+                    Rr = Rg = Rb = 0.0;
+                }
+            } else if (op == CompositeOperator::PlusLighter && blendMode == BlendMode::Normal) {
+                // V-590-revisit: W3C plus-lighter (additive without source-over):
+                //   co = αs*Cs + αb*Cb  (clamp per channel)
+                //   αo = αs + αb        (clamp)
+                Ra = std::min(1.0, Sa + Ba);
+                Rr = std::min(1.0, Sa * Sr + Ba * Br);
+                Rg = std::min(1.0, Sa * Sg + Ba * Bg);
+                Rb = std::min(1.0, Sa * Sb + Ba * Bb);
             } else {
                 // Generic blend + source-over composite.
                 double blendR, blendG, blendB;

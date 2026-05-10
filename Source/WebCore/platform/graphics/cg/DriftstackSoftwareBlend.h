@@ -37,6 +37,17 @@ inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blend
         return true;
     if (op == CompositeOperator::XOR && blendMode == BlendMode::Normal)
         return true;
+    // V-590-revisit (founder verdict 2026-05-11 — Rule N locked): V-589
+    // empirical enumeration identified destination-atop ×3 + lighter (PlusLighter)
+    // ×2 + saturation ×1 across 6 mass-diff compositing seeds in V-405.
+    // Saturation is already covered via the blendMode set above. destination-atop
+    // and plus-lighter map to W3C composite operators (not blend modes), so
+    // route them through the software path here where the Porter-Duff impl
+    // matches iPhone CG bit-exactly.
+    if (op == CompositeOperator::DestinationAtop && blendMode == BlendMode::Normal)
+        return true;
+    if (op == CompositeOperator::PlusLighter && blendMode == BlendMode::Normal)
+        return true;
     return false;
 }
 
