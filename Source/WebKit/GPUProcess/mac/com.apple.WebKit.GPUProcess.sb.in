@@ -148,6 +148,8 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    ;;; V-583.K-text: text glyph atlas
+    (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 #endif
