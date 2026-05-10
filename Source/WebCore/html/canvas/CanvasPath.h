@@ -35,11 +35,21 @@ namespace WebCore {
 
 struct DOMPointInit;
 template<typename> class ExceptionOr;
+#if PLATFORM(DRIFTSTACK)
+class OpSequenceRecorder;
+#endif
 
 class CanvasPath {
 public:
     using RadiusVariant = Variant<double, DOMPointInit>;
     virtual ~CanvasPath() = default;
+
+#if PLATFORM(DRIFTSTACK)
+    // V-581 Phase C-3.B-2: per-subclass override returning the canvas-context's
+    // op recorder (or nullptr for Path2D, which does not record into any
+    // context). CRC2DBase overrides to return its recorder.
+    virtual OpSequenceRecorder* driftstackOpRecorderForPath() { return nullptr; }
+#endif
 
     void closePath();
     void moveTo(float x, float y);

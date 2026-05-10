@@ -532,6 +532,8 @@ public:
     // DerivedSources unified-source files would break).
     OpSequenceRecorder& driftstackOpSequenceRecorder() const;
     String driftstackOpSequenceSHA256(uint16_t canvasW, uint16_t canvasH) const;
+    // V-581 Phase C-3.B-2: CanvasPath override — returns this context's recorder.
+    OpSequenceRecorder* driftstackOpRecorderForPath() override;
 private:
     mutable std::unique_ptr<OpSequenceRecorder> m_driftstackOpSequenceRecorder;
 #endif

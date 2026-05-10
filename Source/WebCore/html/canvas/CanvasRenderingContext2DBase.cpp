@@ -314,6 +314,11 @@ String CanvasRenderingContext2DBase::driftstackOpSequenceSHA256(uint16_t canvasW
         return String();
     return m_driftstackOpSequenceRecorder->finalizeSHA256Hex(canvasW, canvasH);
 }
+
+OpSequenceRecorder* CanvasRenderingContext2DBase::driftstackOpRecorderForPath()
+{
+    return &driftstackOpSequenceRecorder();
+}
 #endif
 
 bool CanvasRenderingContext2DBase::isAccelerated() const

@@ -33,6 +33,10 @@
 #include "config.h"
 #include "CanvasRenderingContext2D.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "OpSequenceRecorder.h"
+#endif
+
 #include "AXObjectCache.h"
 #include "CSSFilterRenderer.h"
 #include "CSSFontSelector.h"
@@ -200,6 +204,9 @@ void CanvasRenderingContext2D::drawFocusIfNeededInternal(const Path& path, Eleme
 
 void CanvasRenderingContext2D::setFont(const String& newFont)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetFont(newFont);
+#endif
     Ref document = canvas().document();
     document->updateStyleIfNeeded();
 
@@ -287,12 +294,24 @@ CanvasDirection CanvasRenderingContext2D::direction() const
 
 void CanvasRenderingContext2D::fillText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (maxWidth)
+        driftstackOpSequenceRecorder().recordFillTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        driftstackOpSequenceRecorder().recordFillText(text, x, y);
+#endif
     canvasBase().recordLastFillText(text);
     drawTextInternal(text, x, y, true, maxWidth);
 }
 
 void CanvasRenderingContext2D::strokeText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (maxWidth)
+        driftstackOpSequenceRecorder().recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        driftstackOpSequenceRecorder().recordStrokeText(text, x, y);
+#endif
     drawTextInternal(text, x, y, false, maxWidth);
 }
 

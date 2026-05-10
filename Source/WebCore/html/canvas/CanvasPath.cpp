@@ -45,11 +45,18 @@
 #include <numbers>
 #include <wtf/MathExtras.h>
 #include <wtf/text/MakeString.h>
+#if PLATFORM(DRIFTSTACK)
+#include "OpSequenceRecorder.h"
+#endif
 
 namespace WebCore {
 
 void CanvasPath::closePath()
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordClosePath();
+#endif
     if (m_path.isEmpty())
         return;
 
@@ -62,6 +69,10 @@ void CanvasPath::closePath()
 
 void CanvasPath::moveTo(float x, float y)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordMoveTo(x, y);
+#endif
     if (!std::isfinite(x) || !std::isfinite(y))
         return;
     if (!hasInvertibleTransform()) [[unlikely]]
@@ -76,6 +87,10 @@ void CanvasPath::lineTo(FloatPoint point)
 
 void CanvasPath::lineTo(float x, float y)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordLineTo(x, y);
+#endif
     if (!std::isfinite(x) || !std::isfinite(y))
         return;
     if (!hasInvertibleTransform()) [[unlikely]]
@@ -162,6 +177,10 @@ static void normalizeAngles(float& startAngle, float& endAngle, bool anticlockwi
 
 ExceptionOr<void> CanvasPath::arc(float x, float y, float radius, float startAngle, float endAngle, bool anticlockwise)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordArc(x, y, radius, startAngle, endAngle, anticlockwise);
+#endif
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(radius) || !std::isfinite(startAngle) || !std::isfinite(endAngle))
         return { };
 
@@ -228,6 +247,10 @@ ExceptionOr<void> CanvasPath::ellipse(float x, float y, float radiusX, float rad
 
 void CanvasPath::rect(float x, float y, float width, float height)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordRect(x, y, width, height);
+#endif
     if (!hasInvertibleTransform()) [[unlikely]]
         return;
 
