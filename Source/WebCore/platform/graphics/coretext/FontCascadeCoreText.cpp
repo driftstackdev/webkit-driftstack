@@ -679,12 +679,34 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // Draw at baseline-aligned anchor.
                         float drawX = textPositions[i].x - bearingX;
                         float drawY = textPositions[i].y - baselineY;
+                        // V-627.B: tint alpha-mask atlas image with active fill
+                        // color via transparency layer. Atlas PNGs encode alpha
+                        // only (RGB=(0,0,0); alpha = glyph coverage, per V-627.A
+                        // post-process). Pipeline:
+                        //   1. begin transparency layer (isolated compositing)
+                        //   2. fillRect with cgContext's current fill color —
+                        //      paints the user's fillStyle across the canvasW ×
+                        //      canvasH glyph rect inside the layer.
+                        //   3. setBlendMode(DestinationIn): subsequent draws
+                        //      use src alpha to mask dest pixels.
+                        //   4. drawImage(alpha-mask): keeps fill-color pixels
+                        //      where mask alpha > 0; everywhere else, layer
+                        //      pixels alpha→0 → composited as transparent.
+                        //   5. end transparency layer → composite onto canvas.
+                        // Result: user-colored, alpha-blended glyph painted
+                        // ONLY where mask is non-zero. Surrounding canvas
+                        // pixels are preserved (no white overpaint).
                         CGContextSaveGState(cgContext.get());
                         CGContextTranslateCTM(cgContext.get(), drawX, drawY);
                         CGContextTranslateCTM(cgContext.get(), 0.f, canvasH);
                         CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
+                        CGContextBeginTransparencyLayer(cgContext.get(), nullptr);
+                        CGContextFillRect(cgContext.get(),
+                            CGRectMake(0.f, 0.f, canvasW, canvasH));
+                        CGContextSetBlendMode(cgContext.get(), kCGBlendModeDestinationIn);
                         CGContextDrawImage(cgContext.get(),
                             CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
+                        CGContextEndTransparencyLayer(cgContext.get());
                         CGContextRestoreGState(cgContext.get());
                     }
                     flushTextCTRun();
