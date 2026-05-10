@@ -588,7 +588,19 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // Anchor: PNG top-left at (px - ptSize*0.5, py - ptSize*2) where (px, py)
     // is WebKit glyph baseline position.
     bool didTextAtlasPath = false;
-    if (!didCompositePath) {
+    // V-583.K-text Phase 3c dispatch is OPT-IN via DRIFTSTACK_TEXT_ATLAS=1.
+    // Captured PNGs encode an OPAQUE white background (`c.fillStyle = '#fff';
+    // c.fillRect(...)` in v583k-comprehensive-glyph.html), so stamping each
+    // PNG over a non-white canvas overpaints the surrounding test pattern with
+    // white — verified empirically (atlas-ON L1 distance -166% to -5938%
+    // vs atlas-OFF baseline on V-405 text seeds). Fix path: recapture atlas
+    // with `c.clearRect` for transparent background, OR post-process existing
+    // PNGs to convert white→alpha=0. Until either lands, dispatch stays off
+    // by default; flag preserved so the path can be exercised once atlas is
+    // alpha-correct.
+    static const bool textAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
+        && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
+    if (!didCompositePath && textAtlasEnabled) {
         auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
         if (textAtlas.isAvailable() && glyphs.size() > 0) {
             const String& familyName = font.platformData().familyName();
