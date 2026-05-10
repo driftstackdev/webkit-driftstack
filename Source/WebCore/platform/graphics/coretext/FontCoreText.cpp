@@ -1193,6 +1193,25 @@ RetainPtr<CGImageRef> Font::driftstackAtlasImageForCodepoint(uint32_t codepoint,
         m_driftstackAtlasImageCache.add(key, image);
     return image;
 }
+
+RetainPtr<CGImageRef> Font::driftstackTextAtlasImageForCodepoint(uint32_t codepoint, uint32_t ptSize, std::span<const uint8_t> pngBytes) const
+{
+    const uint64_t key = (static_cast<uint64_t>(ptSize) << 32) | codepoint;
+    Locker locker(m_driftstackTextAtlasImageCacheLock);
+    auto it = m_driftstackTextAtlasImageCache.find(key);
+    if (it != m_driftstackTextAtlasImageCache.end())
+        return it->value;
+    RetainPtr<CFDataRef> data = adoptCF(CFDataCreate(kCFAllocatorDefault, pngBytes.data(), static_cast<CFIndex>(pngBytes.size())));
+    if (!data)
+        return { };
+    RetainPtr<CGDataProviderRef> provider = adoptCF(CGDataProviderCreateWithCFData(data.get()));
+    if (!provider)
+        return { };
+    RetainPtr<CGImageRef> image = adoptCF(CGImageCreateWithPNGDataProvider(provider.get(), nullptr, false, kCGRenderingIntentDefault));
+    if (image)
+        m_driftstackTextAtlasImageCache.add(key, image);
+    return image;
+}
 #endif
 
 #if PLATFORM(DRIFTSTACK)

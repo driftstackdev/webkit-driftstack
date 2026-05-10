@@ -599,15 +599,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 // Classify each glyph.
                 struct TextPlan {
                     bool atlasHit;
+                    char32_t codepoint;
                     std::span<const uint8_t> pngBytes;
                 };
                 Vector<TextPlan, 256> textPlans;
                 textPlans.reserveInitialCapacity(glyphs.size());
                 unsigned hits = 0;
                 for (auto g : glyphs) {
-                    TextPlan tp { false, { } };
+                    TextPlan tp { false, 0, { } };
                     char32_t cp = font.driftstackCodepointForTextGlyph(g);
                     if (cp) {
+                        tp.codepoint = cp;
                         auto bytes = textAtlas.lookup(fontId, ptSizeRound, static_cast<uint32_t>(cp));
                         if (!bytes.empty()) {
                             tp.atlasHit = true;
@@ -657,13 +659,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             continue;
                         }
                         flushTextCTRun();
-                        // Decode PNG → CGImage.
-                        auto provider = adoptCF(CGDataProviderCreateWithData(nullptr,
-                            textPlans[i].pngBytes.data(), textPlans[i].pngBytes.size(), nullptr));
-                        if (!provider)
-                            continue;
-                        auto image = adoptCF(CGImageCreateWithPNGDataProvider(provider.get(),
-                            nullptr, false, kCGRenderingIntentDefault));
+                        // V-583.K-text Phase 3d: cache decoded PNG → CGImage.
+                        RetainPtr<CGImageRef> image = font.driftstackTextAtlasImageForCodepoint(
+                            static_cast<uint32_t>(textPlans[i].codepoint), ptSizeRound, textPlans[i].pngBytes);
                         if (!image)
                             continue;
                         // Draw at baseline-aligned anchor.

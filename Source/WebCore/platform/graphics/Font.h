@@ -279,6 +279,11 @@ public:
     // pngBytes must remain valid for the lifetime of the returned image
     // (atlas mmap'd region — singleton lifetime is process lifetime).
     RetainPtr<CGImageRef> driftstackAtlasImageForCodepoint(uint32_t codepoint, uint32_t strikePPEM, std::span<const uint8_t> pngBytes) const;
+    // V-583.K-text Phase 3d: decoded text-atlas PNG → CGImageRef cache lookup.
+    // Same pattern as driftstackAtlasImageForCodepoint but keyed on (ptSize, cp)
+    // for the text glyph atlas. Avoids repeated PNG decode on repeated glyph
+    // renders (canvas fingerprint workloads invoke same glyph many times).
+    RetainPtr<CGImageRef> driftstackTextAtlasImageForCodepoint(uint32_t codepoint, uint32_t ptSize, std::span<const uint8_t> pngBytes) const;
     // V-148-Complex: per-pair iphone-vs-mac kerning delta to apply to the
     // LEFT glyph's advance. Returns 0 if (font, size, leftCp, rightCp) not
     // in V-138 table, or if both kerning values match. Mac kerning is
@@ -406,6 +411,12 @@ private:
     // Key encoding: (uint64_t)codepoint << 32 | strikePPEM. WTF::Lock-protected.
     mutable HashMap<uint64_t, RetainPtr<CGImageRef>, IntHash<uint64_t>, WTF::UnsignedWithZeroKeyHashTraits<uint64_t>> m_driftstackAtlasImageCache;
     mutable Lock m_driftstackAtlasImageCacheLock;
+    // V-583.K-text Phase 3d: per-(ptSize, codepoint) decoded text-atlas PNG → CGImage cache.
+    // Key encoding: (uint64_t)ptSize << 32 | codepoint. WTF::Lock-protected.
+    // Disjoint key space from emoji atlas cache (text atlas covers
+    // ASCII/CJK/Arabic/Devanagari, emoji atlas covers color emoji codepoints).
+    mutable HashMap<uint64_t, RetainPtr<CGImageRef>, IntHash<uint64_t>, WTF::UnsignedWithZeroKeyHashTraits<uint64_t>> m_driftstackTextAtlasImageCache;
+    mutable Lock m_driftstackTextAtlasImageCacheLock;
     // V-121 closure: glyph→ASCII-codepoint reverse map for the subset of glyphs
     // in U+0020..U+007E. Used by Font::platformWidthForGlyph to look up
     // iPhone reference widths from DriftstackAsciiAdvanceTable. Populated
