@@ -32,6 +32,7 @@
 #endif
 #include "FontCascadeFonts.h"
 #include "FontCascadeInlines.h"
+#include "FontInlines.h"
 #include "GlyphBuffer.h"
 #include "GraphicsContext.h"
 #include "LayoutRect.h"
@@ -347,6 +348,38 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             (double)platformData.size(), glyphs.size(),
             glyphs.size() ? static_cast<unsigned>(glyphs[0]) : 0u,
             glyphs.size() ? (double)advances[0].width : 0.0);
+    }
+
+    // V-583.E: ComplexTextController.draw bypasses Font::widthForGlyph (it uses
+    // CTRunGetAdvances directly). Result: V-149 ASCII advance overrides + V-094
+    // Track 5 emoji-color-glyph overrides + V-143 Apple-Color-Emoji-space-glyph
+    // overrides ONLY apply to canvas.measureText, NOT to fillText cursor
+    // positioning. To close that gap: at this drawGlyphs entry, replace each
+    // advance[i] with the iPhone-canonical value from Font::platformWidthForGlyph
+    // (which routes through all existing per-glyph override layers). Subsequent
+    // showGlyphsWithAdvances calls + V-582 composite-path position computation
+    // use the corrected advances. (Empirical V-405 seed=250 vs iPhone reference:
+    // Mac fork's CT cursor reaches emoji 0.6 px later than iPhone's at fontSize=16
+    // -apple-system multi-script text — closes when overrides fire here.)
+    Vector<GlyphBufferAdvance, 256> driftstackAdvances;
+    if (advances.size() == glyphs.size()) {
+        driftstackAdvances.reserveInitialCapacity(glyphs.size());
+        for (size_t i = 0; i < glyphs.size(); ++i) {
+            float iphoneWidth = font.widthForGlyph(glyphs[i], Font::SyntheticBoldInclusion::Exclude);
+            // platformWidthForGlyph returns iPhone advance via overrides, OR Mac
+            // native advance if no override matches. If the override returned
+            // something different from input advance.width, prefer the override.
+            // Otherwise keep input (which may include synthetic-bold + other
+            // adjustments not in platformWidthForGlyph).
+            if (std::abs(iphoneWidth - advances[i].width) > 0.001f) {
+                driftstackAdvances.append(GlyphBufferAdvance{ iphoneWidth, advances[i].height });
+            } else {
+                driftstackAdvances.append(advances[i]);
+            }
+        }
+        // Reassign the span to point at our local vector. Local Vector outlives
+        // this function scope so the span is valid for the rest of drawGlyphs.
+        advances = driftstackAdvances.span();
     }
 #endif
 
