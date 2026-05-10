@@ -70,6 +70,9 @@ class RenderObject;
 class SVGImageElement;
 class TextMetrics;
 class WebCodecsVideoFrame;
+#if PLATFORM(DRIFTSTACK)
+class OpSequenceRecorder;
+#endif
 
 struct DOMMatrix2DInit;
 struct GlyphOverflow;
@@ -514,6 +517,24 @@ private:
     CanvasRenderingContext2DSettings m_settings;
     bool m_hasDeferredOperations { false };
     mutable bool m_hasCreatedImageBuffer { false };
+
+#if PLATFORM(DRIFTSTACK)
+public:
+    // V-581 Phase C-3.B: per-context op-sequence recorder. Methods on this
+    // class (and CanvasPath / CanvasRenderingContext2D) call recordX() on
+    // the lazily-created recorder; HTMLCanvasElement queries
+    // opSequenceSHA256(W, H) at toDataURL time → atlas v3 lookup →
+    // iPhone-byte substitution. The recorder type is incomplete here
+    // (forward-declared above) and held via unique_ptr to avoid bleeding
+    // OpSequenceRecorder.h into every CRC2DBase.h consumer (the header
+    // is in the same dir but not registered in WebCore.xcodeproj's flat-
+    // namespace Headers build phase, so transitive include from
+    // DerivedSources unified-source files would break).
+    OpSequenceRecorder& driftstackOpSequenceRecorder() const;
+    String driftstackOpSequenceSHA256(uint16_t canvasW, uint16_t canvasH) const;
+private:
+    mutable std::unique_ptr<OpSequenceRecorder> m_driftstackOpSequenceRecorder;
+#endif
 };
 
 } // namespace WebCore

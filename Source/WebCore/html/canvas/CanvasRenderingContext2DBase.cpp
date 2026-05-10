@@ -106,6 +106,7 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& 
 #include "TextShapingResultAndDisplayList.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackMeasureTextOverrides.h"
+#include "OpSequenceRecorder.h"
 #endif
 #include "TextUtil.h"
 #include "WebCodecsVideoFrame.h"
@@ -295,6 +296,25 @@ CanvasRenderingContext2DBase::~CanvasRenderingContext2DBase()
         buffer->context().restore();
 #endif
 }
+
+#if PLATFORM(DRIFTSTACK)
+// V-581 Phase C-3.B: lazy-init recorder accessor. unique_ptr<incomplete_type>
+// is safe in the header because this destructor + accessor are out-of-line
+// and OpSequenceRecorder.h is included above.
+OpSequenceRecorder& CanvasRenderingContext2DBase::driftstackOpSequenceRecorder() const
+{
+    if (!m_driftstackOpSequenceRecorder)
+        m_driftstackOpSequenceRecorder = makeUnique<OpSequenceRecorder>();
+    return *m_driftstackOpSequenceRecorder;
+}
+
+String CanvasRenderingContext2DBase::driftstackOpSequenceSHA256(uint16_t canvasW, uint16_t canvasH) const
+{
+    if (!m_driftstackOpSequenceRecorder)
+        return String();
+    return m_driftstackOpSequenceRecorder->finalizeSHA256Hex(canvasW, canvasH);
+}
+#endif
 
 bool CanvasRenderingContext2DBase::isAccelerated() const
 {

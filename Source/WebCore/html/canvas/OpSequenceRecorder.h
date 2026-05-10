@@ -46,12 +46,14 @@
 #if PLATFORM(DRIFTSTACK)
 
 #include <wtf/Forward.h>
+#include <wtf/TZoneMalloc.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 class OpSequenceRecorder {
+    WTF_MAKE_TZONE_ALLOCATED(OpSequenceRecorder);
 public:
     OpSequenceRecorder() = default;
     ~OpSequenceRecorder() = default;
