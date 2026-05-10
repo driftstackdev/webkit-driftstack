@@ -674,6 +674,16 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // V-583.K-text Phase 3d: cache decoded PNG → CGImage.
                         RetainPtr<CGImageRef> image = font.driftstackTextAtlasImageForCodepoint(
                             static_cast<uint32_t>(textPlans[i].codepoint), ptSizeRound, textPlans[i].pngBytes);
+                        // V-633.A diagnostic — confirm image-decode success rate;
+                        // cap at 30 lines per process to avoid log flood.
+                        {
+                            static unsigned diagCount = 0;
+                            if (++diagCount <= 30) {
+                                WTFLogAlways("[Driftstack-V633A] image=%p cp=U+%04x ptSize=%u pngBytes=%zu",
+                                    image.get(), static_cast<unsigned>(textPlans[i].codepoint),
+                                    static_cast<unsigned>(ptSizeRound), textPlans[i].pngBytes.size());
+                            }
+                        }
                         if (!image)
                             continue;
                         // Draw at baseline-aligned anchor.
@@ -708,6 +718,25 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
                         CGContextEndTransparencyLayer(cgContext.get());
                         CGContextRestoreGState(cgContext.get());
+                        // V-633.A diagnostic — report bitmap context availability.
+                        // CGBitmapContextGetData returns nullptr when the
+                        // CGContext is GPUProcess-accelerated (IOSurface-backed);
+                        // in that case our CG draws may target a different
+                        // backing buffer than the one toDataURL serializes,
+                        // which would explain pixels appearing unchanged.
+                        {
+                            static unsigned pixDiagCount = 0;
+                            if (++pixDiagCount <= 5) {
+                                void* bits = CGBitmapContextGetData(cgContext.get());
+                                size_t bpr = CGBitmapContextGetBytesPerRow(cgContext.get());
+                                size_t width = CGBitmapContextGetWidth(cgContext.get());
+                                size_t height = CGBitmapContextGetHeight(cgContext.get());
+                                WTFLogAlways("[Driftstack-V633A-CTX] post-substitute cp=U+%04x bits=%p bpr=%zu bmp=%zux%zu — %s",
+                                    static_cast<unsigned>(textPlans[i].codepoint),
+                                    bits, bpr, width, height,
+                                    bits ? "bitmap-backed" : "GPU/IOSurface-backed (CGBitmapContextGetData NULL — pixel-readback gap)");
+                            }
+                        }
                     }
                     flushTextCTRun();
                 }
