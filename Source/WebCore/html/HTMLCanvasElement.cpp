@@ -1104,21 +1104,53 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // Safari 26.4 via BS Automate (V-510); 3998 entries cover 4000
     // deterministic seeds (strokes+text). Substitution-critical: 2000.
     // Already-identical: 2000 (no-op return passthrough).
+    // V-581 diagnostic log + dump-canvas: fire on EVERY toDataURL regardless of
+    // whether atlas is enabled. Needed for rendering-pipeline divergence
+    // analysis (per founder Rule N: native parity is the bar; atlas is safety
+    // net). If DRIFTSTACK_DUMP_CANVAS_DIR is set, write the Mac fork's rendered
+    // dataURL to <dir>/<key>.b64 so we can pixel-diff vs iPhone reference and
+    // identify the C++ render path responsible for divergent pixels.
+    String opSeqSha;
+    if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+        uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+        uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+        opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
+    }
+    {
+        std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> macFullDigest;
+        auto utf8 = encoded.utf8();
+        CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), macFullDigest.data());
+        std::array<char, 32> macHexArr;
+        static constexpr std::array<char, 16> kLowerHex {{'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'}};
+        for (size_t i = 0; i < 16; ++i) {
+            macHexArr[i * 2] = kLowerHex[(macFullDigest[i] >> 4) & 0xf];
+            macHexArr[i * 2 + 1] = kLowerHex[macFullDigest[i] & 0xf];
+        }
+        String macHexStr(std::span<const char> { macHexArr });
+        WTFLogAlways("[Driftstack-V581-DIAG] toDataURL %ux%u opSeq=%s mac=%s mac-len=%u",
+            width(), height(),
+            opSeqSha.isEmpty() ? "<empty>" : opSeqSha.utf8().data(),
+            macHexStr.utf8().data(),
+            encoded.length());
+        const char* dumpDir = std::getenv("DRIFTSTACK_DUMP_CANVAS_DIR");
+        if (dumpDir) {
+            String key = opSeqSha.isEmpty() ? macHexStr : opSeqSha;
+            String fname = makeString(StringView::fromLatin1(dumpDir), '/', key, ".b64"_s);
+            auto fnameUtf8 = fname.utf8();
+            int fd = open(fnameUtf8.data(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) {
+                auto b64Utf8 = encoded.utf8();
+                auto b64Span = unsafeMakeSpan(b64Utf8.data(), b64Utf8.length());
+                write(fd, b64Span.data(), b64Span.size());
+                close(fd);
+            }
+        }
+    }
     static bool s_canvasFuzzAtlasEnabled = []() {
         const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
         return env && env[0] == '1';
     }();
     if (s_canvasFuzzAtlasEnabled) {
-        // V-581 Phase C-3.C: compute opSeqSha for v3 atlas dispatch (no-op for
-        // v1/v2 atlases). Only meaningful if the canvas has a 2D context with
-        // recorded ops; non-2D contexts (WebGL, WebGPU, ImageBitmap) return
-        // empty String here and v510AtlasLookup falls back to v1/v2 hashing.
-        String opSeqSha;
-        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
-            uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
-            uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
-            opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
-        }
         auto substitute = v510AtlasLookup(encoded, opSeqSha);
         if (!substitute.isNull()) {
             WTFLogAlways("[Driftstack-V510] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u, opSeq=%s)",
