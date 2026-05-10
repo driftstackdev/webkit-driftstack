@@ -1908,6 +1908,12 @@ bool Quirks::needsChromeForAndroidUserAgent(const URL& url)
     // nfl.com rdar://171113872
     if (url.host() == "www.nfl.com"_s && PAL::currentUserInterfaceIdiomIsSmallScreen())
         return true;
+#elif PLATFORM(DRIFTSTACK)
+    // V-611.A: Mac fork presents iPhone identity. PAL helper is iOS-only;
+    // host check alone is correct for DRIFTSTACK builds (always-small-screen
+    // implicit in iPhone archetype).
+    if (url.host() == "www.nfl.com"_s)
+        return true;
 #else
     UNUSED_PARAM(url);
 #endif
@@ -1919,6 +1925,11 @@ bool Quirks::needsMediaSourceEnabled(const URL& url)
 #if PLATFORM(IOS_FAMILY)
     // nfl.com rdar://171113872
     if (url.host() == "www.nfl.com"_s && PAL::currentUserInterfaceIdiomIsSmallScreen())
+        return true;
+#elif PLATFORM(DRIFTSTACK)
+    // V-611.B: see V-611.A — same nfl.com SmallScreen-gated quirk; DRIFTSTACK
+    // fork is implicitly small-screen iPhone.
+    if (url.host() == "www.nfl.com"_s)
         return true;
 #else
     UNUSED_PARAM(url);
