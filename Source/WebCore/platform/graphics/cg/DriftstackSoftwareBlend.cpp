@@ -16,72 +16,73 @@ namespace WebCore {
 
 namespace {
 
-// Per-channel float blend formulas (W3C Compositing 1, §10).
-// Inputs Cb (backdrop) and Cs (source) are in [0,1].
-inline float blendChannelMultiply(float Cb, float Cs) { return Cb * Cs; }
-inline float blendChannelScreen(float Cb, float Cs) { return Cb + Cs - Cb * Cs; }
-inline float blendChannelHardLight(float Cb, float Cs)
+// Per-channel double blend formulas (W3C Compositing 1, §10).
+// Use double to match iPhone CG's internal precision (V-583.K-empirical:
+// float gave systematic 1-LSB drift in G channel for non-separable hue).
+inline double blendChannelMultiply(double Cb, double Cs) { return Cb * Cs; }
+inline double blendChannelScreen(double Cb, double Cs) { return Cb + Cs - Cb * Cs; }
+inline double blendChannelHardLight(double Cb, double Cs)
 {
-    return Cs <= 0.5f ? blendChannelMultiply(Cb, 2.0f * Cs)
-                      : blendChannelScreen(Cb, 2.0f * Cs - 1.0f);
+    return Cs <= 0.5 ? blendChannelMultiply(Cb, 2.0 * Cs)
+                     : blendChannelScreen(Cb, 2.0 * Cs - 1.0);
 }
-inline float blendChannelSoftLight(float Cb, float Cs)
+inline double blendChannelSoftLight(double Cb, double Cs)
 {
-    if (Cs <= 0.5f)
-        return Cb - (1.0f - 2.0f * Cs) * Cb * (1.0f - Cb);
-    float D = (Cb <= 0.25f) ? ((16.0f * Cb - 12.0f) * Cb + 4.0f) * Cb : std::sqrt(Cb);
-    return Cb + (2.0f * Cs - 1.0f) * (D - Cb);
+    if (Cs <= 0.5)
+        return Cb - (1.0 - 2.0 * Cs) * Cb * (1.0 - Cb);
+    double D = (Cb <= 0.25) ? ((16.0 * Cb - 12.0) * Cb + 4.0) * Cb : std::sqrt(Cb);
+    return Cb + (2.0 * Cs - 1.0) * (D - Cb);
 }
-inline float blendChannelColorBurn(float Cb, float Cs)
+inline double blendChannelColorBurn(double Cb, double Cs)
 {
-    if (Cb >= 1.0f) return 1.0f;
-    if (Cs <= 0.0f) return 0.0f;
-    return 1.0f - std::min(1.0f, (1.0f - Cb) / Cs);
+    if (Cb >= 1.0) return 1.0;
+    if (Cs <= 0.0) return 0.0;
+    return 1.0 - std::min(1.0, (1.0 - Cb) / Cs);
 }
-inline float blendChannelExclusion(float Cb, float Cs) { return Cb + Cs - 2.0f * Cb * Cs; }
+inline double blendChannelExclusion(double Cb, double Cs) { return Cb + Cs - 2.0 * Cb * Cs; }
 
 // Non-separable blends (operate on full RGB triplet).
-inline float lum(float r, float g, float b) { return 0.3f * r + 0.59f * g + 0.11f * b; }
+inline double lum(double r, double g, double b) { return 0.3 * r + 0.59 * g + 0.11 * b; }
 
-inline void clipColor(float& r, float& g, float& b)
+inline void clipColor(double& r, double& g, double& b)
 {
-    float l = lum(r, g, b);
-    float n = std::min({ r, g, b });
-    float x = std::max({ r, g, b });
-    if (n < 0.0f) {
-        float d = l - n;
-        if (d < 1e-10f) d = 1e-10f;
+    double l = lum(r, g, b);
+    double n = std::min({ r, g, b });
+    double x = std::max({ r, g, b });
+    if (n < 0.0) {
+        double d = l - n;
+        if (d < 1e-15) d = 1e-15;
         r = l + (((r - l) * l) / d);
         g = l + (((g - l) * l) / d);
         b = l + (((b - l) * l) / d);
     }
-    if (x > 1.0f) {
-        float d = x - l;
-        if (d < 1e-10f) d = 1e-10f;
-        r = l + (((r - l) * (1.0f - l)) / d);
-        g = l + (((g - l) * (1.0f - l)) / d);
-        b = l + (((b - l) * (1.0f - l)) / d);
+    if (x > 1.0) {
+        double d = x - l;
+        if (d < 1e-15) d = 1e-15;
+        r = l + (((r - l) * (1.0 - l)) / d);
+        g = l + (((g - l) * (1.0 - l)) / d);
+        b = l + (((b - l) * (1.0 - l)) / d);
     }
 }
 
-inline void setLum(float& r, float& g, float& b, float l)
+inline void setLum(double& r, double& g, double& b, double l)
 {
-    float d = l - lum(r, g, b);
+    double d = l - lum(r, g, b);
     r += d; g += d; b += d;
     clipColor(r, g, b);
 }
 
-inline float sat(float r, float g, float b)
+inline double sat(double r, double g, double b)
 {
     return std::max({ r, g, b }) - std::min({ r, g, b });
 }
 
-inline void setSat(float& r, float& g, float& b, float s)
+inline void setSat(double& r, double& g, double& b, double s)
 {
     // Sort channels so we can adjust min=0, mid=mid, max=s without losing identity of channels.
-    float* mn = &r;
-    float* md = &g;
-    float* mx = &b;
+    double* mn = &r;
+    double* md = &g;
+    double* mx = &b;
     if (*mn > *md) std::swap(mn, md);
     if (*md > *mx) std::swap(md, mx);
     if (*mn > *md) std::swap(mn, md);
@@ -89,23 +90,23 @@ inline void setSat(float& r, float& g, float& b, float s)
         *md = ((*md - *mn) * s) / (*mx - *mn);
         *mx = s;
     } else {
-        *md = 0.0f;
-        *mx = 0.0f;
+        *md = 0.0;
+        *mx = 0.0;
     }
-    *mn = 0.0f;
+    *mn = 0.0;
 }
 
 inline void blendNonseparable(BlendMode mode,
-    float Cbr, float Cbg, float Cbb,
-    float Csr, float Csg, float Csb,
-    float& or_, float& og, float& ob)
+    double Cbr, double Cbg, double Cbb,
+    double Csr, double Csg, double Csb,
+    double& or_, double& og, double& ob)
 {
     // Default: copy backdrop (no-op), overwritten below.
     or_ = Cbr; og = Cbg; ob = Cbb;
     switch (mode) {
     case BlendMode::Hue: {
         // SetLum(SetSat(Cs, Sat(Cb)), Lum(Cb))
-        float r = Csr, g = Csg, b = Csb;
+        double r = Csr, g = Csg, b = Csb;
         setSat(r, g, b, sat(Cbr, Cbg, Cbb));
         setLum(r, g, b, lum(Cbr, Cbg, Cbb));
         or_ = r; og = g; ob = b;
@@ -113,7 +114,7 @@ inline void blendNonseparable(BlendMode mode,
     }
     case BlendMode::Saturation: {
         // SetLum(SetSat(Cb, Sat(Cs)), Lum(Cb))
-        float r = Cbr, g = Cbg, b = Cbb;
+        double r = Cbr, g = Cbg, b = Cbb;
         setSat(r, g, b, sat(Csr, Csg, Csb));
         setLum(r, g, b, lum(Cbr, Cbg, Cbb));
         or_ = r; og = g; ob = b;
@@ -121,14 +122,14 @@ inline void blendNonseparable(BlendMode mode,
     }
     case BlendMode::Color: {
         // SetLum(Cs, Lum(Cb))
-        float r = Csr, g = Csg, b = Csb;
+        double r = Csr, g = Csg, b = Csb;
         setLum(r, g, b, lum(Cbr, Cbg, Cbb));
         or_ = r; og = g; ob = b;
         break;
     }
     case BlendMode::Luminosity: {
         // SetLum(Cb, Lum(Cs))
-        float r = Cbr, g = Cbg, b = Cbb;
+        double r = Cbr, g = Cbg, b = Cbb;
         setLum(r, g, b, lum(Csr, Csg, Csb));
         or_ = r; og = g; ob = b;
         break;
@@ -138,12 +139,12 @@ inline void blendNonseparable(BlendMode mode,
     }
 }
 
-inline uint8_t f2u8(float f)
+inline uint8_t f2u8(double f)
 {
-    f = std::max(0.0f, std::min(1.0f, f));
+    f = std::max(0.0, std::min(1.0, f));
     // Match Apple CG rounding: nearest, half-to-even is unstable here;
     // CG uses round-to-nearest-with-ties-to-positive (i.e. (int)(f*255+0.5)).
-    return static_cast<uint8_t>(f * 255.0f + 0.5f);
+    return static_cast<uint8_t>(f * 255.0 + 0.5);
 }
 
 } // anonymous namespace
@@ -218,17 +219,17 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
 
     // Source color components in unpremultiplied [0,1].
     auto srgbComponents = fillColor.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
-    float Sr = srgbComponents[0];
-    float Sg = srgbComponents[1];
-    float Sb = srgbComponents[2];
-    float Sa = srgbComponents[3] * globalAlpha;
-    if (Sa <= 0.0f) return true; // nothing to draw
+    double Sr = srgbComponents[0];
+    double Sg = srgbComponents[1];
+    double Sb = srgbComponents[2];
+    double Sa = static_cast<double>(srgbComponents[3]) * static_cast<double>(globalAlpha);
+    if (Sa <= 0.0) return true; // nothing to draw
 
     // Clamp source [0,1].
-    Sr = std::max(0.0f, std::min(1.0f, Sr));
-    Sg = std::max(0.0f, std::min(1.0f, Sg));
-    Sb = std::max(0.0f, std::min(1.0f, Sb));
-    Sa = std::max(0.0f, std::min(1.0f, Sa));
+    Sr = std::max(0.0, std::min(1.0, Sr));
+    Sg = std::max(0.0, std::min(1.0, Sg));
+    Sb = std::max(0.0, std::min(1.0, Sb));
+    Sa = std::max(0.0, std::min(1.0, Sa));
 
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // CG bitmap raw byte access
     uint8_t* base = static_cast<uint8_t*>(data);
@@ -238,30 +239,30 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
         for (int x = x0; x < x1; ++x) {
             uint8_t* px = row + x * bpp;
             // Read backdrop, unpremultiply if needed.
-            float Br = px[rIdx] / 255.0f;
-            float Bg = px[gIdx] / 255.0f;
-            float Bb = px[bIdx] / 255.0f;
-            float Ba = px[aIdx] / 255.0f;
-            if (premultiplied && Ba > 0.0f) {
+            double Br = px[rIdx] / 255.0;
+            double Bg = px[gIdx] / 255.0;
+            double Bb = px[bIdx] / 255.0;
+            double Ba = px[aIdx] / 255.0;
+            if (premultiplied && Ba > 0.0) {
                 Br /= Ba; Bg /= Ba; Bb /= Ba;
             }
 
-            float Rr, Rg, Rb, Ra;
+            double Rr, Rg, Rb, Ra;
 
             if (op == CompositeOperator::XOR && blendMode == BlendMode::Normal) {
                 // W3C XOR (Porter-Duff): co = αs*Cs*(1-αb) + αb*Cb*(1-αs)
                 //                         αo = αs*(1-αb) + αb*(1-αs)
-                Ra = Sa * (1.0f - Ba) + Ba * (1.0f - Sa);
-                if (Ra > 0.0f) {
-                    Rr = (Sa * Sr * (1.0f - Ba) + Ba * Br * (1.0f - Sa)) / Ra;
-                    Rg = (Sa * Sg * (1.0f - Ba) + Ba * Bg * (1.0f - Sa)) / Ra;
-                    Rb = (Sa * Sb * (1.0f - Ba) + Ba * Bb * (1.0f - Sa)) / Ra;
+                Ra = Sa * (1.0 - Ba) + Ba * (1.0 - Sa);
+                if (Ra > 0.0) {
+                    Rr = (Sa * Sr * (1.0 - Ba) + Ba * Br * (1.0 - Sa)) / Ra;
+                    Rg = (Sa * Sg * (1.0 - Ba) + Ba * Bg * (1.0 - Sa)) / Ra;
+                    Rb = (Sa * Sb * (1.0 - Ba) + Ba * Bb * (1.0 - Sa)) / Ra;
                 } else {
-                    Rr = Rg = Rb = 0.0f;
+                    Rr = Rg = Rb = 0.0;
                 }
             } else {
                 // Generic blend + source-over composite.
-                float blendR, blendG, blendB;
+                double blendR, blendG, blendB;
                 switch (blendMode) {
                 case BlendMode::ColorBurn:
                     blendR = blendChannelColorBurn(Br, Sr);
@@ -295,16 +296,16 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
 
                 // W3C composite: Cs_compose = (1 - αb)*Cs + αb*B(Cb, Cs)
                 // Then source-over: result = αs*Cs_compose + (1 - αs)*Cb
-                float CsR = (1.0f - Ba) * Sr + Ba * blendR;
-                float CsG = (1.0f - Ba) * Sg + Ba * blendG;
-                float CsB = (1.0f - Ba) * Sb + Ba * blendB;
-                Ra = Sa + Ba * (1.0f - Sa);
-                if (Ra > 0.0f) {
-                    Rr = (Sa * CsR + (1.0f - Sa) * Ba * Br) / Ra;
-                    Rg = (Sa * CsG + (1.0f - Sa) * Ba * Bg) / Ra;
-                    Rb = (Sa * CsB + (1.0f - Sa) * Ba * Bb) / Ra;
+                double CsR = (1.0 - Ba) * Sr + Ba * blendR;
+                double CsG = (1.0 - Ba) * Sg + Ba * blendG;
+                double CsB = (1.0 - Ba) * Sb + Ba * blendB;
+                Ra = Sa + Ba * (1.0 - Sa);
+                if (Ra > 0.0) {
+                    Rr = (Sa * CsR + (1.0 - Sa) * Ba * Br) / Ra;
+                    Rg = (Sa * CsG + (1.0 - Sa) * Ba * Bg) / Ra;
+                    Rb = (Sa * CsB + (1.0 - Sa) * Ba * Bb) / Ra;
                 } else {
-                    Rr = Rg = Rb = 0.0f;
+                    Rr = Rg = Rb = 0.0;
                 }
             }
 
