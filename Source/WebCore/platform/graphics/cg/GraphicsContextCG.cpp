@@ -33,6 +33,9 @@
 #include "CGSubimageCacheWithTimer.h"
 #include "CGUtilities.h"
 #include "DisplayListRecorder.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackSoftwareBlend.h"
+#endif
 #include "FloatConversion.h"
 #include "Gradient.h"
 #include "ImageBuffer.h"
@@ -926,6 +929,19 @@ void GraphicsContextCG::fillRect(const FloatRect& rect, RequiresClipToRect requi
         contextShadow.drawRectShadow(*this, FloatRoundedRect(rect));
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // V-583.K: bypass CG for blend modes where Mac CG and iPhone CG diverge
+    // by 1-LSB at certain pixel boundaries. Software W3C-spec impl matches
+    // iPhone bit-exactly. Only triggers on bitmap contexts; falls through
+    // for non-bitmap contexts (PDF, layer-based) and for unsupported modes.
+    if (!drawOwnShadow) {
+        const auto& mode = compositeMode();
+        if (driftstackSoftwareBlendApplies(mode.operation, mode.blendMode)
+            && driftstackSoftwareBlendFillRect(context, rect, fillColor(), alpha(), mode.blendMode, mode.operation))
+            return;
+    }
+#endif
+
     CGContextFillRect(context, rect);
 }
 
@@ -976,6 +992,20 @@ void GraphicsContextCG::fillRect(const FloatRect& rect, const Color& color)
         ShadowBlur contextShadow(*shadow, shadowsIgnoreTransforms());
         contextShadow.drawRectShadow(*this, FloatRoundedRect(rect));
     }
+
+#if PLATFORM(DRIFTSTACK)
+    if (!drawOwnShadow) {
+        const auto& mode = compositeMode();
+        if (driftstackSoftwareBlendApplies(mode.operation, mode.blendMode)
+            && driftstackSoftwareBlendFillRect(context, rect, color, alpha(), mode.blendMode, mode.operation)) {
+            if (drawOwnShadow)
+                stateSaver.restore();
+            if (oldFillColor != color)
+                setCGFillColor(context, oldFillColor, colorSpace());
+            return;
+        }
+    }
+#endif
 
     CGContextFillRect(context, rect);
 
