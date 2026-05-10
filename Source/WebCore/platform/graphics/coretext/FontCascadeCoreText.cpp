@@ -29,6 +29,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackEmojiAtlas.h"
+#include "../cocoa/DriftstackTextGlyphAtlas.h"
 #endif
 #include "FontCascadeFonts.h"
 #include "FontCascadeInlines.h"
@@ -576,8 +577,26 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             }
         }
     }
-    if (!didCompositePath)
+    // V-583.K-text Phase 3a (logging-only): observe how many text glyphs would
+    // be candidates for atlas substitution. Dispatch hook to be enabled after
+    // verifying atlas coverage + correctness via empirical comparison.
+    if (!didCompositePath) {
+        auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
+        if (textAtlas.isAvailable() && glyphs.size() > 0) {
+            const String& familyName = font.platformData().familyName();
+            uint16_t fontId = DriftstackTextGlyphAtlas::fontIdForFamily(familyName);
+            const float ptSize = font.platformData().size();
+            const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
+            if (fontId != UINT16_MAX) {
+                static unsigned logCount = 0;
+                if (++logCount <= 20) {
+                    WTFLogAlways("[Driftstack-V583K-text] would-dispatch family='%s' fontId=%u ptSize=%u glyphCount=%zu (atlas-loaded; substitution gated)",
+                        familyName.utf8().data(), fontId, ptSizeRound, glyphs.size());
+                }
+            }
+        }
         showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
+    }
 #else
     showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
 #endif
