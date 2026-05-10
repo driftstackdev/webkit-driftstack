@@ -577,9 +577,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             }
         }
     }
-    // V-583.K-text Phase 3b (reverse-map-only): resolve glyph→codepoint for each
-    // text glyph, count atlas hits per dispatch. Still routes glyphs through CT
-    // (no PNG substitution yet). Phase 3c will add CGImage decode + render.
+    // V-583.K-text Phase 3c: PNG substitution dispatch for text glyphs.
+    // For each atlas-hit glyph, decode captured PNG → CGImage → draw at glyph
+    // anchor (baseline-aligned via per-glyph metrics in atlas index). Misses
+    // (codepoint not in atlas) fall through to CT.
+    //
+    // Captured canvas convention (v583k-comprehensive-glyph.html):
+    //   canvasW = ptSize * 4, canvasH = ptSize * 3
+    //   text drawn at (ptSize * 0.5, ptSize * 2), textBaseline='alphabetic'
+    // Anchor: PNG top-left at (px - ptSize*0.5, py - ptSize*2) where (px, py)
+    // is WebKit glyph baseline position.
+    bool didTextAtlasPath = false;
     if (!didCompositePath) {
         auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
         if (textAtlas.isAvailable() && glyphs.size() > 0) {
@@ -588,24 +596,93 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             const float ptSize = font.platformData().size();
             const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
             if (fontId != UINT16_MAX) {
-                unsigned hits = 0, misses = 0;
+                // Classify each glyph.
+                struct TextPlan {
+                    bool atlasHit;
+                    std::span<const uint8_t> pngBytes;
+                };
+                Vector<TextPlan, 256> textPlans;
+                textPlans.reserveInitialCapacity(glyphs.size());
+                unsigned hits = 0;
                 for (auto g : glyphs) {
+                    TextPlan tp { false, { } };
                     char32_t cp = font.driftstackCodepointForTextGlyph(g);
                     if (cp) {
                         auto bytes = textAtlas.lookup(fontId, ptSizeRound, static_cast<uint32_t>(cp));
-                        if (!bytes.empty()) ++hits;
-                        else ++misses;
-                    } else
-                        ++misses;
+                        if (!bytes.empty()) {
+                            tp.atlasHit = true;
+                            tp.pngBytes = bytes;
+                            ++hits;
+                        }
+                    }
+                    textPlans.append(tp);
                 }
-                static unsigned logCount = 0;
-                if (++logCount <= 30) {
-                    WTFLogAlways("[Driftstack-V583K-text] dispatch family='%s' fontId=%u ptSize=%u glyphCount=%zu hits=%u misses=%u",
-                        familyName.utf8().data(), fontId, ptSizeRound, glyphs.size(), hits, misses);
+                if (hits > 0) {
+                    didTextAtlasPath = true;
+                    static unsigned logCount = 0;
+                    if (++logCount <= 20) {
+                        WTFLogAlways("[Driftstack-V583K-text] PNG-substitute family='%s' fontId=%u ptSize=%u hits=%u/%zu",
+                            familyName.utf8().data(), fontId, ptSizeRound, hits, glyphs.size());
+                    }
+                    // Compute per-glyph positions.
+                    Vector<CGPoint, 256> textPositions;
+                    textPositions.reserveInitialCapacity(glyphs.size());
+                    FloatPoint cursor = point;
+                    for (size_t i = 0; i < glyphs.size(); ++i) {
+                        textPositions.append(CGPointMake(cursor.x(), cursor.y()));
+                        cursor.move(advances[i].width, advances[i].height);
+                    }
+                    // Two-pass: flush CT runs between atlas hits.
+                    Vector<GlyphBufferGlyph, 64> textCTRunGlyphs;
+                    Vector<GlyphBufferAdvance, 64> textCTRunAdvances;
+                    FloatPoint textCTRunStart = point;
+                    auto flushTextCTRun = [&]() {
+                        if (textCTRunGlyphs.isEmpty())
+                            return;
+                        showGlyphsWithAdvances(textCTRunStart, font, cgContext.get(),
+                            textCTRunGlyphs.span(), textCTRunAdvances.span(), textMatrix);
+                        textCTRunGlyphs.clear();
+                        textCTRunAdvances.clear();
+                    };
+                    const float canvasW = ptSize * 4.0f;
+                    const float canvasH = ptSize * 3.0f;
+                    const float bearingX = ptSize * 0.5f;
+                    const float baselineY = ptSize * 2.0f;
+                    for (size_t i = 0; i < glyphs.size(); ++i) {
+                        if (!textPlans[i].atlasHit) {
+                            if (textCTRunGlyphs.isEmpty())
+                                textCTRunStart = FloatPoint(textPositions[i].x, textPositions[i].y);
+                            textCTRunGlyphs.append(glyphs[i]);
+                            textCTRunAdvances.append(advances[i]);
+                            continue;
+                        }
+                        flushTextCTRun();
+                        // Decode PNG → CGImage.
+                        auto provider = adoptCF(CGDataProviderCreateWithData(nullptr,
+                            textPlans[i].pngBytes.data(), textPlans[i].pngBytes.size(), nullptr));
+                        if (!provider)
+                            continue;
+                        auto image = adoptCF(CGImageCreateWithPNGDataProvider(provider.get(),
+                            nullptr, false, kCGRenderingIntentDefault));
+                        if (!image)
+                            continue;
+                        // Draw at baseline-aligned anchor.
+                        float drawX = textPositions[i].x - bearingX;
+                        float drawY = textPositions[i].y - baselineY;
+                        CGContextSaveGState(cgContext.get());
+                        CGContextTranslateCTM(cgContext.get(), drawX, drawY);
+                        CGContextTranslateCTM(cgContext.get(), 0.f, canvasH);
+                        CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
+                        CGContextDrawImage(cgContext.get(),
+                            CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
+                        CGContextRestoreGState(cgContext.get());
+                    }
+                    flushTextCTRun();
                 }
             }
         }
-        showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
+        if (!didTextAtlasPath)
+            showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
     }
 #else
     showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
