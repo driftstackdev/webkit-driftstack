@@ -27,6 +27,7 @@
 
 #import "FontCache.h"
 #import "FontCascadeInlines.h"
+#import "FontInlines.h"
 #import "Logging.h"
 #import "SimpleFontDataCoreText.h"
 #import <CoreText/CoreText.h>
@@ -109,6 +110,30 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
             });
         }
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // V-583.F: Override per-glyph advances with iPhone-canonical values from
+    // Font::widthForGlyph (routes through V-149 ASCII + V-094 Track 5 emoji +
+    // V-143 Apple Color Emoji overrides). This is the upstream-most hook —
+    // ComplexTextController consumes m_baseAdvances for ALL downstream cursor
+    // positioning + per-glyph drawGlyphs anchor computation. Inter-run anchors
+    // accumulate from this, so overriding here propagates to the entire text
+    // layout. (V-583.E hook in FontCascade::drawGlyphs only affected within-run
+    // + trailing cursor — too late for inter-run anchor parity.)
+    if (m_glyphCount && m_baseAdvances.size() == m_glyphCount) {
+        BaseAdvancesVector overrideAdvances;
+        overrideAdvances.reserveInitialCapacity(m_glyphCount);
+        for (unsigned i = 0; i < m_glyphCount; ++i) {
+            float iphoneWidth = m_font->widthForGlyph(m_glyphs[i], Font::SyntheticBoldInclusion::Exclude);
+            CGSize current = m_baseAdvances[i];
+            if (std::abs(iphoneWidth - static_cast<float>(current.width)) > 0.001f)
+                overrideAdvances.append(CGSizeMake(iphoneWidth, current.height));
+            else
+                overrideAdvances.append(current);
+        }
+        m_baseAdvances = std::move(overrideAdvances);
+    }
+#endif
 
     LOG_WITH_STREAM(TextShaping,
         stream << "Shaping result: " << m_glyphCount << " glyphs.\n";
