@@ -753,8 +753,13 @@ void initV510AtlasOnce()
              | (uint32_t(bytesSpan[off+2]) << 16) | (uint32_t(bytesSpan[off+3]) << 24);
     };
     uint16_t version = readU16(4);
-    if ((version != 1 && version != 2) || bytesSpan[7] != 1) {
-        WTFLogAlways("[Driftstack] V510Atlas: unsupported version=%u/algo=%u", version, bytesSpan[7]);
+    uint8_t keyAlgo = bytesSpan[7];
+    // V-581: accept v1/v2 (algo=1, Mac-output sha) and v3 (algo=2, op-seq sha).
+    bool accept = (version == 1 && keyAlgo == 1)
+        || (version == 2 && keyAlgo == 1)
+        || (version == 3 && keyAlgo == 2);
+    if (!accept) {
+        WTFLogAlways("[Driftstack] V510Atlas: unsupported version=%u/algo=%u", version, keyAlgo);
         munmap(base, st.st_size); close(fd); return;
     }
     state.formatVersion = version;
@@ -988,8 +993,10 @@ String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA
             if (++hits <= 50)
                 WTFLogAlways("[Driftstack-V510-HIT] entry=%zu/%zu off=%u len=%u format=v%u",
                     mid, state.numEntries, dataOff, dataLen, state.formatVersion);
-            // V-578: dispatch by atlas format version
-            if (state.formatVersion == 2)
+            // V-578 / V-581: dispatch by atlas format version. v2 (Mac-output-sha
+            // keyed) and v3 (op-seq-sha keyed) both use the same delta-pixel
+            // data section layout, so applyV2DeltaAndReEncode handles both.
+            if (state.formatVersion == 2 || state.formatVersion == 3)
                 return applyV2DeltaAndReEncode(macForkDataURL, entry);
             auto charSpan = unsafeMakeSpan(reinterpret_cast<const char*>(entry.data()), entry.size());
             return String::fromUTF8(charSpan);
