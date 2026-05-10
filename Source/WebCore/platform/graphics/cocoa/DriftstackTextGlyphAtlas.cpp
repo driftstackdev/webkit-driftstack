@@ -176,6 +176,93 @@ uint16_t DriftstackTextGlyphAtlas::fontIdForFamily(const String& familyName)
     if (familyName == "system-ui"_s || familyName == "-webkit-system-font"_s) return 11;
     if (familyName == "monospace"_s || familyName == "-webkit-monospace"_s) return 12;
     if (familyName == "Apple Color Emoji"_s) return 13;
+
+    // V-631: Mac script-fallback families → atlas fontId=0. macOS resolves
+    // CJK / Arabic / Devanagari requests through its own fallback chain
+    // (Hiragino Sans GB / Songti SC / Geeza Pro / Devanagari MT / etc.).
+    // iPhone resolves the same script requests through PingFang SC /
+    // Geeza Pro / Devanagari Sangam MN; the iPhone-captured PNGs in our
+    // atlas under fontId=0 already encode those iOS-rasterized glyphs for
+    // every script. By aliasing every Mac script-fallback family back to
+    // fontId=0 we let the dispatch substitute Mac's CT-rendered fallback
+    // pixels with iPhone's fallback pixels — bit-identical regardless of
+    // which user-specified family triggered the script fallback.
+    // Without this aliasing, V-405 text seeds (which use
+    // rng.unicodeString over ['ASCII','CJK','Arabic','Devanagari','Emoji'])
+    // exit fontIdForFamily with UINT16_MAX for every non-Latin glyph and
+    // the dispatch falls through to vanilla Mac CT — text 0% pass rate.
+    //
+    // V-631.B: Mac script-fallback families empirically observed via fork
+    // log on V-405 text seeds. macOS resolves CSS script-tagged glyph
+    // requests through a private set of `.Apple{Script}Font` family names,
+    // plus the public Hiragino / Songti / Geeza / Kohinoor / Devanagari MT
+    // families. Map them all to atlas fontId=0 so iPhone-captured glyphs
+    // (PingFang SC / Geeza Pro / Devanagari Sangam MN under iOS
+    // -apple-system) substitute regardless of Mac's resolved family.
+    //
+    // CJK families on macOS:
+    //   .AppleSimplifiedChineseFont — Simplified Chinese
+    //   .AppleTraditionalChineseFont — Traditional Chinese
+    //   .AppleJapaneseFont — Japanese
+    //   .AppleKoreanFont — Korean
+    //   .AppleHongKongChineseFont / .AppleMacaoChineseFont — regional CJK
+    //   Hiragino Sans / Sans GB / Mincho ProN / Kaku Gothic Pro — public CJK
+    //   Songti SC / STSong / STHeiti / PingFang SC|TC|HK — alternate CJK
+    if (familyName == ".AppleSimplifiedChineseFont"_s
+        || familyName == ".AppleTraditionalChineseFont"_s
+        || familyName == ".AppleJapaneseFont"_s
+        || familyName == ".AppleKoreanFont"_s
+        || familyName == ".AppleHongKongChineseFont"_s
+        || familyName == ".AppleMacaoChineseFont"_s
+        || familyName == "Hiragino Sans GB"_s
+        || familyName == "Hiragino Sans"_s
+        || familyName == "Hiragino Kaku Gothic Pro"_s
+        || familyName == "Hiragino Kaku Gothic ProN"_s
+        || familyName == "Hiragino Mincho ProN"_s
+        || familyName == "Hiragino Sans GB W3"_s
+        || familyName == "Hiragino Sans GB W6"_s
+        || familyName == "Songti SC"_s
+        || familyName == "STSong"_s
+        || familyName == "STHeiti"_s
+        || familyName == "STHeitiSC-Medium"_s
+        || familyName == "STHeitiTC-Medium"_s
+        || familyName == "PingFang HK"_s
+        || familyName == "PingFang SC"_s
+        || familyName == "PingFang TC"_s)
+        return 0;
+
+    // Arabic family on macOS:
+    //   .SF Arabic (system) / Geeza Pro / .AppleUrduFont / .DecoType Nastaleeq Urdu UI
+    if (familyName == "Geeza Pro"_s
+        || familyName == "GeezaPro"_s
+        || familyName == ".SF Arabic"_s
+        || familyName == ".AppleUrduFont"_s
+        || familyName == ".DecoType Nastaleeq Urdu UI"_s)
+        return 0;
+
+    // Devanagari + Indic on macOS:
+    //   .SF Devanagari / Kohinoor Devanagari / Devanagari MT / .AppleIndicFont
+    //   / Devanagari Sangam MN
+    if (familyName == "Devanagari MT"_s
+        || familyName == "DevanagariMT"_s
+        || familyName == "Devanagari Sangam MN"_s
+        || familyName == "Kohinoor Devanagari"_s
+        || familyName == ".SF Devanagari"_s
+        || familyName == ".AppleIndicFont"_s)
+        return 0;
+
+    // Other script families observed empirically (Hebrew / Armenian /
+    // Georgian / Apple Symbols Fallback) — currently no atlas coverage
+    // for these scripts but route to fontId=0 so future expansion
+    // captures get used immediately.
+    if (familyName == ".SF Hebrew"_s
+        || familyName == ".SF Armenian"_s
+        || familyName == ".SF Georgian"_s
+        || familyName == ".Apple Symbols Fallback"_s
+        || familyName == ".AppleSystemFallback"_s
+        || familyName == "Apple Symbols"_s)
+        return 0;
+
     return UINT16_MAX;
 }
 
