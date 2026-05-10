@@ -85,6 +85,12 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    ;;; V-583.K-text: text glyph atlas (single .bin file mmap'd at startup).
+    ;;; Mirrors literal rule in WebProcess.sb.in + GPUProcess.sb.in
+    ;;; (V-583.K-text sandbox commit). WebContent.sb.in needs same coverage
+    ;;; because macOS .Development XPC services load this profile per
+    ;;; Source/WebKit/DerivedSources.make:469 (V-582 narrative).
+    (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 #endif
