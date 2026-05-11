@@ -750,10 +750,13 @@ void GraphicsContextCG::drawPath(const Path& path)
                 int dw = dx1 - dx;
                 int dh = dy1 - dy;
                 if (dw > 0 && dh > 0 && dw * dh < (16 * 1024 * 1024)) {
-                    Vector<uint8_t> coverage(dw * dh, 0);
+                    Vector<uint8_t> coverage;
+                    coverage.grow(dw * dh);
+                    coverage.fill(0);
                     auto cs = adoptCF(CGColorSpaceCreateDeviceGray());
+                    auto coverageSpan = coverage.mutableSpan();
                     auto maskCtx = adoptCF(CGBitmapContextCreate(
-                        coverage.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
+                        coverageSpan.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
                     if (maskCtx) {
                         CGContextTranslateCTM(maskCtx.get(), -dx, -dy);
                         CGContextConcatCTM(maskCtx.get(), ctm);
@@ -766,7 +769,7 @@ void GraphicsContextCG::drawPath(const Path& path)
 
                         FloatRect deviceRect(dx, dy, dw, dh);
                         if (driftstackSoftwareBlendApplyMasked(
-                                context, deviceRect, coverage.data(),
+                                context, deviceRect, coverageSpan.data(),
                                 dw, dh, dw,
                                 fillColor(), alpha(), mode.blendMode, mode.operation))
                             return;
@@ -847,10 +850,13 @@ void GraphicsContextCG::fillPath(const Path& path)
             // back to CG default (acceptable: V-405 compositing seeds are
             // small-rect overlays).
             if (dw > 0 && dh > 0 && dw * dh < (16 * 1024 * 1024)) {
-                Vector<uint8_t> coverage(dw * dh, 0);
+                Vector<uint8_t> coverage;
+                coverage.grow(dw * dh);
+                coverage.fill(0);
                 auto cs = adoptCF(CGColorSpaceCreateDeviceGray());
+                auto coverageSpan = coverage.mutableSpan();
                 auto maskCtx = adoptCF(CGBitmapContextCreate(
-                    coverage.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
+                    coverageSpan.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
                 if (maskCtx) {
                     CGContextTranslateCTM(maskCtx.get(), -dx, -dy);
                     CGContextConcatCTM(maskCtx.get(), ctm);
@@ -863,7 +869,7 @@ void GraphicsContextCG::fillPath(const Path& path)
 
                     FloatRect deviceRect(dx, dy, dw, dh);
                     if (driftstackSoftwareBlendApplyMasked(
-                            context, deviceRect, coverage.data(),
+                            context, deviceRect, coverageSpan.data(),
                             dw, dh, dw,
                             fillColor(), alpha(), mode.blendMode, mode.operation))
                         return;
