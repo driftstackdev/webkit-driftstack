@@ -316,6 +316,46 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             // super-compact → compact remap; iPhone reports super-compact
             // and fork now exposes whatever AVSpeechSynthesisVoice returns
             // natively (which V-525.A.1 verifies post-build).
+            //
+            // V-657 (2026-05-11): V-525.A.1 was empirically validated against
+            // BS Automate iOS 18.6 pool ("iPhone 17" capture). The launch
+            // archetype is iphone16pro_ios18_7_safari26_4 — DIFFERENT iOS
+            // minor version with a DIFFERENT voice catalog. Cumrig REF
+            // `iphone16pro_ios26_4_1/2026-05-04T19-24-11Z_real-iphone-recapture.json`
+            // (physical iPhone iOS 18.7 / Safari 26.4) reports
+            // `com.apple.voice.compact.en-US.Samantha` (NOT super-compact).
+            // V-525.A.1 was correct for iOS 18.6 but wrong-direction for iOS
+            // 18.7. Per memory rule "Inline iphone_reference data is SUSPECT
+            // until BS-verified" → BS data was the wrong-pool source.
+            //
+            // V-657 super-compact → compact precise remap. Real iPhone iOS
+            // 18.7 / Safari 26.4 returns most voices as super-compact (45/68)
+            // but FOUR specific default-language voices are compact-tier:
+            //   com.apple.voice.compact.en-US.Samantha
+            //   com.apple.voice.compact.kn-IN.Alpana
+            //   com.apple.voice.compact.te-IN.Geeta
+            //   com.apple.voice.compact.bn-IN.Paya
+            // (Empirically extracted from iphone16pro_ios26_4_1/
+            // 2026-05-04T19-24-11Z_real-iphone-recapture.json.)
+            // Mac returns all these as super-compact. Archetype-gated so
+            // iOS-18.6 BS-pool-targeted sessions are unaffected.
+            //
+            // Reads DRIFTSTACK_ARCHETYPE env var directly; matches V-633.D
+            // env-gate pattern; avoids cross-module header dependency.
+            static const bool v657NeedsCompactRemap = []() {
+                const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+                if (!env || !env[0]) return false;
+                NSString *archStr = [NSString stringWithUTF8String:env];
+                return [archStr isEqualToString:@"iphone16pro_ios18_7_safari26_4"]
+                    || [archStr isEqualToString:@"iphone16pro_ios26_4_1"];
+            }();
+            if (v657NeedsCompactRemap
+                && ([identifier isEqualToString:@"com.apple.voice.super-compact.en-US.Samantha"]
+                 || [identifier isEqualToString:@"com.apple.voice.super-compact.kn-IN.Alpana"]
+                 || [identifier isEqualToString:@"com.apple.voice.super-compact.te-IN.Geeta"]
+                 || [identifier isEqualToString:@"com.apple.voice.super-compact.bn-IN.Paya"])) {
+                identifier = [identifier stringByReplacingOccurrencesOfString:@"super-compact" withString:@"compact"];
+            }
             if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
                 displayName = @"Wobble";
             else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Hysterical"])
