@@ -710,13 +710,33 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         CGContextTranslateCTM(cgContext.get(), drawX, drawY);
                         CGContextTranslateCTM(cgContext.get(), 0.f, canvasH);
                         CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
-                        CGContextBeginTransparencyLayer(cgContext.get(), nullptr);
-                        CGContextFillRect(cgContext.get(),
-                            CGRectMake(0.f, 0.f, canvasW, canvasH));
-                        CGContextSetBlendMode(cgContext.get(), kCGBlendModeDestinationIn);
-                        CGContextDrawImage(cgContext.get(),
-                            CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
-                        CGContextEndTransparencyLayer(cgContext.get());
+                        // V-633.D (2026-05-11, env-gated DRIFTSTACK_V633D=1):
+                        // GPU-honoring tint via CGContextClipToMask + FillRect.
+                        // Unlike V-627.B's BeginTransparencyLayer + DestinationIn
+                        // (which uses an isolated compositing buffer that GPU
+                        // readback paths don't honor — V-633.A finding: bits=0x0
+                        // on every dispatch sample), ClipToMask + FillRect is a
+                        // single composite op that writes directly to the canvas
+                        // backing on both CPU and GPU contexts.
+                        static bool s_v633dEnabled = []() {
+                            const char* env = getenv("DRIFTSTACK_V633D");
+                            return env && env[0] == '1';
+                        }();
+                        if (s_v633dEnabled) {
+                            CGContextClipToMask(cgContext.get(),
+                                CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
+                            CGContextFillRect(cgContext.get(),
+                                CGRectMake(0.f, 0.f, canvasW, canvasH));
+                        } else {
+                            // V-627.B legacy (default): transparency-layer + DestinationIn.
+                            CGContextBeginTransparencyLayer(cgContext.get(), nullptr);
+                            CGContextFillRect(cgContext.get(),
+                                CGRectMake(0.f, 0.f, canvasW, canvasH));
+                            CGContextSetBlendMode(cgContext.get(), kCGBlendModeDestinationIn);
+                            CGContextDrawImage(cgContext.get(),
+                                CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
+                            CGContextEndTransparencyLayer(cgContext.get());
+                        }
                         CGContextRestoreGState(cgContext.get());
                         // V-633.A diagnostic — report bitmap context availability.
                         // CGBitmapContextGetData returns nullptr when the
