@@ -456,30 +456,47 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
 
 #if PLATFORM(DRIFTSTACK)
     // V-090 / Phase F.1.B-2: composite atlas-rendered emoji bitmaps in
-    // place of CT-rendered color glyphs. For atlas-HIT codepoints,
-    // decode PNG → CGImage → CGContextDrawImage; non-color or atlas-MISS
-    // glyphs forward to showGlyphsWithAdvances unchanged.
+    // place of CT-rendered color glyphs. V-655 (2026-05-11) extends this
+    // block to ALSO dispatch text-atlas substitutions when a mixed
+    // text+emoji run has any emoji-atlas hit (V-632 coexistence gap fix).
+    // Classification per glyph: EMOJI_HIT | TEXT_HIT | PASSTHROUGH. The
+    // standalone V-583.K-text block below still serves the emoji-free
+    // case so this refactor is incremental.
     bool didCompositePath = false;
     {
-        auto& atlas = DriftstackEmojiAtlas::singleton();
-        if (atlas.isAvailable()) {
+        auto& emojiAtlas = DriftstackEmojiAtlas::singleton();
+        // V-655: text-atlas state available for unified dispatch.
+        static const bool v655TextAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
+            && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
+        auto& v655TextAtlas = DriftstackTextGlyphAtlas::singleton();
+        const bool v655UseText = v655TextAtlasEnabled && v655TextAtlas.isAvailable();
+        if (emojiAtlas.isAvailable()) {
             const float ptSize = font.platformData().size();
-            const uint32_t strike = atlas.pickStrikeForPointSize(ptSize);
+            const uint32_t strike = emojiAtlas.pickStrikeForPointSize(ptSize);
+            const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
+            const uint16_t v655FontId = v655UseText
+                ? DriftstackTextGlyphAtlas::fontIdForFamily(font.platformData().familyName())
+                : UINT16_MAX;
 
-            // Pass 1: classify each glyph (atlas-hit | passthrough).
+            // Pass 1: classify each glyph (emoji-atlas-hit | text-atlas-hit | passthrough).
             // perGlyphStrike: V-583.B per-ptSize override path uses strike==ptSize
             // (no downscale). Default strike from pickStrikeForPointSize otherwise.
+            // V-655: textHit + textCp + textBytes for text-atlas substitution.
             struct GlyphPlan {
-                bool atlasHit;
+                bool atlasHit; // emoji
                 uint32_t cp;
                 std::span<const uint8_t> pngBytes;
                 uint32_t perGlyphStrike;
+                bool textHit;
+                uint32_t textCp;
+                std::span<const uint8_t> textPngBytes;
             };
             Vector<GlyphPlan, 256> plans;
             plans.reserveInitialCapacity(glyphs.size());
-            bool anyAtlasHit = false;
+            bool anyAtlasHit = false; // any emoji hit — gates dispatch
+            unsigned v655TextHitCount = 0;
             for (size_t i = 0; i < glyphs.size(); ++i) {
-                GlyphPlan p { false, 0, { }, strike };
+                GlyphPlan p { false, 0, { }, strike, false, 0, { } };
                 Glyph g = glyphs[i];
                 if (font.colorGlyphType(g) == ColorGlyphType::Color) {
                     char32_t cp = font.driftstackCodepointForColorGlyph(g);
@@ -498,12 +515,25 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // bare-codepoint case. BMP+VS-16 sequences are routed
                     // through the composite atlas (F.1.B-5/6), not this path.
                     if (cp > 0xFFFF) {
-                        auto entry = atlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
+                        auto entry = emojiAtlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
                         if (!entry.empty()) {
                             p.atlasHit = true;
                             p.cp = static_cast<uint32_t>(cp);
                             p.pngBytes = entry;
                             anyAtlasHit = true;
+                        }
+                    }
+                }
+                // V-655: if not emoji-atlas-hit, check text atlas.
+                if (!p.atlasHit && v655UseText && v655FontId != UINT16_MAX) {
+                    char32_t tcp = font.driftstackCodepointForTextGlyph(g);
+                    if (tcp) {
+                        auto bytes = v655TextAtlas.lookup(v655FontId, ptSizeRound, static_cast<uint32_t>(tcp));
+                        if (!bytes.empty()) {
+                            p.textHit = true;
+                            p.textCp = static_cast<uint32_t>(tcp);
+                            p.textPngBytes = bytes;
+                            ++v655TextHitCount;
                         }
                     }
                 }
@@ -514,8 +544,8 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 didCompositePath = true;
                 int hitCount = 0;
                 for (auto& p : plans) if (p.atlasHit) ++hitCount;
-                WTFLogAlways("[Driftstack-V582] EmojiAtlas dispatch fired: %d/%zu glyphs atlas-HIT (pid=%d, prog=%s, ptSize=%.1f, strike=%u)",
-                    hitCount, glyphs.size(), (int)getpid(), getprogname(), (double)ptSize, strike);
+                WTFLogAlways("[Driftstack-V582] EmojiAtlas dispatch fired: %d/%zu emoji + %u/%zu text atlas-HIT (pid=%d, prog=%s, ptSize=%.1f, strike=%u)",
+                    hitCount, glyphs.size(), v655TextHitCount, glyphs.size(), (int)getpid(), getprogname(), (double)ptSize, strike);
                 // Compute glyph positions in CTM coords (no text-matrix flip).
                 Vector<CGPoint, 256> positions;
                 positions.reserveInitialCapacity(glyphs.size());
@@ -541,8 +571,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     ctRunAdvances.clear();
                 };
 
+                // V-655: text-atlas mask-tint constants (mirror V-583.K-text block).
+                static bool v655s_v633dEnabled = []() {
+                    const char* env = getenv("DRIFTSTACK_V633D");
+                    return env && env[0] == '1';
+                }();
+                const float v655CanvasW = ptSize * 4.0f;
+                const float v655CanvasH = ptSize * 3.0f;
+                const float v655BearingX = ptSize * 0.5f;
+                const float v655BaselineY = ptSize * 2.0f;
+
                 for (size_t i = 0; i < glyphs.size(); ++i) {
-                    if (!plans[i].atlasHit) {
+                    if (!plans[i].atlasHit && !plans[i].textHit) {
                         if (ctRunGlyphs.isEmpty())
                             ctRunStart = FloatPoint(positions[i].x, positions[i].y);
                         ctRunGlyphs.append(glyphs[i]);
@@ -550,28 +590,58 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         continue;
                     }
                     flushCTRun();
-                    // Atlas image: canvas dim = 2*strike + 8 (per atlas capture spec).
-                    // Glyph drawn at (4, strike + 2) within canvas. Scale strike → ptSize.
-                    // V-583.B: per-glyph strike (== ptSize for override entries → scale=1.0).
-                    const uint32_t glyphStrike = plans[i].perGlyphStrike;
-                    RetainPtr<CGImageRef> image = font.driftstackAtlasImageForCodepoint(plans[i].cp, glyphStrike, plans[i].pngBytes);
-                    if (!image)
-                        continue;
-                    const float canvasDim = 2.0f * static_cast<float>(glyphStrike) + 8.0f;
-                    const float scale = ptSize / static_cast<float>(glyphStrike);
-                    const float imageDim = canvasDim * scale;
-                    const float originXOffset = -4.0f * scale;
-                    const float originYOffset = -(static_cast<float>(glyphStrike) + 2.0f) * scale;
-                    // WebKit canonical "draw image right-side-up in Y-down CTM" pattern,
-                    // mirroring GraphicsContextCG::drawNativeImage (lines 415-433).
-                    CGContextSaveGState(cgContext.get());
-                    CGContextTranslateCTM(cgContext.get(),
-                        positions[i].x + originXOffset,
-                        positions[i].y + originYOffset);
-                    CGContextTranslateCTM(cgContext.get(), 0.f, imageDim);
-                    CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
-                    CGContextDrawImage(cgContext.get(), CGRectMake(0.f, 0.f, imageDim, imageDim), image.get());
-                    CGContextRestoreGState(cgContext.get());
+                    if (plans[i].atlasHit) {
+                        // Emoji-atlas path (V-090 original).
+                        // Atlas image: canvas dim = 2*strike + 8 (per atlas capture spec).
+                        // Glyph drawn at (4, strike + 2) within canvas. Scale strike → ptSize.
+                        // V-583.B: per-glyph strike (== ptSize for override entries → scale=1.0).
+                        const uint32_t glyphStrike = plans[i].perGlyphStrike;
+                        RetainPtr<CGImageRef> image = font.driftstackAtlasImageForCodepoint(plans[i].cp, glyphStrike, plans[i].pngBytes);
+                        if (!image)
+                            continue;
+                        const float canvasDim = 2.0f * static_cast<float>(glyphStrike) + 8.0f;
+                        const float scale = ptSize / static_cast<float>(glyphStrike);
+                        const float imageDim = canvasDim * scale;
+                        const float originXOffset = -4.0f * scale;
+                        const float originYOffset = -(static_cast<float>(glyphStrike) + 2.0f) * scale;
+                        // WebKit canonical "draw image right-side-up in Y-down CTM" pattern,
+                        // mirroring GraphicsContextCG::drawNativeImage (lines 415-433).
+                        CGContextSaveGState(cgContext.get());
+                        CGContextTranslateCTM(cgContext.get(),
+                            positions[i].x + originXOffset,
+                            positions[i].y + originYOffset);
+                        CGContextTranslateCTM(cgContext.get(), 0.f, imageDim);
+                        CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
+                        CGContextDrawImage(cgContext.get(), CGRectMake(0.f, 0.f, imageDim, imageDim), image.get());
+                        CGContextRestoreGState(cgContext.get());
+                    } else {
+                        // V-655: text-atlas mask-tint path (mirror V-583.K-text block).
+                        RetainPtr<CGImageRef> image = font.driftstackTextAtlasImageForCodepoint(
+                            plans[i].textCp, ptSizeRound, plans[i].textPngBytes);
+                        if (!image)
+                            continue;
+                        float drawX = positions[i].x - v655BearingX;
+                        float drawY = positions[i].y - v655BaselineY;
+                        CGContextSaveGState(cgContext.get());
+                        CGContextTranslateCTM(cgContext.get(), drawX, drawY);
+                        CGContextTranslateCTM(cgContext.get(), 0.f, v655CanvasH);
+                        CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
+                        if (v655s_v633dEnabled) {
+                            CGContextClipToMask(cgContext.get(),
+                                CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH), image.get());
+                            CGContextFillRect(cgContext.get(),
+                                CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH));
+                        } else {
+                            CGContextBeginTransparencyLayer(cgContext.get(), nullptr);
+                            CGContextFillRect(cgContext.get(),
+                                CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH));
+                            CGContextSetBlendMode(cgContext.get(), kCGBlendModeDestinationIn);
+                            CGContextDrawImage(cgContext.get(),
+                                CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH), image.get());
+                            CGContextEndTransparencyLayer(cgContext.get());
+                        }
+                        CGContextRestoreGState(cgContext.get());
+                    }
                 }
                 flushCTRun();
             }
