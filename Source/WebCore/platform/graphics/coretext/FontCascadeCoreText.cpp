@@ -283,6 +283,38 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
         return;
 
     const FontPlatformData& platformData = font.platformData();
+#if PLATFORM(DRIFTSTACK)
+    // V-602 LAYER-4 DIAG (env-gated DRIFTSTACK_V602_DIAG=1): log the CTFont
+    // family name + first 5 glyph IDs + notdef count to characterize the
+    // empty-pixel rasterization gap for CJK / Arabic / Devanagari clusters.
+    // Per V-602 verify: Hiragino is selected for CJK but glyphs emit 0 pixels.
+    // This diagnostic reveals whether the issue is .notdef glyph IDs (cluster
+    // shaped against a font that doesn't have those glyphs) or whether real
+    // glyph IDs are passed but rasterization fails.
+    static bool s_v602Diag = []() {
+        const char* env = getenv("DRIFTSTACK_V602_DIAG");
+        return env && env[0] == '1';
+    }();
+    if (s_v602Diag) {
+        static unsigned diagFireCount = 0;
+        if (++diagFireCount <= 30) {
+            RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(platformData.ctFont()));
+            char nameBuf[256] = {0};
+            if (familyName)
+                CFStringGetCString(familyName.get(), nameBuf, sizeof(nameBuf), kCFStringEncodingUTF8);
+            unsigned notdefCount = 0;
+            for (size_t i = 0; i < glyphs.size(); ++i)
+                if (glyphs[i] == 0) ++notdefCount;
+            WTFLogAlways("[Driftstack-V602-DIAG] font='%s' nGlyphs=%zu notdef=%u g0..4={%u,%u,%u,%u,%u}",
+                nameBuf, glyphs.size(), notdefCount,
+                glyphs.size() > 0 ? glyphs[0] : 0u,
+                glyphs.size() > 1 ? glyphs[1] : 0u,
+                glyphs.size() > 2 ? glyphs[2] : 0u,
+                glyphs.size() > 3 ? glyphs[3] : 0u,
+                glyphs.size() > 4 ? glyphs[4] : 0u);
+        }
+    }
+#endif
     Vector<CGPoint, 256> positions(glyphs.size());
     if (platformData.orientation() == FontOrientation::Vertical) {
         ScopedTextMatrix savedMatrix(computeVerticalTextMatrix(font, textMatrix), context);
