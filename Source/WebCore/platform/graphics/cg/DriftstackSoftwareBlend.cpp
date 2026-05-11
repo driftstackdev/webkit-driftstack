@@ -356,6 +356,12 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
 // to a hot, well-tested code path. v1 of this function intentionally duplicates
 // the inner-loop math to keep the existing fillRect dispatch unchanged. v2 may
 // refactor once V-749.B/C/D ship and the function pair is exercised at parity.
+//
+// WTF_ALLOW_UNSAFE_BUFFER_USAGE pragma wraps the entire function — the
+// coverage pointer parameter is intentional raw-pointer access into a
+// caller-owned alpha bitmap, and the inner pixel-access loops match
+// the pattern used by driftstackSoftwareBlendFillRect above.
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 bool driftstackSoftwareBlendApplyMasked(
     CGContextRef context,
     const FloatRect& deviceRect,
@@ -529,6 +535,8 @@ bool driftstackSoftwareBlendApplyMasked(
 
     return true;
 }
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 } // namespace WebCore
 
