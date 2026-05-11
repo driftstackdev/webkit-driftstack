@@ -29,6 +29,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackAsciiAdvanceTable.h"
+#include "../cocoa/DriftstackNonAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "DriftstackKerningTable.h"
@@ -975,7 +976,11 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     if (platformData().size() > 0.f) {
         const float ptSize = platformData().size();
         const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
-        if (sizePx == 14 || sizePx == 16 || sizePx == 18 || sizePx == 20 || sizePx == 24) {
+        // V-688 (2026-05-11): extend size range to all V-405 fuzzer sizes 12-48
+        // (was 5 specific sizes: 14/16/18/20/24). Non-ASCII table covers a subset
+        // (13 even sizes 12,14,...,48); the per-script fallback below handles
+        // missing-size case by simply returning Mac CT's natural advance.
+        if (sizePx >= 12 && sizePx <= 48) {
             // Map resolved family name → atlas-table key. Direct CSS-name
             // matches first (Arial, Helvetica, Times New Roman, Courier,
             // Tahoma, Verdana, Georgia, Trebuchet MS — priority D coverage).
@@ -1002,53 +1007,87 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f",
                 familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize);
             if (atlasKey) {
-                // Build glyph→codepoint reverse map for ASCII range on first use.
+                // Find atlasKey font_id (shared between ASCII + non-ASCII tables).
+                uint16_t fontId = 0xFFFF;
+                for (uint16_t i = 0; i < std::size(kDriftstackAsciiAdvanceFonts); ++i) {
+                    if (kDriftstackAsciiAdvanceFonts[i] == atlasKey) {
+                        fontId = i;
+                        break;
+                    }
+                }
+                // Build glyph→codepoint reverse map for ASCII range + V-688 non-ASCII range on first use.
+                // V-688 (2026-05-11): extends the same m_driftstackAsciiReverseMap to include
+                // codepoints in kDriftstackNonAsciiAdvanceTable matching this Font's font_id.
+                // This avoids a Font.h cascade rebuild while reusing the per-Font lazy build pattern.
                 if (!m_driftstackAsciiReverseMapBuilt) {
                     RetainPtr font = ctFont();
                     if (font) {
+                        // ASCII range U+0020..U+007E
                         for (UChar cp = 0x20; cp <= 0x7E; ++cp) {
                             UniChar ch[1] = { cp };
                             CGGlyph glyphs[1] = { 0 };
                             if (CTFontGetGlyphsForCharacters(font.get(), ch, glyphs, 1) && glyphs[0])
                                 m_driftstackAsciiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
                         }
+                        // V-688: non-ASCII codepoints (CJK / Arabic / Devanagari per kDriftstackNonAsciiAdvanceTable).
+                        if (fontId != 0xFFFF) {
+                            for (const auto& e : kDriftstackNonAsciiAdvanceTable) {
+                                if (e.fontId > fontId)
+                                    break;
+                                if (e.fontId != fontId)
+                                    continue;
+                                char32_t cp = static_cast<char32_t>(e.codepoint);
+                                if (cp < 0x10000) {
+                                    UniChar ch[1] = { static_cast<UniChar>(cp) };
+                                    CGGlyph g[1] = { 0 };
+                                    if (CTFontGetGlyphsForCharacters(font.get(), ch, g, 1) && g[0])
+                                        m_driftstackAsciiReverseMap.set(g[0], cp);
+                                } else {
+                                    UniChar ch[2] = {
+                                        static_cast<UniChar>(0xD800 + ((cp - 0x10000) >> 10)),
+                                        static_cast<UniChar>(0xDC00 + ((cp - 0x10000) & 0x3FF))
+                                    };
+                                    CGGlyph g[2] = { 0, 0 };
+                                    if (CTFontGetGlyphsForCharacters(font.get(), ch, g, 2) && g[0])
+                                        m_driftstackAsciiReverseMap.set(g[0], cp);
+                                }
+                            }
+                        }
                     }
                     m_driftstackAsciiReverseMapBuilt = true;
-                    WTFLogAlways("[Driftstack-V121] ascii reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
+                    WTFLogAlways("[Driftstack-V121+V688] reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
                         familyName.utf8().data(), atlasKey, ptSize, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
                 }
                 auto it = m_driftstackAsciiReverseMap.find(glyph);
                 if (it != m_driftstackAsciiReverseMap.end()) {
                     char32_t cp = it->value;
-                    // Find atlasKey font_id in kDriftstackAsciiAdvanceFonts.
-                    uint16_t fontId = 0xFFFF;
-                    for (uint16_t i = 0; i < std::size(kDriftstackAsciiAdvanceFonts); ++i) {
-                        if (kDriftstackAsciiAdvanceFonts[i] == atlasKey) {
-                            fontId = i;
-                            break;
-                        }
-                    }
                     if (fontId != 0xFFFF) {
-                        // Linear scan of the table (sorted by font_id+size+cp).
-                        for (const auto& e : kDriftstackAsciiAdvanceTable) {
-                            if (e.fontId > fontId)
-                                break;
-                            if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
-                                // V-145 diagnostic: log all HITs (was capped at 5)
-                                WTFLogAlways("[Driftstack-V121] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
-                                    atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
-                                return e.widthPx;
+                        bool isAscii = (cp <= 0x7E);
+                        // Linear scan of appropriate table.
+                        if (isAscii) {
+                            for (const auto& e : kDriftstackAsciiAdvanceTable) {
+                                if (e.fontId > fontId)
+                                    break;
+                                if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
+                                    WTFLogAlways("[Driftstack-V121] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                        atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
+                                    return e.widthPx;
+                                }
+                            }
+                        } else {
+                            // V-688: non-ASCII table lookup.
+                            for (const auto& e : kDriftstackNonAsciiAdvanceTable) {
+                                if (e.fontId > fontId)
+                                    break;
+                                if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
+                                    static unsigned hits = 0;
+                                    if (++hits <= 16)
+                                        WTFLogAlways("[Driftstack-V688] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                            atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
+                                    return e.widthPx;
+                                }
                             }
                         }
-                        static unsigned misses = 0;
-                        if (++misses <= 5)
-                            WTFLogAlways("[Driftstack-V121] MISS family='%s' fontId=%u size=%u cp=U+%04X (table_len=%zu)",
-                                atlasKey, fontId, sizePx, static_cast<uint32_t>(cp), kDriftstackAsciiAdvanceTable.size());
-                    } else {
-                        static unsigned noFontId = 0;
-                        if (++noFontId <= 5)
-                            WTFLogAlways("[Driftstack-V121] no fontId for atlasKey='%s' (font_table_len=%zu)",
-                                atlasKey, kDriftstackAsciiAdvanceFonts.size());
                     }
                 }
             }
