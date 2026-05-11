@@ -410,9 +410,15 @@ static RetainPtr<CGImageRef> createTintedAlphaMaskImage(
     auto colorSpace = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
     if (!colorSpace)
         return { };
+    // V-675 (2026-05-11): use ByteOrder32Host + AlphaPremultipliedFirst to
+    // match the canvas backing format. Canvas creates contexts with
+    // kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host (per
+    // ImageBufferCGBitmapBackend.cpp:74). Avoiding byte-swap during
+    // CGContextDrawImage may prevent pixel-conversion precision loss
+    // between Mac CG and iOS CG.
     auto ctx = adoptCF(CGBitmapContextCreate(
         nullptr, width, height, 8, width * 4, colorSpace.get(),
-        static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) | static_cast<uint32_t>(kCGBitmapByteOrder32Big)));
+        static_cast<uint32_t>(kCGImageAlphaPremultipliedFirst) | static_cast<uint32_t>(kCGBitmapByteOrder32Host)));
     if (!ctx)
         return { };
     CGContextSetRGBFillColor(ctx.get(),
