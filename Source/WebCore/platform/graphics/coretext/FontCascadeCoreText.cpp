@@ -1036,7 +1036,10 @@ RefPtr<const Font> FontCascade::fontForCombiningCharacterSequence(StringView str
         RefPtr font = fontRanges.fontForCharacter(baseCharacter);
         if (!font)
             continue;
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+        // V-682 (2026-05-11): extend to DRIFTSTACK. Skip Times New Roman / Arial
+        // in Arabic combining-character fallback so combining clusters route
+        // to SF Arabic / Geeza Pro instead of Times — matches iOS behavior.
         if (baseCharacter >= 0x0600 && baseCharacter <= 0x06ff && font->shouldNotBeUsedForArabic())
             continue;
 #endif

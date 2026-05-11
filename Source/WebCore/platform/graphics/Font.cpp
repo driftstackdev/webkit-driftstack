@@ -101,7 +101,7 @@ Font::Font(const FontPlatformData& platformData, Origin origin, IsInterstitial i
     , m_hasVerticalGlyphs(false)
     , m_isUsedInSystemFallbackFontCache(false)
     , m_allowsAntialiasing(true)
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     , m_shouldNotBeUsedForArabic(false)
 #endif
 {
@@ -385,10 +385,13 @@ static void overrideControlCharacters(Vector<char16_t>& buffer, unsigned start, 
 
 static RefPtr<GlyphPage> createAndFillGlyphPage(unsigned pageNumber, const Font& font)
 {
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+    // V-682 (2026-05-11): extend to DRIFTSTACK. iOS skips Times New Roman / Arial
+    // for Arabic glyph pages — these fonts contain Arabic glyphs but CT doesn't
+    // shape them correctly on iOS. Fork must replicate so canvas fillText with
+    // Times New Roman font-family routes Arabic chars to SF Arabic fallback
+    // (iOS behavior) instead of producing broken-shape Times Arabic glyphs.
     // FIXME: Times New Roman contains Arabic glyphs, but Core Text doesn't know how to shape them. See <rdar://problem/9823975>.
-    // Once we have the fix for <rdar://problem/9823975> then remove this code together with Font::shouldNotBeUsedForArabic()
-    // in <rdar://problem/12096835>.
     if (GlyphPage::pageNumberIsUsedForArabic(pageNumber) && font.shouldNotBeUsedForArabic())
         return nullptr;
 #endif
