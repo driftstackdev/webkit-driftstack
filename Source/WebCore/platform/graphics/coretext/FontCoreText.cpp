@@ -28,6 +28,7 @@
 #include "Font.h"
 
 #if PLATFORM(DRIFTSTACK)
+#include "../cocoa/DriftstackAdvanceAtlas.h"
 #include "../cocoa/DriftstackAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackNonAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
@@ -1003,9 +1004,24 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             else if (familyName == "-webkit-sans-serif"_s) atlasKey = "sans-serif";
             else if (familyName == "-webkit-serif"_s) atlasKey = "serif";
             else if (familyName == "-webkit-system-font"_s) atlasKey = "system-ui";
+            // V-691 REVERTED (2026-05-11): script-fallback aliasing (CJK/Arabic/Devanagari
+            // families → atlasKey="-apple-system" with script-scoped reverse maps)
+            // regressed V-405 atlas-OFF text from 1/249 → 0/249. Empirically: Mac's
+            // native script-fallback rendering ALREADY coincidentally matches iPhone
+            // for some seeds (e.g. text/206 mixing CJK+Devanagari+Arabic — V-687 single-
+            // glyph alpha-diff=0). Overriding widths to iOS apple-system values mixes
+            // Mac-shape-bytes with iOS-position-positioning → destroys the coincidental
+            // match. Width overrides only help if Mac uses a DIFFERENT FONT than iOS
+            // (e.g. Geeza Pro vs SF Arabic), but for fonts with bit-identical HMTX
+            // (Mac PingFangUI ↔ iOS PingFang per V-679), widths already match.
+            //
+            // Closure path: capture per-fallback-font iPhone reference data (e.g. iOS
+            // Sangam MN widths), then alias only for fonts where Mac+iOS diverge.
+            uint32_t scriptRangeLo = 0;
+            uint32_t scriptRangeHi = 0xFFFFFFFFu;
             // V-145 diagnostic: log every (familyName, atlasKey) resolution.
-            WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f",
-                familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize);
+            WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f script=[U+%04X..U+%04X]",
+                familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize, scriptRangeLo, scriptRangeHi);
             if (atlasKey) {
                 // Find atlasKey font_id (shared between ASCII + non-ASCII tables).
                 uint16_t fontId = 0xFFFF;
@@ -1015,28 +1031,34 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                         break;
                     }
                 }
-                // Build glyph→codepoint reverse map for ASCII range + V-688 non-ASCII range on first use.
-                // V-688 (2026-05-11): extends the same m_driftstackAsciiReverseMap to include
-                // codepoints in kDriftstackNonAsciiAdvanceTable matching this Font's font_id.
-                // This avoids a Font.h cascade rebuild while reusing the per-Font lazy build pattern.
+                // Build glyph→codepoint reverse map for ASCII + V-688 non-ASCII + V-690 mmap atlas codepoints.
+                // V-690 (Wave 25 / 2026-05-11): extends reverse map to include codepoints from
+                // the DriftstackAdvanceAtlas binary file (2.7M (font, size, cp) → width entries).
+                // Coverage: full V-405 fuzzer codepoint range across 5 scripts × 37 sizes × 6 fonts.
                 if (!m_driftstackAsciiReverseMapBuilt) {
                     RetainPtr font = ctFont();
                     if (font) {
-                        // ASCII range U+0020..U+007E
-                        for (UChar cp = 0x20; cp <= 0x7E; ++cp) {
-                            UniChar ch[1] = { cp };
-                            CGGlyph glyphs[1] = { 0 };
-                            if (CTFontGetGlyphsForCharacters(font.get(), ch, glyphs, 1) && glyphs[0])
-                                m_driftstackAsciiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
+                        // ASCII range U+0020..U+007E (skipped when scriptRange excludes ASCII —
+                        // e.g. script-fallback Font instances shouldn't override ASCII).
+                        if (scriptRangeLo <= 0x20 && scriptRangeHi >= 0x7E) {
+                            for (UChar cp = 0x20; cp <= 0x7E; ++cp) {
+                                UniChar ch[1] = { cp };
+                                CGGlyph glyphs[1] = { 0 };
+                                if (CTFontGetGlyphsForCharacters(font.get(), ch, glyphs, 1) && glyphs[0])
+                                    m_driftstackAsciiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
+                            }
                         }
-                        // V-688: non-ASCII codepoints (CJK / Arabic / Devanagari per kDriftstackNonAsciiAdvanceTable).
                         if (fontId != 0xFFFF) {
+                            // V-688: non-ASCII constexpr table (CJK 152 + Arabic 60 + Devanagari 70).
+                            // V-691: scope to scriptRange for fallback fonts.
                             for (const auto& e : kDriftstackNonAsciiAdvanceTable) {
                                 if (e.fontId > fontId)
                                     break;
                                 if (e.fontId != fontId)
                                     continue;
                                 char32_t cp = static_cast<char32_t>(e.codepoint);
+                                if (cp < scriptRangeLo || cp > scriptRangeHi)
+                                    continue;
                                 if (cp < 0x10000) {
                                     UniChar ch[1] = { static_cast<UniChar>(cp) };
                                     CGGlyph g[1] = { 0 };
@@ -1052,10 +1074,47 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                                         m_driftstackAsciiReverseMap.set(g[0], cp);
                                 }
                             }
+                            // V-690: also iterate DriftstackAdvanceAtlas entries for (fontId, sizePx).
+                            // The atlas covers ~12k codepoints per (font, size) → 12k CTFontGetGlyphsForCharacters
+                            // calls, ~100ms first-access cost amortized to subsequent lookups.
+                            const auto& atlas = DriftstackAdvanceAtlas::singleton();
+                            WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+                            if (atlas.isAvailable()) {
+                                uint32_t atlasCount = 0;
+                                const DriftstackAdvanceEntry* atlasEntries = atlas.entriesForFontSize(fontId, sizePx, &atlasCount);
+                                if (atlasEntries) {
+                                    for (uint32_t i = 0; i < atlasCount; ++i) {
+                                        char32_t cp = static_cast<char32_t>(atlasEntries[i].codepoint);
+                                        if (cp < scriptRangeLo || cp > scriptRangeHi)
+                                            continue;
+                                        if (m_driftstackAsciiReverseMap.contains(cp))
+                                            continue;
+                                        if (cp < 0x10000) {
+                                            UniChar ch[1] = { static_cast<UniChar>(cp) };
+                                            CGGlyph g[1] = { 0 };
+                                            if (CTFontGetGlyphsForCharacters(font.get(), ch, g, 1) && g[0])
+                                                m_driftstackAsciiReverseMap.set(g[0], cp);
+                                        } else {
+                                            UniChar ch[2] = {
+                                                static_cast<UniChar>(0xD800 + ((cp - 0x10000) >> 10)),
+                                                static_cast<UniChar>(0xDC00 + ((cp - 0x10000) & 0x3FF))
+                                            };
+                                            CGGlyph g[2] = { 0, 0 };
+                                            if (CTFontGetGlyphsForCharacters(font.get(), ch, g, 2) && g[0])
+                                                m_driftstackAsciiReverseMap.set(g[0], cp);
+                                        }
+                                    }
+                                    static unsigned builtCount = 0;
+                                    if (++builtCount <= 8)
+                                        WTFLogAlways("[Driftstack-V690] atlas range loaded for fontId=%u size=%u: %u atlas cps → reverse map total %u",
+                                            fontId, sizePx, atlasCount, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
+                                }
+                            }
+                            WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
                         }
                     }
                     m_driftstackAsciiReverseMapBuilt = true;
-                    WTFLogAlways("[Driftstack-V121+V688] reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
+                    WTFLogAlways("[Driftstack-V121+V688+V690] reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
                         familyName.utf8().data(), atlasKey, ptSize, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
                 }
                 auto it = m_driftstackAsciiReverseMap.find(glyph);
@@ -1063,7 +1122,7 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                     char32_t cp = it->value;
                     if (fontId != 0xFFFF) {
                         bool isAscii = (cp <= 0x7E);
-                        // Linear scan of appropriate table.
+                        // Tier 1: constexpr table (fast path, in CPU cache).
                         if (isAscii) {
                             for (const auto& e : kDriftstackAsciiAdvanceTable) {
                                 if (e.fontId > fontId)
@@ -1075,7 +1134,6 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                                 }
                             }
                         } else {
-                            // V-688: non-ASCII table lookup.
                             for (const auto& e : kDriftstackNonAsciiAdvanceTable) {
                                 if (e.fontId > fontId)
                                     break;
@@ -1086,6 +1144,19 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                                             atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
                                     return e.widthPx;
                                 }
+                            }
+                        }
+                        // V-690 Tier 2: DriftstackAdvanceAtlas binary file lookup (2.7M entries via mmap + binary search).
+                        // Reached when constexpr tables miss. Covers the full V-405 fuzzer codepoint range.
+                        const auto& atlas = DriftstackAdvanceAtlas::singleton();
+                        if (atlas.isAvailable()) {
+                            float w = atlas.lookup(fontId, sizePx, static_cast<uint32_t>(cp));
+                            if (w >= 0.0f) {
+                                static unsigned hits = 0;
+                                if (++hits <= 16)
+                                    WTFLogAlways("[Driftstack-V690] HIT family='%s' fontId=%u size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                        atlasKey, fontId, sizePx, static_cast<uint32_t>(cp), advance.width, w);
+                                return w;
                             }
                         }
                     }

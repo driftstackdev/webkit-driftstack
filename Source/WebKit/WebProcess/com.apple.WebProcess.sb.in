@@ -126,6 +126,8 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
     ;;; V-583.K-text: text glyph atlas (single .bin file mmap'd at startup)
     (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
+    ;;; V-689 (Wave 25): Driftstack advance atlas (2.7M (font,size,cp)→width entries, 31 MB)
+    (literal "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 ;;; V-582: dev-only canvas dump dir for empirical diff vs iPhone reference.
