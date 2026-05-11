@@ -32,6 +32,7 @@
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "DriftstackKerningTable.h"
+#include "DriftstackPingFangMetrics.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <wtf/Lock.h>
@@ -211,6 +212,57 @@ void Font::platformInit()
     descent = ceilf(descent);
 
 #if PLATFORM(DRIFTSTACK)
+    // V-602 option 1 (2026-05-11, env-gated DRIFTSTACK_V602_SUBSTITUTE=1):
+    // detect the PingFang-substitute Hiragino tagged by
+    // driftstackIOSFallbackFontForCJKCluster (FontCacheCoreText.cpp).
+    // Override Mac Hiragino metrics with PingFang's hhea/OS-2 typo values
+    // (DriftstackPingFangMetrics.h) so the canvas line-height + text
+    // metrics match what iPhone PingFang would produce for the same CSS
+    // weight. Layer 4 glyph shape parity (Hiragino vs PingFang glyphs)
+    // is residual V-653 scope.
+    {
+        RetainPtr<CTFontDescriptorRef> desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
+        if (desc) {
+            RetainPtr<CFStringRef> v602Tag = adoptCF(static_cast<CFStringRef>(
+                CTFontDescriptorCopyAttribute(desc.get(),
+                    CFSTR("__driftstack_pingfang_substitute_v602"))));
+            if (v602Tag && CFEqual(v602Tag.get(), CFSTR("yes"))) {
+                // Resolve PingFang weight-bracket entry from CSS weight.
+                // CTFont weight trait → CSS weight via OpenType spec:
+                //   -1.0 ↔ 100, -0.6 ↔ 200, -0.4 ↔ 300, 0.0 ↔ 400,
+                //   0.23 ↔ 500, 0.30 ↔ 600, 0.40 ↔ 700, 0.62 ↔ 800, 1.0 ↔ 900.
+                // Simplified: read symbolic-traits + map to nearest CSS weight.
+                uint16_t cssWeight = 400; // default Regular
+                RetainPtr<CFDictionaryRef> traits = adoptCF(static_cast<CFDictionaryRef>(
+                    CTFontDescriptorCopyAttribute(desc.get(), kCTFontTraitsAttribute)));
+                if (traits) {
+                    CFNumberRef weightNum = static_cast<CFNumberRef>(
+                        CFDictionaryGetValue(traits.get(), kCTFontWeightTrait));
+                    if (weightNum) {
+                        float ctWeight = 0.f;
+                        CFNumberGetValue(weightNum, kCFNumberFloatType, &ctWeight);
+                        // Linear interpolation: ctWeight = -1..1 → CSS 100..900
+                        cssWeight = static_cast<uint16_t>(std::clamp(
+                            400.0f + ctWeight * 400.0f, 100.0f, 900.0f));
+                    }
+                }
+                const auto& pingFangMetric = WebCore::Driftstack::pingFangMetricForWeight(cssWeight);
+                // Apply PingFang typo metrics (PingFang OS/2 USE_TYPO_METRICS=0
+                // but the typo values are the architecturally-correct line
+                // metric per OpenFontFormat recommendation for fonts with
+                // significantly different hhea vs typo metrics).
+                unitsPerEm = pingFangMetric.unitsPerEm;
+                ascent = scaleEmToUnits(pingFangMetric.typoAscent, unitsPerEm) * pointSize;
+                descent = -scaleEmToUnits(pingFangMetric.typoDescent, unitsPerEm) * pointSize;
+                lineGap = scaleEmToUnits(pingFangMetric.typoLineGap, unitsPerEm) * pointSize;
+                WTFLogAlways("[Driftstack-V602] PingFang metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
+                    static_cast<unsigned>(cssWeight), pingFangMetric.label,
+                    static_cast<double>(ascent), static_cast<double>(descent),
+                    static_cast<double>(lineGap), static_cast<double>(pointSize));
+            }
+        }
+    }
+
     // V-081 Stage D-2 Track 1: iPhone reports a different per-size
     // fontBoundingBox{Ascent,Descent} for Apple Color Emoji than Mac's
     // CoreText returns from the same iOS font binary. Captured per-size

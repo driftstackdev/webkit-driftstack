@@ -1533,7 +1533,60 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
         "ping fang sc"_s,
         "pingfang"_s,
     };
-    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    if (auto pingFang = driftstackLookupIOSFontByCandidates(candidates, description, size))
+        return pingFang;
+
+    // V-602 option 1 (2026-05-11, env-gated DRIFTSTACK_V602_SUBSTITUTE=1):
+    // iOS PingFang.ttc cidg/hvgl outline tables prevent Mac CTFontManager from
+    // parsing the binary (V-487 PARSEFAIL — only iOS Core font with this issue).
+    // When the PingFang lookup chain fails, fall back to Mac's Hiragino Kaku
+    // Gothic (which parses correctly and has ~6,746 CJK Unified Ideograph
+    // coverage in font[0]). Tag the returned CTFont with a custom descriptor
+    // attribute so Font::platformInit() can apply PingFang's hhea/OS-2 metric
+    // overlay (data in DriftstackPingFangMetrics.h) at the metric extraction
+    // layer. Net result: Mac fork CJK text canvas renders Hiragino glyphs
+    // with PingFang's vertical metrics (line-spacing parity), closing the
+    // Layer 1 + Layer 3 (metric) divergence. Layer 4 (glyph shape) parity is
+    // a residual V-653 scope (Hiragino vs PingFang glyph shapes differ).
+    //
+    // Env-gated for safe rollout — default OFF until verified via V-652
+    // Mac re-capture showing CJK canvasSha unique count > 1.
+    static bool s_v602Enabled = []() {
+        const char* env = getenv("DRIFTSTACK_V602_SUBSTITUTE");
+        return env && env[0] == '1';
+    }();
+    if (s_v602Enabled) {
+        static const std::array<ASCIILiteral, 4> hiraginoCandidates {
+            "hiragino kaku gothic"_s,
+            "hiraginokakugothic"_s,
+            "hiragino sans"_s,
+            "hiraginosans"_s,
+        };
+        if (auto hiragino = driftstackLookupIOSFontByCandidates(hiraginoCandidates, description, size)) {
+            // Tag the descriptor with a custom attribute that Font::platformInit()
+            // can introspect to apply the PingFang metric overlay.
+            RetainPtr<CTFontDescriptorRef> baseDesc = adoptCF(CTFontCopyFontDescriptor(hiragino.get()));
+            CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 1,
+                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            CFDictionaryAddValue(attrs, CFSTR("__driftstack_pingfang_substitute_v602"),
+                CFSTR("yes"));
+            RetainPtr<CTFontDescriptorRef> taggedDesc = adoptCF(
+                CTFontDescriptorCreateCopyWithAttributes(baseDesc.get(), attrs));
+            CFRelease(attrs);
+            if (taggedDesc) {
+                RetainPtr<CTFontRef> taggedFont = adoptCF(
+                    CTFontCreateWithFontDescriptor(taggedDesc.get(), size, nullptr));
+                if (taggedFont) {
+                    static unsigned hitCount = 0;
+                    if (++hitCount <= 5)
+                        WTFLogAlways("[Driftstack-V602] PingFang→Hiragino substitute fired (%u so far); cp=U+%04X size=%.1f",
+                            hitCount, static_cast<unsigned>(cp), size);
+                    return taggedFont;
+                }
+            }
+        }
+    }
+    return nullptr;
 }
 
 // Emoji presentation ranges — covers the supplementary-plane emoji blocks +
