@@ -1140,9 +1140,51 @@ void GraphicsContextCG::fillRoundedRectImpl(const FloatRoundedRect& rect, const 
     bool equalWidths = (radii.topLeft().width() == radii.topRight().width() && radii.topRight().width() == radii.bottomLeft().width() && radii.bottomLeft().width() == radii.bottomRight().width());
     bool equalHeights = (radii.topLeft().height() == radii.bottomLeft().height() && radii.bottomLeft().height() == radii.topRight().height() && radii.topRight().height() == radii.bottomRight().height());
     bool hasCustomFill = fillGradient() || fillPattern();
-    if (!hasCustomFill && equalWidths && equalHeights && radii.topLeft().width() * 2 == r.width() && radii.topLeft().height() * 2 == r.height())
+    bool isPerfectCircle = (!hasCustomFill && equalWidths && equalHeights && radii.topLeft().width() * 2 == r.width() && radii.topLeft().height() * 2 == r.height());
+    if (isPerfectCircle) {
+#if PLATFORM(DRIFTSTACK)
+        // V-749.E perfect-circle CGContextFillEllipseInRect dispatch. fillRoundedRectImpl
+        // direct-calls CGContextFillEllipseInRect for the perfect-circle case, bypassing
+        // V-749.B/C path-based dispatch. Wire same software blend pattern: rasterize
+        // ellipse to alpha-only bitmap mask, call masked-blend.
+        const auto& mode = compositeMode();
+        if (!drawOwnShadow && driftstackSoftwareBlendApplies(mode.operation, mode.blendMode)) {
+            CGAffineTransform ctm = CGContextGetCTM(context);
+            CGRect deviceRectCG = CGRectApplyAffineTransform(r, ctm);
+            int dx = static_cast<int>(std::floor(deviceRectCG.origin.x));
+            int dy = static_cast<int>(std::floor(deviceRectCG.origin.y));
+            int dx1 = static_cast<int>(std::ceil(deviceRectCG.origin.x + deviceRectCG.size.width));
+            int dy1 = static_cast<int>(std::ceil(deviceRectCG.origin.y + deviceRectCG.size.height));
+            int dw = dx1 - dx;
+            int dh = dy1 - dy;
+            if (dw > 0 && dh > 0 && dw * dh < (16 * 1024 * 1024)) {
+                Vector<uint8_t> coverage;
+                coverage.grow(dw * dh);
+                coverage.fill(0);
+                auto cs = adoptCF(CGColorSpaceCreateDeviceGray());
+                auto coverageSpan = coverage.mutableSpan();
+                auto maskCtx = adoptCF(CGBitmapContextCreate(
+                    coverageSpan.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
+                if (maskCtx) {
+                    CGContextTranslateCTM(maskCtx.get(), -dx, -dy);
+                    CGContextConcatCTM(maskCtx.get(), ctm);
+                    CGContextSetGrayFillColor(maskCtx.get(), 1.0, 1.0);
+                    CGContextFillEllipseInRect(maskCtx.get(), r);
+                    FloatRect deviceRect(dx, dy, dw, dh);
+                    if (driftstackSoftwareBlendApplyMasked(
+                            context, deviceRect, coverageSpan.data(),
+                            dw, dh, dw,
+                            color, alpha(), mode.blendMode, mode.operation))
+                        goto v749e_done;
+                }
+            }
+        }
+#endif
         CGContextFillEllipseInRect(context, r);
-    else {
+#if PLATFORM(DRIFTSTACK)
+v749e_done:;
+#endif
+    } else {
         Path path;
         path.addRoundedRect(rect);
         fillPath(path);
