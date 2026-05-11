@@ -63,6 +63,33 @@ inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blend
 // CTM and uses it to map rect coordinates to pixel coordinates.
 bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect, const Color& fillColor, float globalAlpha, BlendMode blendMode, CompositeOperator op);
 
+// V-749.A — extended software-blend with per-pixel coverage mask. Same
+// composite/blend math as driftstackSoftwareBlendFillRect but each pixel's
+// source alpha is multiplied by coverageMask[y * coverageRowStride + x] / 255.
+// Enables V-749.B/C/D fillPath/drawEllipse/fillRoundedRect wiring.
+//
+// `deviceRect` is the path's device-space bounding rect (caller computed via
+// CGContextGetCTM mapping). `coverage` array dims = (coverageWidth ×
+// coverageHeight), row-major top-down. Caller responsibility:
+//   1. Compute path device-space bounding rect.
+//   2. CGBitmapContextCreate (alpha-only, dims = device rect rounded up).
+//   3. CGContextSetFillColor(layerCtx, white); CGContextAddPath + fill the
+//      path into the alpha bitmap (this produces the coverage mask).
+//   4. Pass the bitmap data as `coverage`; call this function.
+//
+// Returns true if the blend was performed. False means non-bitmap context or
+// empty intersection.
+bool driftstackSoftwareBlendApplyMasked(
+    CGContextRef context,
+    const FloatRect& deviceRect,
+    const uint8_t* coverage,
+    int coverageWidth, int coverageHeight,
+    size_t coverageRowStride,
+    const Color& fillColor,
+    float globalAlpha,
+    BlendMode blendMode,
+    CompositeOperator op);
+
 } // namespace WebCore
 
 #endif // USE(CG) && PLATFORM(DRIFTSTACK)

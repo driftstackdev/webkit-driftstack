@@ -347,6 +347,189 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
     return true;
 }
 
+// V-749.A — masked variant of software blend. Coverage mask is in device pixel
+// space, row-major top-down, dimensions matching deviceRect rounded to ints.
+// Per-pixel source alpha is multiplied by coverage[y][x]/255.
+//
+// Sharing the per-pixel composite/blend math with driftstackSoftwareBlendFillRect
+// would require factoring it into a common helper, which adds refactor risk
+// to a hot, well-tested code path. v1 of this function intentionally duplicates
+// the inner-loop math to keep the existing fillRect dispatch unchanged. v2 may
+// refactor once V-749.B/C/D ship and the function pair is exercised at parity.
+bool driftstackSoftwareBlendApplyMasked(
+    CGContextRef context,
+    const FloatRect& deviceRect,
+    const uint8_t* coverage,
+    int coverageWidth, int coverageHeight,
+    size_t coverageRowStride,
+    const Color& fillColor,
+    float globalAlpha,
+    BlendMode blendMode,
+    CompositeOperator op)
+{
+    if (!context || !coverage) return false;
+    if (coverageWidth <= 0 || coverageHeight <= 0) return false;
+
+    void* data = CGBitmapContextGetData(context);
+    if (!data) return false;
+
+    size_t bw = CGBitmapContextGetWidth(context);
+    size_t bh = CGBitmapContextGetHeight(context);
+    size_t bpr = CGBitmapContextGetBytesPerRow(context);
+    size_t bpp = CGBitmapContextGetBitsPerPixel(context) / 8;
+    CGBitmapInfo info = CGBitmapContextGetBitmapInfo(context);
+    CGImageAlphaInfo alphaInfo = static_cast<CGImageAlphaInfo>(info & kCGBitmapAlphaInfoMask);
+    CGBitmapInfo byteOrder = info & kCGBitmapByteOrderMask;
+
+    if (bpp != 4) return false;
+
+    int rIdx, gIdx, bIdx, aIdx;
+    bool premultiplied;
+    bool alphaFirst = (alphaInfo == kCGImageAlphaPremultipliedFirst || alphaInfo == kCGImageAlphaFirst || alphaInfo == kCGImageAlphaNoneSkipFirst);
+    bool alphaLast = (alphaInfo == kCGImageAlphaPremultipliedLast || alphaInfo == kCGImageAlphaLast || alphaInfo == kCGImageAlphaNoneSkipLast);
+    bool littleEndian = (byteOrder == kCGBitmapByteOrder32Little);
+    premultiplied = (alphaInfo == kCGImageAlphaPremultipliedFirst || alphaInfo == kCGImageAlphaPremultipliedLast);
+
+    if (!alphaFirst && !alphaLast) return false;
+
+    if (alphaFirst && littleEndian) { bIdx = 0; gIdx = 1; rIdx = 2; aIdx = 3; }
+    else if (alphaLast && !littleEndian) { rIdx = 0; gIdx = 1; bIdx = 2; aIdx = 3; }
+    else if (alphaFirst && !littleEndian) { aIdx = 0; rIdx = 1; gIdx = 2; bIdx = 3; }
+    else { aIdx = 3; bIdx = 2; gIdx = 1; rIdx = 0; }
+
+    // deviceRect is already in CG device coords. Map to bitmap row-major top-down.
+    int dx0 = static_cast<int>(std::floor(deviceRect.x()));
+    int dy0 = static_cast<int>(std::floor(deviceRect.y()));
+    int dx1 = static_cast<int>(std::ceil(deviceRect.maxX()));
+    int dy1 = static_cast<int>(std::ceil(deviceRect.maxY()));
+
+    int top = static_cast<int>(bh) - dy1;
+    int bot = static_cast<int>(bh) - dy0;
+    int x0 = std::max(0, dx0);
+    int x1 = std::min(static_cast<int>(bw), dx1);
+    top = std::max(0, top);
+    bot = std::min(static_cast<int>(bh), bot);
+    if (x0 >= x1 || top >= bot) return true;
+
+    auto srgbComponents = fillColor.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+    double Sr_base = std::max(0.0, std::min(1.0, (double)srgbComponents[0]));
+    double Sg_base = std::max(0.0, std::min(1.0, (double)srgbComponents[1]));
+    double Sb_base = std::max(0.0, std::min(1.0, (double)srgbComponents[2]));
+    double Sa_base = std::max(0.0, std::min(1.0, (double)srgbComponents[3] * (double)globalAlpha));
+    if (Sa_base <= 0.0) return true;
+
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+    uint8_t* base = static_cast<uint8_t*>(data);
+
+    for (int y = top; y < bot; ++y) {
+        uint8_t* row = base + y * bpr;
+        // Coverage mask row: deviceRect.y() == CG_bottom + offset; bitmap y is top-down
+        // bitmap row y corresponds to device y = bh - 1 - y.
+        int deviceY = static_cast<int>(bh) - 1 - y;
+        int maskRow = deviceY - dy0;
+        if (maskRow < 0 || maskRow >= coverageHeight) continue;
+        const uint8_t* coverageRow = coverage + maskRow * coverageRowStride;
+
+        for (int x = x0; x < x1; ++x) {
+            int maskCol = x - dx0;
+            if (maskCol < 0 || maskCol >= coverageWidth) continue;
+            uint8_t cov = coverageRow[maskCol];
+            if (cov == 0) continue; // outside path; skip pixel entirely
+
+            double covFrac = static_cast<double>(cov) / 255.0;
+            double Sa = Sa_base * covFrac;
+            double Sr = Sr_base, Sg = Sg_base, Sb = Sb_base;
+            if (Sa <= 0.0) continue;
+
+            uint8_t* px = row + x * bpp;
+            double Br = px[rIdx] / 255.0;
+            double Bg = px[gIdx] / 255.0;
+            double Bb = px[bIdx] / 255.0;
+            double Ba = px[aIdx] / 255.0;
+            if (premultiplied && Ba > 0.0) { Br /= Ba; Bg /= Ba; Bb /= Ba; }
+
+            double Rr, Rg, Rb, Ra;
+
+            if (op == CompositeOperator::XOR && blendMode == BlendMode::Normal) {
+                Ra = Sa * (1.0 - Ba) + Ba * (1.0 - Sa);
+                if (Ra > 0.0) {
+                    Rr = (Sa * Sr * (1.0 - Ba) + Ba * Br * (1.0 - Sa)) / Ra;
+                    Rg = (Sa * Sg * (1.0 - Ba) + Ba * Bg * (1.0 - Sa)) / Ra;
+                    Rb = (Sa * Sb * (1.0 - Ba) + Ba * Bb * (1.0 - Sa)) / Ra;
+                } else { Rr = Rg = Rb = 0.0; }
+            } else if (op == CompositeOperator::DestinationAtop && blendMode == BlendMode::Normal) {
+                Ra = Sa;
+                if (Ra > 0.0) {
+                    Rr = ((1.0 - Ba) * Sr) + (Ba * Br);
+                    Rg = ((1.0 - Ba) * Sg) + (Ba * Bg);
+                    Rb = ((1.0 - Ba) * Sb) + (Ba * Bb);
+                } else { Rr = Rg = Rb = 0.0; }
+            } else if (op == CompositeOperator::PlusLighter && blendMode == BlendMode::Normal) {
+                Ra = std::min(1.0, Sa + Ba);
+                Rr = std::min(1.0, Sa * Sr + Ba * Br);
+                Rg = std::min(1.0, Sa * Sg + Ba * Bg);
+                Rb = std::min(1.0, Sa * Sb + Ba * Bb);
+            } else {
+                double blendR, blendG, blendB;
+                switch (blendMode) {
+                case BlendMode::ColorBurn:
+                    blendR = blendChannelColorBurn(Br, Sr);
+                    blendG = blendChannelColorBurn(Bg, Sg);
+                    blendB = blendChannelColorBurn(Bb, Sb);
+                    break;
+                case BlendMode::HardLight:
+                    blendR = blendChannelHardLight(Br, Sr);
+                    blendG = blendChannelHardLight(Bg, Sg);
+                    blendB = blendChannelHardLight(Bb, Sb);
+                    break;
+                case BlendMode::SoftLight:
+                    blendR = blendChannelSoftLight(Br, Sr);
+                    blendG = blendChannelSoftLight(Bg, Sg);
+                    blendB = blendChannelSoftLight(Bb, Sb);
+                    break;
+                case BlendMode::Exclusion:
+                    blendR = blendChannelExclusion(Br, Sr);
+                    blendG = blendChannelExclusion(Bg, Sg);
+                    blendB = blendChannelExclusion(Bb, Sb);
+                    break;
+                case BlendMode::Hue:
+                case BlendMode::Saturation:
+                case BlendMode::Color:
+                case BlendMode::Luminosity:
+                    blendNonseparable(blendMode, Br, Bg, Bb, Sr, Sg, Sb, blendR, blendG, blendB);
+                    break;
+                default:
+                    return false;
+                }
+
+                double CsR = (1.0 - Ba) * Sr + Ba * blendR;
+                double CsG = (1.0 - Ba) * Sg + Ba * blendG;
+                double CsB = (1.0 - Ba) * Sb + Ba * blendB;
+                Ra = Sa + Ba * (1.0 - Sa);
+                if (Ra > 0.0) {
+                    Rr = (Sa * CsR + (1.0 - Sa) * Ba * Br) / Ra;
+                    Rg = (Sa * CsG + (1.0 - Sa) * Ba * Bg) / Ra;
+                    Rb = (Sa * CsB + (1.0 - Sa) * Ba * Bb) / Ra;
+                } else { Rr = Rg = Rb = 0.0; }
+            }
+
+            if (premultiplied) {
+                px[rIdx] = f2u8(Rr * Ra);
+                px[gIdx] = f2u8(Rg * Ra);
+                px[bIdx] = f2u8(Rb * Ra);
+            } else {
+                px[rIdx] = f2u8(Rr);
+                px[gIdx] = f2u8(Rg);
+                px[bIdx] = f2u8(Rb);
+            }
+            px[aIdx] = f2u8(Ra);
+        }
+    }
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+    return true;
+}
+
 } // namespace WebCore
 
 #endif // USE(CG) && PLATFORM(DRIFTSTACK)
