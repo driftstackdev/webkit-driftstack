@@ -540,7 +540,13 @@ RefPtr<Font> FontCache::similarFont(const FontDescription& description, const St
     if (family.isEmpty())
         return nullptr;
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+    // V-683 (2026-05-11): extend to DRIFTSTACK. iOS substitutes Menlo/Monaco
+    // → Courier and Lucida Grande → Verdana before CT font resolution. Without
+    // this, Mac fork resolves the requested family directly via Mac CT,
+    // returning Menlo (Mac's native monospace) for "menlo" / "monaco" requests
+    // — different glyphs and metrics than iOS Courier.
+    // Affects canvas fillText with monospace CSS family.
     // Substitute the default monospace font for well-known monospace fonts.
     if (equalLettersIgnoringASCIICase(family, "monaco"_s) || equalLettersIgnoringASCIICase(family, "menlo"_s))
         return fontForFamily(description, "courier"_s);
@@ -1240,7 +1246,8 @@ void FontCache::platformPurgeInactiveFontData()
     m_databaseDisallowingUserInstalledFonts.clear();
 }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+// V-684: needed for DRIFTSTACK Arabic font replacement in lookupFallbackFont.
 static inline bool isArabicCharacter(char16_t character)
 {
     return character >= 0x0600 && character <= 0x06FF;
@@ -1268,7 +1275,14 @@ static RetainPtr<CTFontRef> lookupFallbackFont(CTFontRef font, FontSelectionValu
     auto result = adoptCF(CTFontCreateForCharactersWithLanguageAndOption(font, reinterpret_cast<const UTF16Char*>(upconvertedCharacters.get()), characterCluster.length(), localeString.get(), fallbackOption, &coveredLength));
     ASSERT(!isUserInstalledFont(result.get()) || allowUserInstalledFonts == AllowUserInstalledFonts::Yes);
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+    // V-684 (2026-05-11): extend to DRIFTSTACK. This is the CT-level
+    // character-cluster fallback used by canvas fillText shaping (via
+    // CTLineCreateWithAttributedString → CTFontCreateForCharactersWithLanguageAndOption).
+    // iOS replaces Times New Roman / Arial → GeezaPro for Arabic clusters.
+    // V-682 patched the WebKit GlyphPage path but canvas fillText bypasses
+    // GlyphPage; THIS path is what canvas fillText actually exercises.
+    //
     // FIXME: This is so unfortunate. The reason this is here is that certain fonts which are early in the system font cascade list
     // (used to?) perform poorly. In order to speed up the browser, we block those fonts, and use other faster fonts instead.
     // However, this performance analysis was done, like, 10 years ago, and the probability that these fonts are still too slow
