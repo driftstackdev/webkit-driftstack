@@ -326,6 +326,21 @@ static void setCGFontRenderingMode(GraphicsContext& context)
     // archetype is portrait, so set Unfiltered. If this resolves V-097's
     // ~2% byte-diff, F.2-F.7 root cause is the CG AA style flag.
     CGContextSetFontAntialiasingStyle(cgContext.get(), kCGFontAntialiasingStyleUnfiltered);
+    // V-653 (2026-05-11): iOS Safari doesn't apply LCD subpixel font
+    // smoothing (it's a Mac-only concept tied to LCD/RGB subpixel layout
+    // on desktop displays). Fresh CGBitmapContextCreate'd canvas on Mac
+    // inherits the system default of shouldSmoothFonts=true /
+    // allowsFontSmoothing=true. The state propagation in
+    // FontCascadeCoreText::drawGlyphs marks shouldSmoothFonts UNUSED for
+    // DRIFTSTACK, so the Mac default leaks through to CTFontDrawGlyphs
+    // → CT applies LCD smoothing → text pixels diverge from iPhone's
+    // grayscale-AA pixels. Force-disable both Allows + Should so every
+    // drawGlyphs path uses non-smoothed glyph rasterization. V-102 tested
+    // subpixel-position OFF (no effect) and V-104 locked antialiasing-
+    // style; this is the remaining CG flag delta. CGContextSetAllowsFont
+    // Smoothing is a CG SPI declared in pal/spi/cg/CoreGraphicsSPI.h.
+    CGContextSetAllowsFontSmoothing(cgContext.get(), false);
+    CGContextSetShouldSmoothFonts(cgContext.get(), false);
 #endif
 }
 
