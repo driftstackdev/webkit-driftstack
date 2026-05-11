@@ -1254,6 +1254,29 @@ static inline bool isArabicCharacter(char16_t character)
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// V-709 (2026-05-11): CJK Han classification for lookupFallbackFont
+// substitution. Mac CT picks Songti SC for many CJK codepoints where iOS
+// picks PingFang SC. V-708 captured 740 Songti-SC calls across V-405 text
+// fuzzer — substituting at this primary-cascade fallback layer is the
+// V-484 candidate (a) closure path for V-405 atlas-OFF text positional
+// drift.
+static inline bool isCJKHanCharacter(char16_t character)
+{
+    return (character >= 0x3400 && character <= 0x4DBF)   // CJK Ext A
+        || (character >= 0x4E00 && character <= 0x9FFF)   // CJK Unified
+        || (character >= 0xF900 && character <= 0xFAFF);  // CJK Compat
+}
+
+// V-709: Devanagari classification. Mac CT picks ITF Devanagari for some
+// codepoints where iOS picks Kohinoor / .SF Devanagari (172 calls in V-708).
+static inline bool isDevanagariCharacter(char16_t character)
+{
+    return (character >= 0x0900 && character <= 0x097F)
+        || (character >= 0xA8E0 && character <= 0xA8FF);
+}
+#endif
+
 #if ASSERT_ENABLED
 static bool isUserInstalledFont(CTFontRef font)
 {
@@ -1301,6 +1324,51 @@ static RetainPtr<CTFontRef> lookupFallbackFont(CTFontRef font, FontSelectionValu
     }
 #else
     UNUSED_PARAM(fontWeight);
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // V-709 (2026-05-11): Mac CT primary-cascade falls back to Songti SC
+    // for many CJK Han codepoints (740 calls / 4695 firings in V-708),
+    // and ITF Devanagari for some Devanagari codepoints (172 calls).
+    // iOS picks PingFang SC and Kohinoor Devanagari respectively. Different
+    // font binary = different glyph rasterization = 95% LARGE pixel diff
+    // (V-705-B). Substitute at this primary-cascade level to align with
+    // iOS choice.
+    //
+    // Closure target: V-405 atlas-OFF text 1/249 → higher pass rate as
+    // Mac glyph rasterization aligns with iOS for CJK + Devanagari.
+    //
+    // Env-gated via DRIFTSTACK_V709=1 (default OFF) until empirically
+    // verified to MOVE V-405 atlas-OFF text % positively. Revert if
+    // regression (analogous to V-691 regression of width overrides).
+    {
+        char16_t firstChar = characterCluster[0];
+        static const bool s_v709Enabled = []() {
+            const char* env = getenv("DRIFTSTACK_V709");
+            return env && env[0] == '1';
+        }();
+        if (s_v709Enabled) {
+            CFStringRef substituteName = nullptr;
+            if (isCJKHanCharacter(firstChar)) {
+                auto familyName = adoptCF(static_cast<CFStringRef>(CTFontCopyAttribute(result.get(), kCTFontFamilyNameAttribute)));
+                if (familyName && CFStringCompare(familyName.get(), CFSTR("Songti SC"), 0) == kCFCompareEqualTo)
+                    substituteName = CFSTR("PingFang SC");
+            } else if (isDevanagariCharacter(firstChar)) {
+                auto familyName = adoptCF(static_cast<CFStringRef>(CTFontCopyAttribute(result.get(), kCTFontFamilyNameAttribute)));
+                if (familyName && CFStringCompare(familyName.get(), CFSTR("ITF Devanagari"), 0) == kCFCompareEqualTo)
+                    substituteName = CFSTR("Kohinoor Devanagari");
+            }
+            if (substituteName) {
+                CFTypeRef keys[] = { kCTFontNameAttribute };
+                CFTypeRef values[] = { substituteName };
+                auto attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, std::size(keys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+                auto modification = adoptCF(CTFontDescriptorCreateWithAttributes(attributes.get()));
+                auto substituted = adoptCF(CTFontCreateCopyWithAttributes(result.get(), CTFontGetSize(result.get()), nullptr, modification.get()));
+                if (substituted)
+                    result = WTF::move(substituted);
+            }
+        }
+    }
 #endif
 
     return result;

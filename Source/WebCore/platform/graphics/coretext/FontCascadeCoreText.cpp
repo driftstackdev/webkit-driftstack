@@ -296,8 +296,12 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
         return env && env[0] == '1';
     }();
     if (s_v602Diag) {
+        // V-708 (2026-05-11): rate limit raised to 5000 (was 30) so V-405
+        // atlas-OFF text fuzzer's full 250-seed trace captures cleanly.
+        // Per-process cap retained to bound log size for cumrig + rig
+        // runs that drive thousands of fillText calls.
         static unsigned diagFireCount = 0;
-        if (++diagFireCount <= 30) {
+        if (++diagFireCount <= 5000) {
             RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(platformData.ctFont()));
             char nameBuf[256] = {0};
             if (familyName)
@@ -305,8 +309,22 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
             unsigned notdefCount = 0;
             for (size_t i = 0; i < glyphs.size(); ++i)
                 if (glyphs[i] == 0) ++notdefCount;
-            WTFLogAlways("[Driftstack-V602-DIAG] font='%s' nGlyphs=%zu notdef=%u g0..4={%u,%u,%u,%u,%u}",
-                nameBuf, glyphs.size(), notdefCount,
+            float advanceSum = 0.f;
+            for (size_t i = 0; i < advances.size(); ++i)
+                advanceSum += advances[i].width;
+            // V-708: include CTFont ascent/descent/leading at point-size,
+            // unitsPerEm for cross-checking V-679 binary identity → metric
+            // identity hypothesis. Per-call ascent reveals if font binary
+            // metrics on Mac for SPI fonts match expected iOS values.
+            CGFloat ascent = CTFontGetAscent(platformData.ctFont());
+            CGFloat descent = CTFontGetDescent(platformData.ctFont());
+            CGFloat leading = CTFontGetLeading(platformData.ctFont());
+            unsigned upm = CTFontGetUnitsPerEm(platformData.ctFont());
+            WTFLogAlways("[Driftstack-V602-DIAG] font='%s' size=%.1f upm=%u asc=%.3f desc=%.3f lead=%.3f advSum=%.3f nGlyphs=%zu notdef=%u g0..4={%u,%u,%u,%u,%u}",
+                nameBuf, platformData.size(), upm,
+                static_cast<double>(ascent), static_cast<double>(descent),
+                static_cast<double>(leading), static_cast<double>(advanceSum),
+                glyphs.size(), notdefCount,
                 glyphs.size() > 0 ? glyphs[0] : 0u,
                 glyphs.size() > 1 ? glyphs[1] : 0u,
                 glyphs.size() > 2 ? glyphs[2] : 0u,
