@@ -1327,46 +1327,76 @@ static RetainPtr<CTFontRef> lookupFallbackFont(CTFontRef font, FontSelectionValu
 #endif
 
 #if PLATFORM(DRIFTSTACK)
-    // V-709 (2026-05-11): Mac CT primary-cascade falls back to Songti SC
-    // for many CJK Han codepoints (740 calls / 4695 firings in V-708),
-    // and ITF Devanagari for some Devanagari codepoints (172 calls).
-    // iOS picks PingFang SC and Kohinoor Devanagari respectively. Different
-    // font binary = different glyph rasterization = 95% LARGE pixel diff
-    // (V-705-B). Substitute at this primary-cascade level to align with
-    // iOS choice.
+    // V-709/V-712 (2026-05-11): Mac CT primary-cascade falls back to Songti
+    // SC for CJK Han codepoints (740 calls / 4695 in V-708) and ITF
+    // Devanagari for Devanagari (172 calls). iOS uses .AppleSimplified
+    // ChineseFont (= iOS PingFang.ttc, byte-identical per V-679) and
+    // .AppleIndicFont / .SF Devanagari respectively.
     //
-    // Closure target: V-405 atlas-OFF text 1/249 → higher pass rate as
-    // Mac glyph rasterization aligns with iOS for CJK + Devanagari.
+    // V-709 (env-gated DRIFTSTACK_V709=1) substituted Songti SC → "PingFang
+    // SC" via kCTFontNameAttribute but Mac CT resolved that to user-facing
+    // /System/Library/Fonts/PingFang.ttc which DIFFERS from iOS PingFang
+    // at head/hhea level — substitution mechanism fired (Songti 740→85,
+    // PingFang SC 124→779) but no V-405 pass-rate movement.
     //
-    // Env-gated via DRIFTSTACK_V709=1 (default OFF) until empirically
-    // verified to MOVE V-405 atlas-OFF text % positively. Revert if
-    // regression (analogous to V-691 regression of width overrides).
+    // V-712 (env-gated DRIFTSTACK_V712=1) UPGRADED targeting: use
+    // CTFontDescriptorCreateWithAttributes + kCTFontFamilyNameAttribute=
+    // ".AppleSimplifiedChineseFont" to access Mac SPI internal PingFangUI.
+    // Python ctypes probe confirmed this path returns family=.AppleSimplified
+    // ChineseFont (postscript .AppleSimplifiedChineseFont-UltraLight) —
+    // the V-679-byte-identical-to-iOS-PingFang internal font. Substitution
+    // via this path should achieve true byte-level alignment with iOS.
     {
         char16_t firstChar = characterCluster[0];
         static const bool s_v709Enabled = []() {
             const char* env = getenv("DRIFTSTACK_V709");
             return env && env[0] == '1';
         }();
-        if (s_v709Enabled) {
-            CFStringRef substituteName = nullptr;
+        static const bool s_v712Enabled = []() {
+            const char* env = getenv("DRIFTSTACK_V712");
+            return env && env[0] == '1';
+        }();
+        // Substitution targets: V-712 uses Mac SPI families (kCTFontFamilyName);
+        // V-709 (fallback if V-712 disabled) uses user-facing names (kCTFontName).
+        CFStringRef substituteFamily = nullptr; // V-712 path
+        CFStringRef substituteName = nullptr;   // V-709 path
+        if (s_v712Enabled || s_v709Enabled) {
             if (isCJKHanCharacter(firstChar)) {
                 auto familyName = adoptCF(static_cast<CFStringRef>(CTFontCopyAttribute(result.get(), kCTFontFamilyNameAttribute)));
-                if (familyName && CFStringCompare(familyName.get(), CFSTR("Songti SC"), 0) == kCFCompareEqualTo)
-                    substituteName = CFSTR("PingFang SC");
+                if (familyName && CFStringCompare(familyName.get(), CFSTR("Songti SC"), 0) == kCFCompareEqualTo) {
+                    if (s_v712Enabled)
+                        substituteFamily = CFSTR(".AppleSimplifiedChineseFont");
+                    else
+                        substituteName = CFSTR("PingFang SC");
+                }
             } else if (isDevanagariCharacter(firstChar)) {
                 auto familyName = adoptCF(static_cast<CFStringRef>(CTFontCopyAttribute(result.get(), kCTFontFamilyNameAttribute)));
-                if (familyName && CFStringCompare(familyName.get(), CFSTR("ITF Devanagari"), 0) == kCFCompareEqualTo)
-                    substituteName = CFSTR("Kohinoor Devanagari");
+                if (familyName && CFStringCompare(familyName.get(), CFSTR("ITF Devanagari"), 0) == kCFCompareEqualTo) {
+                    if (s_v712Enabled)
+                        substituteFamily = CFSTR(".AppleIndicFont");
+                    else
+                        substituteName = CFSTR("Kohinoor Devanagari");
+                }
             }
-            if (substituteName) {
-                CFTypeRef keys[] = { kCTFontNameAttribute };
-                CFTypeRef values[] = { substituteName };
-                auto attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, std::size(keys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
-                auto modification = adoptCF(CTFontDescriptorCreateWithAttributes(attributes.get()));
-                auto substituted = adoptCF(CTFontCreateCopyWithAttributes(result.get(), CTFontGetSize(result.get()), nullptr, modification.get()));
-                if (substituted)
-                    result = WTF::move(substituted);
-            }
+        }
+        if (substituteFamily) {
+            // V-712 path: family-name attribute to access Mac SPI internal.
+            CFTypeRef keys[] = { kCTFontFamilyNameAttribute };
+            CFTypeRef values[] = { substituteFamily };
+            auto attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, std::size(keys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+            auto descriptor = adoptCF(CTFontDescriptorCreateWithAttributes(attributes.get()));
+            auto substituted = adoptCF(CTFontCreateWithFontDescriptor(descriptor.get(), CTFontGetSize(result.get()), nullptr));
+            if (substituted)
+                result = WTF::move(substituted);
+        } else if (substituteName) {
+            // V-709 fallback path: name attribute (user-facing).
+            CFTypeRef keys[] = { kCTFontNameAttribute };
+            CFTypeRef values[] = { substituteName };
+            auto attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, std::size(keys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+            auto modification = adoptCF(CTFontDescriptorCreateWithAttributes(attributes.get()));
+            auto substituted = adoptCF(CTFontCreateCopyWithAttributes(result.get(), CTFontGetSize(result.get()), nullptr, modification.get()));
+            if (substituted)
+                result = WTF::move(substituted);
         }
     }
 #endif
