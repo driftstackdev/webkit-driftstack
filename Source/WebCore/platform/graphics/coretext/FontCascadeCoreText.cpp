@@ -30,6 +30,8 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
+#include "Color.h"
+#include <CoreGraphics/CoreGraphics.h>
 #endif
 #include "FontCascadeFonts.h"
 #include "FontCascadeInlines.h"
@@ -344,6 +346,55 @@ static void setCGFontRenderingMode(GraphicsContext& context)
 #endif
 }
 
+#if PLATFORM(DRIFTSTACK)
+// V-666 (2026-05-11): pre-tint an alpha-mask CGImage with the active fill
+// color in a CPU bitmap context, then return a tinted CGImage suitable for
+// plain CGContextDrawImage onto the canvas backing.
+//
+// Why V-666 instead of V-633.D (ClipToMask + FillRect) or V-627.B
+// (TransparencyLayer + DestinationIn + DrawImage)? Empirical V-660 +
+// V-665 showed both V-633.D and V-627.B produce visible pixels but
+// diverge from iPhone reference bytes (V-667 characterization: 83%
+// precision-drift profile). V-090 emoji's plain DrawImage path produces
+// iPhone-bit-identical pixels on GPU canvas — so the V-666 strategy is
+// to do the alpha-mask + fill-color composition in a CPU bitmap context
+// (where pixel arithmetic is bit-exact) and then blit the result via
+// the same plain-DrawImage path V-090 uses.
+//
+// Algorithm:
+//   1. Create CPU bitmap context (sRGB, 8-bit, premultipliedLast)
+//   2. Fill with active fill color (premultiplied RGB × alpha is
+//      computed exactly in 8-bit)
+//   3. DestinationIn blend with the alpha-mask CGImage (keeps fill
+//      where mask alpha > 0, clears elsewhere)
+//   4. Return CGBitmapContextCreateImage as the tinted CGImage
+static RetainPtr<CGImageRef> createTintedAlphaMaskImage(
+    CGImageRef alphaMaskImage,
+    float fillR, float fillG, float fillB, float fillA,
+    size_t width, size_t height)
+{
+    if (!alphaMaskImage || !width || !height)
+        return { };
+    auto colorSpace = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+    if (!colorSpace)
+        return { };
+    auto ctx = adoptCF(CGBitmapContextCreate(
+        nullptr, width, height, 8, width * 4, colorSpace.get(),
+        static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) | static_cast<uint32_t>(kCGBitmapByteOrder32Big)));
+    if (!ctx)
+        return { };
+    CGContextSetRGBFillColor(ctx.get(),
+        std::clamp(fillR, 0.f, 1.f),
+        std::clamp(fillG, 0.f, 1.f),
+        std::clamp(fillB, 0.f, 1.f),
+        std::clamp(fillA, 0.f, 1.f));
+    CGContextFillRect(ctx.get(), CGRectMake(0, 0, width, height));
+    CGContextSetBlendMode(ctx.get(), kCGBlendModeDestinationIn);
+    CGContextDrawImage(ctx.get(), CGRectMake(0, 0, width, height), alphaMaskImage);
+    return adoptCF(CGBitmapContextCreateImage(ctx.get()));
+}
+#endif
+
 void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)
 {
     const auto& platformData = font.platformData();
@@ -637,11 +688,31 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             continue;
                         float drawX = positions[i].x - v655BearingX;
                         float drawY = positions[i].y - v655BaselineY;
+                        // V-666 (2026-05-11, env-gated DRIFTSTACK_V666=1):
+                        // pre-tint alpha-mask in CPU bitmap context to bit-
+                        // exact RGBA8 premultiplied, then plain DrawImage
+                        // (V-090 emoji proven flush path on GPU canvas).
+                        static bool v655UseV666 = []() {
+                            const char* env = getenv("DRIFTSTACK_V666");
+                            return env && env[0] == '1';
+                        }();
                         CGContextSaveGState(cgContext.get());
                         CGContextTranslateCTM(cgContext.get(), drawX, drawY);
                         CGContextTranslateCTM(cgContext.get(), 0.f, v655CanvasH);
                         CGContextScaleCTM(cgContext.get(), 1.f, -1.f);
-                        if (v655s_v633dEnabled) {
+                        if (v655UseV666) {
+                            auto [fr, fg, fb, fa] = context.fillColor()
+                                .toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                            RetainPtr<CGImageRef> tinted = createTintedAlphaMaskImage(
+                                image.get(), fr, fg, fb, fa,
+                                static_cast<size_t>(v655CanvasW),
+                                static_cast<size_t>(v655CanvasH));
+                            if (tinted) {
+                                CGContextDrawImage(cgContext.get(),
+                                    CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH),
+                                    tinted.get());
+                            }
+                        } else if (v655s_v633dEnabled) {
                             CGContextClipToMask(cgContext.get(),
                                 CGRectMake(0.f, 0.f, v655CanvasW, v655CanvasH), image.get());
                             CGContextFillRect(cgContext.get(),
@@ -807,7 +878,26 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             const char* env = getenv("DRIFTSTACK_V633D");
                             return env && env[0] == '1';
                         }();
-                        if (s_v633dEnabled) {
+                        // V-666 (2026-05-11, env-gated DRIFTSTACK_V666=1):
+                        // pre-tint alpha-mask in CPU bitmap context, then
+                        // plain DrawImage. See helper comment.
+                        static bool s_v666Enabled = []() {
+                            const char* env = getenv("DRIFTSTACK_V666");
+                            return env && env[0] == '1';
+                        }();
+                        if (s_v666Enabled) {
+                            auto [fr, fg, fb, fa] = context.fillColor()
+                                .toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                            RetainPtr<CGImageRef> tinted = createTintedAlphaMaskImage(
+                                image.get(), fr, fg, fb, fa,
+                                static_cast<size_t>(canvasW),
+                                static_cast<size_t>(canvasH));
+                            if (tinted) {
+                                CGContextDrawImage(cgContext.get(),
+                                    CGRectMake(0.f, 0.f, canvasW, canvasH),
+                                    tinted.get());
+                            }
+                        } else if (s_v633dEnabled) {
                             CGContextClipToMask(cgContext.get(),
                                 CGRectMake(0.f, 0.f, canvasW, canvasH), image.get());
                             CGContextFillRect(cgContext.get(),
