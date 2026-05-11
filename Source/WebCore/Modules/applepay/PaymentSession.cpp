@@ -38,6 +38,22 @@ namespace WebCore {
 
 bool PaymentSession::isSecureForSession(const URL& url, const std::optional<const CertificateInfo>& certificateInfo)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-658 (2026-05-11): per W3C secure-contexts spec, localhost IS a secure
+    // context. WebKit's strict HTTPS-only check is overrestrictive — iPhone
+    // Safari + iOS Apple Pay accept localhost/127.0.0.1 for capability checks
+    // (canMakePayments, supportsVersion). The cumrig probe over http://127.0.0.1
+    // would otherwise fail with "Trying to start an Apple Pay session from an
+    // insecure document" while real iPhone returns canMakePayments=true.
+    // Production safety: real customer sessions connect to public HTTPS sites;
+    // the loopback exception only fires for self-hosted local test rigs.
+    if (url.protocolIs("http"_s)) {
+        const String& host = url.host().toString();
+        if (host == "127.0.0.1"_s || host == "localhost"_s || host == "[::1]"_s)
+            return true;
+    }
+#endif
+
     if (!url.protocolIs("https"_s))
         return false;
 
