@@ -730,8 +730,53 @@ void GraphicsContextCG::drawPath(const Path& path)
         applyStrokePattern();
 
     CGPathDrawingMode drawingMode;
-    if (calculateDrawingMode(*this, drawingMode))
+    if (calculateDrawingMode(*this, drawingMode)) {
+#if PLATFORM(DRIFTSTACK)
+        // V-749.C path-level software blend dispatch for fill-only path drawing
+        // (drawEllipse, drawRect-with-path, drawPath fill-only). Stroke + combined
+        // fill+stroke modes fall through to CG default (V-749.E follow-up for
+        // stroke software blend if empirically needed).
+        bool fillOnly = (drawingMode == kCGPathFill || drawingMode == kCGPathEOFill);
+        if (fillOnly && !hasDropShadow() && !fillPattern() && !fillGradient()) {
+            const auto& mode = compositeMode();
+            if (driftstackSoftwareBlendApplies(mode.operation, mode.blendMode)) {
+                CGAffineTransform ctm = CGContextGetCTM(context);
+                FloatRect userBounds = path.fastBoundingRect();
+                CGRect deviceRectCG = CGRectApplyAffineTransform(userBounds, ctm);
+                int dx = static_cast<int>(std::floor(deviceRectCG.origin.x));
+                int dy = static_cast<int>(std::floor(deviceRectCG.origin.y));
+                int dx1 = static_cast<int>(std::ceil(deviceRectCG.origin.x + deviceRectCG.size.width));
+                int dy1 = static_cast<int>(std::ceil(deviceRectCG.origin.y + deviceRectCG.size.height));
+                int dw = dx1 - dx;
+                int dh = dy1 - dy;
+                if (dw > 0 && dh > 0 && dw * dh < (16 * 1024 * 1024)) {
+                    Vector<uint8_t> coverage(dw * dh, 0);
+                    auto cs = adoptCF(CGColorSpaceCreateDeviceGray());
+                    auto maskCtx = adoptCF(CGBitmapContextCreate(
+                        coverage.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
+                    if (maskCtx) {
+                        CGContextTranslateCTM(maskCtx.get(), -dx, -dy);
+                        CGContextConcatCTM(maskCtx.get(), ctm);
+                        CGContextSetGrayFillColor(maskCtx.get(), 1.0, 1.0);
+                        setCGContextPath(maskCtx.get(), path);
+                        if (drawingMode == kCGPathEOFill)
+                            CGContextEOFillPath(maskCtx.get());
+                        else
+                            CGContextFillPath(maskCtx.get());
+
+                        FloatRect deviceRect(dx, dy, dw, dh);
+                        if (driftstackSoftwareBlendApplyMasked(
+                                context, deviceRect, coverage.data(),
+                                dw, dh, dw,
+                                fillColor(), alpha(), mode.blendMode, mode.operation))
+                            return;
+                    }
+                }
+            }
+        }
+#endif
         drawPathWithCGContext(context, drawingMode, path);
+    }
 }
 
 void GraphicsContextCG::fillPath(const Path& path)
@@ -779,6 +824,54 @@ void GraphicsContextCG::fillPath(const Path& path)
 
     if (fillPattern())
         applyFillPattern();
+
+#if PLATFORM(DRIFTSTACK)
+    // V-749.B path-level software blend dispatch for V-590-revisit compositing
+    // closures. Catches destination-atop / plus-lighter / hue / saturation /
+    // etc. that bypass the fillRect-only dispatch added in V-583.K. Skips
+    // gradient / pattern / shadow paths (handled by CGLayer offscreen flow);
+    // those cases will be addressed in V-749.B.2 if empirically needed.
+    if (!hasDropShadow() && !fillPattern() && !fillGradient()) {
+        const auto& mode = compositeMode();
+        if (driftstackSoftwareBlendApplies(mode.operation, mode.blendMode)) {
+            CGAffineTransform ctm = CGContextGetCTM(context);
+            FloatRect userBounds = path.fastBoundingRect();
+            CGRect deviceRectCG = CGRectApplyAffineTransform(userBounds, ctm);
+            int dx = static_cast<int>(std::floor(deviceRectCG.origin.x));
+            int dy = static_cast<int>(std::floor(deviceRectCG.origin.y));
+            int dx1 = static_cast<int>(std::ceil(deviceRectCG.origin.x + deviceRectCG.size.width));
+            int dy1 = static_cast<int>(std::ceil(deviceRectCG.origin.y + deviceRectCG.size.height));
+            int dw = dx1 - dx;
+            int dh = dy1 - dy;
+            // Safety cap: 16M coverage pixels = 16 MB alloc. Larger paths fall
+            // back to CG default (acceptable: V-405 compositing seeds are
+            // small-rect overlays).
+            if (dw > 0 && dh > 0 && dw * dh < (16 * 1024 * 1024)) {
+                Vector<uint8_t> coverage(dw * dh, 0);
+                auto cs = adoptCF(CGColorSpaceCreateDeviceGray());
+                auto maskCtx = adoptCF(CGBitmapContextCreate(
+                    coverage.data(), dw, dh, 8, dw, cs.get(), kCGImageAlphaOnly));
+                if (maskCtx) {
+                    CGContextTranslateCTM(maskCtx.get(), -dx, -dy);
+                    CGContextConcatCTM(maskCtx.get(), ctm);
+                    CGContextSetGrayFillColor(maskCtx.get(), 1.0, 1.0);
+                    setCGContextPath(maskCtx.get(), path);
+                    if (fillRule() == WindRule::EvenOdd)
+                        CGContextEOFillPath(maskCtx.get());
+                    else
+                        CGContextFillPath(maskCtx.get());
+
+                    FloatRect deviceRect(dx, dy, dw, dh);
+                    if (driftstackSoftwareBlendApplyMasked(
+                            context, deviceRect, coverage.data(),
+                            dw, dh, dw,
+                            fillColor(), alpha(), mode.blendMode, mode.operation))
+                        return;
+                }
+            }
+        }
+    }
+#endif
 
     drawPathWithCGContext(context, fillRule() == WindRule::EvenOdd ? kCGPathEOFill : kCGPathFill, path);
 }
