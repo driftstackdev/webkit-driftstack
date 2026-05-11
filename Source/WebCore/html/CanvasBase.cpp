@@ -232,6 +232,21 @@ bool CanvasBase::shouldAccelerate() const
 {
     size_t area = size().unclampedArea();
     RefPtr scriptExecutionContext = this->scriptExecutionContext();
+#if PLATFORM(DRIFTSTACK)
+    // V-715 (2026-05-11): env-gated CPU-canvas force for V-405 atlas-OFF
+    // text closure characterization. If DRIFTSTACK_FORCE_CPU_CANVAS=1,
+    // skip GPU acceleration regardless of settings — Mac canvas uses
+    // ImageBufferCGBitmapBackend (CPU) instead of ImageBufferIOSurface
+    // (GPU). Tests whether Mac CPU rasterization produces different
+    // bytes than Mac GPU rasterization, AND whether Mac CPU output
+    // happens to match iPhone GPU canvas output for V-405 text seeds.
+    static const bool s_forceCpuCanvas = []() {
+        const char* env = getenv("DRIFTSTACK_FORCE_CPU_CANVAS");
+        return env && env[0] == '1';
+    }();
+    if (s_forceCpuCanvas)
+        return false;
+#endif
 #if USE(CA) || USE(SKIA)
     if (!scriptExecutionContext->settingsValues().canvasUsesAcceleratedDrawing)
         return false;
