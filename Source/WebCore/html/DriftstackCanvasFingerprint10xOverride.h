@@ -62298,6 +62298,80 @@ static constexpr char kCanvasFp10x_textArial11Pt18Pt400x60_iphone16pro_ios18_6[]
     "KQFTAqYE/mck8P+QP89fhgOWXgAAAABJRU5ErkJggg==";
 
 
+// V-659 (2026-05-11): iOS 18.7 / Safari 26.4 canonical for cumrig
+// fingerprint10x 220x30 probe. Extracted directly from physical iPhone
+// reference `iphone16pro_ios26_4_1/2026-05-04T19-24-11Z_real-iphone-recapture.json`
+// canvas.fingerprint10x.value.sampleDataUrls[0]. The "V-406 capture" for
+// this single probe shape was already in-hand in the cumrig REF file;
+// V-198 table had only iOS 18.6 entries until now. Closes cumrig diff
+// #3 + #4 (canvas.fingerprint10x.hashes + .sampleDataUrls) on the
+// iphone16pro_ios18_7_safari26_4 archetype.
+// Hash: 1dd8d4dc10ce5d782fd3fee43219c32219d2e851b841c091397629260c107c17
+static constexpr char kCanvasFp10x_text2LineEmoji220x30_iphone16pro_ios18_7_safari26_4[] =
+    "data:image/png;base64,"
+    "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";
+
+
 struct CanvasFp10xCanonicalEntry {
     const char* archetype;      // V-245 multi-archetype key
     int width;
@@ -62308,6 +62382,9 @@ struct CanvasFp10xCanonicalEntry {
 };
 
 static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
+    // V-659: iOS 18.7 entry must precede iOS 18.6 so archetype-gated
+    // lookup finds it first for the launch archetype.
+    { "iphone16pro_ios18_7_safari26_4", 220, 30, "Cwm fjordbank glyphs vext quiz, 😃🍕", kCanvasFp10x_text2LineEmoji220x30_iphone16pro_ios18_7_safari26_4, "text_2line_emoji_220x30" },
     { "iphone16pro_ios18_6", 220,  30, "Cwm fjordbank glyphs vext quiz, 😃🍕", kCanvasFp10x_text2LineEmoji220x30_iphone16pro_ios18_6, "text_2line_emoji_220x30" },
     { "iphone16pro_ios18_6", 240,  50, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_240x50_iphone16pro_ios18_6, "text_arial14_240x50" },
     { "iphone16pro_ios18_6", 220,  30, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_220x30_iphone16pro_ios18_6, "text_arial14_220x30" },
