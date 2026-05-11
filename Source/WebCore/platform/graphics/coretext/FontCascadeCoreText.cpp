@@ -762,9 +762,15 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 }
             }
         }
-        if (!didTextAtlasPath)
-            showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
     }
+    // V-654 fix (2026-05-11): the fallback CT draw was nested inside the
+    // `if (!didCompositePath && textAtlasEnabled)` block above, which meant
+    // atlas-OFF runs never reached showGlyphsWithAdvances and canvas text
+    // rendered ONLY at V-121 override sizes {14,16,18,20,24} via a side
+    // effect path. Moved to top-level so non-atlas, non-emoji-composite
+    // draws hit the standard CT pipeline unconditionally.
+    if (!didCompositePath && !didTextAtlasPath)
+        showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
 #else
     showGlyphsWithAdvances(point, font, cgContext.get(), glyphs, advances, textMatrix);
 #endif
