@@ -213,53 +213,57 @@ void Font::platformInit()
 
 #if PLATFORM(DRIFTSTACK)
     // V-602 option 1 (2026-05-11, env-gated DRIFTSTACK_V602_SUBSTITUTE=1):
-    // detect the PingFang-substitute Hiragino tagged by
+    // detect the PingFang-substitute Hiragino selected by
     // driftstackIOSFallbackFontForCJKCluster (FontCacheCoreText.cpp).
     // Override Mac Hiragino metrics with PingFang's hhea/OS-2 typo values
     // (DriftstackPingFangMetrics.h) so the canvas line-height + text
     // metrics match what iPhone PingFang would produce for the same CSS
     // weight. Layer 4 glyph shape parity (Hiragino vs PingFang glyphs)
     // is residual V-653 scope.
-    {
-        RetainPtr<CTFontDescriptorRef> desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
-        if (desc) {
-            RetainPtr<CFStringRef> v602Tag = adoptCF(static_cast<CFStringRef>(
-                CTFontDescriptorCopyAttribute(desc.get(),
-                    CFSTR("__driftstack_pingfang_substitute_v602"))));
-            if (v602Tag && CFEqual(v602Tag.get(), CFSTR("yes"))) {
-                // Resolve PingFang weight-bracket entry from CSS weight.
-                // CTFont weight trait → CSS weight via OpenType spec:
-                //   -1.0 ↔ 100, -0.6 ↔ 200, -0.4 ↔ 300, 0.0 ↔ 400,
-                //   0.23 ↔ 500, 0.30 ↔ 600, 0.40 ↔ 700, 0.62 ↔ 800, 1.0 ↔ 900.
-                // Simplified: read symbolic-traits + map to nearest CSS weight.
-                uint16_t cssWeight = 400; // default Regular
+    //
+    // Family-name based detection: empirical V-602 substitute resolves
+    // CTFontCopyFamilyName to ".Hiragino Kaku Gothic Interface" (Mac
+    // internal dot-prefixed name). Pattern-match this name string —
+    // the V-602 env-gate logic in FontCacheCoreText only returns
+    // Hiragino on PLATFORM(DRIFTSTACK) when the env-gate is active,
+    // so this detection is V-602-scoped in practice.
+    static bool s_v602FixupEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_V602_SUBSTITUTE");
+        return env && env[0] == '1';
+    }();
+    if (s_v602FixupEnabled && familyName) {
+        bool isHiragino = (CFStringCompare(familyName.get(), CFSTR(".Hiragino Kaku Gothic Interface"), 0) == kCFCompareEqualTo)
+            || (CFStringCompare(familyName.get(), CFSTR("Hiragino Kaku Gothic"), 0) == kCFCompareEqualTo)
+            || (CFStringCompare(familyName.get(), CFSTR("HiraginoSans"), 0) == kCFCompareEqualTo);
+        if (isHiragino) {
+            // Resolve PingFang weight-bracket entry from CSS weight.
+            // CTFont weight trait → CSS weight via OpenType spec.
+            // Simplified linear: ctWeight=-1→100, 0→400, 1→800; clamped to [100,900].
+            uint16_t cssWeight = 400; // default Regular
+            RetainPtr<CTFontDescriptorRef> v602Desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
+            if (v602Desc) {
                 RetainPtr<CFDictionaryRef> traits = adoptCF(static_cast<CFDictionaryRef>(
-                    CTFontDescriptorCopyAttribute(desc.get(), kCTFontTraitsAttribute)));
+                    CTFontDescriptorCopyAttribute(v602Desc.get(), kCTFontTraitsAttribute)));
                 if (traits) {
                     CFNumberRef weightNum = static_cast<CFNumberRef>(
                         CFDictionaryGetValue(traits.get(), kCTFontWeightTrait));
                     if (weightNum) {
                         float ctWeight = 0.f;
                         CFNumberGetValue(weightNum, kCFNumberFloatType, &ctWeight);
-                        // Linear interpolation: ctWeight = -1..1 → CSS 100..900
                         cssWeight = static_cast<uint16_t>(std::clamp(
                             400.0f + ctWeight * 400.0f, 100.0f, 900.0f));
                     }
                 }
-                const auto& pingFangMetric = WebCore::Driftstack::pingFangMetricForWeight(cssWeight);
-                // Apply PingFang typo metrics (PingFang OS/2 USE_TYPO_METRICS=0
-                // but the typo values are the architecturally-correct line
-                // metric per OpenFontFormat recommendation for fonts with
-                // significantly different hhea vs typo metrics).
-                unitsPerEm = pingFangMetric.unitsPerEm;
-                ascent = scaleEmToUnits(pingFangMetric.typoAscent, unitsPerEm) * pointSize;
-                descent = -scaleEmToUnits(pingFangMetric.typoDescent, unitsPerEm) * pointSize;
-                lineGap = scaleEmToUnits(pingFangMetric.typoLineGap, unitsPerEm) * pointSize;
-                WTFLogAlways("[Driftstack-V602] PingFang metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
-                    static_cast<unsigned>(cssWeight), pingFangMetric.label,
-                    static_cast<double>(ascent), static_cast<double>(descent),
-                    static_cast<double>(lineGap), static_cast<double>(pointSize));
             }
+            const auto& pingFangMetric = WebCore::Driftstack::pingFangMetricForWeight(cssWeight);
+            unitsPerEm = pingFangMetric.unitsPerEm;
+            ascent = scaleEmToUnits(pingFangMetric.typoAscent, unitsPerEm) * pointSize;
+            descent = -scaleEmToUnits(pingFangMetric.typoDescent, unitsPerEm) * pointSize;
+            lineGap = scaleEmToUnits(pingFangMetric.typoLineGap, unitsPerEm) * pointSize;
+            WTFLogAlways("[Driftstack-V602] PingFang metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
+                static_cast<unsigned>(cssWeight), pingFangMetric.label,
+                static_cast<double>(ascent), static_cast<double>(descent),
+                static_cast<double>(lineGap), static_cast<double>(pointSize));
         }
     }
 

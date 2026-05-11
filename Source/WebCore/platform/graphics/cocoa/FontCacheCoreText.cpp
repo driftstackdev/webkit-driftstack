@@ -1556,6 +1556,11 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
         return env && env[0] == '1';
     }();
     if (s_v602Enabled) {
+        // Mac Hiragino lookup. Identification by family name detection at
+        // Font::platformInit() applies PingFang metric overlay (custom CTFont
+        // descriptor attributes don't survive CTFontCreateWithFontDescriptor
+        // round-trip — empirical 2026-05-11; family-name pattern is more
+        // robust).
         static const std::array<ASCIILiteral, 4> hiraginoCandidates {
             "hiragino kaku gothic"_s,
             "hiraginokakugothic"_s,
@@ -1563,27 +1568,11 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
             "hiraginosans"_s,
         };
         if (auto hiragino = driftstackLookupIOSFontByCandidates(hiraginoCandidates, description, size)) {
-            // Tag the descriptor with a custom attribute that Font::platformInit()
-            // can introspect to apply the PingFang metric overlay.
-            RetainPtr<CTFontDescriptorRef> baseDesc = adoptCF(CTFontCopyFontDescriptor(hiragino.get()));
-            CFMutableDictionaryRef attrs = CFDictionaryCreateMutable(kCFAllocatorDefault, 1,
-                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-            CFDictionaryAddValue(attrs, CFSTR("__driftstack_pingfang_substitute_v602"),
-                CFSTR("yes"));
-            RetainPtr<CTFontDescriptorRef> taggedDesc = adoptCF(
-                CTFontDescriptorCreateCopyWithAttributes(baseDesc.get(), attrs));
-            CFRelease(attrs);
-            if (taggedDesc) {
-                RetainPtr<CTFontRef> taggedFont = adoptCF(
-                    CTFontCreateWithFontDescriptor(taggedDesc.get(), size, nullptr));
-                if (taggedFont) {
-                    static unsigned hitCount = 0;
-                    if (++hitCount <= 5)
-                        WTFLogAlways("[Driftstack-V602] PingFang→Hiragino substitute fired (%u so far); cp=U+%04X size=%.1f",
-                            hitCount, static_cast<unsigned>(cp), size);
-                    return taggedFont;
-                }
-            }
+            static unsigned hitCount = 0;
+            if (++hitCount <= 5)
+                WTFLogAlways("[Driftstack-V602] PingFang→Hiragino substitute fired (%u so far); cp=U+%04X size=%.1f",
+                    hitCount, static_cast<unsigned>(cp), size);
+            return hiragino;
         }
     }
     return nullptr;
