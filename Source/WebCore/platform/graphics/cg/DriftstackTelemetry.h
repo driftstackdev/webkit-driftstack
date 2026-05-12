@@ -74,7 +74,14 @@ enum class TelemetryEventType : uint8_t {
     MLInference = 2,
     Latency = 3,
     CanaryDetect = 4,
+    // V-770.A.9: atlas-hit telemetry. Same POD as AtlasMissEvent for
+    // IPC/serialization symmetry; daemon side distinguishes via type byte.
+    // Emit-rate is high (one per atlas-hit drawGlyphBuffer call); daemon
+    // should aggregate by (font_id, pt_size, position_class) before SQLite.
+    AtlasHit = 5,
 };
+
+using AtlasHitEvent = AtlasMissEvent;
 
 // Union-typed event for ring buffer storage.
 struct TelemetryEvent {
@@ -127,6 +134,14 @@ inline void driftstackLogAtlasMiss(const AtlasMissEvent& e)
 {
     TelemetryEvent te;
     te.type = TelemetryEventType::AtlasMiss;
+    te.data.atlasMiss = e;
+    driftstackTelemetryRing().tryPush(te);
+}
+
+inline void driftstackLogAtlasHit(const AtlasHitEvent& e)
+{
+    TelemetryEvent te;
+    te.type = TelemetryEventType::AtlasHit;
     te.data.atlasMiss = e;
     driftstackTelemetryRing().tryPush(te);
 }

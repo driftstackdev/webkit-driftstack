@@ -38,6 +38,7 @@
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
+#include "cg/DriftstackTelemetry.h"
 #include "cg/DriftstackTextRunAtlas.h"
 #include "cocoa/DriftstackAsciiAtlas.h"
 #include "cocoa/DriftstackCompositeAtlas.h"
@@ -1702,6 +1703,17 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                     // text run advance. Critical for multi-font-run text
                                     // (next run's anchor must align with capture-side metric).
                                     point.setX(point.x() + entry.width);
+                                    // V-770.A.9: emit atlas-hit telemetry for empirical
+                                    // hit-rate visibility (Layer A coverage metrics).
+                                    AtlasHitEvent hitEv{};
+                                    hitEv.text_run_hash = textRunHash;
+                                    hitEv.font_id = fontId;
+                                    hitEv.pt_size = ptSize;
+                                    hitEv.position_class = 0;
+                                    hitEv.archetype_id = 1; // iphone16pro_ios18_bs default
+                                    hitEv.ios_version_packed = (18 << 8) | 6;
+                                    hitEv.timestamp_ms = 0; // V-820.A producer clock TBD
+                                    driftstackLogAtlasHit(hitEv);
                                     return;
                                 }
                             }
