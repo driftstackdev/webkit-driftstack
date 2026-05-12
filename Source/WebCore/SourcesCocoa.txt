@@ -759,7 +759,8 @@ platform/graphics/angle/GraphicsContextGLANGLE.cpp @no-unify
 platform/graphics/cocoa/GraphicsContextGLCocoa.mm @nonARC @no-unify
 platform/graphics/cv/GraphicsContextGLCVCocoa.mm @nonARC @no-unify
 
-// V-820.A + V-770.A.1 Driftstack: kept @no-unify so unified-source bundle
-// boundaries above don't shift when adding/removing files.
-platform/graphics/cg/DriftstackTelemetry.cpp @no-unify
-platform/graphics/cg/DriftstackTextRunAtlas.cpp @no-unify
+// V-820.A + V-770.A.1 Driftstack: kept at END of normal source list so
+// unified-source bundle boundaries above don't shift (FontCacheCoreText
+// stays in its original bundle, preserving log channel dep chain).
+platform/graphics/cg/DriftstackTelemetry.cpp
+platform/graphics/cg/DriftstackTextRunAtlas.cpp
