@@ -21,6 +21,7 @@
 #include <wtf/text/StringView.h>
 #include <wtf/ThreadSpecific.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -355,14 +356,16 @@ uint16_t driftstackMapFontToId(const Font& font)
     if (!ctFont)
         return UINT16_MAX;
 
+    char psBuf[256] = {};
+    char familyBuf[256] = {};
+
     // Try PostScript name first.
     RetainPtr<CFStringRef> psName = adoptCF(CTFontCopyPostScriptName(ctFont));
     if (psName) {
-        char buf[256];
-        if (CFStringGetCString(psName.get(), buf, sizeof(buf), kCFStringEncodingUTF8)) {
+        if (CFStringGetCString(psName.get(), psBuf, sizeof(psBuf), kCFStringEncodingUTF8)) {
             size_t bufLen = 0;
-            while (bufLen < sizeof(buf) && buf[bufLen]) ++bufLen;
-            uint16_t fid = atlas.fontIdForName(buf, bufLen);
+            while (bufLen < sizeof(psBuf) && psBuf[bufLen]) ++bufLen;
+            uint16_t fid = atlas.fontIdForName(psBuf, bufLen);
             if (fid != UINT16_MAX)
                 return fid;
         }
@@ -371,13 +374,25 @@ uint16_t driftstackMapFontToId(const Font& font)
     // Fallback: family name (CSS family alias like "-apple-system", "Arial").
     RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(ctFont));
     if (familyName) {
-        char buf[256];
-        if (CFStringGetCString(familyName.get(), buf, sizeof(buf), kCFStringEncodingUTF8)) {
+        if (CFStringGetCString(familyName.get(), familyBuf, sizeof(familyBuf), kCFStringEncodingUTF8)) {
             size_t bufLen = 0;
-            while (bufLen < sizeof(buf) && buf[bufLen]) ++bufLen;
-            uint16_t fid = atlas.fontIdForName(buf, bufLen);
+            while (bufLen < sizeof(familyBuf) && familyBuf[bufLen]) ++bufLen;
+            uint16_t fid = atlas.fontIdForName(familyBuf, bufLen);
             if (fid != UINT16_MAX)
                 return fid;
+        }
+    }
+
+    // V-770.A.14: surface the missing-font name once per (postscript, family)
+    // pair so V-770.B.13.c can extend FONT_IDS. Once-only log via a small
+    // thread-safe set; bounded at 64 distinct entries to avoid runaway log.
+    if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
+        static std::atomic<unsigned> s_loggedCount { 0 };
+        static const unsigned kMaxLogged = 64;
+        if (s_loggedCount.fetch_add(1, std::memory_order_relaxed) < kMaxLogged) {
+            WTFLogAlways("[Driftstack-V770A.UNKNOWN_FONT] ps='%s' family='%s'",
+                psBuf[0] ? psBuf : "(none)",
+                familyBuf[0] ? familyBuf : "(none)");
         }
     }
 
