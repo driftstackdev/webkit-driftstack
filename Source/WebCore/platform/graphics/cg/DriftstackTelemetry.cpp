@@ -35,6 +35,7 @@ bool DriftstackTelemetryRing::tryPush(const TelemetryEvent& event)
     return true;
 }
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 size_t DriftstackTelemetryRing::drain(TelemetryEvent* out, size_t maxOut)
 {
     if (!out || maxOut == 0)
@@ -48,6 +49,7 @@ size_t DriftstackTelemetryRing::drain(TelemetryEvent* out, size_t maxOut)
     m_tail.store(tail + toRead, std::memory_order_release);
     return toRead;
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 DriftstackTelemetryRing& driftstackTelemetryRing()
 {

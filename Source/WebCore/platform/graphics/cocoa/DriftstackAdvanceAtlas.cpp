@@ -8,6 +8,8 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cerrno>
+#include <cstdlib>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -36,7 +38,8 @@ void DriftstackAdvanceAtlas::loadAtlas()
 
     int fd = open(atlasPath, O_RDONLY);
     if (fd < 0) {
-        WTFLogAlways("[Driftstack-V689] advance atlas missing at %s", atlasPath);
+        WTFLogAlways("[Driftstack-V689] advance atlas open failed at %s errno=%d pid=%d prog=%s",
+            atlasPath, errno, (int)getpid(), getprogname());
         return;
     }
 

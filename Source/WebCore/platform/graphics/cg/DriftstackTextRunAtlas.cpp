@@ -39,6 +39,7 @@ std::optional<DriftstackTextRunAtlasEntry> DriftstackTextRunAtlas::lookup(
     return std::nullopt;
 }
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 uint64_t driftstackComputeTextRunHash(
     const Font& font,
     std::span<const uint16_t> glyphs,
@@ -83,6 +84,7 @@ uint64_t driftstackComputeTextRunHash(
 
     return h;
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 uint8_t driftstackComputePositionClass(CGContextRef cgContext, const FloatPoint& anchor)
 {

@@ -30,6 +30,8 @@
 #import "FilterEffectApplier.h"
 #import <wtf/TZoneMalloc.h>
 
+OBJC_CLASS CIImage;
+
 namespace WebCore {
 
 class FEComponentTransfer;
