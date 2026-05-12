@@ -1696,9 +1696,12 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                     FloatRect destRect(dx, dy, imgW, imgH);
                                     FloatRect srcRect(0, 0, imgW, imgH);
                                     context.drawNativeImage(*nativeImg, destRect, srcRect);
-                                    // Advance point by image width so subsequent
-                                    // text-run positioning matches.
-                                    point.setX(point.x() + imgW);
+                                    // V-770.A.7: advance point by canvas measureText width,
+                                    // NOT image width. PNG may include leading/trailing
+                                    // transparent padding; measureText.width is the actual
+                                    // text run advance. Critical for multi-font-run text
+                                    // (next run's anchor must align with capture-side metric).
+                                    point.setX(point.x() + entry.width);
                                     return;
                                 }
                             }
