@@ -516,17 +516,13 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         // uint16_t on platforms using CGGlyph; cast safely.
         const auto glyphsU16 = std::span<const uint16_t>(
             reinterpret_cast<const uint16_t*>(glyphs.data()), glyphs.size());
-        // GlyphBufferAdvance is FloatSize-compatible (2x float). For hashing
-        // purposes we cast to CGSize span (16 bytes per — different stride
-        // than FloatSize 8 bytes; widen-cast via separate vector if needed).
-        // For v1 stub, hash quality is sufficient with just the glyph buffer.
-        Vector<CGSize, 256> advancesAsCGSize;
-        advancesAsCGSize.reserveInitialCapacity(advances.size());
-        for (const auto& a : advances)
-            advancesAsCGSize.append(CGSizeMake(a.width(), a.height()));
+        // GlyphBufferAdvance is CGSize on Cocoa platform (GlyphBufferMembers.h);
+        // reinterpret_cast the span directly without copying.
+        const auto advancesCGSize = std::span<const CGSize>(
+            reinterpret_cast<const CGSize*>(advances.data()), advances.size());
 
         uint64_t textRunHash = driftstackComputeTextRunHash(
-            font, glyphsU16, advancesAsCGSize.span());
+            font, glyphsU16, advancesCGSize);
         uint8_t positionClass = driftstackComputePositionClass(
             context.platformContext(), anchorPoint);
         uint16_t fontId = driftstackMapFontToId(font);
