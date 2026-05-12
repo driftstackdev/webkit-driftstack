@@ -12,36 +12,211 @@
 #include "Font.h"
 #include "FloatPoint.h"
 #include "FontPlatformData.h"
+#include <wtf/FastMalloc.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringHasher.h>
 #include <wtf/text/StringView.h>
 #include <wtf/ThreadSpecific.h>
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace WebCore {
 
 DriftstackTextRunAtlas& DriftstackTextRunAtlas::singleton()
 {
     static DriftstackTextRunAtlas instance;
+    // V-770.A.2: lazy auto-load on first access. Idempotent; failure is
+    // soft (lookup() falls through to miss path, Mac CG renders natively).
+    if (!instance.m_loaded)
+        instance.loadFromFile(nullptr);
     return instance;
 }
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+bool DriftstackTextRunAtlas::loadFromFile(const char* path)
+{
+    if (m_loaded)
+        return true;
+
+    const char* resolved = path;
+    if (!resolved)
+        resolved = std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_PATH");
+    if (!resolved)
+        resolved = "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin";
+
+    int fd = ::open(resolved, O_RDONLY);
+    if (fd < 0)
+        return false;
+
+    struct stat st;
+    if (::fstat(fd, &st) != 0 || st.st_size < 16) {
+        ::close(fd);
+        return false;
+    }
+
+    void* base = ::mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (base == MAP_FAILED)
+        return false;
+
+    const uint8_t* p = static_cast<const uint8_t*>(base);
+    const uint8_t* end = p + st.st_size;
+
+    // 1. Magic "DSCFA2"
+    if (p + 6 > end || std::memcmp(p, "DSCFA2", 6) != 0) {
+        ::munmap(base, st.st_size);
+        return false;
+    }
+    p += 6;
+
+    // 2. Header: version u16, archetype u16, iOS triplet u8×3
+    if (p + 7 > end) { ::munmap(base, st.st_size); return false; }
+    uint16_t version; std::memcpy(&version, p, 2); p += 2;
+    if (version != 2) { ::munmap(base, st.st_size); return false; }
+    p += 2; // archetype_id (unused by loader)
+    p += 3; // iOS triplet
+
+    // 3. Font table
+    if (p + 2 > end) { ::munmap(base, st.st_size); return false; }
+    uint16_t nFonts; std::memcpy(&nFonts, p, 2); p += 2;
+    for (uint16_t i = 0; i < nFonts; ++i) {
+        if (p + 3 > end) { ::munmap(base, st.st_size); return false; }
+        p += 2; // font_id (unused — driftstackMapFontToId stub)
+        uint8_t nameLen = *p; p += 1;
+        if (p + nameLen > end) { ::munmap(base, st.st_size); return false; }
+        p += nameLen;
+    }
+
+    // 4. Text-run index
+    if (p + 4 > end) { ::munmap(base, st.st_size); return false; }
+    uint32_t nTextRun; std::memcpy(&nTextRun, p, 4); p += 4;
+
+    constexpr size_t kTextRunStride = 2 + 2 + 1 + 8 + 4 + 4 + 4 * 5; // 39
+    if (p + size_t(nTextRun) * kTextRunStride > end) {
+        ::munmap(base, st.st_size); return false;
+    }
+
+    // Allocate parallel arrays for keys + entries.
+    if (nTextRun > 0) {
+        m_textRunKeys = static_cast<PackedKey*>(WTF::fastMalloc(sizeof(PackedKey) * nTextRun));
+        m_textRunEntries = static_cast<TextRunEntry*>(WTF::fastMalloc(sizeof(TextRunEntry) * nTextRun));
+        if (!m_textRunKeys || !m_textRunEntries) {
+            if (m_textRunKeys) WTF::fastFree(m_textRunKeys);
+            if (m_textRunEntries) WTF::fastFree(m_textRunEntries);
+            m_textRunKeys = nullptr;
+            m_textRunEntries = nullptr;
+            ::munmap(base, st.st_size);
+            return false;
+        }
+    }
+
+    // Count per-bucket for prefix-sum layout (sorted-by-bucket arrays).
+    uint32_t bucketCount[kBucketCount] {};
+    const uint8_t* records = p;
+    for (uint32_t i = 0; i < nTextRun; ++i) {
+        const uint8_t* rec = records + size_t(i) * kTextRunStride;
+        uint64_t hash; std::memcpy(&hash, rec + 5, 8);
+        uint32_t bucket = static_cast<uint32_t>(hash) & kBucketMask;
+        bucketCount[bucket]++;
+    }
+    // Prefix sums.
+    uint32_t running = 0;
+    for (size_t b = 0; b < kBucketCount; ++b) {
+        m_buckets[b].first = running;
+        m_buckets[b].count = bucketCount[b];
+        running += bucketCount[b];
+    }
+    // Cursor per bucket for insertion.
+    uint32_t bucketCursor[kBucketCount] {};
+    for (uint32_t i = 0; i < nTextRun; ++i) {
+        const uint8_t* rec = records + size_t(i) * kTextRunStride;
+        uint16_t fontId; std::memcpy(&fontId, rec + 0, 2);
+        uint16_t ptSize; std::memcpy(&ptSize, rec + 2, 2);
+        uint8_t pos = *(rec + 4);
+        uint64_t hash; std::memcpy(&hash, rec + 5, 8);
+        uint32_t off; std::memcpy(&off, rec + 13, 4);
+        uint32_t sz;  std::memcpy(&sz,  rec + 17, 4);
+        float abbL, abbR, abbA, abbD, w;
+        std::memcpy(&abbL, rec + 21, 4);
+        std::memcpy(&abbR, rec + 25, 4);
+        std::memcpy(&abbA, rec + 29, 4);
+        std::memcpy(&abbD, rec + 33, 4);
+        std::memcpy(&w,    rec + 37, 4);
+        uint32_t bucket = static_cast<uint32_t>(hash) & kBucketMask;
+        uint32_t slot = m_buckets[bucket].first + bucketCursor[bucket]++;
+        m_textRunKeys[slot] = PackedKey { fontId, ptSize, pos, hash };
+        m_textRunEntries[slot] = TextRunEntry { off, sz, abbL, abbR, abbA, abbD, w };
+    }
+    m_textRunEntryCount = nTextRun;
+    p = records + size_t(nTextRun) * kTextRunStride;
+
+    // 5. Skip per-glyph index (handled elsewhere by DriftstackTextGlyphAtlas).
+    if (p + 4 > end) { ::munmap(base, st.st_size); return false; }
+    uint32_t nPerGlyph; std::memcpy(&nPerGlyph, p, 4); p += 4;
+    constexpr size_t kPerGlyphStride = 2 + 2 + 4 + 1 + 4 + 4 + 4 * 5; // 37
+    p += size_t(nPerGlyph) * kPerGlyphStride;
+    if (p > end) { ::munmap(base, st.st_size); return false; }
+
+    // 6. Blob (rest of file). PNG bytes referenced by (offset, size).
+    m_blobBase = p;
+    m_blobSize = end - p;
+
+    m_mmapBase = base;
+    m_mmapSize = st.st_size;
+    m_loaded = true;
+    return true;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 std::optional<DriftstackTextRunAtlasEntry> DriftstackTextRunAtlas::lookup(
-    uint16_t /*fontId*/,
-    uint16_t /*ptSize*/,
-    uint8_t /*positionClass*/,
-    uint64_t /*textRunHash*/)
+    uint16_t fontId,
+    uint16_t ptSize,
+    uint8_t positionClass,
+    uint64_t textRunHash)
 {
     m_lookupCount++;
-    // v1 stub: no atlas loaded; always miss.
-    // V-770.B atlas builder produces the DSCFA2 binary; subsequent V-770.A.2
-    // sub-slice will mmap the binary + implement actual lookup. For now,
-    // returning nullopt means the V-771 hook's atlas-miss path is always
-    // taken — proves the hook wiring is healthy + emits V-820.A telemetry.
+    if (!m_loaded || !m_textRunKeys || m_textRunEntryCount == 0) {
+        m_missCount++;
+        return std::nullopt;
+    }
+    uint32_t bucket = static_cast<uint32_t>(textRunHash) & kBucketMask;
+    const Bucket& b = m_buckets[bucket];
+    for (uint32_t i = 0; i < b.count; ++i) {
+        const PackedKey& k = m_textRunKeys[b.first + i];
+        if (k.textRunHash == textRunHash
+            && k.fontId == fontId
+            && k.ptSize == ptSize
+            && k.positionClass == positionClass) {
+            const TextRunEntry& e = m_textRunEntries[b.first + i];
+            if (size_t(e.blobOffset) + size_t(e.blobSize) > m_blobSize) {
+                // Defensive: corrupt offset; treat as miss.
+                m_missCount++;
+                return std::nullopt;
+            }
+            m_hitCount++;
+            DriftstackTextRunAtlasEntry result;
+            result.pngData = m_blobBase + e.blobOffset;
+            result.pngSize = e.blobSize;
+            result.abbLeft = e.abbLeft;
+            result.abbRight = e.abbRight;
+            result.abbAscent = e.abbAscent;
+            result.abbDescent = e.abbDescent;
+            result.width = e.width;
+            return result;
+        }
+    }
     m_missCount++;
     return std::nullopt;
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 uint64_t driftstackComputeTextRunHash(

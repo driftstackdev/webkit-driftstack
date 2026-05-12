@@ -47,10 +47,18 @@ class DriftstackTextRunAtlas {
 public:
     static DriftstackTextRunAtlas& singleton();
 
+    // V-770.A.2: parse + mmap the DSCFA2 atlas binary. Idempotent; safe to
+    // call multiple times (returns true on existing-mmap, false on failure).
+    // Path resolution: explicit `path` arg, else DRIFTSTACK_TEXT_RUN_ATLAS_PATH
+    // env var, else hard-coded fallback. Loaded text-run entries become
+    // queryable via lookup(); per-glyph section is ignored (handled by
+    // DriftstackTextGlyphAtlas).
+    bool loadFromFile(const char* path = nullptr);
+    bool isLoaded() const { return m_loaded; }
+    size_t entryCount() const { return m_textRunEntryCount; }
+
     // V-771 lookup entry. Returns hit if (font_id, ptSize, position_class,
-    // text_run_hash) is in the atlas binary.
-    //
-    // v1: always returns nullopt (empty atlas / not yet loaded).
+    // text_run_hash) is in the atlas binary, else nullopt.
     std::optional<DriftstackTextRunAtlasEntry> lookup(
         uint16_t fontId,
         uint16_t ptSize,
@@ -66,6 +74,51 @@ public:
 
 private:
     DriftstackTextRunAtlas() = default;
+
+    bool m_loaded { false };
+    void* m_mmapBase { nullptr };
+    size_t m_mmapSize { 0 };
+
+    // Text-run section: parsed at load() into entry table for O(1) lookup.
+    // Entries point into the mmap blob region (zero-copy pngData).
+    struct TextRunEntry {
+        uint32_t blobOffset;
+        uint32_t blobSize;
+        float abbLeft;
+        float abbRight;
+        float abbAscent;
+        float abbDescent;
+        float width;
+    };
+    // V-770.A.2 simple hash map: combined u64 key. PackedKey is composed as
+    // (textRunHash XOR (font_id<<48) XOR (ptSize<<32) XOR positionClass).
+    // Collision probability under 100K entries is negligible — re-verified by
+    // (font_id, ptSize, positionClass, hash) at hit time via a separate
+    // tag check.
+    struct PackedKey {
+        uint16_t fontId;
+        uint16_t ptSize;
+        uint8_t positionClass;
+        uint64_t textRunHash;
+    };
+    // Stored as parallel arrays: keys + entries. Keeps memory layout dense
+    // and avoids std::unordered_map's per-bucket overhead at 100K+ entries.
+    // Lookup uses linear scan WITHIN a coarse bucket indexed by hash low
+    // bits — see lookup() body.
+    static constexpr size_t kBucketBits = 14;
+    static constexpr size_t kBucketCount = (1u << kBucketBits); // 16384
+    static constexpr size_t kBucketMask = kBucketCount - 1;
+    struct Bucket {
+        // Range [first, first+count) into m_textRunKeys/m_textRunEntries.
+        uint32_t first { 0 };
+        uint32_t count { 0 };
+    };
+    Bucket m_buckets[kBucketCount] {}; // 128 KB static; small.
+    PackedKey* m_textRunKeys { nullptr };       // owned via WTF FastMalloc
+    TextRunEntry* m_textRunEntries { nullptr }; // owned via WTF FastMalloc
+    size_t m_textRunEntryCount { 0 };
+    const uint8_t* m_blobBase { nullptr };
+    size_t m_blobSize { 0 };
 
     uint64_t m_lookupCount { 0 };
     uint64_t m_hitCount { 0 };
