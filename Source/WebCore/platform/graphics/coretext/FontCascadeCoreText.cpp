@@ -535,8 +535,21 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         uint8_t positionClass = driftstackComputePositionClass(
             context.platformContext(), anchorPoint);
 
-        auto atlasResult = DriftstackTextRunAtlas::singleton().lookup(
+        auto& atlas = DriftstackTextRunAtlas::singleton();
+        auto atlasResult = atlas.lookup(
             fontId, ptSize, positionClass, textRunHash);
+
+        // V-770.A.5 diag: opt-in trace for synthetic atlas hit verification.
+        if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
+            WTFLogAlways("[Driftstack-V770A] drawGlyphs entry: fontId=%u pt=%u pos=0x%02x hash=0x%016llx text=%.*s sourceLen=%u loaded=%d entries=%u => %s",
+                (unsigned)fontId, (unsigned)ptSize, (unsigned)positionClass,
+                (unsigned long long)textRunHash,
+                (int)std::min<size_t>(64, sourceText.length()),
+                sourceText.is8Bit() ? (const char*)sourceText.span8().data() : "(16bit)",
+                (unsigned)sourceText.length(),
+                atlas.isLoaded() ? 1 : 0, (unsigned)atlas.entryCount(),
+                atlasResult.has_value() ? "HIT" : "miss");
+        }
 
         if (atlasResult.has_value()) {
             // V-770.A.4 atlas hit blit: decode the iPhone-canonical PNG

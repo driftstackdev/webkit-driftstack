@@ -26,6 +26,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <cerrno>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -53,9 +54,13 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     if (!resolved)
         resolved = "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin";
 
+    bool diag = std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") != nullptr;
     int fd = ::open(resolved, O_RDONLY);
-    if (fd < 0)
+    if (fd < 0) {
+        if (diag) WTFLogAlways("[Driftstack-V770A.LOAD] open('%s') failed errno=%d", resolved, errno);
         return false;
+    }
+    if (diag) WTFLogAlways("[Driftstack-V770A.LOAD] open('%s') fd=%d", resolved, fd);
 
     struct stat st;
     if (::fstat(fd, &st) != 0 || st.st_size < 16) {
@@ -181,6 +186,8 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     m_mmapBase = base;
     m_mmapSize = st.st_size;
     m_loaded = true;
+    if (diag) WTFLogAlways("[Driftstack-V770A.LOAD] LOADED nTextRun=%u nFonts=%u nPerGlyph=%u",
+        (unsigned)nTextRun, (unsigned)nFonts, (unsigned)nPerGlyph);
     return true;
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
@@ -335,11 +342,11 @@ uint16_t driftstackMapFontToId(const Font& font)
     // contains family aliases (the V-770.B builder accepts either).
     auto& atlas = DriftstackTextRunAtlas::singleton();
     if (!atlas.isLoaded())
-        return 0; // loader not ready — match v1 stub behavior
+        return UINT16_MAX; // sentinel: no font_id resolution possible
 
     CTFontRef ctFont = font.platformData().ctFont();
     if (!ctFont)
-        return 0;
+        return UINT16_MAX;
 
     // Try PostScript name first.
     RetainPtr<CFStringRef> psName = adoptCF(CTFontCopyPostScriptName(ctFont));
@@ -367,7 +374,7 @@ uint16_t driftstackMapFontToId(const Font& font)
         }
     }
 
-    return 0; // unknown — V-770.B.13 atlas builder should add the family
+    return UINT16_MAX; // unknown — V-770.B.13 atlas builder should add the family
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 

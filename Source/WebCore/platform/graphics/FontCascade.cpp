@@ -1633,6 +1633,82 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // reads it via driftstackCurrentTextSource() for cross-platform atlas
     // hash parity (avoids Mac CT vs iOS CT glyph buffer divergence).
     DriftstackCurrentTextSourceScope driftstackSourceScope(source);
+    if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
+        WTFLogAlways("[Driftstack-V770A.GB] drawGlyphBuffer entry: sourceLen=%u source=%.*s glyphCount=%u",
+            (unsigned)source.length(),
+            (int)std::min<size_t>(64, source.length()),
+            source.is8Bit() ? (const char*)source.span8().data() : "(16bit)",
+            (unsigned)glyphBuffer.size());
+    }
+
+    // V-770.A.4 PRIMARY hit path: when source is available here at the
+    // drawGlyphBuffer layer, look up + blit BEFORE handing off to the
+    // platform drawGlyphs (which may be display-list-recorded and replayed
+    // after this stack frame returns, defeating TLS source propagation).
+    //
+    // Atlas key is per-font-run (font, ptSize, position_class, text_hash).
+    // For multi-font text the same drawGlyphBuffer is invoked once per
+    // font run, each with the FULL source string + glyph buffer subset for
+    // that run. The atlas-build side hashes on the FULL string per
+    // capture, so font_id alone discriminates between font-runs hashing
+    // identically.
+    if (!source.isEmpty() && glyphBuffer.size() > 0) {
+        RefPtr fontData0 = glyphBuffer.fontAt(0);
+        if (fontData0) {
+            const Font& font = *fontData0;
+            uint16_t ptSize = static_cast<uint16_t>(font.platformData().size());
+            uint16_t fontId = driftstackMapFontToId(font);
+            if (fontId != UINT16_MAX) {
+            // No platform CG context here; position class needs the
+            // CGContext CTM. Skip subpixel binning at this layer (use
+            // position_class=0); the FontCascadeCoreText hook will refine.
+            uint64_t textRunHash = driftstackComputeTextRunHash(
+                font, ptSize, source,
+                std::span<const uint16_t>{},
+                std::span<const CGSize>{});
+            auto& atlas = DriftstackTextRunAtlas::singleton();
+            auto atlasResult = atlas.lookup(fontId, ptSize, 0, textRunHash);
+            if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
+                WTFLogAlways("[Driftstack-V770A.GB-LK] fontId=%u pt=%u hash=0x%016llx => %s (entries=%u)",
+                    (unsigned)fontId, (unsigned)ptSize, (unsigned long long)textRunHash,
+                    atlasResult.has_value() ? "HIT" : "miss",
+                    (unsigned)atlas.entryCount());
+            }
+            if (atlasResult.has_value()) {
+                const auto& entry = atlasResult.value();
+                if (entry.pngData && entry.pngSize > 0) {
+                    RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreateWithBytesNoCopy(
+                        kCFAllocatorDefault, entry.pngData,
+                        static_cast<CFIndex>(entry.pngSize), kCFAllocatorNull));
+                    if (cfData) {
+                        RetainPtr<CGImageSourceRef> cgSource = adoptCF(
+                            CGImageSourceCreateWithData(cfData.get(), nullptr));
+                        if (cgSource && CGImageSourceGetCount(cgSource.get()) > 0) {
+                            RetainPtr<CGImageRef> cgImage = adoptCF(
+                                CGImageSourceCreateImageAtIndex(cgSource.get(), 0, nullptr));
+                            if (cgImage) {
+                                RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
+                                if (nativeImg) {
+                                    const float imgW = nativeImg->size().width();
+                                    const float imgH = nativeImg->size().height();
+                                    const float dx = std::floor(point.x()) - entry.abbLeft;
+                                    const float dy = std::floor(point.y()) - entry.abbAscent;
+                                    FloatRect destRect(dx, dy, imgW, imgH);
+                                    FloatRect srcRect(0, 0, imgW, imgH);
+                                    context.drawNativeImage(*nativeImg, destRect, srcRect);
+                                    // Advance point by image width so subsequent
+                                    // text-run positioning matches.
+                                    point.setX(point.x() + imgW);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            } // fontId != UINT16_MAX
+        }
+    }
 
     // F.1.B-6 Phase 3: composite emoji atlas substitution via CGContextDrawImage.
     // Per founder direction Approach 1 (source-text iteration). TR51-simplified
