@@ -87,8 +87,10 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     if (p + 7 > end) { ::munmap(base, st.st_size); return false; }
     uint16_t version; std::memcpy(&version, p, 2); p += 2;
     if (version != 2) { ::munmap(base, st.st_size); return false; }
-    p += 2; // archetype_id (unused by loader)
-    p += 3; // iOS triplet
+    uint16_t archetypeId; std::memcpy(&archetypeId, p, 2); p += 2;
+    uint8_t iosMaj = *p; ++p;
+    uint8_t iosMin = *p; ++p;
+    uint8_t iosPat = *p; ++p;
 
     // 3. Font table — index into FontTableEntry array (V-770.A.3).
     if (p + 2 > end) { ::munmap(base, st.st_size); return false; }
@@ -185,8 +187,13 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
 
     m_mmapBase = base;
     m_mmapSize = st.st_size;
+    m_archetypeId = archetypeId;
+    m_iosMajor = iosMaj;
+    m_iosMinor = iosMin;
+    m_iosPatch = iosPat;
     m_loaded = true;
-    if (diag) WTFLogAlways("[Driftstack-V770A.LOAD] LOADED nTextRun=%u nFonts=%u nPerGlyph=%u",
+    if (diag) WTFLogAlways("[Driftstack-V770A.LOAD] LOADED archetype_id=%u iOS=%u.%u.%u nTextRun=%u nFonts=%u nPerGlyph=%u",
+        (unsigned)archetypeId, (unsigned)iosMaj, (unsigned)iosMin, (unsigned)iosPat,
         (unsigned)nTextRun, (unsigned)nFonts, (unsigned)nPerGlyph);
     return true;
 }

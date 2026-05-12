@@ -1731,8 +1731,8 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                     hitEv.font_id = fontId;
                                     hitEv.pt_size = ptSize;
                                     hitEv.position_class = positionClass;
-                                    hitEv.archetype_id = 1; // iphone16pro_ios18_bs default
-                                    hitEv.ios_version_packed = (18 << 8) | 6;
+                                    hitEv.archetype_id = static_cast<uint8_t>(atlas.archetypeId());
+                                    hitEv.ios_version_packed = static_cast<uint16_t>((atlas.iosMajor() << 8) | atlas.iosMinor());
                                     hitEv.timestamp_ms = 0; // V-820.A producer clock TBD
                                     driftstackLogAtlasHit(hitEv);
                                     return;

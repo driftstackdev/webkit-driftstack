@@ -79,6 +79,18 @@ private:
     void* m_mmapBase { nullptr };
     size_t m_mmapSize { 0 };
 
+    // V-770.A.13: parsed header metadata for diagnostics + future archetype gating.
+    uint16_t m_archetypeId { 0 };
+    uint8_t m_iosMajor { 0 };
+    uint8_t m_iosMinor { 0 };
+    uint8_t m_iosPatch { 0 };
+public:
+    uint16_t archetypeId() const { return m_archetypeId; }
+    uint8_t iosMajor() const { return m_iosMajor; }
+    uint8_t iosMinor() const { return m_iosMinor; }
+    uint8_t iosPatch() const { return m_iosPatch; }
+private:
+
     // V-770.A.3: font table parsed from the atlas binary's font section.
     // postscript_name (or family alias) → font_id. Pointers reference the
     // mmap region directly; no allocation per entry.
