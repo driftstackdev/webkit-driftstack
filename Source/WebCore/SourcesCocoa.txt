@@ -423,8 +423,6 @@ platform/graphics/cg/ColorCG.cpp
 platform/graphics/cg/ColorSpaceCG.cpp
 platform/graphics/cg/FloatPointCG.cpp
 platform/graphics/cg/DriftstackSoftwareBlend.cpp
-platform/graphics/cg/DriftstackTelemetry.cpp
-platform/graphics/cg/DriftstackTextRunAtlas.cpp
 platform/graphics/cg/FloatRectCG.cpp
 platform/graphics/cg/FloatSizeCG.cpp
 platform/graphics/cg/GradientCG.cpp
@@ -760,3 +758,8 @@ testing/cocoa/WebViewVisualIdentificationOverlay.mm @nonARC
 platform/graphics/angle/GraphicsContextGLANGLE.cpp @no-unify
 platform/graphics/cocoa/GraphicsContextGLCocoa.mm @nonARC @no-unify
 platform/graphics/cv/GraphicsContextGLCVCocoa.mm @nonARC @no-unify
+
+// V-820.A + V-770.A.1 Driftstack: kept @no-unify so unified-source bundle
+// boundaries above don't shift when adding/removing files.
+platform/graphics/cg/DriftstackTelemetry.cpp @no-unify
+platform/graphics/cg/DriftstackTextRunAtlas.cpp @no-unify
