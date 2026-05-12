@@ -34,6 +34,8 @@
 #include "../cg/DriftstackTextRunAtlas.h"
 #include "Color.h"
 #include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
+#include <wtf/RetainPtr.h>
 #endif
 #include "FontCascadeFonts.h"
 #include "FontCascadeInlines.h"
@@ -537,9 +539,54 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             fontId, ptSize, positionClass, textRunHash);
 
         if (atlasResult.has_value()) {
-            // v1: never reaches here (lookup always returns nullopt).
-            // V-770.A.2 will implement actual blit when atlas binary loads.
-            // For now, fall through to default Mac CG.
+            // V-770.A.4 atlas hit blit: decode the iPhone-canonical PNG
+            // alpha mask from the mmap blob (zero-copy) and CGContextDrawImage
+            // onto the current cgContext at the anchor point. Return early so
+            // the platform CT draw beneath is skipped.
+            const auto& entry = atlasResult.value();
+            CGContextRef cg = context.platformContext();
+            if (cg && entry.pngData && entry.pngSize > 0) {
+                RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreateWithBytesNoCopy(
+                    kCFAllocatorDefault,
+                    entry.pngData,
+                    static_cast<CFIndex>(entry.pngSize),
+                    kCFAllocatorNull));
+                if (cfData) {
+                    RetainPtr<CGImageSourceRef> cgSource = adoptCF(
+                        CGImageSourceCreateWithData(cfData.get(), nullptr));
+                    if (cgSource && CGImageSourceGetCount(cgSource.get()) > 0) {
+                        RetainPtr<CGImageRef> cgImage = adoptCF(
+                            CGImageSourceCreateImageAtIndex(cgSource.get(), 0, nullptr));
+                        if (cgImage) {
+                            // Atlas entry is the rendered text run at its
+                            // captured canvas dimensions. Composite at the
+                            // anchor point in CT's drawing coordinates,
+                            // flipping Y because PNG origin is top-left but
+                            // canvas anchor is the baseline.
+                            const CGFloat imgW = CGImageGetWidth(cgImage.get());
+                            const CGFloat imgH = CGImageGetHeight(cgImage.get());
+                            // Capture page anchors text at y = round(canvasH*0.75);
+                            // atlas top-left == (anchor.x - canvasX_offset, anchor.y - canvasY_offset).
+                            // For v1 we approximate: snap to integer pixel,
+                            // place top-left at (floor(anchorX) - abbLeft, floor(anchorY) - abbAscent).
+                            const float dx = std::floor(anchorPoint.x()) - entry.abbLeft;
+                            const float dy = std::floor(anchorPoint.y()) - entry.abbAscent;
+
+                            CGContextSaveGState(cg);
+                            // Y-flip: WebKit canvas CGContext is typically top-left
+                            // origin (after RenderingMode flip), but for native
+                            // pixel-aligned bitmap blit we draw in unflipped
+                            // device space. Use CGContextDrawImage with explicit
+                            // CGAffineTransform identity (no extra transform).
+                            CGContextDrawImage(cg, CGRectMake(dx, dy, imgW, imgH), cgImage.get());
+                            CGContextRestoreGState(cg);
+                            // Return early — atlas hit completes the draw.
+                            return;
+                        }
+                    }
+                }
+            }
+            // Decode failure: fall through to default Mac CG path (safe).
         } else {
             // Atlas miss: emit V-820.A telemetry.
             AtlasMissEvent e{};
