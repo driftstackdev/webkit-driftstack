@@ -513,12 +513,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // lookup hits will substitute iPhone canonical alpha directly here.
     {
         // Glyph buffer reinterpretation: GlyphBufferGlyph is a typedef to
-        // uint16_t on platforms using CGGlyph; cast safely.
-        const auto glyphsU16 = std::span<const uint16_t>(
+        // uint16_t on platforms using CGGlyph; cast safely via WTF helper.
+        const auto glyphsU16 = unsafeMakeSpan(
             reinterpret_cast<const uint16_t*>(glyphs.data()), glyphs.size());
         // GlyphBufferAdvance is CGSize on Cocoa platform (GlyphBufferMembers.h);
-        // reinterpret_cast the span directly without copying.
-        const auto advancesCGSize = std::span<const CGSize>(
+        // reinterpret the span directly without copying.
+        const auto advancesCGSize = unsafeMakeSpan(
             reinterpret_cast<const CGSize*>(advances.data()), advances.size());
 
         uint64_t textRunHash = driftstackComputeTextRunHash(
