@@ -12,7 +12,9 @@
 #include "Font.h"
 #include "FloatPoint.h"
 #include "FontPlatformData.h"
+#include <CoreText/CoreText.h>
 #include <wtf/FastMalloc.h>
+#include <wtf/RetainPtr.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringHasher.h>
@@ -83,16 +85,24 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     p += 2; // archetype_id (unused by loader)
     p += 3; // iOS triplet
 
-    // 3. Font table
+    // 3. Font table — index into FontTableEntry array (V-770.A.3).
     if (p + 2 > end) { ::munmap(base, st.st_size); return false; }
     uint16_t nFonts; std::memcpy(&nFonts, p, 2); p += 2;
+    if (nFonts > 0) {
+        m_fontTable = static_cast<FontTableEntry*>(WTF::fastMalloc(sizeof(FontTableEntry) * nFonts));
+        if (!m_fontTable) { ::munmap(base, st.st_size); return false; }
+    }
     for (uint16_t i = 0; i < nFonts; ++i) {
         if (p + 3 > end) { ::munmap(base, st.st_size); return false; }
-        p += 2; // font_id (unused — driftstackMapFontToId stub)
+        uint16_t fid; std::memcpy(&fid, p, 2); p += 2;
         uint8_t nameLen = *p; p += 1;
         if (p + nameLen > end) { ::munmap(base, st.st_size); return false; }
+        m_fontTable[i].fontId = fid;
+        m_fontTable[i].nameBytes = reinterpret_cast<const char*>(p);
+        m_fontTable[i].nameLen = nameLen;
         p += nameLen;
     }
+    m_fontTableCount = nFonts;
 
     // 4. Text-run index
     if (p + 4 > end) { ::munmap(base, st.st_size); return false; }
@@ -303,15 +313,63 @@ uint8_t driftstackComputePositionClass(CGContextRef cgContext, const FloatPoint&
     return static_cast<uint8_t>((yBin << 4) | xBin);
 }
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+uint16_t DriftstackTextRunAtlas::fontIdForName(const char* name, size_t len) const
+{
+    if (!m_fontTable || !name)
+        return UINT16_MAX;
+    for (uint16_t i = 0; i < m_fontTableCount; ++i) {
+        const FontTableEntry& e = m_fontTable[i];
+        if (e.nameLen == len && std::memcmp(e.nameBytes, name, len) == 0)
+            return e.fontId;
+    }
+    return UINT16_MAX;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 uint16_t driftstackMapFontToId(const Font& font)
 {
-    // v1 stub: returns 0 (unknown font). V-770.A.2 will use the font's
-    // postscript name to look up against FONT_IDS table loaded from atlas
-    // binary header. For now, 0 is fine since lookup() always returns
-    // nullopt anyway.
-    UNUSED_PARAM(font);
-    return 0;
+    // V-770.A.3: resolve via atlas font table using the CT font's
+    // PostScript name. Falls back to CSS family if the atlas table only
+    // contains family aliases (the V-770.B builder accepts either).
+    auto& atlas = DriftstackTextRunAtlas::singleton();
+    if (!atlas.isLoaded())
+        return 0; // loader not ready — match v1 stub behavior
+
+    CTFontRef ctFont = font.platformData().ctFont();
+    if (!ctFont)
+        return 0;
+
+    // Try PostScript name first.
+    RetainPtr<CFStringRef> psName = adoptCF(CTFontCopyPostScriptName(ctFont));
+    if (psName) {
+        char buf[256];
+        if (CFStringGetCString(psName.get(), buf, sizeof(buf), kCFStringEncodingUTF8)) {
+            size_t bufLen = 0;
+            while (bufLen < sizeof(buf) && buf[bufLen]) ++bufLen;
+            uint16_t fid = atlas.fontIdForName(buf, bufLen);
+            if (fid != UINT16_MAX)
+                return fid;
+        }
+    }
+
+    // Fallback: family name (CSS family alias like "-apple-system", "Arial").
+    RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(ctFont));
+    if (familyName) {
+        char buf[256];
+        if (CFStringGetCString(familyName.get(), buf, sizeof(buf), kCFStringEncodingUTF8)) {
+            size_t bufLen = 0;
+            while (bufLen < sizeof(buf) && buf[bufLen]) ++bufLen;
+            uint16_t fid = atlas.fontIdForName(buf, bufLen);
+            if (fid != UINT16_MAX)
+                return fid;
+        }
+    }
+
+    return 0; // unknown — V-770.B.13 atlas builder should add the family
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 // V-771.B thread-local source text plumbing.
 //

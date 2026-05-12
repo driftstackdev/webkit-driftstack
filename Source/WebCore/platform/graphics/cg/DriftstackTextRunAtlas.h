@@ -79,6 +79,23 @@ private:
     void* m_mmapBase { nullptr };
     size_t m_mmapSize { 0 };
 
+    // V-770.A.3: font table parsed from the atlas binary's font section.
+    // postscript_name (or family alias) → font_id. Pointers reference the
+    // mmap region directly; no allocation per entry.
+    struct FontTableEntry {
+        uint16_t fontId;
+        const char* nameBytes;
+        uint8_t nameLen;
+    };
+    FontTableEntry* m_fontTable { nullptr };
+    uint16_t m_fontTableCount { 0 };
+
+public:
+    // Resolve a CSS family / postscript name to the atlas font_id by linear
+    // scan of the table (small N ≤ 50). Returns UINT16_MAX if no match.
+    uint16_t fontIdForName(const char* name, size_t len) const;
+private:
+
     // Text-run section: parsed at load() into entry table for O(1) lookup.
     // Entries point into the mmap blob region (zero-copy pngData).
     struct TextRunEntry {
