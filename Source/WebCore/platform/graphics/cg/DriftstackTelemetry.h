@@ -128,6 +128,14 @@ private:
 // Singleton accessor (one ring per WebProcess).
 DriftstackTelemetryRing& driftstackTelemetryRing();
 
+// V-820.B.1.a: install a periodic RunLoop timer (5s cadence) that drains
+// the ring and emits a one-line WTFLogAlways summary. Gated by env var
+// DRIFTSTACK_TELEMETRY_DRAIN=1; off by default. Production V-820.B.1.b
+// will replace the log emission with IPC → UIProcess → daemon HTTP POST.
+// Must be called on a thread that has a RunLoop installed (e.g., main
+// thread of WebContent process).
+void driftstackTelemetryStartDrainTimer();
+
 // Convenience producers. Hot-path callers use these instead of constructing
 // TelemetryEvent manually.
 inline void driftstackLogAtlasMiss(const AtlasMissEvent& e)

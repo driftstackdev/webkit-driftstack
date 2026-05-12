@@ -1629,6 +1629,11 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     ASSERT(glyphBuffer.isFlattened());
 
 #if PLATFORM(DRIFTSTACK)
+    // V-820.B.1.a: ensure the drain timer is running on the main thread.
+    // start() is idempotent + env-gated; called from every drawGlyphBuffer
+    // so the first call from the main thread installs the RunLoop timer.
+    driftstackTelemetryStartDrainTimer();
+
     // V-771.B: publish the source UTF-8 text on this thread for the duration
     // of the platform drawGlyphs dispatch. FontCascadeCoreText.cpp V-771 hook
     // reads it via driftstackCurrentTextSource() for cross-platform atlas
