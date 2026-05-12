@@ -14,7 +14,10 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <wtf/Logging.h>
+// NOTE: Do NOT include wtf/Logging.h — leaks LOG_CHANNEL_PREFIX=WTFLog into
+// unified bundle (FontCacheCoreText neighbor in UnifiedSource345 expects Log
+// prefix). WTFLogAlways is in wtf/Assertions.h.
+#include <wtf/Assertions.h>
 #include <wtf/NeverDestroyed.h>
 
 namespace WebCore {
