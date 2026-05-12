@@ -30,6 +30,8 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
+#include "../cg/DriftstackTelemetry.h"
+#include "../cg/DriftstackTextRunAtlas.h"
 #include "Color.h"
 #include <CoreGraphics/CoreGraphics.h>
 #endif
@@ -503,6 +505,52 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         // Reassign the span to point at our local vector. Local Vector outlives
         // this function scope so the span is valid for the rest of drawGlyphs.
         advances = driftstackAdvances.span();
+    }
+
+    // V-771 / V-770.A.1 — text-run atlas lookup (Rule N v2 Layer A entry).
+    // Stub atlas (v1) always misses; emits V-820.A AtlasMiss telemetry.
+    // When V-770.A captures fire + atlas binary loads (V-770.A.2 next slice),
+    // lookup hits will substitute iPhone canonical alpha directly here.
+    {
+        // Glyph buffer reinterpretation: GlyphBufferGlyph is a typedef to
+        // uint16_t on platforms using CGGlyph; cast safely.
+        const auto glyphsU16 = std::span<const uint16_t>(
+            reinterpret_cast<const uint16_t*>(glyphs.data()), glyphs.size());
+        // GlyphBufferAdvance is FloatSize-compatible (2x float). For hashing
+        // purposes we cast to CGSize span (16 bytes per — different stride
+        // than FloatSize 8 bytes; widen-cast via separate vector if needed).
+        // For v1 stub, hash quality is sufficient with just the glyph buffer.
+        Vector<CGSize, 256> advancesAsCGSize;
+        advancesAsCGSize.reserveInitialCapacity(advances.size());
+        for (const auto& a : advances)
+            advancesAsCGSize.append(CGSizeMake(a.width(), a.height()));
+
+        uint64_t textRunHash = driftstackComputeTextRunHash(
+            font, glyphsU16, advancesAsCGSize.span());
+        uint8_t positionClass = driftstackComputePositionClass(
+            context.platformContext(), anchorPoint);
+        uint16_t fontId = driftstackMapFontToId(font);
+        uint16_t ptSize = static_cast<uint16_t>(platformData.size());
+
+        auto atlasResult = DriftstackTextRunAtlas::singleton().lookup(
+            fontId, ptSize, positionClass, textRunHash);
+
+        if (atlasResult.has_value()) {
+            // v1: never reaches here (lookup always returns nullopt).
+            // V-770.A.2 will implement actual blit when atlas binary loads.
+            // For now, fall through to default Mac CG.
+        } else {
+            // Atlas miss: emit V-820.A telemetry.
+            AtlasMissEvent e{};
+            e.text_run_hash = textRunHash;
+            e.font_id = fontId;
+            e.pt_size = ptSize;
+            e.position_class = positionClass;
+            e.archetype_id = 1; // iphone16pro_ios18_bs default
+            e.ios_version_packed = (18 << 8) | 6;
+            e.timestamp_ms = 0; // V-820.A producer not yet wired to real clock
+            driftstackLogAtlasMiss(e);
+        }
     }
 #endif
 

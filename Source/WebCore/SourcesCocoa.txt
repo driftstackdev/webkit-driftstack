@@ -423,6 +423,8 @@ platform/graphics/cg/ColorCG.cpp
 platform/graphics/cg/ColorSpaceCG.cpp
 platform/graphics/cg/FloatPointCG.cpp
 platform/graphics/cg/DriftstackSoftwareBlend.cpp
+platform/graphics/cg/DriftstackTelemetry.cpp
+platform/graphics/cg/DriftstackTextRunAtlas.cpp
 platform/graphics/cg/FloatRectCG.cpp
 platform/graphics/cg/FloatSizeCG.cpp
 platform/graphics/cg/GradientCG.cpp
