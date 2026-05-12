@@ -14,7 +14,12 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <wtf/Logging.h>
+// NOTE: Do NOT include wtf/Logging.h here — it #defines LOG_CHANNEL_PREFIX
+// to WTFLog, and when this file is unified with FontCacheCoreText.cpp (next
+// in the bundle), the macro persists into FontCacheCoreText's RELEASE_LOG_
+// FORWARDABLE expansion, producing WTFLogFonts symbols instead of LogFonts.
+// WTFLogAlways comes from wtf/Assertions.h (already pulled in transitively).
+#include <wtf/Assertions.h>
 #include <wtf/NeverDestroyed.h>
 
 namespace WebCore {
