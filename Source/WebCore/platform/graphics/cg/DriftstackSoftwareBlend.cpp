@@ -41,6 +41,19 @@ inline double blendChannelColorBurn(double Cb, double Cs)
 }
 inline double blendChannelExclusion(double Cb, double Cs) { return Cb + Cs - 2.0 * Cb * Cs; }
 
+// V-749.F additions (V-587.A.10 closure: difference, color-dodge already covered
+// here for use by the W3C blend mode switch).
+inline double blendChannelDifference(double Cb, double Cs) { return std::abs(Cb - Cs); }
+inline double blendChannelColorDodge(double Cb, double Cs)
+{
+    if (Cb <= 0.0) return 0.0;
+    if (Cs >= 1.0) return 1.0;
+    return std::min(1.0, Cb / (1.0 - Cs));
+}
+// blendChannelMultiply already defined above (Cb * Cs). W3C 'multiply' blend
+// mode uses it directly. No new helper required.
+// 'darken' and 'lighten' use std::min / std::max directly (inlined at call site).
+
 // Non-separable blends (operate on full RGB triplet).
 inline double lum(double r, double g, double b) { return 0.3 * r + 0.59 * g + 0.11 * b; }
 
@@ -280,6 +293,19 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
                 Rr = std::min(1.0, Sa * Sr + Ba * Br);
                 Rg = std::min(1.0, Sa * Sg + Ba * Bg);
                 Rb = std::min(1.0, Sa * Sb + Ba * Bb);
+            } else if (op == CompositeOperator::SourceOut && blendMode == BlendMode::Normal) {
+                // V-749.F (V-587.A.10 closure): W3C source-out:
+                //   co = αs * Cs * (1 - αb)
+                //   αo = αs * (1 - αb)
+                // Result: source only where destination is transparent.
+                Ra = Sa * (1.0 - Ba);
+                if (Ra > 0.0) {
+                    Rr = Sr;
+                    Rg = Sg;
+                    Rb = Sb;
+                } else {
+                    Rr = Rg = Rb = 0.0;
+                }
             } else {
                 // Generic blend + source-over composite.
                 double blendR, blendG, blendB;
@@ -303,6 +329,21 @@ bool driftstackSoftwareBlendFillRect(CGContextRef context, const FloatRect& rect
                     blendR = blendChannelExclusion(Br, Sr);
                     blendG = blendChannelExclusion(Bg, Sg);
                     blendB = blendChannelExclusion(Bb, Sb);
+                    break;
+                case BlendMode::Multiply:
+                    blendR = blendChannelMultiply(Br, Sr);
+                    blendG = blendChannelMultiply(Bg, Sg);
+                    blendB = blendChannelMultiply(Bb, Sb);
+                    break;
+                case BlendMode::Difference:
+                    blendR = blendChannelDifference(Br, Sr);
+                    blendG = blendChannelDifference(Bg, Sg);
+                    blendB = blendChannelDifference(Bb, Sb);
+                    break;
+                case BlendMode::ColorDodge:
+                    blendR = blendChannelColorDodge(Br, Sr);
+                    blendG = blendChannelColorDodge(Bg, Sg);
+                    blendB = blendChannelColorDodge(Bb, Sb);
                     break;
                 case BlendMode::Hue:
                 case BlendMode::Saturation:
@@ -475,6 +516,14 @@ bool driftstackSoftwareBlendApplyMasked(
                 Rr = std::min(1.0, Sa * Sr + Ba * Br);
                 Rg = std::min(1.0, Sa * Sg + Ba * Bg);
                 Rb = std::min(1.0, Sa * Sb + Ba * Bb);
+            } else if (op == CompositeOperator::SourceOut && blendMode == BlendMode::Normal) {
+                // V-749.F (V-587.A.10 closure): masked-variant W3C source-out.
+                Ra = Sa * (1.0 - Ba);
+                if (Ra > 0.0) {
+                    Rr = Sr;
+                    Rg = Sg;
+                    Rb = Sb;
+                } else { Rr = Rg = Rb = 0.0; }
             } else {
                 double blendR, blendG, blendB;
                 switch (blendMode) {
@@ -497,6 +546,21 @@ bool driftstackSoftwareBlendApplyMasked(
                     blendR = blendChannelExclusion(Br, Sr);
                     blendG = blendChannelExclusion(Bg, Sg);
                     blendB = blendChannelExclusion(Bb, Sb);
+                    break;
+                case BlendMode::Multiply:
+                    blendR = blendChannelMultiply(Br, Sr);
+                    blendG = blendChannelMultiply(Bg, Sg);
+                    blendB = blendChannelMultiply(Bb, Sb);
+                    break;
+                case BlendMode::Difference:
+                    blendR = blendChannelDifference(Br, Sr);
+                    blendG = blendChannelDifference(Bg, Sg);
+                    blendB = blendChannelDifference(Bb, Sb);
+                    break;
+                case BlendMode::ColorDodge:
+                    blendR = blendChannelColorDodge(Br, Sr);
+                    blendG = blendChannelColorDodge(Bg, Sg);
+                    blendB = blendChannelColorDodge(Bb, Sb);
                     break;
                 case BlendMode::Hue:
                 case BlendMode::Saturation:

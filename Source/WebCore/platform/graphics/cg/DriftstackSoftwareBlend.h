@@ -30,10 +30,14 @@ inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blend
     if (blendMode == BlendMode::Hue
         || blendMode == BlendMode::Color
         || blendMode == BlendMode::Saturation
+        || blendMode == BlendMode::Luminosity
         || blendMode == BlendMode::ColorBurn
+        || blendMode == BlendMode::ColorDodge
         || blendMode == BlendMode::HardLight
         || blendMode == BlendMode::SoftLight
-        || blendMode == BlendMode::Exclusion)
+        || blendMode == BlendMode::Exclusion
+        || blendMode == BlendMode::Multiply
+        || blendMode == BlendMode::Difference)
         return true;
     if (op == CompositeOperator::XOR && blendMode == BlendMode::Normal)
         return true;
@@ -47,6 +51,10 @@ inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blend
     if (op == CompositeOperator::DestinationAtop && blendMode == BlendMode::Normal)
         return true;
     if (op == CompositeOperator::PlusLighter && blendMode == BlendMode::Normal)
+        return true;
+    // V-749.F (V-587.A.10 closure): source-out maps to W3C composite op (not
+    // blend mode); route through software path for sub-LSB CG-rounding match.
+    if (op == CompositeOperator::SourceOut && blendMode == BlendMode::Normal)
         return true;
     return false;
 }
