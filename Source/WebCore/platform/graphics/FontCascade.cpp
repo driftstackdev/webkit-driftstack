@@ -1660,18 +1660,34 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             uint16_t ptSize = static_cast<uint16_t>(font.platformData().size());
             uint16_t fontId = driftstackMapFontToId(font);
             if (fontId != UINT16_MAX) {
-            // No platform CG context here; position class needs the
-            // CGContext CTM. Skip subpixel binning at this layer (use
-            // position_class=0); the FontCascadeCoreText hook will refine.
+            // V-770.A.10: compute position class from anchor's fractional
+            // bits. Matches capture-page methodology (V-770.A.0 uses
+            // posOffset.x / posOffset.y to derive position_class directly,
+            // independent of any device CTM). For canvas content this aligns
+            // when DPR=1; for DPR>1 the runtime sees DPR-scaled fractional
+            // bits that don't match the capture (capture also runs at DPR=1
+            // on iPhone Safari). DPR>1 robustness deferred to a multi-DPR
+            // capture follow-up.
+            double xFrac = point.x() - std::floor(point.x());
+            double yFrac = point.y() - std::floor(point.y());
+            int xBin = static_cast<int>(std::floor(xFrac * 16.0));
+            int yBin = static_cast<int>(std::floor(yFrac * 16.0));
+            if (xBin > 15) xBin = 15;
+            if (yBin > 15) yBin = 15;
+            if (xBin < 0) xBin = 0;
+            if (yBin < 0) yBin = 0;
+            uint8_t positionClass = static_cast<uint8_t>((yBin << 4) | xBin);
+
             uint64_t textRunHash = driftstackComputeTextRunHash(
                 font, ptSize, source,
                 std::span<const uint16_t>{},
                 std::span<const CGSize>{});
             auto& atlas = DriftstackTextRunAtlas::singleton();
-            auto atlasResult = atlas.lookup(fontId, ptSize, 0, textRunHash);
+            auto atlasResult = atlas.lookup(fontId, ptSize, positionClass, textRunHash);
             if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
-                WTFLogAlways("[Driftstack-V770A.GB-LK] fontId=%u pt=%u hash=0x%016llx => %s (entries=%u)",
-                    (unsigned)fontId, (unsigned)ptSize, (unsigned long long)textRunHash,
+                WTFLogAlways("[Driftstack-V770A.GB-LK] fontId=%u pt=%u pos=0x%02x hash=0x%016llx => %s (entries=%u)",
+                    (unsigned)fontId, (unsigned)ptSize, (unsigned)positionClass,
+                    (unsigned long long)textRunHash,
                     atlasResult.has_value() ? "HIT" : "miss",
                     (unsigned)atlas.entryCount());
             }
@@ -1709,7 +1725,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                     hitEv.text_run_hash = textRunHash;
                                     hitEv.font_id = fontId;
                                     hitEv.pt_size = ptSize;
-                                    hitEv.position_class = 0;
+                                    hitEv.position_class = positionClass;
                                     hitEv.archetype_id = 1; // iphone16pro_ios18_bs default
                                     hitEv.ios_version_packed = (18 << 8) | 6;
                                     hitEv.timestamp_ms = 0; // V-820.A producer clock TBD
