@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <wtf/text/StringView.h>
 
 namespace WebCore {
 
@@ -72,16 +73,39 @@ private:
 };
 
 // Helpers (PLATFORM(DRIFTSTACK)-gated).
+//
+// V-771.B: hash on UTF-8 text bytes + font + ptSize for cross-platform
+// parity. Falls back to glyph-buffer hash when textUtf8 is empty (e.g.,
+// drawGlyphs call sites outside the FontCascade::drawGlyphBuffer text path).
 uint64_t driftstackComputeTextRunHash(
     const Font& font,
-    std::span<const uint16_t> glyphs,    // CGGlyph == uint16_t
-    std::span<const CGSize> advances);
+    uint16_t ptSize,
+    StringView textUtf8,                 // V-771.B primary identity
+    std::span<const uint16_t> glyphs,    // CGGlyph == uint16_t (fallback)
+    std::span<const CGSize> advances);   // fallback
 
 uint8_t driftstackComputePositionClass(
     CGContextRef cgContext,
     const FloatPoint& anchor);
 
 uint16_t driftstackMapFontToId(const Font& font);
+
+// V-771.B thread-local source-text plumbing.
+//
+// FontCascade::drawGlyphBuffer receives the source StringView (via F.1.B-6
+// plumbing from CanvasRenderingContext2D::fillText). It sets the current
+// text source on its thread before invoking GraphicsContext::drawGlyphs,
+// which dispatches to the platform Font::drawGlyphs (V-771 hook). The hook
+// reads back the source for hash computation. RAII setter clears on exit.
+class DriftstackCurrentTextSourceScope {
+public:
+    explicit DriftstackCurrentTextSourceScope(StringView source);
+    ~DriftstackCurrentTextSourceScope();
+    DriftstackCurrentTextSourceScope(const DriftstackCurrentTextSourceScope&) = delete;
+    DriftstackCurrentTextSourceScope& operator=(const DriftstackCurrentTextSourceScope&) = delete;
+};
+
+StringView driftstackCurrentTextSource();
 
 } // namespace WebCore
 

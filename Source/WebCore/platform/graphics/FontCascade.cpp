@@ -38,6 +38,7 @@
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
+#include "cg/DriftstackTextRunAtlas.h"
 #include "cocoa/DriftstackAsciiAtlas.h"
 #include "cocoa/DriftstackCompositeAtlas.h"
 #include "NativeImage.h"
@@ -1627,6 +1628,12 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     ASSERT(glyphBuffer.isFlattened());
 
 #if PLATFORM(DRIFTSTACK)
+    // V-771.B: publish the source UTF-8 text on this thread for the duration
+    // of the platform drawGlyphs dispatch. FontCascadeCoreText.cpp V-771 hook
+    // reads it via driftstackCurrentTextSource() for cross-platform atlas
+    // hash parity (avoids Mac CT vs iOS CT glyph buffer divergence).
+    DriftstackCurrentTextSourceScope driftstackSourceScope(source);
+
     // F.1.B-6 Phase 3: composite emoji atlas substitution via CGContextDrawImage.
     // Per founder direction Approach 1 (source-text iteration). TR51-simplified
     // sequence boundary detection (ZWJ chains, regional flag pairs, keycap,

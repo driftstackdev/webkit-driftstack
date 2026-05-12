@@ -521,12 +521,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         const auto advancesCGSize = unsafeMakeSpan(
             reinterpret_cast<const CGSize*>(advances.data()), advances.size());
 
-        uint64_t textRunHash = driftstackComputeTextRunHash(
-            font, glyphsU16, advancesCGSize);
-        uint8_t positionClass = driftstackComputePositionClass(
-            context.platformContext(), anchorPoint);
         uint16_t fontId = driftstackMapFontToId(font);
         uint16_t ptSize = static_cast<uint16_t>(platformData.size());
+        // V-771.B: read source UTF-8 text from thread-local slot set by
+        // FontCascade::drawGlyphBuffer. Empty when drawGlyphs is invoked
+        // outside the canvas text path (DrawGlyphsRecorder replay, etc.) —
+        // hash falls back to glyph-buffer mode.
+        StringView sourceText = driftstackCurrentTextSource();
+        uint64_t textRunHash = driftstackComputeTextRunHash(
+            font, ptSize, sourceText, glyphsU16, advancesCGSize);
+        uint8_t positionClass = driftstackComputePositionClass(
+            context.platformContext(), anchorPoint);
 
         auto atlasResult = DriftstackTextRunAtlas::singleton().lookup(
             fontId, ptSize, positionClass, textRunHash);

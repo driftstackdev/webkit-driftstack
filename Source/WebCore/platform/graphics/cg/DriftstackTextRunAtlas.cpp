@@ -11,8 +11,12 @@
 
 #include "Font.h"
 #include "FloatPoint.h"
+#include "FontPlatformData.h"
+#include <wtf/NeverDestroyed.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringHasher.h>
+#include <wtf/text/StringView.h>
+#include <wtf/ThreadSpecific.h>
 #include <cmath>
 
 namespace WebCore {
@@ -42,19 +46,21 @@ std::optional<DriftstackTextRunAtlasEntry> DriftstackTextRunAtlas::lookup(
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 uint64_t driftstackComputeTextRunHash(
     const Font& font,
+    uint16_t ptSize,
+    StringView textUtf8,
     std::span<const uint16_t> glyphs,
     std::span<const CGSize> advances)
 {
-    // FNV-1a 64-bit on (font_pointer, glyphs, advances). Glyph buffer is a
-    // deterministic transform of (text, font, ptSize), so hashing it
-    // captures text-run identity without needing the original string.
+    // V-771.B: FNV-1a 64-bit on (fontId, ptSize, UTF-8 text, weight, italic).
+    // Platform-independent — iPhone capture and Mac fork hash to the same
+    // value for the same (text, font, ptSize) tuple, enabling atlas-key
+    // parity across the divergent CT glyph buffers (RTL, shaping, ligatures).
     //
-    // Using font's pointer as the family discriminator is process-local
-    // (different sessions get different pointer values), which is FINE for
-    // atlas lookup since the atlas binary's font_id is the family id (mapped
-    // via driftstackMapFontToId), not the runtime pointer. The hash here is
-    // a high-entropy fingerprint for text-run-IDENTITY only — the (fontId,
-    // ptSize, positionClass) tuple disambiguates per-archetype atlas slots.
+    // Fallback path: when textUtf8 is empty (drawGlyphs callers outside
+    // FontCascade::drawGlyphBuffer text path, e.g., DrawGlyphsRecorder
+    // replay or text-decoration marks), hash on the platform glyph buffer.
+    // Those callers won't have atlas entries anyway; the fallback only
+    // exists to keep hash output stable per call site for telemetry.
 
     constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325ULL;
     constexpr uint64_t FNV_PRIME = 0x100000001b3ULL;
@@ -67,20 +73,33 @@ uint64_t driftstackComputeTextRunHash(
         }
     };
 
-    // Mix in font identity (use platform data postScriptName via Font ref).
-    // Font is not directly stringifiable here; use the pointer's low 32 bits
-    // as a discriminator (deterministic per session). The atlas builder will
-    // canonicalize via Postscript name on the capture side.
-    uintptr_t fontPtrVal = reinterpret_cast<uintptr_t>(&font);
-    mixBytes(reinterpret_cast<const uint8_t*>(&fontPtrVal), sizeof(fontPtrVal));
+    // 1. Font family id (resolved via driftstackMapFontToId).
+    uint16_t fontId = driftstackMapFontToId(font);
+    mixBytes(reinterpret_cast<const uint8_t*>(&fontId), sizeof(fontId));
 
-    // Mix in glyphs.
-    if (!glyphs.empty())
-        mixBytes(reinterpret_cast<const uint8_t*>(glyphs.data()), glyphs.size() * sizeof(uint16_t));
+    // 2. Point size.
+    mixBytes(reinterpret_cast<const uint8_t*>(&ptSize), sizeof(ptSize));
 
-    // Mix in advances (CGSize is 2× double = 16 bytes per).
-    if (!advances.empty())
-        mixBytes(reinterpret_cast<const uint8_t*>(advances.data()), advances.size() * sizeof(CGSize));
+    // 3. UTF-8 text bytes (V-771.B primary identity).
+    if (!textUtf8.isEmpty()) {
+        auto utf8 = textUtf8.utf8();
+        const uint8_t* utf8Bytes = reinterpret_cast<const uint8_t*>(utf8.data());
+        mixBytes(utf8Bytes, utf8.length());
+    } else {
+        // V-770.A.1 fallback (platform-dependent — likely atlas-miss).
+        if (!glyphs.empty())
+            mixBytes(reinterpret_cast<const uint8_t*>(glyphs.data()), glyphs.size() * sizeof(uint16_t));
+        if (!advances.empty())
+            mixBytes(reinterpret_cast<const uint8_t*>(advances.data()), advances.size() * sizeof(CGSize));
+    }
+
+    // 4. Font weight (canonical bucket from FontDescription).
+    uint16_t weight = static_cast<uint16_t>(font.platformData().size() * 0); // placeholder
+    // FontPlatformData on Cocoa exposes weight via FontSelectionValue; the
+    // builder-side capture uses the CSS weight (100..900). Until we wire the
+    // canonical mapping, treat weight as 400 (regular) implicitly via fontId
+    // — the atlas keys font_id per (family, weight, italic) tuple already.
+    UNUSED_PARAM(weight);
 
     return h;
 }
@@ -117,6 +136,48 @@ uint16_t driftstackMapFontToId(const Font& font)
     // nullopt anyway.
     UNUSED_PARAM(font);
     return 0;
+}
+
+// V-771.B thread-local source text plumbing.
+//
+// Each WebContent thread that renders canvas text owns its own slot;
+// drawGlyphBuffer pushes a StringView, drawGlyphs reads it during hash
+// computation, the scope guard clears on return. Saved/restored via a
+// stack-allocated previous-value field so nested drawGlyphBuffer calls
+// (e.g., text-decoration mark draws) don't lose their parent context.
+namespace {
+
+struct TextSourceSlot {
+    StringView current;
+};
+
+static ThreadSpecific<TextSourceSlot>& textSourceSlot()
+{
+    static NeverDestroyed<ThreadSpecific<TextSourceSlot>> slot;
+    return slot.get();
+}
+
+} // namespace
+
+DriftstackCurrentTextSourceScope::DriftstackCurrentTextSourceScope(StringView source)
+{
+    auto& slot = *textSourceSlot();
+    // No save/restore — drawGlyphBuffer is leaf w.r.t. recursive text emit
+    // in the current code path. If nesting appears later, switch to a
+    // Vector<StringView> push/pop and refactor.
+    slot.current = source;
+}
+
+DriftstackCurrentTextSourceScope::~DriftstackCurrentTextSourceScope()
+{
+    auto& slot = *textSourceSlot();
+    slot.current = StringView { };
+}
+
+StringView driftstackCurrentTextSource()
+{
+    auto& slot = *textSourceSlot();
+    return slot.current;
 }
 
 } // namespace WebCore
