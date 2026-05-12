@@ -383,16 +383,37 @@ uint16_t driftstackMapFontToId(const Font& font)
         }
     }
 
-    // V-770.A.14: surface the missing-font name once per (postscript, family)
-    // pair so V-770.B.13.c can extend FONT_IDS. Once-only log via a small
-    // thread-safe set; bounded at 64 distinct entries to avoid runaway log.
+    // V-770.A.14/.15: surface each distinct missing-font NAME once. A small
+    // ring of seen names (kMaxDistinct=64 slots) avoids unbounded growth +
+    // runaway log spam. Lookup is linear scan; expected steady-state distinct
+    // count is small (single digits per session).
     if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
-        static std::atomic<unsigned> s_loggedCount { 0 };
-        static const unsigned kMaxLogged = 64;
-        if (s_loggedCount.fetch_add(1, std::memory_order_relaxed) < kMaxLogged) {
-            WTFLogAlways("[Driftstack-V770A.UNKNOWN_FONT] ps='%s' family='%s'",
-                psBuf[0] ? psBuf : "(none)",
-                familyBuf[0] ? familyBuf : "(none)");
+        struct SeenEntry { uint64_t hash; bool valid; };
+        static constexpr size_t kMaxDistinct = 64;
+        static SeenEntry s_seen[kMaxDistinct] {};
+        static std::atomic<size_t> s_seenCount { 0 };
+
+        // FNV-1a over (ps + '|' + family) as the dedup key.
+        uint64_t k = 0xcbf29ce484222325ULL;
+        for (const char* p = psBuf; *p; ++p) { k ^= (uint8_t)*p; k *= 0x100000001b3ULL; }
+        k ^= '|'; k *= 0x100000001b3ULL;
+        for (const char* p = familyBuf; *p; ++p) { k ^= (uint8_t)*p; k *= 0x100000001b3ULL; }
+        if (!k) k = 1; // 0 reserved for empty slot
+
+        size_t cnt = s_seenCount.load(std::memory_order_acquire);
+        bool already = false;
+        for (size_t i = 0; i < cnt && i < kMaxDistinct; ++i) {
+            if (s_seen[i].valid && s_seen[i].hash == k) { already = true; break; }
+        }
+        if (!already && cnt < kMaxDistinct) {
+            size_t slot = s_seenCount.fetch_add(1, std::memory_order_acq_rel);
+            if (slot < kMaxDistinct) {
+                s_seen[slot] = { k, true };
+                WTFLogAlways("[Driftstack-V770A.UNKNOWN_FONT] ps='%s' family='%s' (slot=%u)",
+                    psBuf[0] ? psBuf : "(none)",
+                    familyBuf[0] ? familyBuf : "(none)",
+                    (unsigned)slot);
+            }
         }
     }
 
