@@ -103,7 +103,6 @@ void LayerB::loadModel()
     MLModel* model = [MLModel modelWithContentsOfURL:modelURL
                                        configuration:config
                                                error:&error];
-    [config release];
 
     if (!model) {
         const char* errMsg = error
@@ -113,7 +112,9 @@ void LayerB::loadModel()
         return;
     }
 
-    // Retain into the C++ holder.
+    // Bridge ARC strong reference to a CF retain so the C++ void* m_model
+    // owns one retain count past this scope. Released in destructor (not
+    // implemented at Phase 1 — singleton lives forever for now).
     m_model = (void*)CFBridgingRetain(model);
     m_isLoaded = true;
 
@@ -138,10 +139,8 @@ std::optional<LayerBPrediction> LayerB::predict(
             initWithShape:@[@1, @1, @64, @64]
                  dataType:MLMultiArrayDataTypeFloat32
                     error:&error];
-        if (!macArray) {
-            [macArray release];
+        if (!macArray)
             return std::nullopt;
-        }
 
         float* macData = (float*)macArray.dataPointer;
         for (int y = 0; y < 64; ++y)
@@ -153,11 +152,8 @@ std::optional<LayerBPrediction> LayerB::predict(
             initWithShape:@[@1, @4]
                  dataType:MLMultiArrayDataTypeFloat32
                     error:&error];
-        if (!featArray) {
-            [macArray release];
-            [featArray release];
+        if (!featArray)
             return std::nullopt;
-        }
 
         float* featData = (float*)featArray.dataPointer;
         featData[0] = static_cast<float>(features.font_id);
@@ -168,20 +164,15 @@ std::optional<LayerBPrediction> LayerB::predict(
         MLDictionaryFeatureProvider* input = [[MLDictionaryFeatureProvider alloc]
             initWithDictionary:@{ @"mac": macArray, @"feat": featArray }
                          error:&error];
-        [macArray release];
-        [featArray release];
 
-        if (!input) {
-            [input release];
+        if (!input)
             return std::nullopt;
-        }
 
         // Inference with Rule O v2 5ms HARD timing.
         auto t0 = std::chrono::high_resolution_clock::now();
         id<MLFeatureProvider> output = [model predictionFromFeatures:input
                                                                error:&error];
         auto t1 = std::chrono::high_resolution_clock::now();
-        [input release];
 
         if (!output || error)
             return std::nullopt;

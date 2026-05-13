@@ -766,7 +766,8 @@ platform/graphics/cg/DriftstackTelemetry.cpp
 platform/graphics/cg/DriftstackTextRunAtlas.cpp
 
 // V-790.V Layer B WebKit fork integration (Phase 2 — wave 29-116).
-// Objective-C++ (.mm) due to CoreML/MLModel dependency. @no-unify
-// keeps the ObjC++ translation unit out of unified bundles that
-// expect pure C++.
-platform/graphics/coreml/DriftstackLayerB.mm @no-unify
+// Objective-C++ (.mm) for CoreML/MLModel dependency. ARC-compatible
+// (no manual retain/release except CFBridgingRetain to cross the
+// ARC↔C++ boundary for the singleton's m_model void*). Unifiable
+// with other ARC ObjC++ files.
+platform/graphics/coreml/DriftstackLayerB.mm
