@@ -32,6 +32,7 @@
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "../cg/DriftstackTelemetry.h"
 #include "../cg/DriftstackTextRunAtlas.h"
+#include "../coreml/DriftstackLayerB.h"
 #include "Color.h"
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
@@ -611,6 +612,39 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             e.ios_version_packed = (18 << 8) | 6;
             e.timestamp_ms = 0; // V-820.A producer not yet wired to real clock
             driftstackLogAtlasMiss(e);
+
+            // V-790.V Phase 3 — Layer B ML delta prediction hook (LOG-ONLY).
+            // Env-gated default-OFF via DRIFTSTACK_LAYER_B_ENABLED=1 inside
+            // LayerB::shared().predict() — when OFF, returns nullopt and
+            // hook is a no-op. Strict Rule O v2 5ms HARD enforced inside
+            // predict; strict Rule P MLComputeUnitsCPUAndNeuralEngine.
+            //
+            // Phase 3 placeholder: passes all-zero mac_pixels (Phase 3.B
+            // will wire the actual offscreen Mac CG render at 64x64).
+            // Codepoint extraction from glyph_buffer is also deferred to
+            // Phase 3.B. This phase only verifies the call path links +
+            // fires when env-gate is ON.
+            {
+                std::array<std::array<uint8_t, 64>, 64> mac_pixels {};
+                Driftstack::LayerBFeatures features {
+                    .font_id = fontId,
+                    .pt_size_q4 = static_cast<uint16_t>(ptSize * 16),
+                    .codepoint = 0, // TODO Phase 3.B: extract from glyph_buffer
+                    .pos_class = positionClass,
+                };
+                auto prediction = Driftstack::LayerB::shared().predict(
+                    mac_pixels, features);
+                if (prediction) {
+                    // Phase 3 stub: log only. Phase 3.B applies delta +
+                    // draws via CGContextDrawImage.
+                    WTFLogAlways("[V-790.V] LayerB predicted "
+                                 "inference_ms=%.3f ane=%d for font_id=%u "
+                                 "pt=%.1f pos=%u",
+                                 prediction->inference_ms,
+                                 prediction->ane_routed,
+                                 fontId, ptSize, positionClass);
+                }
+            }
         }
     }
 #endif
