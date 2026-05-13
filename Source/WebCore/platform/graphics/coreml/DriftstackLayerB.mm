@@ -147,6 +147,48 @@ void LayerB::loadModel()
                                        configuration:config
                                                error:&error];
 
+    // V-790.V Phase 3.B (wave 29-134): observed intermittent .mlmodelc
+    // direct-load failure on 2nd+ WebProcess. The first WebProcess loaded
+    // the .mlmodelc cleanly, but a fresh WebProcess later in the page
+    // lifecycle hit "Unable to load model: Compile the model with Xcode".
+    // Suspected: .mlmodelc loaded by a previous process leaves stale
+    // state somewhere; fresh process retries direct load and fails.
+    //
+    // Fallback: when direct .mlmodelc load fails AND a .mlpackage is
+    // also present in the search path, retry via compileModelAtURL:.
+    // The runtime compile path always succeeds for a valid .mlpackage
+    // (paid 1-2s startup once per WebProcess).
+    if (!model && [pathExt isEqualToString:@"mlmodelc"]) {
+        // Look for sibling .mlpackage in the same directory
+        NSString* modelDir = [[modelURL path] stringByDeletingLastPathComponent];
+        NSString* baseName = [[[modelURL path] lastPathComponent]
+            stringByDeletingPathExtension];
+        NSString* mlpackagePath = [NSString stringWithFormat:@"%@/%@.mlpackage",
+            modelDir, baseName];
+        NSFileManager* fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:mlpackagePath]) {
+            const char* errMsg = error
+                ? [[error localizedDescription] UTF8String]
+                : "unknown";
+            WTFLogAlways("[V-790.V] LayerB .mlmodelc direct-load failed "
+                         "(%s); falling back to .mlpackage runtime compile",
+                         errMsg);
+            NSURL* mlpackageURL = [NSURL fileURLWithPath:mlpackagePath];
+            error = nil;
+            NSURL* compiledURL = [MLModel compileModelAtURL:mlpackageURL error:&error];
+            if (compiledURL) {
+                error = nil;
+                model = [MLModel modelWithContentsOfURL:compiledURL
+                                          configuration:config
+                                                  error:&error];
+                if (model) {
+                    loadURL = compiledURL;
+                    WTFLogAlways("[V-790.V] LayerB fallback compile+load OK");
+                }
+            }
+        }
+    }
+
     if (!model) {
         const char* errMsg = error
             ? [[error localizedDescription] UTF8String]
