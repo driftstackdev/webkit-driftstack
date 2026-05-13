@@ -764,3 +764,9 @@ platform/graphics/cv/GraphicsContextGLCVCocoa.mm @nonARC @no-unify
 // stays in its original bundle, preserving log channel dep chain).
 platform/graphics/cg/DriftstackTelemetry.cpp
 platform/graphics/cg/DriftstackTextRunAtlas.cpp
+
+// V-790.V Layer B WebKit fork integration (Phase 2 — wave 29-116).
+// Objective-C++ (.mm) due to CoreML/MLModel dependency. @no-unify
+// keeps the ObjC++ translation unit out of unified bundles that
+// expect pure C++.
+platform/graphics/coreml/DriftstackLayerB.mm @no-unify

@@ -211,6 +211,7 @@ list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
     "${WEBCORE_DIR}/platform/graphics/cocoa"
     "${WEBCORE_DIR}/platform/graphics/cocoa/controls"
     "${WEBCORE_DIR}/platform/graphics/coreimage"
+    "${WEBCORE_DIR}/platform/graphics/coreml"
     "${WEBCORE_DIR}/platform/graphics/coretext"
     "${WEBCORE_DIR}/platform/graphics/cg"
     "${WEBCORE_DIR}/platform/graphics/cv"
