@@ -625,16 +625,45 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             // FontCascade::drawGlyphBuffer via driftstackCurrentTextSource()).
             // For N>1 or empty sourceText, atlas lookup is skipped.
             if (glyphs.size() == 1 && sourceText.length() >= 1) {
-                // Extract first codepoint from sourceText. For 8-bit
-                // sourceText (Latin-1), codepoint is the byte value.
-                // For 16-bit sourceText (UTF-16), codepoint is the
-                // first code unit (note: surrogate pairs not handled
-                // in v1 — high-codepoint Unicode falls through).
+                // Extract first codepoint from sourceText.
+                //
+                // Empirical (wave 29-143 diag): sourceText is UTF-8
+                // encoded bytes packed into an 8-bit StringView buffer
+                // for non-ASCII text. So is8Bit()=true and a single CJK
+                // char appears as 3 bytes. We must decode UTF-8.
+                //
+                // For 16-bit StringView (rare in this codepath), the
+                // first u16 is either a codepoint or a high surrogate.
+                // We use the first u16 directly (BMP only; surrogate
+                // pairs not handled in v1).
                 uint32_t cp = 0;
-                if (sourceText.is8Bit())
-                    cp = static_cast<uint32_t>(sourceText.span8()[0]);
-                else
+                if (sourceText.is8Bit()) {
+                    auto bytes = sourceText.span8();
+                    uint8_t b0 = bytes[0];
+                    if (b0 < 0x80) {
+                        cp = b0; // ASCII
+                    } else if ((b0 & 0xE0) == 0xC0 && sourceText.length() >= 2) {
+                        // 2-byte UTF-8: 110xxxxx 10xxxxxx
+                        cp = (static_cast<uint32_t>(b0 & 0x1F) << 6)
+                           | (static_cast<uint32_t>(bytes[1] & 0x3F));
+                    } else if ((b0 & 0xF0) == 0xE0 && sourceText.length() >= 3) {
+                        // 3-byte UTF-8: 1110xxxx 10xxxxxx 10xxxxxx
+                        cp = (static_cast<uint32_t>(b0 & 0x0F) << 12)
+                           | (static_cast<uint32_t>(bytes[1] & 0x3F) << 6)
+                           | (static_cast<uint32_t>(bytes[2] & 0x3F));
+                    } else if ((b0 & 0xF8) == 0xF0 && sourceText.length() >= 4) {
+                        // 4-byte UTF-8: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+                        cp = (static_cast<uint32_t>(b0 & 0x07) << 18)
+                           | (static_cast<uint32_t>(bytes[1] & 0x3F) << 12)
+                           | (static_cast<uint32_t>(bytes[2] & 0x3F) << 6)
+                           | (static_cast<uint32_t>(bytes[3] & 0x3F));
+                    } else {
+                        // Malformed or unsupported encoding — skip atlas
+                        cp = 0;
+                    }
+                } else {
                     cp = static_cast<uint32_t>(sourceText.span16()[0]);
+                }
 
                 if (std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
                     WTFLogAlways("[V-790.L] per-glyph atlas LOOKUP "
