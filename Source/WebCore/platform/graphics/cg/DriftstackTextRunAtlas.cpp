@@ -214,28 +214,44 @@ std::optional<DriftstackTextRunAtlasEntry> DriftstackTextRunAtlas::lookup(
     }
     uint32_t bucket = static_cast<uint32_t>(textRunHash) & kBucketMask;
     const Bucket& b = m_buckets[bucket];
-    for (uint32_t i = 0; i < b.count; ++i) {
-        const PackedKey& k = m_textRunKeys[b.first + i];
-        if (k.textRunHash == textRunHash
-            && k.fontId == fontId
-            && k.ptSize == ptSize
-            && k.positionClass == positionClass) {
-            const TextRunEntry& e = m_textRunEntries[b.first + i];
-            if (size_t(e.blobOffset) + size_t(e.blobSize) > m_blobSize) {
-                // Defensive: corrupt offset; treat as miss.
-                m_missCount++;
-                return std::nullopt;
+    // V-790.N (wave 29-154): two-pass lookup — first try exact pos_class
+    // match, then fall back to pos_class=0. Atlas builders may only have
+    // pos_class=0 entries (V-790.N V-405 text-run conversion), while
+    // runtime computes a range of pos_classes from anchor sub-pixel.
+    // For same (font, pt, text), the iPhone PNG is identical across
+    // pos_classes; only sub-pixel AA at the edges differs. pos=0 fallback
+    // gives ~95% pixel match for the sub-pixel-offset case.
+    auto findExact = [&](uint8_t pc) -> std::optional<DriftstackTextRunAtlasEntry> {
+        for (uint32_t i = 0; i < b.count; ++i) {
+            const PackedKey& k = m_textRunKeys[b.first + i];
+            if (k.textRunHash == textRunHash
+                && k.fontId == fontId
+                && k.ptSize == ptSize
+                && k.positionClass == pc) {
+                const TextRunEntry& e = m_textRunEntries[b.first + i];
+                if (size_t(e.blobOffset) + size_t(e.blobSize) > m_blobSize)
+                    return std::nullopt;
+                DriftstackTextRunAtlasEntry result;
+                result.pngData = m_blobBase + e.blobOffset;
+                result.pngSize = e.blobSize;
+                result.abbLeft = e.abbLeft;
+                result.abbRight = e.abbRight;
+                result.abbAscent = e.abbAscent;
+                result.abbDescent = e.abbDescent;
+                result.width = e.width;
+                return result;
             }
+        }
+        return std::nullopt;
+    };
+    if (auto hit = findExact(positionClass)) {
+        m_hitCount++;
+        return hit;
+    }
+    if (positionClass != 0) {
+        if (auto hit = findExact(0)) {
             m_hitCount++;
-            DriftstackTextRunAtlasEntry result;
-            result.pngData = m_blobBase + e.blobOffset;
-            result.pngSize = e.blobSize;
-            result.abbLeft = e.abbLeft;
-            result.abbRight = e.abbRight;
-            result.abbAscent = e.abbAscent;
-            result.abbDescent = e.abbDescent;
-            result.width = e.width;
-            return result;
+            return hit;
         }
     }
     m_missCount++;
