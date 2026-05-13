@@ -37,28 +37,33 @@ namespace WebCore::Driftstack {
 
 namespace {
 
-// Search path order — first match wins. Tries compiled .mlmodelc first
-// (faster load + no runtime compile cost) then .mlpackage as fallback.
-// Includes both:
-//   - Bundled location: WebKit installation's WebCore Resources
-//   - Dev location: ~/code/driftstack/reference/models/ (Layer B
-//     persistent backup landed by wave 29-105/29-109)
+// Search path order — first match wins. Prefer .mlpackage and always
+// route through MLModel.compileModelAtURL: at WebProcess startup.
 //
-// V-790.V wave 29-128: .mlmodelc support added. MLModel can load both
-// .mlpackage (uncompiled, fails on macOS with "Unable to load model:
-// Compile the model with Xcode or MLModel.compileModel(at:)") and
-// .mlmodelc (compiled). For Driftstack we ship pre-compiled .mlmodelc
-// to avoid runtime compile cost (Rule O v2 startup latency budget).
+// V-790.V wave 29-136: empirical finding (waves 29-134/135 smoke) —
+// .mlmodelc direct-load via modelWithContentsOfURL: is INTERMITTENT
+// across WebProcess instances. First process loads cleanly, 2nd+ hits
+// "Unable to load model: Compile the model with Xcode". Even
+// .mlpackage compileModelAtURL: from 2nd+ process can fail with
+// "Input stream is not valid" — suggests macOS-internal compile-cache
+// state shared across processes.
+//
+// Workaround: always use .mlpackage source format + always call
+// compileModelAtURL: at WebProcess startup. The runtime compile path
+// is uniformly reliable. Cost: ~1-2s per WebProcess startup (paid
+// once before any predict() call — Rule O v2 5ms HARD applies per
+// predict, not per loadModel).
+//
+// Includes both:
+//   - Dev / autopilot path: ~/code/driftstack/reference/models/
+//   - Bundled location: WebKit installation's WebCore Resources
 NSURL* findModelURL()
 {
     NSArray<NSString*>* candidates = @[
         // Dev / autopilot path — reference/models/ in driftstack repo
-        @"/Users/john/code/driftstack/reference/models/v790g-layerb-final.mlmodelc",
         @"/Users/john/code/driftstack/reference/models/v790g-layerb-final.mlpackage",
         // Bundled location (future install path)
-        @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlmodelc",
         @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlpackage",
-        @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlmodelc",
         @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlpackage",
     ];
 
@@ -108,31 +113,21 @@ void LayerB::loadModel()
 
     NSError* error = nil;
 
-    // V-790.V Phase 3.E (wave 29-130): branch on extension.
-    // compileModelAtURL: expects .mlpackage (with Manifest.json),
-    // modelWithContentsOfURL: expects pre-compiled .mlmodelc.
-    //
-    // Phase 3.D unconditional compileModelAtURL: failed when given a
-    // .mlmodelc:
-    //   "A valid manifest does not exist at path: .../Manifest.json"
-    //
-    // Phase 3.E: if URL is .mlpackage, compile-at-runtime → tmp
-    // .mlmodelc; if URL is .mlmodelc, load directly.
-    NSURL* loadURL = modelURL;
-    NSString* pathExt = [[modelURL path] pathExtension];
-    if ([pathExt isEqualToString:@"mlpackage"]) {
-        NSURL* compiledURL = [MLModel compileModelAtURL:modelURL error:&error];
-        if (!compiledURL) {
-            const char* errMsg = error
-                ? [[error localizedDescription] UTF8String]
-                : "unknown error";
-            WTFLogAlways("[V-790.V] LayerB compileModelAtURL failed: %s", errMsg);
-            return;
-        }
-        loadURL = compiledURL;
-        WTFLogAlways("[V-790.V] LayerB compiled .mlpackage → %s",
-                     [[compiledURL path] UTF8String]);
+    // V-790.V wave 29-136: always route through compileModelAtURL:.
+    // .mlmodelc direct-load is intermittent across WebProcess
+    // instances (waves 29-134/135 finding). The compile-at-runtime
+    // path is uniformly reliable.
+    NSURL* compiledURL = [MLModel compileModelAtURL:modelURL error:&error];
+    if (!compiledURL) {
+        const char* errMsg = error
+            ? [[error localizedDescription] UTF8String]
+            : "unknown error";
+        WTFLogAlways("[V-790.V] LayerB compileModelAtURL failed: %s", errMsg);
+        return;
     }
+    NSURL* loadURL = compiledURL;
+    WTFLogAlways("[V-790.V] LayerB compiled .mlpackage → %s",
+                 [[compiledURL path] UTF8String]);
 
     MLModelConfiguration* config = [[MLModelConfiguration alloc] init];
 
@@ -146,48 +141,6 @@ void LayerB::loadModel()
     MLModel* model = [MLModel modelWithContentsOfURL:loadURL
                                        configuration:config
                                                error:&error];
-
-    // V-790.V Phase 3.B (wave 29-134): observed intermittent .mlmodelc
-    // direct-load failure on 2nd+ WebProcess. The first WebProcess loaded
-    // the .mlmodelc cleanly, but a fresh WebProcess later in the page
-    // lifecycle hit "Unable to load model: Compile the model with Xcode".
-    // Suspected: .mlmodelc loaded by a previous process leaves stale
-    // state somewhere; fresh process retries direct load and fails.
-    //
-    // Fallback: when direct .mlmodelc load fails AND a .mlpackage is
-    // also present in the search path, retry via compileModelAtURL:.
-    // The runtime compile path always succeeds for a valid .mlpackage
-    // (paid 1-2s startup once per WebProcess).
-    if (!model && [pathExt isEqualToString:@"mlmodelc"]) {
-        // Look for sibling .mlpackage in the same directory
-        NSString* modelDir = [[modelURL path] stringByDeletingLastPathComponent];
-        NSString* baseName = [[[modelURL path] lastPathComponent]
-            stringByDeletingPathExtension];
-        NSString* mlpackagePath = [NSString stringWithFormat:@"%@/%@.mlpackage",
-            modelDir, baseName];
-        NSFileManager* fm = [NSFileManager defaultManager];
-        if ([fm fileExistsAtPath:mlpackagePath]) {
-            const char* errMsg = error
-                ? [[error localizedDescription] UTF8String]
-                : "unknown";
-            WTFLogAlways("[V-790.V] LayerB .mlmodelc direct-load failed "
-                         "(%s); falling back to .mlpackage runtime compile",
-                         errMsg);
-            NSURL* mlpackageURL = [NSURL fileURLWithPath:mlpackagePath];
-            error = nil;
-            NSURL* compiledURL = [MLModel compileModelAtURL:mlpackageURL error:&error];
-            if (compiledURL) {
-                error = nil;
-                model = [MLModel modelWithContentsOfURL:compiledURL
-                                          configuration:config
-                                                  error:&error];
-                if (model) {
-                    loadURL = compiledURL;
-                    WTFLogAlways("[V-790.V] LayerB fallback compile+load OK");
-                }
-            }
-        }
-    }
 
     if (!model) {
         const char* errMsg = error
