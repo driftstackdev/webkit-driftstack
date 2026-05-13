@@ -30,13 +30,16 @@ constexpr size_t kPixelsSize = 64 * 64;
 constexpr size_t kEntrySize = kKeySize + kPixelsSize;
 constexpr const char kMagic[8] = { 'D', 'S', 'P', 'G', 'A', '1', '\0', '\0' };
 
-// Read little-endian u16 from byte ptr.
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+// Read little-endian u16 from byte ptr. WebKit's
+// -Wunsafe-buffer-usage flags raw-pointer arithmetic; wrapped in
+// WTF_ALLOW_UNSAFE_BUFFER_USAGE for the mmap'd-byte access pattern.
 inline uint16_t leU16(const uint8_t* p)
 {
     return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
 }
 
-// Read little-endian u32 from byte ptr.
 inline uint32_t leU32(const uint8_t* p)
 {
     return static_cast<uint32_t>(p[0])
@@ -45,8 +48,6 @@ inline uint32_t leU32(const uint8_t* p)
          | (static_cast<uint32_t>(p[3]) << 24);
 }
 
-// Pack a lookup key into 12 little-endian bytes (matching the on-disk
-// format produced by the Python builder).
 inline void packKey(uint8_t out[kKeySize], uint16_t fontId,
     uint16_t ptSizeQ4, uint32_t codepoint, uint32_t posClass)
 {
@@ -64,12 +65,12 @@ inline void packKey(uint8_t out[kKeySize], uint16_t fontId,
     out[11] = static_cast<uint8_t>((posClass >> 24) & 0xff);
 }
 
-// memcmp wrapper that treats keys as a 12-byte unsigned blob (same
-// ordering used by the Python builder when sorting before write).
 inline int cmpKey(const uint8_t* a, const uint8_t* b)
 {
     return std::memcmp(a, b, kKeySize);
 }
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 } // anonymous namespace
 
@@ -80,6 +81,8 @@ DriftstackPerGlyphAtlas& DriftstackPerGlyphAtlas::singleton()
         instance->loadFromFile(nullptr);
     return instance.get();
 }
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
 bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
 {
@@ -188,6 +191,8 @@ std::optional<DriftstackPerGlyphAtlasEntry> DriftstackPerGlyphAtlas::lookup(
     }
     return std::nullopt;
 }
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 } // namespace WebCore
 
