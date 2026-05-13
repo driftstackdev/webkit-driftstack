@@ -108,24 +108,30 @@ void LayerB::loadModel()
 
     NSError* error = nil;
 
-    // V-790.V Phase 3.D (wave 29-129): macOS MLModel.modelWithContentsOfURL
-    // accepts only pre-compiled .mlmodelc bundles. Both raw .mlpackage and
-    // coremlc-compiled .mlmodelc bundles from a different toolchain version
-    // can fail with "Unable to load model: Compile the model with Xcode or
-    // MLModel.compileModel(at:)".
+    // V-790.V Phase 3.E (wave 29-130): branch on extension.
+    // compileModelAtURL: expects .mlpackage (with Manifest.json),
+    // modelWithContentsOfURL: expects pre-compiled .mlmodelc.
     //
-    // Use MLModel +compileModelAtURL:error: to compile the source at
-    // WebProcess startup. This produces a tmp .mlmodelc that the current
-    // macOS runtime guarantees to load. Startup cost is ~1-2s for a small
-    // model — paid ONCE per WebProcess (singleton constructor), not per
-    // predict() call (Rule O v2 5ms HARD applies per-call only).
-    NSURL* compiledURL = [MLModel compileModelAtURL:modelURL error:&error];
-    if (!compiledURL) {
-        const char* errMsg = error
-            ? [[error localizedDescription] UTF8String]
-            : "unknown error";
-        WTFLogAlways("[V-790.V] LayerB compileModelAtURL failed: %s", errMsg);
-        return;
+    // Phase 3.D unconditional compileModelAtURL: failed when given a
+    // .mlmodelc:
+    //   "A valid manifest does not exist at path: .../Manifest.json"
+    //
+    // Phase 3.E: if URL is .mlpackage, compile-at-runtime → tmp
+    // .mlmodelc; if URL is .mlmodelc, load directly.
+    NSURL* loadURL = modelURL;
+    NSString* pathExt = [[modelURL path] pathExtension];
+    if ([pathExt isEqualToString:@"mlpackage"]) {
+        NSURL* compiledURL = [MLModel compileModelAtURL:modelURL error:&error];
+        if (!compiledURL) {
+            const char* errMsg = error
+                ? [[error localizedDescription] UTF8String]
+                : "unknown error";
+            WTFLogAlways("[V-790.V] LayerB compileModelAtURL failed: %s", errMsg);
+            return;
+        }
+        loadURL = compiledURL;
+        WTFLogAlways("[V-790.V] LayerB compiled .mlpackage → %s",
+                     [[compiledURL path] UTF8String]);
     }
 
     MLModelConfiguration* config = [[MLModelConfiguration alloc] init];
@@ -137,7 +143,7 @@ void LayerB::loadModel()
     // non-determinism per Apple Metal compiler scheduling.
     config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
 
-    MLModel* model = [MLModel modelWithContentsOfURL:compiledURL
+    MLModel* model = [MLModel modelWithContentsOfURL:loadURL
                                        configuration:config
                                                error:&error];
 
