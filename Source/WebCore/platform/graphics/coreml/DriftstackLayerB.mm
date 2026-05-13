@@ -31,6 +31,7 @@
 #import <span>
 #import <string_view>
 #import <wtf/Assertions.h>
+#import <wtf/StdLibExtras.h>
 
 namespace WebCore::Driftstack {
 
@@ -148,12 +149,13 @@ std::optional<LayerBPrediction> LayerB::predict(
         if (!macArray)
             return std::nullopt;
 
-        // std::span over the data buffer to satisfy WebKit's
-        // -Wunsafe-buffer-usage (no raw pointer indexing).
-        std::span<float> macData {
-            static_cast<float*>(macArray.dataPointer),
-            64 * 64
-        };
+        // WTF::unsafeMakeSpan for bounds-tagged buffer access — satisfies
+        // -Wunsafe-buffer-usage-in-container (2-param std::span is
+        // flagged in WebKit). MLMultiArray.dataPointer + known shape
+        // is structurally safe; unsafeMakeSpan documents the manual
+        // assertion.
+        auto macData = unsafeMakeSpan(
+            static_cast<float*>(macArray.dataPointer), 64 * 64);
         for (int y = 0; y < 64; ++y)
             for (int x = 0; x < 64; ++x)
                 macData[y * 64 + x] = static_cast<float>(mac_pixels[y][x]) / 255.0f;
@@ -166,10 +168,8 @@ std::optional<LayerBPrediction> LayerB::predict(
         if (!featArray)
             return std::nullopt;
 
-        std::span<float> featData {
-            static_cast<float*>(featArray.dataPointer),
-            4
-        };
+        auto featData = unsafeMakeSpan(
+            static_cast<float*>(featArray.dataPointer), 4);
         featData[0] = static_cast<float>(features.font_id);
         featData[1] = static_cast<float>(features.pt_size_q4) / 16.0f;
         featData[2] = static_cast<float>(features.codepoint);
@@ -221,10 +221,8 @@ std::optional<LayerBPrediction> LayerB::predict(
                                        // ANE-compatible ops.
 
         // Copy + NaN check delta.
-        std::span<const float> deltaData {
-            static_cast<const float*>(deltaArr.dataPointer),
-            64 * 64
-        };
+        auto deltaData = unsafeMakeSpan(
+            static_cast<const float*>(deltaArr.dataPointer), 64 * 64);
         for (int y = 0; y < 64; ++y) {
             for (int x = 0; x < 64; ++x) {
                 float v = deltaData[y * 64 + x];
