@@ -639,10 +639,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // draws via CGContextDrawImage.
                     WTFLogAlways("[V-790.V] LayerB predicted "
                                  "inference_ms=%.3f ane=%d for font_id=%u "
-                                 "pt=%.1f pos=%u",
+                                 "pt=%u pos=%u",
                                  prediction->inference_ms,
-                                 prediction->ane_routed,
-                                 fontId, ptSize, positionClass);
+                                 static_cast<int>(prediction->ane_routed),
+                                 static_cast<unsigned>(fontId),
+                                 static_cast<unsigned>(ptSize),
+                                 static_cast<unsigned>(positionClass));
                 }
             }
         }
