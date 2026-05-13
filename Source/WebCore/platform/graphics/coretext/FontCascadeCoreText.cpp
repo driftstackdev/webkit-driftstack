@@ -636,6 +636,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 else
                     cp = static_cast<uint32_t>(sourceText.span16()[0]);
 
+                if (std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
+                    WTFLogAlways("[V-790.L] per-glyph atlas LOOKUP "
+                                 "font_id=%u pt_size_q4=%u cp=U+%04x pos=%u "
+                                 "(sourceLen=%u, 8bit=%d)",
+                                 static_cast<unsigned>(fontId),
+                                 static_cast<unsigned>(ptSize * 16),
+                                 static_cast<unsigned>(cp),
+                                 static_cast<unsigned>(positionClass),
+                                 static_cast<unsigned>(sourceText.length()),
+                                 sourceText.is8Bit() ? 1 : 0);
+                }
+
                 auto& pglyphAtlas = DriftstackPerGlyphAtlas::singleton();
                 auto hit = pglyphAtlas.lookup(
                     fontId,
