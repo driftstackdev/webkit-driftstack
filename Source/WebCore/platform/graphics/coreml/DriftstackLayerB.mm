@@ -37,17 +37,28 @@ namespace WebCore::Driftstack {
 
 namespace {
 
-// Search path order — first match wins. Includes both:
+// Search path order — first match wins. Tries compiled .mlmodelc first
+// (faster load + no runtime compile cost) then .mlpackage as fallback.
+// Includes both:
 //   - Bundled location: WebKit installation's WebCore Resources
 //   - Dev location: ~/code/driftstack/reference/models/ (Layer B
 //     persistent backup landed by wave 29-105/29-109)
+//
+// V-790.V wave 29-128: .mlmodelc support added. MLModel can load both
+// .mlpackage (uncompiled, fails on macOS with "Unable to load model:
+// Compile the model with Xcode or MLModel.compileModel(at:)") and
+// .mlmodelc (compiled). For Driftstack we ship pre-compiled .mlmodelc
+// to avoid runtime compile cost (Rule O v2 startup latency budget).
 NSURL* findModelURL()
 {
     NSArray<NSString*>* candidates = @[
         // Dev / autopilot path — reference/models/ in driftstack repo
+        @"/Users/john/code/driftstack/reference/models/v790g-layerb-final.mlmodelc",
         @"/Users/john/code/driftstack/reference/models/v790g-layerb-final.mlpackage",
         // Bundled location (future install path)
+        @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlmodelc",
         @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlpackage",
+        @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlmodelc",
         @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-final.mlpackage",
     ];
 
