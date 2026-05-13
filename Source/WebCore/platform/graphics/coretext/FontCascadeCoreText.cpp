@@ -30,6 +30,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
+#include "../cg/DriftstackPerGlyphAtlas.h"
 #include "../cg/DriftstackTelemetry.h"
 #include "../cg/DriftstackTextRunAtlas.h"
 #include "../coreml/DriftstackLayerB.h"
@@ -612,6 +613,74 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             e.ios_version_packed = (18 << 8) | 6;
             e.timestamp_ms = 0; // V-820.A producer not yet wired to real clock
             driftstackLogAtlasMiss(e);
+
+            // V-790.L per-glyph exact-substitution atlas lookup (Path A2
+            // wave 29-141). Sits BEFORE Phase 3 Layer B hook in the
+            // pipeline: if atlas hits, use exact iPhone pixels (sha256
+            // bit-identical), skip Layer B entirely. Atlas miss → fall
+            // through to Layer B Phase 3.B step 2 approximate.
+            //
+            // Selective-by-N: only N=1 case (single-glyph drawGlyphs
+            // calls). Codepoint extracted from sourceText (set by
+            // FontCascade::drawGlyphBuffer via driftstackCurrentTextSource()).
+            // For N>1 or empty sourceText, atlas lookup is skipped.
+            if (glyphs.size() == 1 && sourceText.length() >= 1) {
+                // Extract first codepoint from sourceText. For 8-bit
+                // sourceText (Latin-1), codepoint is the byte value.
+                // For 16-bit sourceText (UTF-16), codepoint is the
+                // first code unit (note: surrogate pairs not handled
+                // in v1 — high-codepoint Unicode falls through).
+                uint32_t cp = 0;
+                if (sourceText.is8Bit())
+                    cp = static_cast<uint32_t>(sourceText.span8()[0]);
+                else
+                    cp = static_cast<uint32_t>(sourceText.span16()[0]);
+
+                auto& pglyphAtlas = DriftstackPerGlyphAtlas::singleton();
+                auto hit = pglyphAtlas.lookup(
+                    fontId,
+                    static_cast<uint16_t>(ptSize * 16),
+                    cp,
+                    static_cast<uint32_t>(positionClass));
+                if (hit) {
+                    // Atlas hit: use the iPhone-canonical pixels for
+                    // sha256 bit-identical output.
+                    RetainPtr<CGColorSpaceRef> grayCS = adoptCF(
+                        CGColorSpaceCreateDeviceGray());
+                    // Cast away const — CGBitmapContextCreate
+                    // requires a mutable backing pointer, but we never
+                    // write to it (we only create a CGImage from the
+                    // context and use it for drawing).
+                    void* mutableBase = const_cast<uint8_t*>(hit->pixels);
+                    RetainPtr<CGContextRef> imgCtx = adoptCF(
+                        CGBitmapContextCreate(
+                            mutableBase,
+                            64, 64, 8, 64,
+                            grayCS.get(),
+                            kCGImageAlphaNone));
+                    if (imgCtx) {
+                        RetainPtr<CGImageRef> substImg = adoptCF(
+                            CGBitmapContextCreateImage(imgCtx.get()));
+                        if (substImg) {
+                            CGContextRef destCG = context.platformContext();
+                            CGContextDrawImage(destCG,
+                                CGRectMake(
+                                    anchorPoint.x() - 32.0,
+                                    anchorPoint.y() - 32.0 + static_cast<CGFloat>(ptSize) / 2.0,
+                                    64, 64),
+                                substImg.get());
+                            WTFLogAlways("[V-790.L] per-glyph atlas HIT "
+                                         "font_id=%u pt=%u cp=U+%04x pos=%u "
+                                         "— EXACT iPhone pixels substituted",
+                                         static_cast<unsigned>(fontId),
+                                         static_cast<unsigned>(ptSize),
+                                         static_cast<unsigned>(cp),
+                                         static_cast<unsigned>(positionClass));
+                            return; // skip Layer B + platform CT raster
+                        }
+                    }
+                }
+            }
 
             // V-790.V Phase 3 — Layer B ML delta prediction hook (LOG-ONLY).
             // Env-gated default-OFF via DRIFTSTACK_LAYER_B_ENABLED=1 inside

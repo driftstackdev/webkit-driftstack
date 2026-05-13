@@ -127,6 +127,11 @@
     ;;; V-770 (Wave 28): Driftstack text-run atlas (Rule N v2 Layer A)
     (subpath "/Users/john/code/driftstack/reference/driftstack_text_run_atlas")
     (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
+    ;;; V-790.L (Wave 29-141): per-glyph exact-substitution atlas
+    ;;; (Path A2 — between V-770 Layer A and V-790.V Layer B). Atlas-hit
+    ;;; produces sha256 bit-identical iPhone glyph pixels via mmap +
+    ;;; binary search (no ML inference path).
+    (literal "/Users/john/code/driftstack/reference/driftstack_per_glyph_atlas.bin")
     ;;; V-790.V (Wave 29-131): Layer B CoreML model dir (.mlpackage +
     ;;; .mlmodelc). WebContent process loads the model on first
     ;;; LayerB::shared() call via MLModel.compileModelAtURL: /
