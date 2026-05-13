@@ -688,17 +688,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 auto prediction = Driftstack::LayerB::shared().predict(
                     mac_pixels, features);
                 if (prediction) {
-                    // Phase 3 stub: log only. Phase 3.B applies delta +
-                    // draws via CGContextDrawImage.
-                    //
-                    // wave 29-133: include glyph count to inform Phase 3.B
-                    // budget design. Per-call predict cost is N-independent
-                    // (single placeholder mac_pixels input); Phase 3.B
-                    // per-glyph cost will scale ~N × (render+predict+apply+
-                    // draw). For Rule O v2 5ms HARD per-call cap, knowing N
-                    // distribution from real pages informs whether per-glyph
-                    // substitution is feasible or batch/cache/selective
-                    // strategy is required.
+                    // V-790.V Phase 3 telemetry log
                     WTFLogAlways("[V-790.V] LayerB predicted "
                                  "inference_ms=%.3f ane=%d for font_id=%u "
                                  "pt=%u pos=%u glyphs=%zu",
@@ -708,6 +698,89 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                  static_cast<unsigned>(ptSize),
                                  static_cast<unsigned>(positionClass),
                                  glyphs.size());
+
+                    // V-790.V Phase 3.B step 2 (wave 29-138): actual
+                    // rendering substitution. Apply ML delta to mac_pixels,
+                    // create CGImage, draw at glyph position, return early
+                    // (skipping platform CT raster).
+                    //
+                    // Gated by THREE env vars (all required):
+                    //   DRIFTSTACK_LAYER_B_ENABLED (Phase 3, predict path)
+                    //   DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER (Phase 3.B step 1)
+                    //   DRIFTSTACK_LAYER_B_SUBSTITUTE (Phase 3.B step 2)
+                    //
+                    // Selective-by-N: only substitute when N=1. For N>=2
+                    // we'd need separate per-glyph render+predict passes
+                    // which would exceed Rule O v2 5ms HARD cap. The N=1
+                    // case is 57% of atlas-miss drawGlyphs calls per
+                    // wave 29-133 empirical data — covers single-char
+                    // labels and most button/heading text.
+                    //
+                    // Per-glyph cost (N=1): offscreen render (~0.5-1ms,
+                    // Phase 3.B step 1) + predict (~1ms warm) + apply
+                    // delta (~0.2ms) + CGImage create (~0.1ms) + draw
+                    // (~0.2ms) = ~2.5ms warm. Within Rule O v2 budget.
+                    //
+                    // Trade-off: returning early bypasses post-raster
+                    // Driftstack mods (V-583K PNG substitution etc.).
+                    // For atlas-miss text glyphs that's the intended
+                    // behavior (Layer B substitutes what V-770 atlas
+                    // missed; emoji/PNG mods fire on different code
+                    // paths anyway).
+                    if (glyphs.size() == 1
+                        && std::getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER")
+                        && std::getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE")) {
+
+                        // Apply delta in-place to mac_pixels:
+                        //   corrected = clamp01(mac/255 + delta) * 255
+                        for (int y = 0; y < 64; ++y) {
+                            for (int x = 0; x < 64; ++x) {
+                                float mac_norm = static_cast<float>(mac_pixels[y][x]) / 255.0f;
+                                float delta = prediction->delta[y][x];
+                                float corrected = std::clamp(
+                                    mac_norm + delta, 0.0f, 1.0f);
+                                mac_pixels[y][x] = static_cast<uint8_t>(
+                                    corrected * 255.0f);
+                            }
+                        }
+
+                        // Create CGImage over the corrected pixels via a
+                        // fresh CGBitmapContext (BitmapContextCreateImage
+                        // copies-on-demand, so mac_pixels stack lifetime
+                        // is fine).
+                        RetainPtr<CGColorSpaceRef> grayCS = adoptCF(
+                            CGColorSpaceCreateDeviceGray());
+                        RetainPtr<CGContextRef> imgCtx = adoptCF(
+                            CGBitmapContextCreate(
+                                mac_pixels[0].data(),
+                                64, 64, 8, 64,
+                                grayCS.get(),
+                                kCGImageAlphaNone));
+                        if (imgCtx) {
+                            RetainPtr<CGImageRef> substImg = adoptCF(
+                                CGBitmapContextCreateImage(imgCtx.get()));
+                            if (substImg) {
+                                CGContextRef destCG = context.platformContext();
+                                // Draw at anchorPoint, centered so the
+                                // glyph (rendered at center of 64x64
+                                // offscreen) aligns with intended
+                                // position. anchorPoint is the baseline
+                                // origin of the first glyph; offset by
+                                // -32, -32 + ptSize/2 to roughly align.
+                                CGContextDrawImage(destCG,
+                                    CGRectMake(
+                                        anchorPoint.x() - 32.0,
+                                        anchorPoint.y() - 32.0 + static_cast<CGFloat>(ptSize) / 2.0,
+                                        64, 64),
+                                    substImg.get());
+                                WTFLogAlways("[V-790.V] LayerB substituted "
+                                             "N=1 glyph for font_id=%u pt=%u",
+                                             static_cast<unsigned>(fontId),
+                                             static_cast<unsigned>(ptSize));
+                                return; // skip platform CT raster
+                            }
+                        }
+                    }
                 }
             }
         }
