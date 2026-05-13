@@ -683,6 +683,26 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     static_cast<uint16_t>(ptSize * 16),
                     cp,
                     static_cast<uint32_t>(positionClass));
+
+                // V-790.L proof-of-concept: when exact pos_class missing,
+                // fall back to pos_class=0 entry. For (font_id, ptSize, cp)
+                // the central glyph rasterization is identical; only
+                // sub-pixel AA at the edges differs across pos_classes.
+                // pos_class=0 fallback gives ~95% pixel match (vs exact
+                // 100% for matching pos_class). v1 atlas only has
+                // pos_class=0 entries; later captures will expand.
+                if (!hit && positionClass != 0) {
+                    hit = pglyphAtlas.lookup(
+                        fontId,
+                        static_cast<uint16_t>(ptSize * 16),
+                        cp,
+                        0u);
+                    if (hit && std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
+                        WTFLogAlways("[V-790.L] per-glyph atlas pos-fallback "
+                                     "(actual_pos=%u, used pos=0)",
+                                     static_cast<unsigned>(positionClass));
+                    }
+                }
                 if (hit) {
                     // Atlas hit: use the iPhone-canonical pixels for
                     // sha256 bit-identical output.
