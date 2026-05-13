@@ -241,10 +241,15 @@ RefPtr<const DisplayList::DisplayList> FontCascade::displayListForTextRun(Graphi
     auto glyphBuffer = layoutText(codePathToUse, run, from, destination).glyphBuffer;
     glyphBuffer.flatten();
 
-    return displayListForGlyphBuffer(context, glyphBuffer, customFontNotReadyAction);
+    // V-790.N wave 29-156: propagate sourceText through display-list path
+    // for V-771.B cross-platform atlas hash parity. Without this, V-405
+    // offscreen canvas fillText loses its text content during display-list
+    // replay → V-770 hash falls back to glyph-buffer (platform-divergent)
+    // and atlas hits never fire.
+    return displayListForGlyphBuffer(context, glyphBuffer, customFontNotReadyAction, run.text());
 }
 
-RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer,  CustomFontNotReadyAction customFontNotReadyAction) const
+RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(GraphicsContext& context, const GlyphBuffer& glyphBuffer,  CustomFontNotReadyAction customFontNotReadyAction, StringView source) const
 {
     ASSERT(!context.paintingDisabled());
 
@@ -261,7 +266,7 @@ RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(Gr
         context.getCTM(GraphicsContext::DefinitelyIncludeDeviceScale), context.colorSpace(), drawGlyphsMode);
 
     FloatPoint startPoint = toFloatPoint(WebCore::size(glyphBuffer.initialAdvance()));
-    drawGlyphBuffer(recordingContext, glyphBuffer, startPoint, customFontNotReadyAction);
+    drawGlyphBuffer(recordingContext, glyphBuffer, startPoint, customFontNotReadyAction, source);
 
     return recordingContext.takeDisplayList();
 }
