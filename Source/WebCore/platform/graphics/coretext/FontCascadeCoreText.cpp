@@ -626,6 +626,59 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             // fires when env-gate is ON.
             {
                 std::array<std::array<uint8_t, 64>, 64> mac_pixels {};
+
+                // V-790.V Phase 3.B step 1 (wave 29-134): offscreen Mac CG
+                // render at 64x64 to populate mac_pixels with REAL glyph
+                // pixels instead of all-zero placeholder. Env-gated default-
+                // OFF via DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER=1. When OFF,
+                // mac_pixels stays all-zero (Phase 3 LOG-ONLY behavior).
+                //
+                // Renders only glyphs[0] (first glyph in the run) at the
+                // center of a 64x64 8-bit grayscale bitmap, white
+                // background + black text. The model was trained on this
+                // exact format (input shape (1,1,64,64) float32 [0,1]).
+                //
+                // Phase 3.B step 2 (later) wires apply-delta + draw-via-
+                // CGContextDrawImage to actually substitute the glyph.
+                // This step 1 is purely observational — confirms offscreen
+                // render works + predict() now sees real input.
+                if (std::getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER")
+                    && !glyphs.empty()) {
+                    RetainPtr<CGColorSpaceRef> grayCS = adoptCF(
+                        CGColorSpaceCreateDeviceGray());
+                    // mac_pixels is std::array<std::array<uint8_t,64>,64>
+                    // which is contiguous 64*64=4096 bytes. data() of the
+                    // first row gives the base.
+                    uint8_t* basePtr = mac_pixels[0].data();
+                    RetainPtr<CGContextRef> offCtx = adoptCF(
+                        CGBitmapContextCreate(
+                            basePtr,
+                            64, 64,          // width, height
+                            8,               // bits per component
+                            64,              // bytesPerRow
+                            grayCS.get(),
+                            kCGImageAlphaNone));
+                    if (offCtx) {
+                        // White background
+                        CGContextSetGrayFillColor(offCtx.get(), 1.0, 1.0);
+                        CGContextFillRect(offCtx.get(),
+                            CGRectMake(0, 0, 64, 64));
+                        // Black text
+                        CGContextSetGrayFillColor(offCtx.get(), 0.0, 1.0);
+                        // Center glyph at ~32,32; rough offset for ptSize
+                        CGAffineTransform tm = CGAffineTransformMake(
+                            1, 0, 0, 1, 0, 0);
+                        CGContextSetTextMatrix(offCtx.get(), tm);
+                        CGPoint pos = CGPointMake(
+                            32.0 - static_cast<CGFloat>(ptSize) / 2.0,
+                            32.0 - static_cast<CGFloat>(ptSize) / 2.0);
+                        RetainPtr<CTFontRef> ctFontPtr = platformData.ctFont();
+                        const CGGlyph cgGlyph = glyphs[0];
+                        CTFontDrawGlyphs(ctFontPtr.get(),
+                            &cgGlyph, &pos, 1, offCtx.get());
+                    }
+                }
+
                 Driftstack::LayerBFeatures features {
                     .font_id = fontId,
                     .pt_size_q4 = static_cast<uint16_t>(ptSize * 16),
