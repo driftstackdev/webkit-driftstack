@@ -637,14 +637,24 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 if (prediction) {
                     // Phase 3 stub: log only. Phase 3.B applies delta +
                     // draws via CGContextDrawImage.
+                    //
+                    // wave 29-133: include glyph count to inform Phase 3.B
+                    // budget design. Per-call predict cost is N-independent
+                    // (single placeholder mac_pixels input); Phase 3.B
+                    // per-glyph cost will scale ~N × (render+predict+apply+
+                    // draw). For Rule O v2 5ms HARD per-call cap, knowing N
+                    // distribution from real pages informs whether per-glyph
+                    // substitution is feasible or batch/cache/selective
+                    // strategy is required.
                     WTFLogAlways("[V-790.V] LayerB predicted "
                                  "inference_ms=%.3f ane=%d for font_id=%u "
-                                 "pt=%u pos=%u",
+                                 "pt=%u pos=%u glyphs=%zu",
                                  prediction->inference_ms,
                                  static_cast<int>(prediction->ane_routed),
                                  static_cast<unsigned>(fontId),
                                  static_cast<unsigned>(ptSize),
-                                 static_cast<unsigned>(positionClass));
+                                 static_cast<unsigned>(positionClass),
+                                 glyphs.size());
                 }
             }
         }
