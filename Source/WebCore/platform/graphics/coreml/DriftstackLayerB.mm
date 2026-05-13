@@ -28,6 +28,8 @@
 #import <cmath>
 #import <chrono>
 #import <cstdlib>
+#import <span>
+#import <string_view>
 #import <wtf/Assertions.h>
 
 namespace WebCore::Driftstack {
@@ -75,7 +77,9 @@ LayerB::LayerB()
 void LayerB::readFeatureFlag()
 {
     const char* env = std::getenv("DRIFTSTACK_LAYER_B_ENABLED");
-    m_isEnabled = (env && env[0] == '1' && env[1] == '\0');
+    // Use string_view for bounds-checked comparison (avoids
+    // -Wunsafe-buffer-usage on raw pointer indexing).
+    m_isEnabled = env && std::string_view { env } == "1";
 
     if (m_isEnabled)
         WTFLogAlways("[V-790.V] LayerB feature flag ENABLED");
@@ -115,7 +119,9 @@ void LayerB::loadModel()
     // Bridge ARC strong reference to a CF retain so the C++ void* m_model
     // owns one retain count past this scope. Released in destructor (not
     // implemented at Phase 1 — singleton lives forever for now).
-    m_model = (void*)CFBridgingRetain(model);
+    // const_cast through CFTypeRef avoids -Wcast-qual (CFBridgingRetain
+    // returns const void*).
+    m_model = const_cast<void*>(CFBridgingRetain(model));
     m_isLoaded = true;
 
     WTFLogAlways("[V-790.V] LayerB loaded model from %s "
@@ -142,7 +148,12 @@ std::optional<LayerBPrediction> LayerB::predict(
         if (!macArray)
             return std::nullopt;
 
-        float* macData = (float*)macArray.dataPointer;
+        // std::span over the data buffer to satisfy WebKit's
+        // -Wunsafe-buffer-usage (no raw pointer indexing).
+        std::span<float> macData {
+            static_cast<float*>(macArray.dataPointer),
+            64 * 64
+        };
         for (int y = 0; y < 64; ++y)
             for (int x = 0; x < 64; ++x)
                 macData[y * 64 + x] = static_cast<float>(mac_pixels[y][x]) / 255.0f;
@@ -155,7 +166,10 @@ std::optional<LayerBPrediction> LayerB::predict(
         if (!featArray)
             return std::nullopt;
 
-        float* featData = (float*)featArray.dataPointer;
+        std::span<float> featData {
+            static_cast<float*>(featArray.dataPointer),
+            4
+        };
         featData[0] = static_cast<float>(features.font_id);
         featData[1] = static_cast<float>(features.pt_size_q4) / 16.0f;
         featData[2] = static_cast<float>(features.codepoint);
@@ -207,7 +221,10 @@ std::optional<LayerBPrediction> LayerB::predict(
                                        // ANE-compatible ops.
 
         // Copy + NaN check delta.
-        const float* deltaData = (const float*)deltaArr.dataPointer;
+        std::span<const float> deltaData {
+            static_cast<const float*>(deltaArr.dataPointer),
+            64 * 64
+        };
         for (int y = 0; y < 64; ++y) {
             for (int x = 0; x < 64; ++x) {
                 float v = deltaData[y * 64 + x];
