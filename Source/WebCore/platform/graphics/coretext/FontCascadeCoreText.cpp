@@ -712,7 +712,15 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                      static_cast<unsigned>(positionClass));
                     }
                 }
-                if (hit) {
+                // V-790.L-N1-DISABLED (wave 29-175): single-glyph substitution
+                // has same opaque-overpaint bug as Phase 3.C multi-glyph (atlas
+                // pixels are white-bg+black-text; CGContextDrawImage with
+                // kCGImageAlphaNone overpaints V-405's canvas. Env-gate via
+                // DRIFTSTACK_V790L_N1_SUB=1 to re-enable when alpha-mask
+                // implementation lands.
+                static const bool v790lN1SubEnabled = std::getenv("DRIFTSTACK_V790L_N1_SUB")
+                    && std::getenv("DRIFTSTACK_V790L_N1_SUB")[0] == '1';
+                if (hit && v790lN1SubEnabled) {
                     // Atlas hit: use the iPhone-canonical pixels for
                     // sha256 bit-identical output.
                     RetainPtr<CGColorSpaceRef> grayCS = adoptCF(
@@ -749,6 +757,184 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             return; // skip Layer B + platform CT raster
                         }
                     }
+                }
+            }
+
+            // V-790.L Phase 3.C N=2+ multi-glyph extension (wave 29-174).
+            // Iterates per-glyph atlas lookup using UTF-8 sourceText decode +
+            // cumulative advance positioning. All-hits substitute all glyphs
+            // via per-glyph blit and return early. Partial-hits or no-hits
+            // fall through to existing V-655 / V-583K-text / Mac CT dispatch.
+            //
+            // Multi-glyph dispatch is gated on glyphs.size() >= 2 to avoid
+            // re-firing for the N=1 case already handled above. Same
+            // pos_class fallback to 0 applies per-glyph.
+            if (glyphs.size() >= 2 && sourceText.length() >= 1) {
+                struct V790LPlan {
+                    bool hit;
+                    uint32_t cp;
+                    const uint8_t* pixels; // raw 64x64 atlas pixels, mmap-stable
+                };
+                Vector<V790LPlan, 256> v790lPlans;
+                v790lPlans.reserveInitialCapacity(glyphs.size());
+
+                // UTF-8 decode iterator over sourceText
+                size_t srcIdx = 0;
+                auto decodeNextCp = [&]() -> uint32_t {
+                    uint32_t cp = 0;
+                    if (sourceText.is8Bit()) {
+                        auto bytes = sourceText.span8();
+                        if (srcIdx >= bytes.size())
+                            return 0;
+                        uint8_t b0 = bytes[srcIdx];
+                        if (b0 < 0x80) {
+                            cp = b0;
+                            srcIdx += 1;
+                        } else if ((b0 & 0xE0) == 0xC0 && srcIdx + 1 < bytes.size()) {
+                            cp = (static_cast<uint32_t>(b0 & 0x1F) << 6)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 1] & 0x3F));
+                            srcIdx += 2;
+                        } else if ((b0 & 0xF0) == 0xE0 && srcIdx + 2 < bytes.size()) {
+                            cp = (static_cast<uint32_t>(b0 & 0x0F) << 12)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 1] & 0x3F) << 6)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 2] & 0x3F));
+                            srcIdx += 3;
+                        } else if ((b0 & 0xF8) == 0xF0 && srcIdx + 3 < bytes.size()) {
+                            cp = (static_cast<uint32_t>(b0 & 0x07) << 18)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 1] & 0x3F) << 12)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 2] & 0x3F) << 6)
+                               | (static_cast<uint32_t>(bytes[srcIdx + 3] & 0x3F));
+                            srcIdx += 4;
+                        } else {
+                            cp = 0;
+                            srcIdx += 1;
+                        }
+                    } else {
+                        auto u16 = sourceText.span16();
+                        if (srcIdx >= u16.size())
+                            return 0;
+                        cp = static_cast<uint32_t>(u16[srcIdx]);
+                        srcIdx += 1;
+                    }
+                    return cp;
+                };
+
+                auto& v790lPglyphAtlas = DriftstackPerGlyphAtlas::singleton();
+                unsigned v790lHits = 0;
+                for (size_t i = 0; i < glyphs.size(); ++i) {
+                    V790LPlan p { false, 0, nullptr };
+                    p.cp = decodeNextCp();
+                    if (p.cp > 0) {
+                        auto hit = v790lPglyphAtlas.lookup(
+                            fontId,
+                            static_cast<uint16_t>(ptSize * 16),
+                            p.cp,
+                            static_cast<uint32_t>(positionClass));
+                        if (!hit && positionClass != 0) {
+                            hit = v790lPglyphAtlas.lookup(
+                                fontId,
+                                static_cast<uint16_t>(ptSize * 16),
+                                p.cp,
+                                0u);
+                        }
+                        if (hit) {
+                            p.hit = true;
+                            p.pixels = hit->pixels;
+                            ++v790lHits;
+                        }
+                    }
+                    v790lPlans.append(p);
+                }
+
+                static unsigned v790lMultiLog = 0;
+                if (++v790lMultiLog <= 20) {
+                    WTFLogAlways("[Driftstack-V790L-MULTI] fontId=%u pt=%u n=%zu hits=%u",
+                        static_cast<unsigned>(fontId),
+                        static_cast<unsigned>(ptSize),
+                        glyphs.size(), v790lHits);
+                }
+
+                // Substitute IFF all glyphs hit. Partial-hit case is more complex
+                // (need to render misses via Mac CT at correct positions); leaving
+                // partial fall-through to existing V-655/V-583K-text dispatch.
+                //
+                // V-790.L atlas pixels: 64x64 8-bit gray, 0=black-text 255=white-bg
+                // (per v790l-cjk-fullrange-capture.html: ctx.fillStyle='white';
+                // fillRect; fillStyle='black'; fillText). To substitute correctly
+                // on V-405's colored canvas:
+                //   alpha[y,x] = 255 - pixel[y,x]   (text=opaque, bg=transparent)
+                //   draw alpha mask, fill with V-405's current fillStyle color.
+                //
+                // V-790.L-DISABLED (wave 29-175): empirical findings:
+                // - alpha-mask substitution at corrected positioning produces
+                //   AVG byte delta 1267 (worse than 200-500 baseline without
+                //   Phase 3.C). Likely subpixel AA / glyph shaping divergence
+                //   between Mac CT and iPhone CT (V-705 territory).
+                // - Substitution OFF restores 397/500 → 400/500 baseline.
+                // - Phase 3.C dispatch + logging remain (proves infrastructure).
+                static const bool v790lMultiSubEnabled = std::getenv("DRIFTSTACK_V790L_MULTI_SUB")
+                    && std::getenv("DRIFTSTACK_V790L_MULTI_SUB")[0] == '1';
+                if (v790lMultiSubEnabled && v790lHits == glyphs.size()) {
+                    CGContextRef destCG = context.platformContext();
+
+                    // V-790.L probe positioning (v790l-cjk-fullrange-capture.html):
+                    //   canvas 64×64; ctx.fillText(ch, 32 - ptSize/2 + xFrac, 40 + yFrac)
+                    // → glyph LEFT edge at x = 32 - ptSize/2
+                    // → glyph BASELINE at y = 40
+                    // To align with fork's cursor (baseline origin):
+                    //   PNG.x = cursor.x() - (32 - ptSize/2)
+                    //   PNG.y = cursor.y() - 40
+                    const CGFloat anchorXOffset = 32.0 - static_cast<CGFloat>(ptSize) / 2.0;
+                    const CGFloat anchorYOffset = 40.0;
+
+                    FloatPoint cursor = anchorPoint;
+                    for (size_t i = 0; i < glyphs.size(); ++i) {
+                        std::array<uint8_t, 64 * 64> alphaMask;
+                        auto src = unsafeMakeSpan(v790lPlans[i].pixels, 64 * 64);
+                        for (size_t k = 0; k < 64 * 64; ++k)
+                            alphaMask[k] = 255 - src[k];
+
+                        RetainPtr<CGContextRef> maskCtx = adoptCF(
+                            CGBitmapContextCreate(
+                                alphaMask.data(),
+                                64, 64, 8, 64,
+                                nullptr,
+                                kCGImageAlphaOnly));
+                        if (!maskCtx) {
+                            cursor.move(advances[i].width, advances[i].height);
+                            continue;
+                        }
+                        RetainPtr<CGImageRef> maskImg = adoptCF(
+                            CGBitmapContextCreateImage(maskCtx.get()));
+                        if (!maskImg) {
+                            cursor.move(advances[i].width, advances[i].height);
+                            continue;
+                        }
+
+                        // Position PNG top-left at (cursor.x - anchorXOffset, cursor.y - anchorYOffset)
+                        // Use V-655 mask-tint pattern: translate + Y-flip + clip + fill.
+                        const CGFloat drawX = cursor.x() - anchorXOffset;
+                        const CGFloat drawY = cursor.y() - anchorYOffset;
+                        CGContextSaveGState(destCG);
+                        CGContextTranslateCTM(destCG, drawX, drawY);
+                        CGContextTranslateCTM(destCG, 0.f, 64.f);
+                        CGContextScaleCTM(destCG, 1.f, -1.f);
+                        CGContextClipToMask(destCG,
+                            CGRectMake(0.f, 0.f, 64.f, 64.f), maskImg.get());
+                        CGContextFillRect(destCG,
+                            CGRectMake(0.f, 0.f, 64.f, 64.f));
+                        CGContextRestoreGState(destCG);
+
+                        cursor.move(advances[i].width, advances[i].height);
+                    }
+                    static unsigned v790lMultiSubLog = 0;
+                    if (++v790lMultiSubLog <= 20) {
+                        WTFLogAlways("[Driftstack-V790L-MULTI-SUB] all %zu glyphs substituted via alpha-mask (fontId=%u pt=%u)",
+                            glyphs.size(),
+                            static_cast<unsigned>(fontId),
+                            static_cast<unsigned>(ptSize));
+                    }
+                    return; // skip Layer B + platform CT raster
                 }
             }
 
