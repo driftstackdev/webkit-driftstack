@@ -2022,26 +2022,69 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     if (cluster.isEmpty())
         return nullptr;
     char32_t cp = cluster[0];
-    bool isUniversal = (cp == 0x1CDA)
-                    || (cp == 0x17DD)
-                    || (cp == 0x302E)
-                    || (cp == 0x2C7B)
-                    || (cp == 0x10A0)
-                    || (cp == 0xA73D)
-                    || (cp == 0xFFFD)
-                    || (cp == 0x21E4)
-                    || (cp == 0x20E3)
-                    || (cp == 0x20B9);
-    if (!isUniversal)
+    // V-433.Z wave 29-206: per-codepoint candidate routing derived from
+    // iPhone 17 / iOS 18.7 / Safari 26.4 Phase 2 reference width modes.
+    // Mac's `.SF UI` alone has incomplete coverage; each script's iOS
+    // binary holds the actual glyph data.
+    // V-433.Z wave 29-207: canonical iOS dot-prefixed family names verified
+    // via `mdls kMDItemFonts` on iOS font binaries in DRIFTSTACK_FONTS_DIR.
+    switch (cp) {
+    case 0x10A0: { // Georgian Capital An — iPhone width 61 (UNIFORM 713 fonts)
+        // Family in SFGeorgian.ttf: ".SF Georgian"
+        static const std::array<ASCIILiteral, 2> candidates {
+            ".sf georgian"_s, "geeza pro"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x1CDA: { // Vedic Sign Three Dots Above — iPhone width 27 (711/713)
+        // SFIndia.ttc contains .SF Devanagari (Vedic block is part of
+        // Devanagari script extensions). No SF Vedic family exists.
+        static const std::array<ASCIILiteral, 3> candidates {
+            ".sf devanagari"_s, "devanagari sangam mn"_s, "apple symbols"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x20B9: { // Indian Rupee Sign — iPhone width 37 (703/713)
+        // Currency symbol; iPhone likely uses .SF UI or .SF Devanagari.
+        static const std::array<ASCIILiteral, 3> candidates {
+            ".sf ui"_s, ".sf devanagari"_s, "apple symbols"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0xFFFD:   // Replacement Character — iPhone width 43 (710/713)
+    case 0x21E4: { // Leftwards Arrow To Bar — iPhone width 43 (712/713)
+        // Family in AppleSymbols.ttf: "Apple Symbols"
+        static const std::array<ASCIILiteral, 2> candidates {
+            "apple symbols"_s, ".sf ui"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x20E3: { // Combining Enclosing Keycap — iPhone width 72 (711/713)
+        // Family in SFUISymbols-Regular.otf: ".SF UI Symbols"
+        static const std::array<ASCIILiteral, 3> candidates {
+            ".sf ui symbols"_s, "apple symbols"_s, ".sf ui"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x17DD: { // Khmer Sign Atthacan — iPhone width 36 (UNIFORM 713 fonts)
+        // No SF Khmer in dir; AppleSymbols typically catches rare scripts.
+        static const std::array<ASCIILiteral, 2> candidates {
+            "apple symbols"_s, ".sf ui"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x302E:   // Hangul Single Dot Tone Mark — iPhone widths 56/37
+    case 0x2C7B:   // Latin Letter Small Capital Turned E — iPhone widths 56/37
+    case 0xA73D: { // Latin Small Letter Av With Horizontal Bar — iPhone widths 56/37
+        // Latin extended + Hangul tone; cascade .SF UI then Apple Symbols.
+        static const std::array<ASCIILiteral, 3> candidates {
+            ".sf ui"_s, "apple symbols"_s, "apple sd gothic neo"_s,
+        };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    default:
         return nullptr;
-    // SF Pro / .SF UI is iOS's universal text-script fallback for codepoints
-    // not in the primary font's coverage. SFUI.ttf contains native glyphs
-    // for all 10 universally-divergent codepoints.
-    static const std::array<ASCIILiteral, 2> candidates {
-        ".sf ui"_s,
-        ".sfui"_s,
-    };
-    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
 }
 #endif // PLATFORM(DRIFTSTACK)
 
