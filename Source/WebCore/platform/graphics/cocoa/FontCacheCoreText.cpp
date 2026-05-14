@@ -1678,7 +1678,30 @@ static RetainPtr<CTFontRef> driftstackLookupIOSFontByCandidates(std::span<const 
         RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(chosen.url.get()));
         if (!descs || !CFArrayGetCount(descs.get()))
             continue;
-        CTFontDescriptorRef fd = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs.get(), 0);
+        // Wave 29-218 fix: for .ttc files containing multiple families (e.g.
+        // SFIndia.ttc holds 9 .SF <Script> families), CTFontManagerCreate
+        // FontDescriptorsFromURL returns ALL descriptors. Previously we always
+        // used descs[0] (alphabetically first = ".SF Bangla" for SFIndia.ttc)
+        // regardless of which candidate matched, so a `.sf devanagari` candidate
+        // would return .SF Bangla — the wrong font with no U+1CDA coverage.
+        // Now we scan descs[] for the descriptor whose family name matches the
+        // current candidate, falling back to descs[0] if no match.
+        CFIndex descCount = CFArrayGetCount(descs.get());
+        CTFontDescriptorRef fd = nullptr;
+        String candidateLower = String(candidate);
+        for (CFIndex j = 0; j < descCount; ++j) {
+            CTFontDescriptorRef candDesc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs.get(), j);
+            RetainPtr<CFStringRef> descFamilyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(candDesc, kCTFontFamilyNameAttribute)));
+            if (!descFamilyCF)
+                continue;
+            String descFamily = String(descFamilyCF.get()).convertToASCIILowercase();
+            if (descFamily == candidateLower) {
+                fd = candDesc;
+                break;
+            }
+        }
+        if (!fd)
+            fd = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs.get(), 0);
         return adoptCF(CTFontCreateWithFontDescriptor(fd, size, nullptr));
     }
     return nullptr;
@@ -2042,7 +2065,28 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 3> candidates {
             ".sf devanagari"_s, "devanagari sangam mn"_s, "apple symbols"_s,
         };
-        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        RetainPtr<CTFontRef> result = driftstackLookupIOSFontByCandidates(candidates, description, size);
+        // Wave 29-218 diagnostic: log what font was actually returned for
+        // U+1CDA to identify why DOM width still reports Arial's notdef=54
+        // instead of the iPhone reference 27. Logs first 4 firings.
+        if (result) {
+            static unsigned u1cdaLogCount = 0;
+            if (u1cdaLogCount++ < 4) {
+                RetainPtr<CFStringRef> resultFamily = adoptCF(CTFontCopyFamilyName(result.get()));
+                CGFloat resultAdv = 0;
+                CGGlyph g[1] = { 0 };
+                UniChar ch[1] = { 0x1CDA };
+                if (CTFontGetGlyphsForCharacters(result.get(), ch, g, 1) && g[0]) {
+                    CGSize advs[1] = { CGSizeZero };
+                    CTFontGetAdvancesForGlyphs(result.get(), kCTFontOrientationHorizontal, g, advs, 1);
+                    resultAdv = advs[0].width;
+                }
+                WTFLogAlways("[Driftstack-V433Z-U1CDA-Diag] hook returned font family='%s' size=%g glyph=%u CTAdvance=%g",
+                    resultFamily ? String(resultFamily.get()).utf8().data() : "(null)",
+                    size, (unsigned)g[0], resultAdv);
+            }
+        }
+        return result;
     }
     case 0x20B9: { // Indian Rupee Sign — iPhone width 37 (703/713)
         // Currency symbol; iPhone likely uses .SF UI or .SF Devanagari.
