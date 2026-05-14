@@ -2053,17 +2053,22 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     // via `mdls kMDItemFonts` on iOS font binaries in DRIFTSTACK_FONTS_DIR.
     switch (cp) {
     case 0x10A0: { // Georgian Capital An — iPhone width 61 (UNIFORM 713 fonts)
-        // Family in SFGeorgian.ttf: ".SF Georgian"
-        static const std::array<ASCIILiteral, 2> candidates {
-            ".sf georgian"_s, "geeza pro"_s,
+        // Wave 29-219 fontTools cmap: U+10A0 in `.PhoneFallback` (Fallback.ttf)
+        // + .LastResort. NOT in .SF Georgian (despite name suggesting Georgian
+        // script coverage). .PhoneFallback is iOS internal fallback font.
+        static const std::array<ASCIILiteral, 3> candidates {
+            ".phonefallback"_s, ".sf georgian"_s, "geeza pro"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     case 0x1CDA: { // Vedic Sign Three Dots Above — iPhone width 27 (711/713)
-        // SFIndia.ttc contains .SF Devanagari (Vedic block is part of
-        // Devanagari script extensions). No SF Vedic family exists.
+        // Wave 29-219 fontTools cmap: U+1CDA (Vedic) ONLY in Noto Sans Kannada
+        // among Mac-resident iOS fonts. NOT in .SF Devanagari despite Vedic
+        // being a Devanagari script extension. Mac's CT natural cascade routes
+        // to Noto Sans Kannada but my prior .sf devanagari hook BLOCKED that
+        // path → fork width=54 (Arial notdef). Reorder to noto sans kannada first.
         static const std::array<ASCIILiteral, 3> candidates {
-            ".sf devanagari"_s, "devanagari sangam mn"_s, "apple symbols"_s,
+            "noto sans kannada"_s, ".sf devanagari"_s, "apple symbols"_s,
         };
         RetainPtr<CTFontRef> result = driftstackLookupIOSFontByCandidates(candidates, description, size);
         // Wave 29-218 diagnostic: log what font was actually returned for
@@ -2089,9 +2094,10 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         return result;
     }
     case 0x20B9: { // Indian Rupee Sign — iPhone width 37 (703/713)
-        // Currency symbol; iPhone likely uses .SF UI or .SF Devanagari.
-        static const std::array<ASCIILiteral, 3> candidates {
-            ".sf ui"_s, ".sf devanagari"_s, "apple symbols"_s,
+        // Wave 29-219 fontTools cmap: U+20B9 in Carlito + Chalkboard SE.
+        // Not in .SF UI as previously assumed.
+        static const std::array<ASCIILiteral, 4> candidates {
+            "carlito"_s, "chalkboard se"_s, ".sf ui"_s, "apple symbols"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
@@ -2111,9 +2117,10 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     case 0x17DD: { // Khmer Sign Atthacan — iPhone width 36 (UNIFORM 713 fonts)
-        // No SF Khmer in dir; AppleSymbols typically catches rare scripts.
-        static const std::array<ASCIILiteral, 2> candidates {
-            "apple symbols"_s, ".sf ui"_s,
+        // Wave 29-219 fontTools cmap: U+17DD in Khmer Sangam MN. Apple Symbols
+        // does NOT have it. Route to khmer sangam mn directly.
+        static const std::array<ASCIILiteral, 3> candidates {
+            "khmer sangam mn"_s, "apple symbols"_s, ".sf ui"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
