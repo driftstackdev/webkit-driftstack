@@ -1065,14 +1065,52 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // CanvasBase::recordLastFillText V-241 patch). Closes the V-236
     // text_2line_220x30 vs text_2line_emoji_220x30 collision: same dimensions
     // but different fillText content → different table entries.
-    if (s_canvasFp10xOverrideEnabled
-        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+    // V-510-precedence reordering (wave 29-200/29-201): compute Mac
+    // fork's encoded dataURL FIRST, then try V-510 atlas. Only fall back
+    // to V-241 legacy canonical table when V-510 misses. This gives the
+    // modern atlas (keyed on sha256(macForkDataURL), per-render
+    // deterministic, covers vendor probe extensions) precedence over
+    // V-241's hardcoded iOS 18.6-era canonical bytes. The cost: every
+    // toDataURL pays the encode+sha256 work upfront; that work was
+    // already done for V-510 atlas lookup later, so we just move it.
+    // Per founder direction "bit identical on any canvas/font test ...
+    // for any randomized test any site might make".
+    if (s_canvasFp10xOverrideEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        // Try V-510 atlas first via a tentative encode. We compute the
+        // op-sequence sha + Mac fork dataURL, look up, return iPhone
+        // bytes on hit. Only on V-510 miss do we proceed to V-241.
+        String opSeqSha_early;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqSha_early = ctx2D->driftstackOpSequenceSHA256(w, h);
+        }
+        // We don't have `encoded` yet; compute it lazily only if V-510
+        // is enabled (else skip the early-encode cost).
+        static bool s_v510EnabledEarly = []() {
+            const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
+            return env && env[0] == '1';
+        }();
+        if (s_v510EnabledEarly) {
+            auto encodedEarly = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+            auto substituteEarly = v510AtlasLookup(encodedEarly, opSeqSha_early);
+            if (!substituteEarly.isNull()) {
+                WTFLogAlways("[Driftstack-V510-EARLY] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u) — pre-V-241",
+                    width(), height(), encodedEarly.length(), substituteEarly.length());
+                return UncachedString { substituteEarly };
+            }
+            // V-510 miss → fall through to V-241 + later atlas paths.
+            // Note: encodedEarly is discarded; later code re-encodes via
+            // its own path. Could cache for perf but keeping the flow
+            // simple — V-510 atlas hits short-circuit anyway.
+        }
         auto fillText = lastFillText();
         const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), fillText);
         if (!canonical)
             canonical = lookupCanvasFp10xCanonical(width(), height());
         if (canonical) {
-            WTFLogAlways("[Driftstack-V241] canvas-fp canonical substitution FIRED (%dx%d PNG, lastFillText=%d chars)", width(), height(), fillText.length());
+            WTFLogAlways("[Driftstack-V241] canvas-fp canonical substitution FIRED (%dx%d PNG, lastFillText=%d chars) — V-510 atlas miss",
+                width(), height(), fillText.length());
             return UncachedString { String::fromLatin1(canonical) };
         }
     }
