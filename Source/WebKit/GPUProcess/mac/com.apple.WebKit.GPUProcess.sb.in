@@ -150,6 +150,13 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
     ;;; V-583.K-text: text glyph atlas
     (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
+    ;;; V-770.A: text-run atlas (DSCFA2)
+    (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
+    (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin.manifest.json")
+    ;;; V-790.L: per-glyph DSPGA1 atlas
+    (literal "/Users/john/code/driftstack/reference/driftstack_per_glyph_atlas.bin")
+    ;;; V-689: advance atlas
+    (literal "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 #endif
