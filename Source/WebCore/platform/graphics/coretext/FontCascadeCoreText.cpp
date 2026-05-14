@@ -671,7 +671,26 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         cp = 0;
                     }
                 } else {
-                    cp = static_cast<uint32_t>(sourceText.span16()[0]);
+                    // V-790.L surrogate pair decode (wave 29-204): 16-bit
+                    // StringView may contain UTF-16. Supplementary plane
+                    // characters (emoji U+10000..U+10FFFF) encode as
+                    // high+low surrogate pairs. Without decoding, lookup
+                    // keys on the high surrogate (U+D800..U+DBFF) which
+                    // is never in atlas → atlas miss for every emoji.
+                    auto span = sourceText.span16();
+                    uint16_t u0 = span[0];
+                    if (u0 >= 0xD800 && u0 <= 0xDBFF && span.size() >= 2) {
+                        uint16_t u1 = span[1];
+                        if (u1 >= 0xDC00 && u1 <= 0xDFFF) {
+                            cp = 0x10000
+                               + ((static_cast<uint32_t>(u0) - 0xD800) << 10)
+                               + (static_cast<uint32_t>(u1) - 0xDC00);
+                        } else {
+                            cp = u0; // malformed; use lead surrogate
+                        }
+                    } else {
+                        cp = u0;
+                    }
                 }
 
                 if (std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
