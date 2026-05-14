@@ -381,6 +381,69 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // resolve correctly.
     else if (lowercase == "signpainter-housescript"_s)
         lowercase = "signpainter"_s;
+    // V-433.Y wave 29-198 — variant-to-parent aliases for weight-suffixed
+    // iOS-canonical face names. iPhone exposes these as discoverable CSS
+    // family names (Preferred Family / name ID 16) BUT resolves them all
+    // to the SAME parent-family Regular face (e.g., "Avenir Heavy",
+    // "Avenir Light", "Avenir" all render width 4246 at the v433y test
+    // string — iOS Safari ignores the weight suffix in family-name
+    // lookup, uses CSS font-weight property instead). The display-name
+    // allowlist in driftstackWalkFontDir registers them under the
+    // weight-specific face; that's correct for FACE SELECTION but
+    // produces wrong WIDTH metrics because Mac CT and iOS CT pick
+    // different default faces from the same .ttc. Redirecting the
+    // variant CSS family name to the parent family resolves to the
+    // same canonical Regular face on fork, matching iPhone's tuple.
+    else if (lowercase == "avenir black"_s
+        || lowercase == "avenir black oblique"_s
+        || lowercase == "avenir book"_s
+        || lowercase == "avenir heavy"_s
+        || lowercase == "avenir light"_s
+        || lowercase == "avenir medium"_s)
+        lowercase = "avenir"_s;
+    else if (lowercase == "avenir next condensed demi bold"_s
+        || lowercase == "avenir next condensed heavy"_s
+        || lowercase == "avenir next condensed medium"_s
+        || lowercase == "avenir next condensed ultra light"_s)
+        lowercase = "avenir next condensed"_s;
+    else if (lowercase == "avenir next demi bold"_s
+        || lowercase == "avenir next heavy"_s
+        || lowercase == "avenir next medium"_s
+        || lowercase == "avenir next ultra light"_s)
+        lowercase = "avenir next"_s;
+    else if (lowercase == "charter black"_s)
+        lowercase = "charter"_s;
+    else if (lowercase == "hiragino sans w3"_s
+        || lowercase == "hiragino sans w4"_s
+        || lowercase == "hiragino sans w5"_s
+        || lowercase == "hiragino sans w6"_s
+        || lowercase == "hiragino sans w7"_s
+        || lowercase == "hiragino sans w8"_s)
+        lowercase = "hiragino sans"_s;
+    else if (lowercase == "hiragino kaku gothic pro w3"_s
+        || lowercase == "hiragino kaku gothic pro w6"_s)
+        lowercase = "hiragino kaku gothic pro"_s;
+    else if (lowercase == "hiragino kaku gothic pron w3"_s
+        || lowercase == "hiragino kaku gothic pron w6"_s)
+        lowercase = "hiragino kaku gothic pron"_s;
+    else if (lowercase == "hiragino kaku gothic std w8"_s)
+        lowercase = "hiragino kaku gothic std"_s;
+    else if (lowercase == "hiragino kaku gothic stdn w8"_s)
+        lowercase = "hiragino kaku gothic stdn"_s;
+    else if (lowercase == "hiragino maru gothic pro w4"_s)
+        lowercase = "hiragino maru gothic pro"_s;
+    else if (lowercase == "hiragino maru gothic pron w4"_s)
+        lowercase = "hiragino maru gothic pron"_s;
+    else if (lowercase == "hiragino mincho pro w3"_s
+        || lowercase == "hiragino mincho pro w6"_s)
+        lowercase = "hiragino mincho pro"_s;
+    else if (lowercase == "hiragino mincho pron w3"_s
+        || lowercase == "hiragino mincho pron w6"_s)
+        lowercase = "hiragino mincho pron"_s;
+    else if (lowercase == "seravek extralight"_s
+        || lowercase == "seravek light"_s
+        || lowercase == "seravek medium"_s)
+        lowercase = "seravek"_s;
     // V-521.A.2 (2026-05-08): Heiti SC/TC are legacy iOS CJK font families
     // that font-enumeration probe detects on iPhone (width 4292 for
     // 'mmmmmmmmlli' test string). They alias to PingFang SC/TC equivalents
