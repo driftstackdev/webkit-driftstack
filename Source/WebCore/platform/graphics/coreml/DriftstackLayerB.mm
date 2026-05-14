@@ -25,6 +25,7 @@
 
 #import <CoreML/CoreML.h>
 #import <Foundation/Foundation.h>
+#import <algorithm>
 #import <cmath>
 #import <chrono>
 #import <cstdlib>
@@ -70,6 +71,28 @@ NSURL* findModelURL()
     return nil;
 }
 
+// V-790.V2 (wave 29-202) — locate v2 mlpackage (canvas-level RGBA tile
+// model). Staged at reference/models/v790g-layerb-v2-best.mlpackage by
+// wave 29-196 V-790.GC after the 2500-pair retraining (val L1 0.0096).
+NSURL* findModelV2URL()
+{
+    NSArray<NSString*>* candidates = @[
+        @"/Users/john/code/driftstack/reference/models/v790g-layerb-v2-best.mlmodelc",
+        @"/Users/john/code/driftstack/reference/models/v790g-layerb-v2-best.mlpackage",
+        @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-v2-best.mlmodelc",
+        @"/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-v2-best.mlpackage",
+        @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-v2-best.mlmodelc",
+        @"/System/Library/Frameworks/WebKit.framework/Resources/v790g-layerb-v2-best.mlpackage",
+    ];
+
+    NSFileManager* fm = [NSFileManager defaultManager];
+    for (NSString* path in candidates) {
+        if ([fm fileExistsAtPath:path])
+            return [NSURL fileURLWithPath:path];
+    }
+    return nil;
+}
+
 } // anonymous namespace
 
 LayerB& LayerB::shared()
@@ -84,6 +107,8 @@ LayerB::LayerB()
     readFeatureFlag();
     if (m_isEnabled)
         loadModel();
+    if (m_isV2Enabled)
+        loadModelV2();
 }
 
 void LayerB::readFeatureFlag()
@@ -95,6 +120,14 @@ void LayerB::readFeatureFlag()
 
     if (m_isEnabled)
         WTFLogAlways("[V-790.V] LayerB feature flag ENABLED");
+
+    // V-790.V2 (wave 29-202) — independent v2 gate. v2 is the canvas-
+    // level RGBA tile substitution; can be enabled separately from v1.
+    const char* envV2 = std::getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+    m_isV2Enabled = envV2 && std::string_view { envV2 } == "1";
+
+    if (m_isV2Enabled)
+        WTFLogAlways("[V-790.V2] LayerB v2 (canvas-level RGBA) feature flag ENABLED");
 }
 
 void LayerB::loadModel()
@@ -208,6 +241,200 @@ void LayerB::loadModel()
     WTFLogAlways("[V-790.V] LayerB loaded model from %s "
                  "(MLComputeUnitsCPUAndNeuralEngine, strict Rule P)",
                  [[modelURL path] UTF8String]);
+}
+
+// V-790.V2 (wave 29-202) — v2 model loader. Mirrors loadModel() pattern
+// (compile-on-the-fly for .mlpackage / direct-load for .mlmodelc with
+// .mlpackage fallback on direct-load fail). Independent state machine
+// so v2 can load even if v1 fails (or vice versa).
+void LayerB::loadModelV2()
+{
+    NSURL* modelURL = findModelV2URL();
+    if (!modelURL) {
+        WTFLogAlways("[V-790.V2] LayerB v2 model not found in search path — "
+                     "v2 disabled this WebProcess");
+        return;
+    }
+
+    NSError* error = nil;
+    NSURL* loadURL = modelURL;
+    NSString* pathExt = [[modelURL path] pathExtension];
+    if ([pathExt isEqualToString:@"mlpackage"]) {
+        NSURL* compiledURL = [MLModel compileModelAtURL:modelURL error:&error];
+        if (!compiledURL) {
+            const char* errMsg = error
+                ? [[error localizedDescription] UTF8String]
+                : "unknown error";
+            WTFLogAlways("[V-790.V2] LayerB v2 compileModelAtURL failed: %s", errMsg);
+            return;
+        }
+        loadURL = compiledURL;
+        WTFLogAlways("[V-790.V2] LayerB v2 compiled .mlpackage → %s",
+                     [[compiledURL path] UTF8String]);
+    }
+
+    MLModelConfiguration* config = [[MLModelConfiguration alloc] init];
+    config.computeUnits = MLComputeUnitsCPUAndNeuralEngine;
+
+    MLModel* model = [MLModel modelWithContentsOfURL:loadURL
+                                       configuration:config
+                                               error:&error];
+
+    if (!model && [pathExt isEqualToString:@"mlmodelc"]) {
+        NSString* modelDir = [[modelURL path] stringByDeletingLastPathComponent];
+        NSString* baseName = [[[modelURL path] lastPathComponent]
+            stringByDeletingPathExtension];
+        NSString* mlpackagePath = [NSString stringWithFormat:@"%@/%@.mlpackage",
+            modelDir, baseName];
+        NSFileManager* fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:mlpackagePath]) {
+            const char* errMsg = error
+                ? [[error localizedDescription] UTF8String]
+                : "unknown";
+            WTFLogAlways("[V-790.V2] LayerB v2 .mlmodelc direct-load failed "
+                         "(%s); falling back to .mlpackage runtime compile", errMsg);
+            NSURL* mlpackageURL = [NSURL fileURLWithPath:mlpackagePath];
+            error = nil;
+            NSURL* compiledURL = [MLModel compileModelAtURL:mlpackageURL error:&error];
+            if (compiledURL) {
+                error = nil;
+                model = [MLModel modelWithContentsOfURL:compiledURL
+                                          configuration:config
+                                                  error:&error];
+                if (model) {
+                    loadURL = compiledURL;
+                    WTFLogAlways("[V-790.V2] LayerB v2 fallback compile+load OK");
+                }
+            }
+        }
+    }
+
+    if (!model) {
+        const char* errMsg = error
+            ? [[error localizedDescription] UTF8String]
+            : "unknown error";
+        WTFLogAlways("[V-790.V2] LayerB v2 MLModel load failed: %s", errMsg);
+        return;
+    }
+
+    m_modelV2 = const_cast<void*>(CFBridgingRetain(model));
+    m_isV2Loaded = true;
+
+    WTFLogAlways("[V-790.V2] LayerB v2 loaded model from %s "
+                 "(MLComputeUnitsCPUAndNeuralEngine, strict Rule P)",
+                 [[modelURL path] UTF8String]);
+}
+
+// V-790.V2 (wave 29-202) — canvas-level RGBA tile prediction.
+// Input: 256×256 RGBA float32 [0,1] (Mac fork canvas raster tile).
+// Output: 256×256 RGBA float32 [0,1] (iPhone-canonical pixel reconstruction).
+// Per-call Rule O v2 5ms HARD cap; caller enforces per-frame 16ms SOFT.
+std::optional<LayerBV2Prediction> LayerB::predictV2(const LayerBV2Tile& mac_rgba)
+{
+    if (!m_isV2Enabled || !m_isV2Loaded || !m_modelV2)
+        return std::nullopt;
+
+    @autoreleasepool {
+        MLModel* model = (__bridge MLModel*)m_modelV2;
+
+        NSError* error = nil;
+        // v2 input shape: (1, 4, 256, 256) float32 — batch, channels(R,G,B,A),
+        // H, W. PyTorch convention (channels-first).
+        MLMultiArray* macArray = [[MLMultiArray alloc]
+            initWithShape:@[@1, @4, @256, @256]
+                 dataType:MLMultiArrayDataTypeFloat32
+                    error:&error];
+        if (!macArray)
+            return std::nullopt;
+
+        // Copy input. Source layout from caller: row-major channel-interleaved
+        // RGBA (R0,G0,B0,A0, R1,G1,B1,A1, ...). MLMultiArray expects
+        // channels-first (R0...Rn, G0...Gn, B0...Bn, A0...An). Reshape.
+        auto srcSpan = unsafeMakeSpan(mac_rgba.rgba.data(), LayerBV2Tile::kSize);
+        auto dstSpan = unsafeMakeSpan(
+            static_cast<float*>(macArray.dataPointer), LayerBV2Tile::kSize);
+        constexpr size_t kPlaneSize = 256 * 256;
+        for (size_t y = 0; y < 256; ++y) {
+            for (size_t x = 0; x < 256; ++x) {
+                size_t srcIdx = (y * 256 + x) * 4;
+                size_t dstIdx = y * 256 + x;
+                dstSpan[0 * kPlaneSize + dstIdx] = srcSpan[srcIdx + 0]; // R
+                dstSpan[1 * kPlaneSize + dstIdx] = srcSpan[srcIdx + 1]; // G
+                dstSpan[2 * kPlaneSize + dstIdx] = srcSpan[srcIdx + 2]; // B
+                dstSpan[3 * kPlaneSize + dstIdx] = srcSpan[srcIdx + 3]; // A
+            }
+        }
+
+        MLDictionaryFeatureProvider* input = [[MLDictionaryFeatureProvider alloc]
+            initWithDictionary:@{ @"mac_rgba": macArray }
+                         error:&error];
+        if (!input)
+            return std::nullopt;
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        id<MLFeatureProvider> output = [model predictionFromFeatures:input
+                                                               error:&error];
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        if (!output || error)
+            return std::nullopt;
+
+        double inference_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        // Rule O v2 5ms HARD per-call cap.
+        if (inference_ms > 5.0) {
+            WTFLogAlways("[V-790.V2] LayerB v2 Rule O v2 5ms HARD violation: "
+                         "inference_ms=%.3f — discarding prediction", inference_ms);
+            return std::nullopt;
+        }
+
+        // Output: model named "iphone_rgba" (v2 export convention from
+        // v790gc-v2-coreml-export.py). Fallback to first feature if name
+        // changes in future CoreML conversions.
+        MLFeatureValue* val = [output featureValueForName:@"iphone_rgba"];
+        if (!val) {
+            NSArray<NSString*>* names = [[output featureNames] allObjects];
+            if (names.count > 0)
+                val = [output featureValueForName:names[0]];
+        }
+        if (!val) return std::nullopt;
+
+        MLMultiArray* iphoneArr = val.multiArrayValue;
+        if (!iphoneArr) return std::nullopt;
+
+        // Validate shape (1, 4, 256, 256).
+        if (iphoneArr.shape.count < 4) return std::nullopt;
+
+        LayerBV2Prediction prediction;
+        prediction.inference_ms = inference_ms;
+        prediction.ane_routed = true;
+
+        // De-interleave channels-first → RGBA pixel-interleaved with
+        // NaN/Inf clamp.
+        auto outChw = unsafeMakeSpan(
+            static_cast<const float*>(iphoneArr.dataPointer), LayerBV2Tile::kSize);
+        auto outRgba = unsafeMakeSpan(prediction.tile.rgba.data(), LayerBV2Tile::kSize);
+        for (size_t y = 0; y < 256; ++y) {
+            for (size_t x = 0; x < 256; ++x) {
+                size_t srcIdx = y * 256 + x;
+                size_t dstIdx = (y * 256 + x) * 4;
+                float r = outChw[0 * kPlaneSize + srcIdx];
+                float g = outChw[1 * kPlaneSize + srcIdx];
+                float b = outChw[2 * kPlaneSize + srcIdx];
+                float a = outChw[3 * kPlaneSize + srcIdx];
+                if (std::isnan(r) || std::isinf(r)) return std::nullopt;
+                if (std::isnan(g) || std::isinf(g)) return std::nullopt;
+                if (std::isnan(b) || std::isinf(b)) return std::nullopt;
+                if (std::isnan(a) || std::isinf(a)) return std::nullopt;
+                outRgba[dstIdx + 0] = std::clamp(r, 0.0f, 1.0f);
+                outRgba[dstIdx + 1] = std::clamp(g, 0.0f, 1.0f);
+                outRgba[dstIdx + 2] = std::clamp(b, 0.0f, 1.0f);
+                outRgba[dstIdx + 3] = std::clamp(a, 0.0f, 1.0f);
+            }
+        }
+
+        return prediction;
+    } // @autoreleasepool
 }
 
 std::optional<LayerBPrediction> LayerB::predict(

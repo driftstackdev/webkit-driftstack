@@ -63,12 +63,38 @@ struct LayerBPrediction {
     bool ane_routed { false };
 };
 
+// V-790.V2 (wave 29-202) — canvas-level RGBA tile prediction.
+// Input/output: 256x256 RGBA float32 in [0,1], row-major, channel-
+// interleaved (4 channels). v2 hook substitutes at HTMLCanvasElement::
+// toDataURL pre-encode rather than per-glyph in FontCascade. Closes
+// the "any canvas test from any site" universal coverage gap that
+// the per-glyph v1 hook didn't address (only fixed glyph alpha bits,
+// not arbitrary canvas RGBA).
+//
+// 256x256 chosen for ANE-friendly layout + training tractability.
+// Larger canvases tile with overlap; smaller canvases pad with
+// transparent and crop result.
+struct LayerBV2Tile {
+    // 256 × 256 × 4 (RGBA) × 4 bytes (float) = 1 MiB. Held in
+    // std::array so layout is contiguous + stack-allocatable for
+    // single-tile cases.
+    static constexpr size_t kSize = 256 * 256 * 4;
+    std::array<float, kSize> rgba {};
+};
+
+struct LayerBV2Prediction {
+    LayerBV2Tile tile {};
+    double inference_ms { 0.0 };
+    bool ane_routed { false };
+};
+
 class LayerB {
     WTF_MAKE_NONCOPYABLE(LayerB);
 public:
     // Per-WebProcess singleton. Lazy-initialised on first access.
     static LayerB& shared();
 
+    // v1 — per-glyph 64x64 alpha mask substitution (FontCascade hook).
     // Returns nullopt if (a) model not loaded, (b) feature flag disabled,
     // (c) inference latency exceeded Rule O v2 5ms HARD, or (d) any
     // numerical error (NaN/inf in delta).
@@ -76,24 +102,38 @@ public:
         const std::array<std::array<uint8_t, 64>, 64>& mac_pixels,
         const LayerBFeatures& features);
 
+    // v2 — canvas-level 256x256 RGBA tile prediction (toDataURL hook).
+    // Returns nullopt on same failure modes as v1. Per-call ≤5ms HARD;
+    // caller's responsibility to enforce per-frame ≤16ms SOFT across
+    // multiple tile predictions in a single render.
+    std::optional<LayerBV2Prediction> predictV2(const LayerBV2Tile& mac_rgba);
+
     bool isLoaded() const { return m_isLoaded; }
     bool isEnabled() const { return m_isEnabled; }
+    bool isV2Loaded() const { return m_isV2Loaded; }
+    bool isV2Enabled() const { return m_isV2Enabled; }
 
 private:
     LayerB();
 
-    // Read DRIFTSTACK_LAYER_B_ENABLED env var on construction.
+    // Read DRIFTSTACK_LAYER_B_ENABLED and DRIFTSTACK_LAYER_B_V2_ENABLED.
     void readFeatureFlag();
 
-    // Load bundled v790g-layerb.mlpackage via CoreML.
+    // Load v1 v790g-layerb-final.mlpackage (per-glyph alpha).
     void loadModel();
+
+    // Load v2 v790g-layerb-v2-best.mlpackage (canvas-level RGBA).
+    void loadModelV2();
 
     bool m_isEnabled { false };
     bool m_isLoaded { false };
+    bool m_isV2Enabled { false };
+    bool m_isV2Loaded { false };
 
     // Opaque CoreML MLModel* held in the .mm impl. void* in the header
     // to keep this file pure C++.
     void* m_model { nullptr };
+    void* m_modelV2 { nullptr };
 };
 
 } // namespace WebCore::Driftstack
