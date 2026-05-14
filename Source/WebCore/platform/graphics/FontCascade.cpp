@@ -1645,11 +1645,19 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // hash parity (avoids Mac CT vs iOS CT glyph buffer divergence).
     DriftstackCurrentTextSourceScope driftstackSourceScope(source);
     if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
-        WTFLogAlways("[Driftstack-V770A.GB] drawGlyphBuffer entry: sourceLen=%u source=%.*s glyphCount=%u",
+        // V-770.A.V405 (wave 29-186): hex-dump UTF-8 bytes via WTF::StringBuilder
+        auto utf8 = source.utf8();
+        WTF::StringBuilder hexSb;
+        size_t hexLen = std::min<size_t>(80, utf8.length());
+        auto utf8Span = unsafeMakeSpan(reinterpret_cast<const uint8_t*>(utf8.data()), utf8.length());
+        for (size_t i = 0; i < hexLen; ++i) {
+            hexSb.append(WTF::hex(utf8Span[i], 2));
+        }
+        WTFLogAlways("[Driftstack-V770A.GB] drawGlyphBuffer entry: sourceLen=%u utf8Len=%zu glyphCount=%u utf8hex=%s",
             (unsigned)source.length(),
-            (int)std::min<size_t>(64, source.length()),
-            source.is8Bit() ? (const char*)source.span8().data() : "(16bit)",
-            (unsigned)glyphBuffer.size());
+            utf8.length(),
+            (unsigned)glyphBuffer.size(),
+            hexSb.toString().utf8().data());
     }
 
     // V-770.A.4 PRIMARY hit path: when source is available here at the
