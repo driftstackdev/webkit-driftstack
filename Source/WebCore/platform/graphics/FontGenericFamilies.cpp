@@ -28,6 +28,7 @@
 
 #include <wtf/CrossThreadCopier.h>
 #include <wtf/Language.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebCore {
@@ -116,7 +117,20 @@ const String& FontGenericFamilies::sansSerifFontFamily(UScriptCode script) const
 
 const String& FontGenericFamilies::cursiveFontFamily(UScriptCode script) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Y wave 29-197 — iOS Safari defaults CSS-cursive to Snell
+    // Roundhand (cursive baseline tuple == Snell tuple → Snell probes
+    // not detected). Mac Settings defaults cursive to Apple Chancery
+    // (now denied via V-237/V-433 denylist or universal blocker → null
+    // → falls to monospace baseline). Override here so fork's cursive
+    // generic resolves to Snell Roundhand, matching iPhone's CSS
+    // generic-family behavior.
+    (void)script;
+    static NeverDestroyed<String> snellRoundhand { "Snell Roundhand"_s };
+    return snellRoundhand;
+#else
     return genericFontFamilyForScript(m_cursiveFontFamilyMap, script);
+#endif
 }
 
 const String& FontGenericFamilies::fantasyFontFamily(UScriptCode script) const

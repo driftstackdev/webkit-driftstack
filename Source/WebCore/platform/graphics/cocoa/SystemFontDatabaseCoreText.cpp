@@ -368,7 +368,16 @@ String SystemFontDatabaseCoreText::sansSerifFamily(const String& locale)
 
 String SystemFontDatabaseCoreText::cursiveFamily(const String& locale)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Y wave 29-197 — iOS Safari defaults CSS-cursive to Snell
+    // Roundhand; Mac defaults to Apple Chancery. Override here so fork's
+    // generic cursive resolves to Snell Roundhand, matching iPhone's
+    // cursive baseline tuple in browserleaks /fonts probe.
+    (void)locale;
+    return "Snell Roundhand"_str;
+#else
     return genericFamily(locale, m_cursiveFamilies, kCTFontCSSFamilyCursive);
+#endif
 }
 
 String SystemFontDatabaseCoreText::fantasyFamily(const String& locale)
