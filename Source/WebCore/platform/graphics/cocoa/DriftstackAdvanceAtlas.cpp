@@ -193,6 +193,15 @@ uint16_t DriftstackAdvanceAtlas::fontIdForFamily(const String& familyName)
     if (familyName == "serif"_s || familyName == "-webkit-serif"_s || familyName == "Times"_s || familyName == "Times Roman"_s) return 10;
     if (familyName == "system-ui"_s || familyName == "-webkit-system-font"_s) return 11;
     if (familyName == "monospace"_s || familyName == "-webkit-monospace"_s || familyName == "Menlo"_s) return 12;
+    // V-433.Z wave 29-209 — fallback fonts the universal-symbol cluster
+    // hook routes to. Width substitution via V-689 atlas after CT fallback
+    // resolution returns Mac's iOS-binary fallback font with potentially
+    // divergent advance values vs iPhone runtime SF Pro family.
+    if (familyName == ".SF Devanagari"_s || familyName == ".SFDevanagari-Regular"_s) return 13;
+    if (familyName == ".SF Georgian"_s || familyName == ".SFGeorgian-Regular"_s) return 14;
+    if (familyName == ".SF UI Symbols"_s || familyName == ".SFUISymbols-Regular"_s) return 15;
+    if (familyName == ".SF UI"_s || familyName == ".SFUI-Regular"_s) return 16;
+    if (familyName == "Apple Symbols"_s || familyName == "AppleSymbols"_s) return 17;
     return UINT16_MAX;
 }
 
