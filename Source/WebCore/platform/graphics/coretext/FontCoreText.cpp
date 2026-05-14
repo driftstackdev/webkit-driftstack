@@ -1027,11 +1027,30 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                   || familyName == "Kohinoor Gujarati"_s
                   || familyName == "Kohinoor Telugu"_s
                   || familyName == "Mukta Mahee"_s
-                  || familyName == "Devanagari Sangam MN"_s) atlasKey = ".SF Devanagari";
+                  || familyName == "Devanagari Sangam MN"_s
+                  || familyName == ".SF Bangla"_s
+                  || familyName == ".SF Gujarati"_s
+                  || familyName == ".SF Gurmukhi"_s
+                  || familyName == ".SF Kannada"_s
+                  || familyName == ".SF Malayalam"_s
+                  || familyName == ".SF Odia"_s
+                  || familyName == ".SF Tamil"_s
+                  || familyName == ".SF Telugu"_s
+                  || familyName == "Tamil Sangam MN"_s
+                  || familyName == "Sinhala Sangam MN"_s
+                  || familyName == "Malayalam Sangam MN"_s
+                  || familyName == "Noto Sans Kannada"_s
+                  || familyName == "Noto Sans Oriya"_s) atlasKey = ".SF Devanagari";
             else if (familyName == "Khmer Sangam MN"_s
                   || familyName == ".Apple Symbols Fallback"_s
-                  || familyName == ".AppleSystemFallback"_s) atlasKey = "Apple Symbols";
-            else if (familyName == "Noto Sans Armenian"_s) atlasKey = ".SF Georgian";  // Armenian/Georgian closely-related; route to Georgian atlas as approximation
+                  || familyName == ".AppleSystemFallback"_s
+                  || familyName == "Lao Sangam MN"_s
+                  || familyName == "Noto Sans Myanmar"_s
+                  || familyName == "Noto Sans Zawgyi"_s
+                  || familyName == ".ThonburiUI"_s
+                  || familyName == "Kokonor"_s) atlasKey = "Apple Symbols";
+            else if (familyName == "Noto Sans Armenian"_s
+                  || familyName == ".SF Armenian"_s) atlasKey = ".SF Georgian";  // Armenian/Georgian closely-related
             // V-691 REVERTED (2026-05-11): script-fallback aliasing (CJK/Arabic/Devanagari
             // families → atlasKey="-apple-system" with script-scoped reverse maps)
             // regressed V-405 atlas-OFF text from 1/249 → 0/249. Empirically: Mac's
