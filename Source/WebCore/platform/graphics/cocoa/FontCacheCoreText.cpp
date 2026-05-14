@@ -197,14 +197,16 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             if (styleCF)
                 variant.styleName = String(styleCF.get());
 
-            // V-433.X (wave 29-195) — register under both family and full
-            // PostScript name. Probes like browserleaks/v433x request a
-            // font by PostScript name (e.g., "FaktSlabStencilPro-medium"
-            // for CoreUI iOS app fonts) while CSS-named iOS fonts use the
-            // spaced family name (e.g., "Avenir Next"). Registering full
-            // PS-name handles the former without exposing PostScript-base
-            // forms ("AvenirNext") that iOS does NOT expose as separate
-            // CSS-resolvable names.
+            // V-433.X (wave 29-195) + V-433.Y (wave 29-197) — register
+            // under (family, full-PS-name, iPhone-canonical-face-name).
+            // browserleaks /fonts probes ALL face-style names that iOS
+            // exposes as discoverable CSS families: family ("Avenir"),
+            // PS name ("AvenirNext-Heavy"), AND specific face variants
+            // ("Avenir Heavy", "Hiragino Sans W3"). Auto-registering all
+            // display names (CTFontDisplayName) over-exposes Bold/Italic/
+            // Oblique faces iOS does NOT expose. Instead, register only
+            // names that appear in the iPhone-canonical face-name list
+            // for the launch archetype (BS v433y capture 2026-05-14).
             Vector<String> aliasKeys;
             aliasKeys.append(family);
             RetainPtr<CFStringRef> postscriptCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute)));
@@ -212,6 +214,42 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                 String postscript = String(postscriptCF.get()).convertToASCIILowercase();
                 if (!postscript.isEmpty() && postscript != family)
                     aliasKeys.append(postscript);
+            }
+            // iPhone-canonical face-name allowlist for archetype
+            // iphone17_ios18_7_safari26_4. Derived from BS Automate
+            // iPhone 17 / iOS 18.7 / Safari 26.4 v433y capture diff
+            // (252 detected vs fork pre-fix 216 → 37 face variants
+            // iPhone exposes that Mac CTFont descriptor parsing collapses
+            // into the parent family). Lowercase, exact-match.
+            static const std::array<const char*, 37> kIPhoneCanonicalFaceNames = {
+                "avenir black", "avenir black oblique", "avenir book",
+                "avenir heavy", "avenir light", "avenir medium",
+                "avenir next condensed demi bold", "avenir next condensed heavy",
+                "avenir next condensed medium", "avenir next condensed ultra light",
+                "avenir next demi bold", "avenir next heavy",
+                "avenir next medium", "avenir next ultra light",
+                "charter black",
+                "hiragino kaku gothic pro w3", "hiragino kaku gothic pro w6",
+                "hiragino kaku gothic pron w3", "hiragino kaku gothic pron w6",
+                "hiragino kaku gothic std w8", "hiragino kaku gothic stdn w8",
+                "hiragino maru gothic pro w4", "hiragino maru gothic pron w4",
+                "hiragino mincho pro w3", "hiragino mincho pro w6",
+                "hiragino mincho pron w3", "hiragino mincho pron w6",
+                "hiragino sans w3", "hiragino sans w4", "hiragino sans w5",
+                "hiragino sans w6", "hiragino sans w7", "hiragino sans w8",
+                "seravek extralight", "seravek light", "seravek medium",
+                "signpainter-housescript",
+            };
+            RetainPtr<CFStringRef> displayCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontDisplayNameAttribute)));
+            if (displayCF) {
+                String display = String(displayCF.get()).convertToASCIILowercase();
+                for (const char* canonical : kIPhoneCanonicalFaceNames) {
+                    if (display == String::fromUTF8(canonical)) {
+                        if (!aliasKeys.contains(display))
+                            aliasKeys.append(display);
+                        break;
+                    }
+                }
             }
 
             for (const String& key : aliasKeys) {
@@ -335,6 +373,14 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // iOS without aliasing, so they are left alone.
     else if (lowercase == "bangla sangam mn"_s)
         lowercase = "kohinoor bangla"_s;
+    // V-433.Y wave 29-197 — SignPainter-HouseScript: iOS exposes this
+    // as a discoverable CSS family name (Preferred Family / name ID 16),
+    // but Mac CTFontDescriptor only exposes the base family "SignPainter"
+    // (name ID 1) when parsing SignPainter-Semibold.otf. Alias the iOS-
+    // exposed name to the underlying SignPainter family so probe lookups
+    // resolve correctly.
+    else if (lowercase == "signpainter-housescript"_s)
+        lowercase = "signpainter"_s;
     // V-521.A.2 (2026-05-08): Heiti SC/TC are legacy iOS CJK font families
     // that font-enumeration probe detects on iPhone (width 4292 for
     // 'mmmmmmmmlli' test string). They alias to PingFang SC/TC equivalents
@@ -1086,6 +1132,13 @@ static std::optional<SpecialCaseFontLookupResult> fontDescriptorWithFamilySpecia
 static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const AtomString& family, const FontDescription& fontDescription, const FontCreationContext& fontCreationContext, float size, OptionSet<FontLookupOptions> options)
 {
     ASSERT(fontDatabase.allowUserInstalledFonts() == fontDescription.shouldAllowUserInstalledFonts());
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Y wave 29-197 — universal Mac-font blocker eliminates the
+    // need for platformFontLookupWithFamily below, leaving fontDatabase
+    // and options unused on this platform.
+    (void)fontDatabase;
+    (void)options;
+#endif
 
     if (family.isEmpty())
         return nullptr;
@@ -1106,11 +1159,67 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
         });
         return preparePlatformFont(WTF::move(lookupResult->unrealizedCoreTextFont), fontDescription, fontCreationContext, lookupResult->fontTypeForPreparation);
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Y (wave 29-197, founder lock 2026-05-14 "pass any test which
+    // might be doing different things") — universal Mac-font blocker
+    // WITH iOS-canonical-shared-glyph exceptions.
+    //
+    // Any CSS family that wasn't matched by driftstackIOSFontWithFamily
+    // (iOS binaries) above OR by fontDescriptorWithFamilySpecialCase
+    // (-apple-system, system-ui, lastresort, etc.) is a Mac-installed
+    // font that iPhone does NOT expose — EXCEPT for a narrow allow-list
+    // of CJK families where Mac CTFont and iOS CTFont share the binary
+    // glyph data byte-identically per V-679 (Mac's PingFangUI.ttc has
+    // bit-identical cidg/hvgl/hmtx/OS_2 to iOS PingFang.ttc). For those
+    // we let Mac CTFont resolve — the metric output matches iPhone.
+    //
+    // PingFang.ttc fails CTFontManagerCreateFontDescriptorsFromURL parse
+    // on Mac (V-487 PARSEFAIL) so driftstackIOSFontWithFamily can't
+    // resolve it; Mac's PingFangUI.ttc resolves the same name via Mac
+    // CTFont. Allow that fallback only for these specific families.
+    auto lowercaseFamily = family.string().convertToASCIILowercase();
+    static const std::array<const char*, 7> kIOSCanonicalSharedGlyphFamilies = {
+        "pingfang hk",
+        "pingfang sc",
+        "pingfang tc",
+        "heiti sc",
+        "heiti tc",
+        "applesdgothicneo",
+        // V-433.Y wave 29-197 — Snell Roundhand is iOS's CSS-cursive
+        // default font. iPhone's "cursive" baseline tuple == Snell tuple
+        // → Snell Roundhand probes return baseline → "not detected".
+        // Mac CSS-cursive defaults to Apple Chancery (denied via denylist
+        // → falls to monospace baseline), so without this exception the
+        // probe sees Snell metrics distinct from cursive baseline →
+        // false positive. Allowing Mac CTFont Snell Roundhand resolution
+        // makes the cursive baseline equal Snell's metric tuple (within
+        // sub-pixel CT rendering precision), restoring iPhone's logic.
+        "snell roundhand",
+    };
+    bool isSharedGlyph = false;
+    for (const char* canonical : kIOSCanonicalSharedGlyphFamilies) {
+        if (lowercaseFamily == String::fromUTF8(canonical)) {
+            isSharedGlyph = true;
+            break;
+        }
+    }
+    if (!isSharedGlyph)
+        return nullptr;
+
+    // Fall through to Mac CTFont resolution for shared-glyph families.
     auto fontLookup = platformFontLookupWithFamily(fontDatabase, family, fontDescription.fontSelectionRequest(), options);
     UnrealizedCoreTextFont unrealizedFont = { WTF::move(fontLookup.result) };
     unrealizedFont.setSize(size);
     ApplyTraitsVariations applyTraitsVariations = fontLookup.createdFromPostScriptName ? ApplyTraitsVariations::No : ApplyTraitsVariations::Yes;
     return preparePlatformFont(WTF::move(unrealizedFont), fontDescription, fontCreationContext, FontTypeForPreparation::NonSystemFont, applyTraitsVariations);
+#else
+    auto fontLookup = platformFontLookupWithFamily(fontDatabase, family, fontDescription.fontSelectionRequest(), options);
+    UnrealizedCoreTextFont unrealizedFont = { WTF::move(fontLookup.result) };
+    unrealizedFont.setSize(size);
+    ApplyTraitsVariations applyTraitsVariations = fontLookup.createdFromPostScriptName ? ApplyTraitsVariations::No : ApplyTraitsVariations::Yes;
+    return preparePlatformFont(WTF::move(unrealizedFont), fontDescription, fontCreationContext, FontTypeForPreparation::NonSystemFont, applyTraitsVariations);
+#endif
 }
 
 #if PLATFORM(MAC)
