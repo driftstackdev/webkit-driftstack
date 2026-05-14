@@ -4931,8 +4931,22 @@ LayoutUnit RenderBox::lineHeight() const
             return !listMarkerRenderer->isImage();
         return false;
     };
-    if (shouldUseLineHeightFromStyle())
-        return LayoutUnit::fromFloatCeil(firstLineStyle().computedLineHeight());
+    if (shouldUseLineHeightFromStyle()) {
+        auto lh = firstLineStyle().computedLineHeight();
+#if PLATFORM(DRIFTSTACK)
+        // V-433.Z / P-track #46 wave 29-220 diagnostic: log computedLineHeight
+        // for inline-block + font-size:72 boxes to see if float arithmetic
+        // produces value slightly > 72 (then fromFloatCeil → 73 = +1px Δh).
+        if (firstLineStyle().computedFontSize() >= 70 && firstLineStyle().computedFontSize() <= 80) {
+            static unsigned s_lineHeightLogCount = 0;
+            if (s_lineHeightLogCount++ < 30) {
+                WTFLogAlways("[Driftstack-P46-LineHeight] computedFontSize=%g computedLineHeight=%g fromFloatCeil=%d",
+                    firstLineStyle().computedFontSize(), lh, LayoutUnit::fromFloatCeil(lh).toInt());
+            }
+        }
+#endif
+        return LayoutUnit::fromFloatCeil(lh);
+    }
 
     if (isBlockLevelReplacedOrAtomicInline())
         return marginBefore() + logicalHeight() + marginAfter();
