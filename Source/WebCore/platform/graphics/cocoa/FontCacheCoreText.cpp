@@ -1267,11 +1267,26 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
             break;
         }
     }
+    // V-433.Y wave 29-198 — Heiti SC/TC redirect: iPhone aliases Heiti
+    // SC/TC → PingFang SC/TC internally (both render at PingFang's tuple
+    // 4292,180). Mac has its OWN Heiti SC font binary with different
+    // metrics (4482,130). Redirect the shared-glyph lookup to use
+    // PingFang's name so platformFontLookupWithFamily resolves to Mac's
+    // PingFangUI.ttc (which shares glyph data with iOS PingFang per
+    // V-679) instead of Mac's separate Heiti SC.
+    AtomString lookupFamily = family;
+    if (lowercaseFamily == "heiti sc"_s) {
+        lookupFamily = AtomString { "PingFang SC"_s };
+        isSharedGlyph = true;
+    } else if (lowercaseFamily == "heiti tc"_s) {
+        lookupFamily = AtomString { "PingFang TC"_s };
+        isSharedGlyph = true;
+    }
     if (!isSharedGlyph)
         return nullptr;
 
     // Fall through to Mac CTFont resolution for shared-glyph families.
-    auto fontLookup = platformFontLookupWithFamily(fontDatabase, family, fontDescription.fontSelectionRequest(), options);
+    auto fontLookup = platformFontLookupWithFamily(fontDatabase, lookupFamily, fontDescription.fontSelectionRequest(), options);
     UnrealizedCoreTextFont unrealizedFont = { WTF::move(fontLookup.result) };
     unrealizedFont.setSize(size);
     ApplyTraitsVariations applyTraitsVariations = fontLookup.createdFromPostScriptName ? ApplyTraitsVariations::No : ApplyTraitsVariations::Yes;
