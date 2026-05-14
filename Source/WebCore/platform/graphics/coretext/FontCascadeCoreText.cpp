@@ -1223,6 +1223,20 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // alpha-correct.
     static const bool textAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
         && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
+    // V-790.Q (wave 29-170): diag log V-583K-text dispatch entry to root-cause
+    // 0/100 V-405 text gap. Logs once-per-process the gate state.
+    {
+        static bool v790qLogged = false;
+        if (!v790qLogged && std::getenv("DRIFTSTACK_V583K_DIAG")) {
+            v790qLogged = true;
+            WTFLogAlways("[Driftstack-V790Q-DIAG] V-583K-text dispatch entry-gate: "
+                "didCompositePath=%d textAtlasEnabled=%d atlasAvailable=%d glyphCount=%zu",
+                didCompositePath ? 1 : 0,
+                textAtlasEnabled ? 1 : 0,
+                DriftstackTextGlyphAtlas::singleton().isAvailable() ? 1 : 0,
+                glyphs.size());
+        }
+    }
     if (!didCompositePath && textAtlasEnabled) {
         auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
         if (textAtlas.isAvailable() && glyphs.size() > 0) {
@@ -1230,6 +1244,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             uint16_t fontId = DriftstackTextGlyphAtlas::fontIdForFamily(familyName);
             const float ptSize = font.platformData().size();
             const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
+            // V-790.Q diag: log fontIdForFamily result first 20 times per process.
+            {
+                static unsigned v790qFamLog = 0;
+                if (std::getenv("DRIFTSTACK_V583K_DIAG") && ++v790qFamLog <= 20) {
+                    WTFLogAlways("[Driftstack-V790Q-DIAG] family='%s' fontId=%u ptSize=%.1f ptSizeRound=%u",
+                        familyName.utf8().data(),
+                        static_cast<unsigned>(fontId),
+                        static_cast<double>(ptSize),
+                        static_cast<unsigned>(ptSizeRound));
+                }
+            }
             if (fontId != UINT16_MAX) {
                 // Classify each glyph.
                 struct TextPlan {
@@ -1240,6 +1265,8 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 Vector<TextPlan, 256> textPlans;
                 textPlans.reserveInitialCapacity(glyphs.size());
                 unsigned hits = 0;
+                unsigned cpZeros = 0;
+                unsigned bytesEmpty = 0;
                 for (auto g : glyphs) {
                     TextPlan tp { false, 0, { } };
                     char32_t cp = font.driftstackCodepointForTextGlyph(g);
@@ -1250,9 +1277,23 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             tp.atlasHit = true;
                             tp.pngBytes = bytes;
                             ++hits;
+                        } else {
+                            ++bytesEmpty;
                         }
+                    } else {
+                        ++cpZeros;
                     }
                     textPlans.append(tp);
+                }
+                // V-790.Q diag: log per-call hit breakdown first 30 calls per process.
+                {
+                    static unsigned v790qPerCallLog = 0;
+                    if (std::getenv("DRIFTSTACK_V583K_DIAG") && ++v790qPerCallLog <= 30) {
+                        WTFLogAlways("[Driftstack-V790Q-DIAG] dispatch call: fontId=%u ptSize=%u n=%zu hits=%u cpZeros=%u bytesEmpty=%u",
+                            static_cast<unsigned>(fontId),
+                            static_cast<unsigned>(ptSizeRound),
+                            glyphs.size(), hits, cpZeros, bytesEmpty);
+                    }
                 }
                 if (hits > 0) {
                     didTextAtlasPath = true;
