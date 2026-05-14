@@ -468,6 +468,15 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         return;
     }
 
+    // V-790.Q (wave 29-170): unconditional entry log
+    {
+        static unsigned v790qEntryCnt = 0;
+        if (++v790qEntryCnt <= 10) {
+            WTFLogAlways("[Driftstack-V790Q-ENTRY] drawGlyphs entry %u glyphCount=%zu isInGPUProcess=%d ptSize=%.1f",
+                v790qEntryCnt, glyphs.size(), isInGPUProcess() ? 1 : 0, (double)platformData.size());
+        }
+    }
+
 #if PLATFORM(DRIFTSTACK)
     // V-583.B-DIAG: opt-in glyph trace via DRIFTSTACK_GLYPH_DIAG env var.
     // Off by default; for advance-mismatch root-cause analysis only.
@@ -1223,14 +1232,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // alpha-correct.
     static const bool textAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
         && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
-    // V-790.Q (wave 29-170): diag log V-583K-text dispatch entry to root-cause
-    // 0/100 V-405 text gap. Logs once-per-process the gate state.
+    // V-790.Q (wave 29-170): UNCONDITIONAL diag log to verify dispatch entry.
     {
-        static bool v790qLogged = false;
-        if (!v790qLogged && std::getenv("DRIFTSTACK_V583K_DIAG")) {
-            v790qLogged = true;
-            WTFLogAlways("[Driftstack-V790Q-DIAG] V-583K-text dispatch entry-gate: "
-                "didCompositePath=%d textAtlasEnabled=%d atlasAvailable=%d glyphCount=%zu",
+        static unsigned v790qCounter = 0;
+        if (++v790qCounter <= 5) {
+            WTFLogAlways("[Driftstack-V790Q-DIAG-REACHED] line 1226 entry %u didCompositePath=%d textAtlasEnabled=%d atlasAvailable=%d glyphCount=%zu",
+                v790qCounter,
                 didCompositePath ? 1 : 0,
                 textAtlasEnabled ? 1 : 0,
                 DriftstackTextGlyphAtlas::singleton().isAvailable() ? 1 : 0,
@@ -1244,11 +1251,11 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             uint16_t fontId = DriftstackTextGlyphAtlas::fontIdForFamily(familyName);
             const float ptSize = font.platformData().size();
             const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
-            // V-790.Q diag: log fontIdForFamily result first 20 times per process.
+            // V-790.Q diag: log fontIdForFamily result first 30 times (unconditional).
             {
                 static unsigned v790qFamLog = 0;
-                if (std::getenv("DRIFTSTACK_V583K_DIAG") && ++v790qFamLog <= 20) {
-                    WTFLogAlways("[Driftstack-V790Q-DIAG] family='%s' fontId=%u ptSize=%.1f ptSizeRound=%u",
+                if (++v790qFamLog <= 30) {
+                    WTFLogAlways("[Driftstack-V790Q-FAM] family='%s' fontId=%u ptSize=%.1f ptSizeRound=%u",
                         familyName.utf8().data(),
                         static_cast<unsigned>(fontId),
                         static_cast<double>(ptSize),
@@ -1285,11 +1292,11 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     }
                     textPlans.append(tp);
                 }
-                // V-790.Q diag: log per-call hit breakdown first 30 calls per process.
+                // V-790.Q diag: log per-call hit breakdown first 40 calls (unconditional).
                 {
                     static unsigned v790qPerCallLog = 0;
-                    if (std::getenv("DRIFTSTACK_V583K_DIAG") && ++v790qPerCallLog <= 30) {
-                        WTFLogAlways("[Driftstack-V790Q-DIAG] dispatch call: fontId=%u ptSize=%u n=%zu hits=%u cpZeros=%u bytesEmpty=%u",
+                    if (++v790qPerCallLog <= 40) {
+                        WTFLogAlways("[Driftstack-V790Q-PERCALL] fontId=%u ptSize=%u n=%zu hits=%u cpZeros=%u bytesEmpty=%u",
                             static_cast<unsigned>(fontId),
                             static_cast<unsigned>(ptSizeRound),
                             glyphs.size(), hits, cpZeros, bytesEmpty);
