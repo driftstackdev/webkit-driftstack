@@ -197,24 +197,45 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             if (styleCF)
                 variant.styleName = String(styleCF.get());
 
-            auto& variants = map.ensure(family, [] { return Vector<DriftstackIOSFontVariant> { }; }).iterator->value;
-            // Avoid duplicates from the same .ttf being descriptor-walked twice.
-            // V-091 fix: include styleName in dup-detection so .ttc files with
-            // multiple faces sharing weight + italic but differing in styleName
-            // (e.g., iOS Papyrus.ttc face 0 Condensed + face 1 Regular both at
-            // weight=0 italic=false) all end up registered.
-            bool dup = false;
-            for (const auto& v : variants) {
-                if (CFEqual(v.url.get(), variant.url.get()) && v.italic == variant.italic
-                    && std::abs(v.weight - variant.weight) < 0.01f
-                    && v.styleName == variant.styleName) {
-                    dup = true;
-                    break;
-                }
+            // V-433.X (wave 29-195) — register under both family and full
+            // PostScript name. Probes like browserleaks/v433x request a
+            // font by PostScript name (e.g., "FaktSlabStencilPro-medium"
+            // for CoreUI iOS app fonts) while CSS-named iOS fonts use the
+            // spaced family name (e.g., "Avenir Next"). Registering full
+            // PS-name handles the former without exposing PostScript-base
+            // forms ("AvenirNext") that iOS does NOT expose as separate
+            // CSS-resolvable names.
+            Vector<String> aliasKeys;
+            aliasKeys.append(family);
+            RetainPtr<CFStringRef> postscriptCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontNameAttribute)));
+            if (postscriptCF) {
+                String postscript = String(postscriptCF.get()).convertToASCIILowercase();
+                if (!postscript.isEmpty() && postscript != family)
+                    aliasKeys.append(postscript);
             }
-            if (!dup) {
-                variants.append(WTF::move(variant));
-                ++mappedCount;
+
+            for (const String& key : aliasKeys) {
+                auto& variants = map.ensure(key, [] { return Vector<DriftstackIOSFontVariant> { }; }).iterator->value;
+                // Avoid duplicates from the same .ttf being descriptor-walked
+                // twice. V-091 fix: include styleName in dup-detection so .ttc
+                // files with multiple faces sharing weight + italic but
+                // differing in styleName (e.g., iOS Papyrus.ttc face 0
+                // Condensed + face 1 Regular both at weight=0 italic=false)
+                // all end up registered.
+                bool dup = false;
+                for (const auto& v : variants) {
+                    if (CFEqual(v.url.get(), variant.url.get()) && v.italic == variant.italic
+                        && std::abs(v.weight - variant.weight) < 0.01f
+                        && v.styleName == variant.styleName) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    DriftstackIOSFontVariant copy = variant;
+                    variants.append(WTF::move(copy));
+                    ++mappedCount;
+                }
             }
         }
     }
@@ -305,6 +326,15 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // Stage B audit moves Times from MAC_DEFAULT_FAIL → STAGE_B_PASS.
     else if (lowercase == "times"_s)
         lowercase = "times new roman"_s;
+    // V-433.X (wave 29-195) — iOS legacy `* Sangam MN` family-name alias
+    // to the modern Kohinoor families. iOS Safari resolves these CSS
+    // names to the Kohinoor binaries internally; Mac CoreText also has
+    // a "Bangla Sangam MN" font but with different metrics (width 633
+    // vs Kohinoor's 680 at our test string). The other Sangam MN names
+    // (Devanagari/Telugu/Tamil/Kannada) happen to match between Mac and
+    // iOS without aliasing, so they are left alone.
+    else if (lowercase == "bangla sangam mn"_s)
+        lowercase = "kohinoor bangla"_s;
     // V-521.A.2 (2026-05-08): Heiti SC/TC are legacy iOS CJK font families
     // that font-enumeration probe detects on iPhone (width 4292 for
     // 'mmmmmmmmlli' test string). They alias to PingFang SC/TC equivalents

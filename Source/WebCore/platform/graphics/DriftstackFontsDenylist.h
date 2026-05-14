@@ -62,6 +62,47 @@ static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
     // iphone16pro_ios26_4_1 archetype — empty pending founder iOS 26.4
     // fonts capture (V-242 URL). Until populated, iOS 26.4 archetype
     // runs without font denying.
+
+    // iphone17_ios18_7_safari26_4 archetype (launch archetype) — wave
+    // 29-194/195 v433x-exhaustive (511 fonts × measureText vs monospace
+    // baseline). Diff: fork detected 141 vs BS iPhone16Pro/iOS18.7/Safari26.4
+    // detected 109 → 36 Mac-only false positives below. Lowercase, sorted.
+    { "iphone17_ios18_7_safari26_4", "andale mono" },
+    { "iphone17_ios18_7_safari26_4", "apple chancery" },
+    { "iphone17_ios18_7_safari26_4", "applemyungjo" },
+    { "iphone17_ios18_7_safari26_4", "big caslon" },
+    { "iphone17_ios18_7_safari26_4", "brush script mt" },
+    { "iphone17_ios18_7_safari26_4", "comic sans ms" },
+    { "iphone17_ios18_7_safari26_4", "geneva" },
+    { "iphone17_ios18_7_safari26_4", "gujarati sangam mn" },
+    { "iphone17_ios18_7_safari26_4", "gurmukhi mn" },
+    { "iphone17_ios18_7_safari26_4", "gurmukhi sangam mn" },
+    { "iphone17_ios18_7_safari26_4", "herculanum" },
+    { "iphone17_ios18_7_safari26_4", "inaimathi" },
+    { "iphone17_ios18_7_safari26_4", "kannada mn" },
+    { "iphone17_ios18_7_safari26_4", "kannada sangam mn" },
+    { "iphone17_ios18_7_safari26_4", "kefa" },
+    { "iphone17_ios18_7_safari26_4", "lucida grande" },
+    { "iphone17_ios18_7_safari26_4", "luminari" },
+    { "iphone17_ios18_7_safari26_4", "microsoft sans serif" },
+    { "iphone17_ios18_7_safari26_4", "monaco" },
+    { "iphone17_ios18_7_safari26_4", "oriya sangam mn" },
+    { "iphone17_ios18_7_safari26_4", "pt mono" },
+    { "iphone17_ios18_7_safari26_4", "pt sans" },
+    { "iphone17_ios18_7_safari26_4", "pt serif" },
+    { "iphone17_ios18_7_safari26_4", "plantagenet cherokee" },
+    { "iphone17_ios18_7_safari26_4", "stixtwomath" },
+    { "iphone17_ios18_7_safari26_4", "shree devanagari 714" },
+    { "iphone17_ios18_7_safari26_4", "simsun" },
+    { "iphone17_ios18_7_safari26_4", "sinhala mn" },
+    { "iphone17_ios18_7_safari26_4", "skia" },
+    { "iphone17_ios18_7_safari26_4", "tahoma" },
+    { "iphone17_ios18_7_safari26_4", "tamil mn" },
+    { "iphone17_ios18_7_safari26_4", "telugu mn" },
+    { "iphone17_ios18_7_safari26_4", "webdings" },
+    { "iphone17_ios18_7_safari26_4", "wingdings" },
+    { "iphone17_ios18_7_safari26_4", "wingdings 2" },
+    { "iphone17_ios18_7_safari26_4", "wingdings 3" },
 };
 
 // Locally inlined archetype helpers (parallel to V-245 canvas-table
