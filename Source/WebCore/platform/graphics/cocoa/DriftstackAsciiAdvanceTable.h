@@ -23,7 +23,7 @@ struct DriftstackAsciiAdvanceEntry {
     float widthPx;
 };
 
-inline constexpr std::array<ASCIILiteral, 12> kDriftstackAsciiAdvanceFonts { {
+inline constexpr std::array<ASCIILiteral, 18> kDriftstackAsciiAdvanceFonts { {
     "-apple-system"_s,
     "Arial"_s,
     "Courier"_s,
@@ -36,6 +36,12 @@ inline constexpr std::array<ASCIILiteral, 12> kDriftstackAsciiAdvanceFonts { {
     "sans-serif"_s,
     "serif"_s,
     "system-ui"_s,
+    "monospace"_s,        // V-433.Z wave 29-210: id=12 (Menlo / V-689 atlas)
+    ".SF Devanagari"_s,   // V-433.Z wave 29-210: id=13 (Vedic / Indian Rupee)
+    ".SF Georgian"_s,     // V-433.Z wave 29-210: id=14 (Georgian script)
+    ".SF UI Symbols"_s,   // V-433.Z wave 29-210: id=15 (Keycap combining)
+    ".SF UI"_s,           // V-433.Z wave 29-210: id=16 (Latin Extended overrides)
+    "Apple Symbols"_s,    // V-433.Z wave 29-210: id=17 (Replacement, Arrow, Khmer)
 } };
 
 inline constexpr std::array<DriftstackAsciiAdvanceEntry, 5700> kDriftstackAsciiAdvanceTable { {

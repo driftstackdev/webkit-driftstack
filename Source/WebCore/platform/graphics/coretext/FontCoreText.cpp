@@ -981,7 +981,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         // (was 5 specific sizes: 14/16/18/20/24). Non-ASCII table covers a subset
         // (13 even sizes 12,14,...,48); the per-script fallback below handles
         // missing-size case by simply returning Mac CT's natural advance.
-        if (sizePx >= 12 && sizePx <= 48) {
+        // V-433.Z wave 29-210: extend to 72 to include the Phase 2 unicode-glyphs
+        // probe font-size (V-689 atlas extension at sizePx=72 for fallback fonts).
+        if (sizePx >= 12 && sizePx <= 72) {
             // Map resolved family name → atlas-table key. Direct CSS-name
             // matches first (Arial, Helvetica, Times New Roman, Courier,
             // Tahoma, Verdana, Georgia, Trebuchet MS — priority D coverage).
@@ -1004,6 +1006,32 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             else if (familyName == "-webkit-sans-serif"_s) atlasKey = "sans-serif";
             else if (familyName == "-webkit-serif"_s) atlasKey = "serif";
             else if (familyName == "-webkit-system-font"_s) atlasKey = "system-ui";
+            // V-433.Z wave 29-210: universal-symbol cluster fallback fonts
+            // routed by driftstackIOSFallbackFontForUniversalSymbolCluster hook.
+            // Mac CT family names (canonical via mdls kCTFontFamilyNameAttribute).
+            else if (familyName == ".SF Devanagari"_s) atlasKey = ".SF Devanagari";
+            else if (familyName == ".SF Georgian"_s) atlasKey = ".SF Georgian";
+            else if (familyName == ".SF UI Symbols"_s) atlasKey = ".SF UI Symbols";
+            else if (familyName == ".SF UI"_s) atlasKey = ".SF UI";
+            else if (familyName == "Apple Symbols"_s) atlasKey = "Apple Symbols";
+            // V-433.Z wave 29-211: Mac CT cascade resolves Vedic / Devanagari /
+            // Khmer / Indian Rupee codepoints to Mac-system fallback families
+            // (.AppleIndicFont, Kohinoor*, Khmer Sangam MN, Mukta Mahee) instead
+            // of routing through V-433.Z hook's .SF Devanagari result. Alias
+            // these Mac fallback families to the same atlas key the iPhone-
+            // canonical font uses, so the V-689 atlas substitutes iPhone widths
+            // regardless of which fallback Mac picks.
+            else if (familyName == ".AppleIndicFont"_s
+                  || familyName == "Kohinoor Devanagari"_s
+                  || familyName == "Kohinoor Bangla"_s
+                  || familyName == "Kohinoor Gujarati"_s
+                  || familyName == "Kohinoor Telugu"_s
+                  || familyName == "Mukta Mahee"_s
+                  || familyName == "Devanagari Sangam MN"_s) atlasKey = ".SF Devanagari";
+            else if (familyName == "Khmer Sangam MN"_s
+                  || familyName == ".Apple Symbols Fallback"_s
+                  || familyName == ".AppleSystemFallback"_s) atlasKey = "Apple Symbols";
+            else if (familyName == "Noto Sans Armenian"_s) atlasKey = ".SF Georgian";  // Armenian/Georgian closely-related; route to Georgian atlas as approximation
             // V-691 REVERTED (2026-05-11): script-fallback aliasing (CJK/Arabic/Devanagari
             // families → atlasKey="-apple-system" with script-scoped reverse maps)
             // regressed V-405 atlas-OFF text from 1/249 → 0/249. Empirically: Mac's
