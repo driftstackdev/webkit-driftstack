@@ -66,13 +66,28 @@ static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
     // iphone17_ios18_7_safari26_4 archetype (launch archetype) — wave
     // 29-194/195 v433x-exhaustive (511 fonts × measureText vs monospace
     // baseline). Diff: fork detected 141 vs BS iPhone16Pro/iOS18.7/Safari26.4
-    // detected 109 → 36 Mac-only false positives below. Lowercase, sorted.
+    // detected 109 → 36 Mac-only false positives below. Wave 29-195 add
+    // (v404 probe @ 128px + currency-bearing sample text): al bayan, al
+    // tarikh, arial black, arial narrow, arial unicode ms, trattatello —
+    // detected by v404 conditions but not v433x's (Mac/iPhone width-equals-
+    // monospace coincidence at v433x params). Per V-237.2 empirical iOS
+    // 18.6 capture these are Mac-only. Lowercase, sorted.
+    { "iphone17_ios18_7_safari26_4", "al bayan" },
+    { "iphone17_ios18_7_safari26_4", "al tarikh" },
     { "iphone17_ios18_7_safari26_4", "andale mono" },
     { "iphone17_ios18_7_safari26_4", "apple chancery" },
     { "iphone17_ios18_7_safari26_4", "applemyungjo" },
+    { "iphone17_ios18_7_safari26_4", "arial black" },
+    { "iphone17_ios18_7_safari26_4", "baghdad" },
+    { "iphone17_ios18_7_safari26_4", "beirut" },
+    { "iphone17_ios18_7_safari26_4", "arial narrow" },
+    { "iphone17_ios18_7_safari26_4", "arial unicode ms" },
     { "iphone17_ios18_7_safari26_4", "big caslon" },
     { "iphone17_ios18_7_safari26_4", "brush script mt" },
     { "iphone17_ios18_7_safari26_4", "comic sans ms" },
+    { "iphone17_ios18_7_safari26_4", "diwan kufi" },
+    { "iphone17_ios18_7_safari26_4", "diwan thuluth" },
+    { "iphone17_ios18_7_safari26_4", "farisi" },
     { "iphone17_ios18_7_safari26_4", "geneva" },
     { "iphone17_ios18_7_safari26_4", "gujarati sangam mn" },
     { "iphone17_ios18_7_safari26_4", "gurmukhi mn" },
@@ -82,15 +97,21 @@ static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
     { "iphone17_ios18_7_safari26_4", "kannada mn" },
     { "iphone17_ios18_7_safari26_4", "kannada sangam mn" },
     { "iphone17_ios18_7_safari26_4", "kefa" },
+    { "iphone17_ios18_7_safari26_4", "kufistandardgk" },
     { "iphone17_ios18_7_safari26_4", "lucida grande" },
     { "iphone17_ios18_7_safari26_4", "luminari" },
     { "iphone17_ios18_7_safari26_4", "microsoft sans serif" },
     { "iphone17_ios18_7_safari26_4", "monaco" },
+    { "iphone17_ios18_7_safari26_4", "muna" },
+    { "iphone17_ios18_7_safari26_4", "nadeem" },
     { "iphone17_ios18_7_safari26_4", "oriya sangam mn" },
     { "iphone17_ios18_7_safari26_4", "pt mono" },
     { "iphone17_ios18_7_safari26_4", "pt sans" },
     { "iphone17_ios18_7_safari26_4", "pt serif" },
     { "iphone17_ios18_7_safari26_4", "plantagenet cherokee" },
+    { "iphone17_ios18_7_safari26_4", "sana" },
+    { "iphone17_ios18_7_safari26_4", "songti sc" },
+    { "iphone17_ios18_7_safari26_4", "songti tc" },
     { "iphone17_ios18_7_safari26_4", "stixtwomath" },
     { "iphone17_ios18_7_safari26_4", "shree devanagari 714" },
     { "iphone17_ios18_7_safari26_4", "simsun" },
@@ -99,6 +120,8 @@ static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
     { "iphone17_ios18_7_safari26_4", "tahoma" },
     { "iphone17_ios18_7_safari26_4", "tamil mn" },
     { "iphone17_ios18_7_safari26_4", "telugu mn" },
+    { "iphone17_ios18_7_safari26_4", "trattatello" },
+    { "iphone17_ios18_7_safari26_4", "waseem" },
     { "iphone17_ios18_7_safari26_4", "webdings" },
     { "iphone17_ios18_7_safari26_4", "wingdings" },
     { "iphone17_ios18_7_safari26_4", "wingdings 2" },
