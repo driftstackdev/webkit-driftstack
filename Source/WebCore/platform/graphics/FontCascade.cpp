@@ -1722,20 +1722,50 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                             RetainPtr<CGImageRef> cgImage = adoptCF(
                                 CGImageSourceCreateImageAtIndex(cgSource.get(), 0, nullptr));
                             if (cgImage) {
-                                RefPtr nativeImg = NativeImage::create(WTF::move(cgImage));
-                                if (nativeImg) {
-                                    const float imgW = nativeImg->size().width();
-                                    const float imgH = nativeImg->size().height();
-                                    const float dx = std::floor(point.x()) - entry.abbLeft;
-                                    const float dy = std::floor(point.y()) - entry.abbAscent;
-                                    FloatRect destRect(dx, dy, imgW, imgH);
-                                    FloatRect srcRect(0, 0, imgW, imgH);
-                                    context.drawNativeImage(*nativeImg, destRect, srcRect);
-                                    // V-770.A.7: advance point by canvas measureText width,
-                                    // NOT image width. PNG may include leading/trailing
-                                    // transparent padding; measureText.width is the actual
-                                    // text run advance. Critical for multi-font-run text
-                                    // (next run's anchor must align with capture-side metric).
+                                const float imgW = CGImageGetWidth(cgImage.get());
+                                const float imgH = CGImageGetHeight(cgImage.get());
+                                const float dx = std::floor(point.x()) - entry.abbLeft;
+                                const float dy = std::floor(point.y()) - entry.abbAscent;
+                                // V-770.A.V405 (wave 29-189): mask-tint substitution.
+                                // Atlas PNG has black-text-on-transparent (probe captures
+                                // with #000000 fillStyle); V-405 renders with random
+                                // fillStyle. To match: use atlas alpha as clip mask,
+                                // fill with current GraphicsContext fillColor. Only the
+                                // glyph shape (alpha > 0) is painted; transparent pixels
+                                // outside text don't overpaint adjacent canvas content.
+                                // Env-gate DRIFTSTACK_V770_MASK_TINT=1 (default OFF;
+                                // legacy V-770.A.7 drawNativeImage behavior preserved
+                                // when env unset).
+                                static const bool v770MaskTint =
+                                    std::getenv("DRIFTSTACK_V770_MASK_TINT")
+                                    && std::getenv("DRIFTSTACK_V770_MASK_TINT")[0] == '1';
+                                if (v770MaskTint) {
+                                    CGContextRef cg = context.platformContext();
+                                    if (cg) {
+                                        CGContextSaveGState(cg);
+                                        // Translate + Y-flip for CG's bottom-left origin
+                                        CGContextTranslateCTM(cg, dx, dy + imgH);
+                                        CGContextScaleCTM(cg, 1.f, -1.f);
+                                        // Apply current fill color (V-405's rgb(...))
+                                        auto [fr, fg, fb, fa] = context.fillColor()
+                                            .toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                                        CGContextSetRGBFillColor(cg, fr, fg, fb, fa);
+                                        CGContextClipToMask(cg,
+                                            CGRectMake(0.f, 0.f, imgW, imgH), cgImage.get());
+                                        CGContextFillRect(cg,
+                                            CGRectMake(0.f, 0.f, imgW, imgH));
+                                        CGContextRestoreGState(cg);
+                                    }
+                                } else {
+                                    RefPtr nativeImg = NativeImage::create(WTF::retainPtr(cgImage.get()));
+                                    if (nativeImg) {
+                                        FloatRect destRect(dx, dy, imgW, imgH);
+                                        FloatRect srcRect(0, 0, imgW, imgH);
+                                        context.drawNativeImage(*nativeImg, destRect, srcRect);
+                                    }
+                                }
+                                {
+                                    // V-770.A.7: advance point by canvas measureText width
                                     point.setX(point.x() + entry.width);
                                     // V-770.A.9: emit atlas-hit telemetry for empirical
                                     // hit-rate visibility (Layer A coverage metrics).
