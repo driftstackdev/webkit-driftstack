@@ -1991,6 +1991,58 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
     };
     return driftstackLookupIOSFontByCandidates(candidates, description, size);
 }
+
+// V-433.Z wave 29-205: universal-symbol-cluster fallback override.
+// Empirical Phase 2 unicode-glyphs test showed 10 codepoints diverge
+// fork-vs-iPhone for ~ALL 713 fonts:
+//
+//   U+1CDA Vedic Sign Three Dots Above
+//   U+17DD Khmer Sign Atthacan
+//   U+302E Hangul Single Dot Tone Mark
+//   U+2C7B Latin Letter Small Capital Turned E
+//   U+10A0 Georgian Capital Letter An
+//   U+A73D Latin Small Letter Av With Horizontal Bar
+//   U+FFFD Replacement Character
+//   U+21E4 Leftwards Arrow To Bar
+//   U+20E3 Combining Enclosing Keycap
+//   U+20B9 Indian Rupee Sign
+//
+// Root cause: Mac's CT fallback chain picks a DIFFERENT font than iOS's
+// CT for these codepoints in Latin-script font contexts. iPhone routes
+// to SF Pro (SFUI.ttf contains native glyphs for all these per `strings`
+// inspection). Mac picks Apple Symbols or other, with different glyph
+// widths.
+//
+// Fix: explicit override — for these specific codepoints, return iOS
+// SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
+// closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
+// per-page tuning.
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size)
+{
+    if (cluster.isEmpty())
+        return nullptr;
+    char32_t cp = cluster[0];
+    bool isUniversal = (cp == 0x1CDA)
+                    || (cp == 0x17DD)
+                    || (cp == 0x302E)
+                    || (cp == 0x2C7B)
+                    || (cp == 0x10A0)
+                    || (cp == 0xA73D)
+                    || (cp == 0xFFFD)
+                    || (cp == 0x21E4)
+                    || (cp == 0x20E3)
+                    || (cp == 0x20B9);
+    if (!isUniversal)
+        return nullptr;
+    // SF Pro / .SF UI is iOS's universal text-script fallback for codepoints
+    // not in the primary font's coverage. SFUI.ttf contains native glyphs
+    // for all 10 universally-divergent codepoints.
+    static const std::array<ASCIILiteral, 2> candidates {
+        ".sf ui"_s,
+        ".sfui"_s,
+    };
+    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+}
 #endif // PLATFORM(DRIFTSTACK)
 
 RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription& description, const Font& originalFontData, IsForPlatformFont isForPlatformFont, PreferColoredFont, StringView characterCluster)
@@ -2004,12 +2056,23 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
 
     auto result = lookupFallbackFont(ctFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), characterCluster);
 #if PLATFORM(DRIFTSTACK)
+    // V-433.Z wave 29-205: 10 universally-divergent codepoints route to SF Pro
+    // FIRST (before script-specific overrides) so the explicit list always wins
+    // even where script ranges (e.g. U+302E Hangul Tone Mark) would otherwise
+    // match the Hangul or Devanagari hooks.
+    if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
+            characterCluster, description, platformData.size())) {
+        static unsigned hitCount = 0;
+        if (++hitCount <= 8)
+            WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
+                hitCount, (unsigned)characterCluster[0]);
+        result = WTF::move(driftstackUniversalFont);
     // Track 9 / V-161: short-circuit Mac's fallback resolution to prefer the
     // iOS Hangul font binary (AppleSDGothicNeo from Stage B). When the cluster
     // is Hangul and the override font loads, it replaces Mac's pick BEFORE
     // preparePlatformFont normalizes the result. If the cluster is not Hangul
     // OR AppleSDGothicNeo isn't installed, this is a no-op.
-    if (auto driftstackHangulFont = driftstackIOSFallbackFontForHangulCluster(
+    } else if (auto driftstackHangulFont = driftstackIOSFallbackFontForHangulCluster(
             characterCluster, description, platformData.size())) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
