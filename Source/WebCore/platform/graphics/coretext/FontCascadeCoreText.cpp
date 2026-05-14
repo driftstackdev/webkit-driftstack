@@ -712,50 +712,73 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                      static_cast<unsigned>(positionClass));
                     }
                 }
-                // V-790.L-N1-DISABLED (wave 29-175): single-glyph substitution
-                // has same opaque-overpaint bug as Phase 3.C multi-glyph (atlas
-                // pixels are white-bg+black-text; CGContextDrawImage with
-                // kCGImageAlphaNone overpaints V-405's canvas. Env-gate via
-                // DRIFTSTACK_V790L_N1_SUB=1 to re-enable when alpha-mask
-                // implementation lands.
+                // V-790.L-N1 alpha-mask blit (wave 29-203): atlas stores
+                // white-bg + black-text grayscale per V-790.L capture pages
+                // (ctx.fillStyle='white'; fillRect; ctx.fillStyle='black';
+                // fillText). The earlier kCGImageAlphaNone CGContextDrawImage
+                // approach overpainted the canvas because it treated atlas as
+                // opaque grayscale.
+                //
+                // Fix: invert atlas pixels (alpha_mask = 255 - atlas_pixel) →
+                // CGImage with alpha channel → CGContextClipToMask + fill
+                // rect with current fillStyle color. After the mask clip, the
+                // canvas's actual fill color paints through the iPhone-
+                // canonical alpha-mask shape, producing bit-identical iPhone
+                // glyph rasterization on top of arbitrary canvas backgrounds.
+                //
+                // Env-gate retained (DRIFTSTACK_V790L_N1_SUB=1) for staged
+                // rollout. Default OFF; production validation flips ON.
                 static const bool v790lN1SubEnabled = std::getenv("DRIFTSTACK_V790L_N1_SUB")
                     && std::getenv("DRIFTSTACK_V790L_N1_SUB")[0] == '1';
                 if (hit && v790lN1SubEnabled) {
-                    // Atlas hit: use the iPhone-canonical pixels for
-                    // sha256 bit-identical output.
-                    RetainPtr<CGColorSpaceRef> grayCS = adoptCF(
-                        CGColorSpaceCreateDeviceGray());
-                    // Cast away const — CGBitmapContextCreate
-                    // requires a mutable backing pointer, but we never
-                    // write to it (we only create a CGImage from the
-                    // context and use it for drawing).
-                    void* mutableBase = const_cast<uint8_t*>(hit->pixels);
-                    RetainPtr<CGContextRef> imgCtx = adoptCF(
-                        CGBitmapContextCreate(
-                            mutableBase,
-                            64, 64, 8, 64,
-                            grayCS.get(),
-                            kCGImageAlphaNone));
-                    if (imgCtx) {
-                        RetainPtr<CGImageRef> substImg = adoptCF(
-                            CGBitmapContextCreateImage(imgCtx.get()));
-                        if (substImg) {
-                            CGContextRef destCG = context.platformContext();
-                            CGContextDrawImage(destCG,
-                                CGRectMake(
-                                    anchorPoint.x() - 32.0,
-                                    anchorPoint.y() - 32.0 + static_cast<CGFloat>(ptSize) / 2.0,
-                                    64, 64),
-                                substImg.get());
-                            WTFLogAlways("[V-790.L] per-glyph atlas HIT "
-                                         "font_id=%u pt=%u cp=U+%04x pos=%u "
-                                         "— EXACT iPhone pixels substituted",
-                                         static_cast<unsigned>(fontId),
-                                         static_cast<unsigned>(ptSize),
-                                         static_cast<unsigned>(cp),
-                                         static_cast<unsigned>(positionClass));
-                            return; // skip Layer B + platform CT raster
-                        }
+                    // Invert atlas pixels into a mask buffer. The atlas is
+                    // 64x64 grayscale (1 byte per pixel, row-major, row
+                    // stride 64). After inversion: pixel=0 means glyph fully
+                    // opaque, pixel=255 means background fully transparent —
+                    // matches CGContextClipToMask alpha semantics.
+                    std::array<uint8_t, 64 * 64> maskBuf;
+                    auto atlasPx = unsafeMakeSpan(hit->pixels, 64 * 64);
+                    auto maskSpan = unsafeMakeSpan(maskBuf.data(), 64 * 64);
+                    for (size_t i = 0; i < 64 * 64; ++i)
+                        maskSpan[i] = static_cast<uint8_t>(255 - atlasPx[i]);
+
+                    // Create a CGImage from the mask buffer. Per Apple docs,
+                    // CGContextClipToMask accepts either an alpha-only mask
+                    // image OR a grayscale image (treated as alpha).
+                    RetainPtr<CFDataRef> maskData = adoptCF(CFDataCreate(
+                        kCFAllocatorDefault, maskBuf.data(),
+                        64 * 64));
+                    RetainPtr<CGDataProviderRef> dataProvider = adoptCF(
+                        CGDataProviderCreateWithCFData(maskData.get()));
+                    RetainPtr<CGImageRef> maskImg = adoptCF(CGImageMaskCreate(
+                        64, 64, 8, 8, 64,
+                        dataProvider.get(),
+                        nullptr, false));
+                    if (maskImg) {
+                        CGContextRef destCG = context.platformContext();
+                        CGContextSaveGState(destCG);
+                        // CGContextClipToMask applies mask in current
+                        // transform coordinates. Anchor at glyph position
+                        // (top-left of 64x64 box).
+                        CGRect dstRect = CGRectMake(
+                            anchorPoint.x() - 32.0,
+                            anchorPoint.y() - 32.0 + static_cast<CGFloat>(ptSize) / 2.0,
+                            64, 64);
+                        CGContextClipToMask(destCG, dstRect, maskImg.get());
+                        // Fill the rect with current fillStyle color. This
+                        // paints through the mask: where mask=0 (former
+                        // atlas pixel=255=white-bg) → no paint; where mask=
+                        // 255 (former atlas pixel=0=black-text) → paint.
+                        CGContextFillRect(destCG, dstRect);
+                        CGContextRestoreGState(destCG);
+                        WTFLogAlways("[V-790.L] per-glyph atlas HIT "
+                                     "font_id=%u pt=%u cp=U+%04x pos=%u "
+                                     "— alpha-mask iPhone substitution",
+                                     static_cast<unsigned>(fontId),
+                                     static_cast<unsigned>(ptSize),
+                                     static_cast<unsigned>(cp),
+                                     static_cast<unsigned>(positionClass));
+                        return; // skip Layer B + platform CT raster
                     }
                 }
             }
