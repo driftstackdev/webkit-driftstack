@@ -304,6 +304,7 @@ platform/cocoa/CoreLocationGeolocationProvider.mm @nonARC
 platform/cocoa/CoreVideoSoftLink.cpp
 platform/cocoa/DragDataCocoa.mm @nonARC
 platform/cocoa/DragImageCocoa.mm @nonARC
+platform/cocoa/DriftstackArchetypeConfig.mm @nonARC @no-unify
 platform/cocoa/DriftstackBehavioralModel.mm @nonARC @no-unify
 platform/cocoa/EffectiveRateChangedListener.mm @nonARC
 platform/cocoa/FileMonitorCocoa.mm @nonARC
