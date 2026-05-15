@@ -1370,9 +1370,29 @@ void InlineDisplayContentBuilder::setInlineBoxGeometry(const Box& inlineBox, Lay
     ASSERT(inlineBox.isInlineBox());
 
     auto borderBoxSize = LayoutSize { };
-    if (!inlineBox.isRubyBase())
+    if (!inlineBox.isRubyBase()) {
+#if PLATFORM(DRIFTSTACK)
+        // V-433.Z P-track #46 +1px Δh investigation (wave 29-222): log the
+        // float value of logicalRect.height() just before fromFloatCeil
+        // converts it to LayoutUnit. If 175.0 → 175 (no drift); if 175.0001
+        // → 176 (drift drives the +1). Env-gated; default off to avoid log
+        // spam. Set DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY=1 to enable.
+        static bool s_logEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY");
+            return env && env[0] == '1';
+        }();
+        if (s_logEnabled) {
+            float h = logicalRect.height();
+            float w = logicalRect.width();
+            WTFLogAlways("[Driftstack-P46-IBG] w=%.6f h=%.6f ceil(h)=%.0f drift=%s",
+                static_cast<double>(w),
+                static_cast<double>(h),
+                ceilf(h),
+                (ceilf(h) > floorf(h)) ? "YES" : "NO");
+        }
+#endif
         borderBoxSize = { LayoutUnit::fromFloatCeil(logicalRect.width()), LayoutUnit::fromFloatCeil(logicalRect.height()) };
-    else {
+    } else {
         // While flooring here may produce fractional overflow, it ensures ruby content would never trigger incorrect wrapping triggered by
         // inflated annotation boxes inside a shrink-to-fit container (where annotation box is sized to the ruby base but it also imposes a required minimum width)
         borderBoxSize = { LayoutUnit::fromFloatFloor(logicalRect.width()), LayoutUnit::fromFloatFloor(logicalRect.height()) };
