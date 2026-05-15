@@ -138,7 +138,32 @@ InlineLayoutUnit LineBoxVerticalAligner::simplifiedVerticalAlignment(LineBox& li
         rootInlineBoxLogicalTop = std::max(rootInlineBoxLogicalTop, layoutBounds.ascent - rootInlineBoxAscent);
     }
     rootInlineBox.setLogicalTop(rootInlineBoxLogicalTop);
-    return lineBoxLogicalBottom - lineBoxLogicalTop;
+    auto lineBoxHeight = lineBoxLogicalBottom - lineBoxLogicalTop;
+
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Z P-track #46 +1px Δh probe — simplifiedVerticalAlignment path
+    // (wave 29-222 r2). The full computeLogicalHeightAndAlign is bypassed
+    // for simple cases (single line, no fancy align); v433y probe likely
+    // takes THIS path. Logs root ascent + box ascent/height to catch where
+    // the +1 emerges. Env-gate DRIFTSTACK_LOG_LINE_BOX_HEIGHT=1.
+    {
+        static bool s_logLBHSimplified = []() {
+            const char* env = getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT");
+            return env && env[0] == '1';
+        }();
+        if (s_logLBHSimplified) {
+            WTFLogAlways("[Driftstack-P46-LBHs] rootAscent=%.6f rootBoundsAscent=%.6f rootBoundsHeight=%.6f logicalTop=%.6f logicalBottom=%.6f → height=%.6f",
+                static_cast<double>(rootInlineBoxAscent),
+                static_cast<double>(rootInlineBoxLayoutBounds.ascent),
+                static_cast<double>(rootInlineBoxLayoutBounds.height()),
+                static_cast<double>(lineBoxLogicalTop),
+                static_cast<double>(lineBoxLogicalBottom),
+                static_cast<double>(lineBoxHeight));
+        }
+    }
+#endif
+
+    return lineBoxHeight;
 }
 
 InlineLayoutUnit LineBoxVerticalAligner::logicalTopOffsetFromParentBaseline(const InlineLevelBox& inlineLevelBox, const InlineLevelBox& parentInlineBox, IsInlineLevelBoxAlignment isInlineLevelBoxAlignment) const
