@@ -214,33 +214,53 @@ void Font::platformInit()
     descent = ceilf(descent);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-602 option 1 (2026-05-11, env-gated DRIFTSTACK_V602_SUBSTITUTE=1):
-    // detect the PingFang-substitute Hiragino selected by
-    // driftstackIOSFallbackFontForCJKCluster (FontCacheCoreText.cpp).
-    // Override Mac Hiragino metrics with PingFang's hhea/OS-2 typo values
-    // (DriftstackPingFangMetrics.h) so the canvas line-height + text
-    // metrics match what iPhone PingFang would produce for the same CSS
-    // weight. Layer 4 glyph shape parity (Hiragino vs PingFang glyphs)
-    // is residual V-653 scope.
+    // V-602 PingFang metric overlay + Track I generalization (wave 29-233):
+    // Mac-resolved fallback fonts that diverge from iOS equivalents get
+    // metric override here. Table-driven pattern — each entry maps a Mac
+    // family name to the iOS target metric source. Add new entries as
+    // empirical divergences emerge.
     //
-    // Family-name based detection: empirical V-602 substitute resolves
-    // CTFontCopyFamilyName to ".Hiragino Kaku Gothic Interface" (Mac
-    // internal dot-prefixed name). Pattern-match this name string —
-    // the V-602 env-gate logic in FontCacheCoreText only returns
-    // Hiragino on PLATFORM(DRIFTSTACK) when the env-gate is active,
-    // so this detection is V-602-scoped in practice.
-    static bool s_v602FixupEnabled = []() {
+    // Original V-602 hardcoded Hiragino→PingFang block is now entry [0]
+    // in kDriftstackFontMetricOverrides. Future Track I entries follow.
+    //
+    // Env-gated DRIFTSTACK_V602_SUBSTITUTE=1 (legacy name preserved for
+    // back-compat; semantically gates ALL Track I overrides). Off by
+    // default — production sessions explicitly enable.
+    static bool s_metricOverridesEnabled = []() {
         const char* env = getenv("DRIFTSTACK_V602_SUBSTITUTE");
         return env && env[0] == '1';
     }();
-    if (s_v602FixupEnabled && familyName) {
-        bool isHiragino = (CFStringCompare(familyName.get(), CFSTR(".Hiragino Kaku Gothic Interface"), 0) == kCFCompareEqualTo)
-            || (CFStringCompare(familyName.get(), CFSTR("Hiragino Kaku Gothic"), 0) == kCFCompareEqualTo)
-            || (CFStringCompare(familyName.get(), CFSTR("HiraginoSans"), 0) == kCFCompareEqualTo);
-        if (isHiragino) {
-            // Resolve PingFang weight-bracket entry from CSS weight.
-            // CTFont weight trait → CSS weight via OpenType spec.
-            // Simplified linear: ctWeight=-1→100, 0→400, 1→800; clamped to [100,900].
+    if (s_metricOverridesEnabled && familyName) {
+        struct DriftstackFontMetricOverrideEntry {
+            CFStringRef macFamilyName;
+            // Function pointer returning the iOS metric source for a given
+            // CSS weight. Each entry can pull from its own source table
+            // (e.g., PingFang for Hiragino, .SF UI Symbols for Apple
+            // Symbols substitutes, etc.).
+            const WebCore::Driftstack::PingFangMetricEntry& (*resolveMetric)(uint16_t cssWeight);
+        };
+        // Mac family names that route to PingFang metrics (V-602 original).
+        // Track I extends this table with new entries as Mac→iOS font
+        // divergences are empirically captured.
+        static const DriftstackFontMetricOverrideEntry kOverrideTable[] = {
+            { CFSTR(".Hiragino Kaku Gothic Interface"), &WebCore::Driftstack::pingFangMetricForWeight },
+            { CFSTR("Hiragino Kaku Gothic"),            &WebCore::Driftstack::pingFangMetricForWeight },
+            { CFSTR("HiraginoSans"),                    &WebCore::Driftstack::pingFangMetricForWeight },
+            // Track I future entries land here as BS captures provide
+            // per-font reference metrics. Currently empirical-data-pending:
+            //   ".AppleIndicFont"        → .SF Devanagari metrics (V-433.Z 0x1CDA, 0x20B9)
+            //   "Geeza Pro"              → Apple Symbols metrics (V-433.Z 0x21E4)
+            //   "Kohinoor Devanagari"    → .SF Devanagari metrics
+            //   "Khmer Sangam MN"        → Apple Symbols metrics (V-433.Z 0x17DD)
+        };
+        const DriftstackFontMetricOverrideEntry* matchedEntry = nullptr;
+        for (const auto& entry : kOverrideTable) {
+            if (CFStringCompare(familyName.get(), entry.macFamilyName, 0) == kCFCompareEqualTo) {
+                matchedEntry = &entry;
+                break;
+            }
+        }
+        if (matchedEntry) {
             uint16_t cssWeight = 400; // default Regular
             RetainPtr<CTFontDescriptorRef> v602Desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
             if (v602Desc) {
@@ -257,13 +277,13 @@ void Font::platformInit()
                     }
                 }
             }
-            const auto& pingFangMetric = WebCore::Driftstack::pingFangMetricForWeight(cssWeight);
-            unitsPerEm = pingFangMetric.unitsPerEm;
-            ascent = scaleEmToUnits(pingFangMetric.typoAscent, unitsPerEm) * pointSize;
-            descent = -scaleEmToUnits(pingFangMetric.typoDescent, unitsPerEm) * pointSize;
-            lineGap = scaleEmToUnits(pingFangMetric.typoLineGap, unitsPerEm) * pointSize;
-            WTFLogAlways("[Driftstack-V602] PingFang metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
-                static_cast<unsigned>(cssWeight), pingFangMetric.label,
+            const auto& targetMetric = matchedEntry->resolveMetric(cssWeight);
+            unitsPerEm = targetMetric.unitsPerEm;
+            ascent = scaleEmToUnits(targetMetric.typoAscent, unitsPerEm) * pointSize;
+            descent = -scaleEmToUnits(targetMetric.typoDescent, unitsPerEm) * pointSize;
+            lineGap = scaleEmToUnits(targetMetric.typoLineGap, unitsPerEm) * pointSize;
+            WTFLogAlways("[Driftstack-Track-I] metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
+                static_cast<unsigned>(cssWeight), targetMetric.label,
                 static_cast<double>(ascent), static_cast<double>(descent),
                 static_cast<double>(lineGap), static_cast<double>(pointSize));
         }
