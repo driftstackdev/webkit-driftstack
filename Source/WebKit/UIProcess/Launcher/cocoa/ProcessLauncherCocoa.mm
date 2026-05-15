@@ -401,16 +401,29 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
         const char* environmentTZ = getenv("TZ");
         const char* environmentLANG = getenv("LANG");
         const char* environmentLCALL = getenv("LC_ALL");
-        WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s",
+        // V-433.Z P-track #46 (wave 29-222): forward log-gate env vars to
+        // WebContent process so static-init `getenv("DRIFTSTACK_LOG_*")`
+        // gates in inline layout, font init, etc. see the founder-set
+        // value. WebContent XPC services don't inherit parent shell env
+        // automatically.
+        const char* environmentLogIBG = getenv("DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY");
+        const char* environmentV602 = getenv("DRIFTSTACK_V602_SUBSTITUTE");
+        WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s LOG_IBG=%s V602=%s",
                 environmentTZ ?: "(unset)",
                 environmentLANG ?: "(unset)",
-                environmentLCALL ?: "(unset)");
+                environmentLCALL ?: "(unset)",
+                environmentLogIBG ?: "(unset)",
+                environmentV602 ?: "(unset)");
         if (environmentTZ)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TZ", environmentTZ);
         if (environmentLANG)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LANG", environmentLANG);
         if (environmentLCALL)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LC_ALL", environmentLCALL);
+        if (environmentLogIBG)
+            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY", environmentLogIBG);
+        if (environmentV602)
+            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "DRIFTSTACK_V602_SUBSTITUTE", environmentV602);
 #endif
         xpc_dictionary_set_value(bootstrapMessage.get(), "ContainerEnvironmentVariables", containerEnvironmentVariables.get());
     }
