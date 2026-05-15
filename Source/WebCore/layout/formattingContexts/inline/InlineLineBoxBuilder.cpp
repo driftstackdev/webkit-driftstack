@@ -284,6 +284,32 @@ void LineBoxBuilder::setLayoutBoundsForInlineBox(InlineLevelBox& inlineBox, Font
     auto layoutBounds = [&]() -> InlineLevelBox::AscentAndDescent {
         auto [ascent, descent] = layoutBoundstWithEdgeAdjustmentForInlineBox(inlineBox, inlineBox.primarymetricsOfPrimaryFont(), fontBaseline);
 
+#if PLATFORM(DRIFTSTACK)
+        // V-433.Z P-track #46 +1px Δh probe — half-leading source layer
+        // (wave 29-223 slice 3). Logs ascent / descent / preferredLineHeight
+        // / halfLeading on the BOTH branches (font-metrics-based vs
+        // computed-line-height). v433y context measures fonts at varying
+        // sizes via canvas; this site IS in the canvas measureText layout
+        // path. Env-gate DRIFTSTACK_LOG_LINE_BOX_HEIGHT=1.
+        {
+            static bool s_logLBH = []() {
+                const char* env = getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT");
+                return env && env[0] == '1';
+            }();
+            if (s_logLBH) {
+                float preferred = inlineBox.preferredLineHeight();
+                bool metricsBased = inlineBox.isPreferredLineHeightFontMetricsBased();
+                WTFLogAlways("[Driftstack-P46-SLBIB] isRoot=%d ascent_in=%.6f descent_in=%.6f prefLH=%.6f metricsBased=%d sum=%.6f",
+                    inlineBox.isRootInlineBox() ? 1 : 0,
+                    static_cast<double>(ascent),
+                    static_cast<double>(descent),
+                    static_cast<double>(preferred),
+                    metricsBased ? 1 : 0,
+                    static_cast<double>(ascent + descent));
+            }
+        }
+#endif
+
         // FIXME: Annotation root should not have any impact here with the proper annotation box handling (dedicated IFC line for annotations and line-height is 1).
         if (rootBox().isRubyAnnotationBox())
             return { ascent, descent };
