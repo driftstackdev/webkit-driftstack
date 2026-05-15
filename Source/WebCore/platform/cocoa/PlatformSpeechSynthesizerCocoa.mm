@@ -342,6 +342,12 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             //
             // Reads DRIFTSTACK_ARCHETYPE env var directly; matches V-633.D
             // env-gate pattern; avoids cross-module header dependency.
+            //
+            // Wave 29-229 C-A1 attempt (REVERTED): DriftstackArchetypeConfig
+            // wire failed at link time — singleton() symbol not exported by
+            // SourcesCocoa.txt @nonARC @no-unify entry. Xcode project regen
+            // required before C-A1 accessor wiring can land. Tracked as
+            // Tier-3 founder-action.
             static const bool v657NeedsCompactRemap = []() {
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
