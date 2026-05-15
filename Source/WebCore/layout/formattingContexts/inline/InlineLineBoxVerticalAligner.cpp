@@ -491,6 +491,26 @@ InlineLayoutUnit LineBoxVerticalAligner::adjustForAnnotationIfNeeded(LineBox& li
     };
     auto adjustedLineBoxHeight = adjustLineBoxHeightIfNeeded();
 
+#if PLATFORM(DRIFTSTACK)
+    // V-433.Z P-track #46 +1px Δh next-layer probe (wave 29-222):
+    // IBG fromFloatCeil REFUTED in static-HTML case (drift=NO). The +1 is
+    // context-dependent — emerges in v433y font-enum probe path. This
+    // logs lineBoxHeight + adjustedLineBoxHeight to catch which path
+    // grows it. Env-gated DRIFTSTACK_LOG_LINE_BOX_HEIGHT=1.
+    {
+        static bool s_logLBH = []() {
+            const char* env = getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT");
+            return env && env[0] == '1';
+        }();
+        if (s_logLBH) {
+            WTFLogAlways("[Driftstack-P46-LBH] lineBoxHeight=%.6f adjustedLineBoxHeight=%.6f delta=%.6f",
+                static_cast<double>(lineBoxHeight),
+                static_cast<double>(adjustedLineBoxHeight),
+                static_cast<double>(adjustedLineBoxHeight - lineBoxHeight));
+        }
+    }
+#endif
+
     if (lineBoxHeight != adjustedLineBoxHeight) {
         // Annotations needs some space.
         auto adjustContentTopWithAnnotationSpace = [&] {

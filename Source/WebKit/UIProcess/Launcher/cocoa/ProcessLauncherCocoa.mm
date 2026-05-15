@@ -406,24 +406,44 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
         // gates in inline layout, font init, etc. see the founder-set
         // value. WebContent XPC services don't inherit parent shell env
         // automatically.
-        const char* environmentLogIBG = getenv("DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY");
-        const char* environmentV602 = getenv("DRIFTSTACK_V602_SUBSTITUTE");
-        WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s LOG_IBG=%s V602=%s",
+        // V-433.Z P-track #46 + TD-V-NNN-J.1 + #41 wave 29-222: forward
+        // ALL DRIFTSTACK_* runtime gates. Any new DRIFTSTACK_* env-gated
+        // static init in renderer-side code (font/layout/paint/JS/atlas/ML)
+        // MUST be added here too, else gate silently no-ops in WebContent.
+        struct { const char* name; const char* value; } dsEnv[] = {
+            { "DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY", getenv("DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY") },
+            { "DRIFTSTACK_LOG_LINE_BOX_HEIGHT", getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT") },
+            { "DRIFTSTACK_V602_SUBSTITUTE", getenv("DRIFTSTACK_V602_SUBSTITUTE") },
+            { "DRIFTSTACK_LAYER_B_ENABLED", getenv("DRIFTSTACK_LAYER_B_ENABLED") },
+            { "DRIFTSTACK_LAYER_B_V2_ENABLED", getenv("DRIFTSTACK_LAYER_B_V2_ENABLED") },
+            { "DRIFTSTACK_ARCHETYPE_SLUG", getenv("DRIFTSTACK_ARCHETYPE_SLUG") },
+            { "DRIFTSTACK_REFERENCE_DIR", getenv("DRIFTSTACK_REFERENCE_DIR") },
+            { "DRIFTSTACK_TEXT_RUN_ATLAS_PATH", getenv("DRIFTSTACK_TEXT_RUN_ATLAS_PATH") },
+            { "DRIFTSTACK_TEXT_RUN_ATLAS_DIAG", getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") },
+            { "DRIFTSTACK_CANVAS_FUZZ_ATLAS", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS") },
+            { "DRIFTSTACK_CANVAS_FP10X_OVERRIDE", getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE") },
+        };
+        WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
+                     "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
                 environmentTZ ?: "(unset)",
                 environmentLANG ?: "(unset)",
                 environmentLCALL ?: "(unset)",
-                environmentLogIBG ?: "(unset)",
-                environmentV602 ?: "(unset)");
+                dsEnv[0].value ?: "(unset)",
+                dsEnv[1].value ?: "(unset)",
+                dsEnv[2].value ?: "(unset)",
+                dsEnv[3].value ?: "(unset)",
+                dsEnv[4].value ?: "(unset)",
+                dsEnv[5].value ?: "(unset)");
         if (environmentTZ)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "TZ", environmentTZ);
         if (environmentLANG)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LANG", environmentLANG);
         if (environmentLCALL)
             xpc_dictionary_set_string(containerEnvironmentVariables.get(), "LC_ALL", environmentLCALL);
-        if (environmentLogIBG)
-            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "DRIFTSTACK_LOG_INLINE_BOX_GEOMETRY", environmentLogIBG);
-        if (environmentV602)
-            xpc_dictionary_set_string(containerEnvironmentVariables.get(), "DRIFTSTACK_V602_SUBSTITUTE", environmentV602);
+        for (const auto& kv : dsEnv) {
+            if (kv.value)
+                xpc_dictionary_set_string(containerEnvironmentVariables.get(), kv.name, kv.value);
+        }
 #endif
         xpc_dictionary_set_value(bootstrapMessage.get(), "ContainerEnvironmentVariables", containerEnvironmentVariables.get());
     }

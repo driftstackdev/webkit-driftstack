@@ -30,8 +30,68 @@
 #include <cerrno>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <string>
 
 namespace WebCore {
+
+#if PLATFORM(DRIFTSTACK)
+// TD-V-NNN-J.1 (wave 29-222 founder-approved 2026-05-15): scan
+// reference/ for archetype-suffixed atlas files and pick the matching
+// one by runtime archetype.
+//
+// Naming convention: driftstack_text_run_atlas_<archetype-slug>_v<N>.bin
+// Highest <N> wins per archetype.
+//
+// Selection priority:
+//   1. DRIFTSTACK_TEXT_RUN_ATLAS_PATH env var (explicit override; tests)
+//   2. Scan reference/ for files matching driftstack_text_run_atlas_<slug>_v*.bin
+//      where <slug> = DRIFTSTACK_ARCHETYPE_SLUG env var
+//   3. Legacy default: driftstack_text_run_atlas_v1.bin (back-compat)
+//
+// Returns full path of best-version atlas file matching runtime archetype,
+// or empty string if no match.
+static std::string resolveArchetypeAtlasPath()
+{
+    const char* slug = std::getenv("DRIFTSTACK_ARCHETYPE_SLUG");
+    if (!slug || !*slug)
+        return {};
+
+    const char* dir = std::getenv("DRIFTSTACK_REFERENCE_DIR");
+    if (!dir || !*dir)
+        dir = "/Users/john/code/driftstack/reference";
+
+    DIR* d = ::opendir(dir);
+    if (!d)
+        return {};
+
+    std::string prefix = std::string("driftstack_text_run_atlas_") + slug + "_v";
+    std::string bestName;
+    int bestVer = -1;
+
+    while (struct dirent* e = ::readdir(d)) {
+        std::string name(e->d_name);
+        if (name.size() < prefix.size() + 4) continue;
+        if (name.compare(0, prefix.size(), prefix) != 0) continue;
+        if (name.compare(name.size() - 4, 4, ".bin") != 0) continue;
+        std::string vs = name.substr(prefix.size(), name.size() - prefix.size() - 4);
+        if (vs.empty()) continue;
+        bool allDigits = true;
+        int v = 0;
+        for (char c : vs) {
+            if (c < '0' || c > '9') { allDigits = false; break; }
+            v = v * 10 + (c - '0');
+        }
+        if (!allDigits) continue;
+        if (v > bestVer) { bestVer = v; bestName = name; }
+    }
+    ::closedir(d);
+
+    if (bestVer < 0)
+        return {};
+    return std::string(dir) + "/" + bestName;
+}
+#endif
 
 DriftstackTextRunAtlas& DriftstackTextRunAtlas::singleton()
 {
@@ -52,6 +112,12 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     const char* resolved = path;
     if (!resolved)
         resolved = std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_PATH");
+    // TD-V-NNN-J.1: try archetype-suffixed file before legacy default.
+    std::string archetypeOwned;
+    if (!resolved) {
+        archetypeOwned = resolveArchetypeAtlasPath();
+        if (!archetypeOwned.empty()) resolved = archetypeOwned.c_str();
+    }
     if (!resolved)
         resolved = "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin";
 
