@@ -142,6 +142,26 @@ static inline webrtc::PeerConnectionInterface::RtcpMuxPolicy NODELETE rtcpMuxPol
 
 static inline webrtc::PeerConnectionInterface::IceTransportsType NODELETE iceTransportPolicyfromConfiguration(const MediaEndpointConfiguration& configuration)
 {
+#if PLATFORM(DRIFTSTACK)
+    // EG-WK-1.3 Wave 29-318: WebRTC ICE candidate filtering — force kRelay
+    // (no host candidates) when DRIFTSTACK_FORCE_ICE_RELAY=1. Prevents
+    // target sites from gathering host IPs that would reveal Mac fleet
+    // identity even with SOCKS5 proxy active for non-WebRTC traffic.
+    // Customer's TURN server still allowed; host/srflx/prflx candidates
+    // suppressed. Off by default; production sessions explicitly enable.
+    static bool s_forceIceRelayEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_FORCE_ICE_RELAY");
+        return env && env[0] == '1';
+    }();
+    if (s_forceIceRelayEnabled) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.3] ICE transport policy forced to kRelay (host/srflx/prflx candidates suppressed)");
+        }
+        return webrtc::PeerConnectionInterface::kRelay;
+    }
+#endif
     switch (configuration.iceTransportPolicy) {
     case RTCIceTransportPolicy::Relay:
         return webrtc::PeerConnectionInterface::kRelay;
