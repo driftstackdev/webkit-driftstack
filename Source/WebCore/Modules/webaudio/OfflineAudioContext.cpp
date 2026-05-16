@@ -329,22 +329,29 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
         }
     }
 
-    // Wave 29-288 Audio v2 Phase A: canonical graph hash diagnostic.
-    // Walks the destination → inputs chain at startRendering completion time;
-    // emits per-node canonical bytes (type + key params); sha256s the
-    // concatenated bytes; logs the 16-byte hex prefix.
+    // Wave 29-288/29-290 Audio v2 Phase A diag + Phase C dispatch:
+    // Walks the destination → inputs chain at startRendering completion;
+    // builds per-node canonical bytes; sha256s them → 16B key.
     //
-    // Diag-only — no dispatch change. Compare logged hashes against
-    // JS-side opsHash to validate cross-side parity before Phase B/C
-    // wires graphHash into atlas key derivation.
+    // Two gates:
+    //   DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG=1     — log hex prefix
+    //   DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH=1 — use as atlas key (Phase C)
     //
-    // Env gate: DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG=1 (+ __XPC_*).
-    if (renderedBuffer && didRendering) {
-        static bool s_graphHashDiagEnabled = []() {
-            const char* env = getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG");
-            return env && env[0] == '1';
-        }();
-        if (s_graphHashDiagEnabled) {
+    // When DISPATCH is on, the digest is computed and stashed for the
+    // DASA substitution block below to use via `entryFor(key, shape)`
+    // instead of the legacy `entryByShape()` lookup.
+    std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> graphDigest;
+    bool graphDigestValid = false;
+    static bool s_graphHashDiagEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG");
+        return env && env[0] == '1';
+    }();
+    static bool s_graphHashDispatchEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH");
+        return env && env[0] == '1';
+    }();
+    if (renderedBuffer && didRendering && (s_graphHashDiagEnabled || s_graphHashDispatchEnabled)) {
+        {
             StringBuilder canon;
             HashSet<AudioNode*> visited;
             auto appendNodeCanonical = [&](AudioNode& node, auto& self) -> void {
@@ -399,21 +406,23 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
             appendNodeCanonical(destination(), appendNodeCanonical);
             String canonStr = canon.toString();
             auto utf8 = canonStr.utf8();
-            std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> digest;
-            CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), digest.data());
-            StringBuilder hexBuilder;
-            static constexpr ASCIILiteral kLowerHex = "0123456789abcdef"_s;
-            for (size_t i = 0; i < 16; ++i) {
-                hexBuilder.append(kLowerHex[(digest[i] >> 4) & 0xf]);
-                hexBuilder.append(kLowerHex[digest[i] & 0xf]);
-            }
-            static unsigned diagCount = 0;
-            if (++diagCount <= 30) {
-                WTFLogAlways("[Driftstack-AudioGraphHash-DIAG] sr=%g ch=%u frames=%u canonLen=%u sha16=%s",
-                    renderedBuffer->sampleRate(), renderedBuffer->numberOfChannels(),
-                    static_cast<unsigned>(renderedBuffer->length()),
-                    static_cast<unsigned>(utf8.length()),
-                    hexBuilder.toString().utf8().data());
+            CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), graphDigest.data());
+            graphDigestValid = true;
+            if (s_graphHashDiagEnabled) {
+                StringBuilder hexBuilder;
+                static constexpr ASCIILiteral kLowerHex = "0123456789abcdef"_s;
+                for (size_t i = 0; i < 16; ++i) {
+                    hexBuilder.append(kLowerHex[(graphDigest[i] >> 4) & 0xf]);
+                    hexBuilder.append(kLowerHex[graphDigest[i] & 0xf]);
+                }
+                static unsigned diagCount = 0;
+                if (++diagCount <= 30) {
+                    WTFLogAlways("[Driftstack-AudioGraphHash-DIAG] sr=%g ch=%u frames=%u canonLen=%u sha16=%s",
+                        renderedBuffer->sampleRate(), renderedBuffer->numberOfChannels(),
+                        static_cast<unsigned>(renderedBuffer->length()),
+                        static_cast<unsigned>(utf8.length()),
+                        hexBuilder.toString().utf8().data());
+                }
             }
         }
     }
@@ -447,7 +456,21 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
             uint32_t channelCount = renderedBuffer->numberOfChannels();
             uint32_t framesPerChannel = renderedBuffer->length();
             auto& atlas = DriftstackAudioAtlas::singleton();
-            auto bytes = atlas.entryByShape(sampleRate, channelCount, framesPerChannel);
+            std::span<const uint8_t> bytes;
+            // Wave 29-290 Phase C: when DISPATCH enabled + graph digest
+            // computed, use entryFor(key, shape) for graph-disambiguated
+            // lookup. Falls back to entryByShape on miss (legacy path).
+            if (s_graphHashDispatchEnabled && graphDigestValid) {
+                std::span<const uint8_t, 16> keySpan { std::span<const uint8_t> { graphDigest }.first(16) };
+                bytes = atlas.entryFor(keySpan, sampleRate, channelCount, framesPerChannel);
+                if (bytes.empty()) {
+                    static unsigned phaseCMisses = 0;
+                    if (++phaseCMisses <= 30)
+                        WTFLogAlways("[Driftstack-AudioGraphHash-Phase-C-miss] graph-key not in atlas; falling through to shape-only");
+                }
+            }
+            if (bytes.empty())
+                bytes = atlas.entryByShape(sampleRate, channelCount, framesPerChannel);
             if (!bytes.empty()) {
                 // Atlas data is interleaved Float32; deinterleave into channel data.
                 // Stage H builder produces interleaved bytes (matches AudioBus
