@@ -105,6 +105,7 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& 
 #include "TextRun.h"
 #include "TextShapingResultAndDisplayList.h"
 #if PLATFORM(DRIFTSTACK)
+#include "DriftstackFontCanonicalAtlas.h"
 #include "DriftstackMeasureTextOverrides.h"
 #include "OpSequenceRecorder.h"
 #endif
@@ -3255,6 +3256,43 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
         if (familyLower.startsWith("-webkit-"_s))
             familyLower = familyLower.substring(8);
         CString textUtf8 = textRun.text().toString().utf8();
+
+        // Wave 29-283: V-184 random-text extension via DSCFM-v1 atlas.
+        // Lookup (family|weight|style|size|text) keyed by sha256 prefix.
+        // Covers V-405 fuzzer probes captured from real iPhone via BS Automate.
+        // Falls through to kCanonicalMetrics linear scan on miss.
+        static bool s_dscfmEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE");
+            return env && env[0] == '1';
+        }();
+        if (s_dscfmEnabled) {
+            const auto& description = font.fontDescription();
+            auto weightValue = static_cast<unsigned>(static_cast<float>(description.weight()));
+            String weightStr = String::number(weightValue);
+            auto slope = description.fontStyleSlope();
+            String styleStr = (slope && static_cast<float>(*slope) != 0.0f) ? "italic"_s : "normal"_s;
+            unsigned sizeValue = static_cast<unsigned>(description.computedSize());
+            String textStr = textRun.text().toString();
+            auto canonical = DriftstackFontCanonicalAtlas::singleton().lookup(
+                familyLower, weightStr, styleStr, sizeValue, textStr);
+            if (canonical) {
+                metrics->setWidth(canonical->mtWidth);
+                FloatPoint offset = textOffset(canonical->mtWidth, textRun.direction());
+                metrics->setActualBoundingBoxAscent(canonical->mtActualBoundingBoxAscent);
+                metrics->setActualBoundingBoxDescent(canonical->mtActualBoundingBoxDescent);
+                metrics->setFontBoundingBoxAscent(canonical->mtFontBoundingBoxAscent - offset.y());
+                metrics->setFontBoundingBoxDescent(canonical->mtFontBoundingBoxDescent + offset.y());
+                metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
+                metrics->setEmHeightDescent(fontMetrics.descent() + offset.y());
+                metrics->setHangingBaseline(fontMetrics.ascent() - offset.y());
+                metrics->setAlphabeticBaseline(-offset.y());
+                metrics->setIdeographicBaseline(-fontMetrics.descent() - offset.y());
+                metrics->setActualBoundingBoxLeft(0 - offset.x());
+                metrics->setActualBoundingBoxRight(canonical->mtWidth + offset.x());
+                return metrics;
+            }
+        }
+
         for (const auto& entry : kCanonicalMetrics) {
             auto entryTextView = StringView::fromLatin1(entry.text);
             if (textUtf8.length() != entryTextView.length()) continue;

@@ -207,6 +207,7 @@ editing/mac/TextAlternativeWithRange.mm @nonARC @no-unify
 editing/mac/TextUndoInsertionMarkupMac.mm @nonARC
 fileapi/FileCocoa.mm @nonARC
 history/mac/HistoryItemMac.mm @nonARC
+html/canvas/DriftstackFontCanonicalAtlas.mm @nonARC
 html/canvas/GPUCanvasContextCocoa.mm @nonARC
 html/shadow/YouTubeEmbedShadowElement.cpp
 inspector/LegacyWebSocketInspectorInstrumentation.cpp
