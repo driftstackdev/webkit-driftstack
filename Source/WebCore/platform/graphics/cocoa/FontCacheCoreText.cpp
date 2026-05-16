@@ -2070,13 +2070,14 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     case 0x1CDA: { // Vedic Sign Three Dots Above — iPhone width 27 (711/713)
-        // Wave 29-219 fontTools cmap: U+1CDA (Vedic) ONLY in Noto Sans Kannada
-        // among Mac-resident iOS fonts. NOT in .SF Devanagari despite Vedic
-        // being a Devanagari script extension. Mac's CT natural cascade routes
-        // to Noto Sans Kannada but my prior .sf devanagari hook BLOCKED that
-        // path → fork width=54 (Arial notdef). Reorder to noto sans kannada first.
-        static const std::array<ASCIILiteral, 3> candidates {
-            "noto sans kannada"_s, ".sf devanagari"_s, "apple symbols"_s,
+        // Wave 29-317 empirical: prior wave 29-219 finding (NotoSansKannada has
+        // U+1CDA cmap entry) was correct but INCOMPLETE — the glyph exists with
+        // CTAdvance=0! Empirical from V-433Z-U1CDA-Diag log:
+        //   "hook returned font family='Noto Sans Kannada' size=72 glyph=460 CTAdvance=0"
+        // iPhone width=27 implies iPhone uses .PhoneFallback (per U+10A0 comment
+        // wave 29-219). Reorder candidates to put .phonefallback FIRST.
+        static const std::array<ASCIILiteral, 4> candidates {
+            ".phonefallback"_s, "noto sans kannada"_s, ".sf devanagari"_s, "apple symbols"_s,
         };
         RetainPtr<CTFontRef> result = driftstackLookupIOSFontByCandidates(candidates, description, size);
         // Wave 29-218 diagnostic: log what font was actually returned for
