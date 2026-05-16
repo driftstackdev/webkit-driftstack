@@ -147,7 +147,23 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
         // canonical for runtime-determined surface).
         if (!result.hasException()) {
             auto estimate = result.returnValue();
-            estimate.quota = estimate.quota / 2;
+            // Slice 245.3 (wave 29-246): file 99 S11 + file 110 § Storage
+            // quota — archetype-specific quota matching real iPhone disk
+            // size class. Env-var override path (DRIFTSTACK_STORAGE_QUOTA_BYTES)
+            // takes precedence; falls back to V-072 halving when unset.
+            // Same env-routed pattern as Apple Pay (Slice 245.1) until
+            // DriftstackArchetypeConfig.h registered for cross-module
+            // visibility.
+            if (const char* env = getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES")) {
+                uint64_t override = static_cast<uint64_t>(strtoull(env, nullptr, 10));
+                if (override > 0) {
+                    estimate.quota = override;
+                } else {
+                    estimate.quota = estimate.quota / 2;
+                }
+            } else {
+                estimate.quota = estimate.quota / 2;
+            }
             estimate.usage = 0;
             promise.resolve(estimate);
             return;
