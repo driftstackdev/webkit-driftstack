@@ -155,7 +155,10 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
             // DriftstackArchetypeConfig.h registered for cross-module
             // visibility.
             if (const char* env = getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES")) {
-                uint64_t override = static_cast<uint64_t>(strtoull(env, nullptr, 10));
+                // Hand-roll uint64 parse to avoid strtoull (Werror=-Wunsafe-buffer-usage-in-libc-call).
+                uint64_t override = 0;
+                for (const char* p = env; *p >= '0' && *p <= '9'; ++p)
+                    override = override * 10 + static_cast<uint64_t>(*p - '0');
                 if (override > 0) {
                     estimate.quota = override;
                 } else {
