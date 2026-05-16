@@ -334,6 +334,24 @@ void LineBoxBuilder::setLayoutBoundsForInlineBox(InlineLevelBox& inlineBox, Font
             if (shouldIncorporateHalfLeading) {
                 auto lineGap = InlineFormattingUtils::snapToInt(inlineBox.primarymetricsOfPrimaryFont().lineSpacing(), inlineBox);
                 auto halfLeading = (lineGap - (ascent + descent)) / 2;
+#if PLATFORM(DRIFTSTACK)
+                // Wave 29-257 / P-track #46 empirical exploration: ceil(halfLeading)
+                // closes cjk h=17.5→18 but breaks emoji/family h=18.5→19, flag h=18.0→18.5.
+                // iPhone reference: cjk=18, arabic=19, emoji=18, family=18, flag=18.
+                // Per-script-target rounding requires font-cascade-aware logic
+                // beyond simple ceil/round. Kept as env-gated diagnostic:
+                // DRIFTSTACK_HALFLEADING_ROUND=ceil applies std::ceil,
+                // DRIFTSTACK_HALFLEADING_ROUND=round applies std::round,
+                // unset = no-op (default).
+                if (const char* env = getenv("DRIFTSTACK_HALFLEADING_ROUND")) {
+                    if (env[0] == 'c' || env[0] == 'C')
+                        halfLeading = std::ceil(halfLeading);
+                    else if (env[0] == 'r' || env[0] == 'R')
+                        halfLeading = std::round(halfLeading);
+                    else if (env[0] == '1')
+                        halfLeading = std::round(halfLeading);
+                }
+#endif
                 ascent += halfLeading;
                 descent += halfLeading;
             }
