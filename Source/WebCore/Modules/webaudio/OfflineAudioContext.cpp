@@ -417,11 +417,12 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
                 }
                 static unsigned diagCount = 0;
                 if (++diagCount <= 30) {
-                    WTFLogAlways("[Driftstack-AudioGraphHash-DIAG] sr=%g ch=%u frames=%u canonLen=%u sha16=%s",
+                    WTFLogAlways("[Driftstack-AudioGraphHash-DIAG] sr=%g ch=%u frames=%u canonLen=%u sha16=%s canon=%s",
                         renderedBuffer->sampleRate(), renderedBuffer->numberOfChannels(),
                         static_cast<unsigned>(renderedBuffer->length()),
                         static_cast<unsigned>(utf8.length()),
-                        hexBuilder.toString().utf8().data());
+                        hexBuilder.toString().utf8().data(),
+                        utf8.data());
                 }
             }
         }
