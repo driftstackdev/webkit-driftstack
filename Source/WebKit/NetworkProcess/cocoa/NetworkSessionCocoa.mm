@@ -1219,6 +1219,28 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     // conflict with parameters.proxyConfiguration per per-session customer
     // config requirement (planning 133 EG-WK-1.1 spec).
     // Off when env unset → cumrig 1595/0 preserved (default behavior).
+    // EG-WK-1.4 Wave 29-313: egress safeguard. When DRIFTSTACK_REQUIRE_PROXY=1
+    // AND no SOCKS5 / HTTP proxy is configured for this session, log a
+    // CRITICAL warning so production deployments catch missing proxy config
+    // before sessions go live. (Full hard-refuse semantics requires WebContent
+    // load delegate integration — wave 29-313 logs only.)
+    {
+        const char* requireEnv = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        bool requireProxy = requireEnv && requireEnv[0] == '1';
+        const char* socks5EnvCheck = getenv("DRIFTSTACK_SOCKS5_PROXY");
+        bool socks5Set = socks5EnvCheck && socks5EnvCheck[0];
+        bool httpProxySet = parameters.proxyConfiguration
+            || !parameters.httpProxy.isEmpty()
+            || !parameters.httpsProxy.isEmpty();
+        if (requireProxy && !socks5Set && !httpProxySet) {
+            static bool loggedOnceSafeguard = false;
+            if (!loggedOnceSafeguard) {
+                loggedOnceSafeguard = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.4] EGRESS SAFEGUARD WARNING: DRIFTSTACK_REQUIRE_PROXY=1 but no proxy configured — production session should NOT egress without customer proxy");
+            }
+        }
+    }
+
     if (const char* socks5Env = getenv("DRIFTSTACK_SOCKS5_PROXY")) {
         if (socks5Env[0]) {
             String spec = String::fromLatin1(socks5Env);
