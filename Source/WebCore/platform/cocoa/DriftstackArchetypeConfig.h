@@ -91,6 +91,12 @@ public:
     String webgpuDevice() const { return m_webgpuDevice; }          // "apple"
     String webgpuDescription() const { return m_webgpuDescription; } // "apple"
 
+    // Apple Pay (Slice 244.2 / file 99 V2 / file 110 § Apple Pay):
+    // canMakePayments() varies per real iPhone user — true if Apple Pay
+    // set up (iCloud + Wallet has card), false otherwise. Per-session
+    // Phase 2 value seeded from archetype profile probability distribution.
+    bool applePaySetUp() const { return m_applePaySetUp; }
+
     // Resource paths (per-archetype binaries)
     String fontsDir() const { return m_fontsDir; }
     String voicesListPath() const { return m_voicesListPath; }
@@ -155,6 +161,9 @@ private:
     String m_webgpuArchitecture;
     String m_webgpuDevice;
     String m_webgpuDescription;
+
+    // Apple Pay (Slice 244.2)
+    bool m_applePaySetUp { false };
 
     // Resource paths
     String m_fontsDir;

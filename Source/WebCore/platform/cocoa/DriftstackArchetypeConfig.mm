@@ -184,6 +184,24 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
         }
     }
 
+    // apple_pay { set_up: true/false } — Slice 244.2 / file 99 V2 correction.
+    // Per-session Phase 2 value. JSON may omit (defaults false). Future:
+    // seed via probability distribution per archetype (~60-70% set_up for
+    // consumer iPhone). Env var DRIFTSTACK_APPLE_PAY_SET_UP=1 forces true
+    // (test override).
+    if (auto apValue = rootObj->getValue("apple_pay"_s)) {
+        if (auto ap = apValue->asObject()) {
+            if (auto v = ap->getValue("set_up"_s)) {
+                if (auto b = v->asBoolean())
+                    m_applePaySetUp = *b;
+            }
+        }
+    }
+    if (const char* env = getenv("DRIFTSTACK_APPLE_PAY_SET_UP")) {
+        if (env[0] == '1') m_applePaySetUp = true;
+        else if (env[0] == '0') m_applePaySetUp = false;
+    }
+
     // fonts {...}
     if (auto fontsValue = rootObj->getValue("fonts"_s)) {
         if (auto fonts = fontsValue->asObject()) {
