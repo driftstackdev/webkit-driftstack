@@ -2045,6 +2045,14 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     if (cluster.isEmpty())
         return nullptr;
     char32_t cp = cluster[0];
+    // P-#48 wave 29-314 diag trace: log entry + result for our 10 target cps.
+    // Limited to first 30 fires per process to avoid log flood.
+    static unsigned p48EntryCount = 0;
+    bool p48ShouldLog = (cp == 0x1CDA || cp == 0x17DD || cp == 0x302E
+        || cp == 0x2C7B || cp == 0x10A0 || cp == 0xA73D || cp == 0xFFFD
+        || cp == 0x21E4 || cp == 0x20E3 || cp == 0x20B9) && (++p48EntryCount <= 30);
+    if (p48ShouldLog)
+        WTFLogAlways("[Driftstack-P48-Entry] cp=U+%04X size=%g (entry #%u)", (unsigned)cp, size, p48EntryCount);
     // V-433.Z wave 29-206: per-codepoint candidate routing derived from
     // iPhone 17 / iOS 18.7 / Safari 26.4 Phase 2 reference width modes.
     // Mac's `.SF UI` alone has incomplete coverage; each script's iOS
