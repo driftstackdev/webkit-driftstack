@@ -35,6 +35,7 @@
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "DriftstackKerningTable.h"
 #include "DriftstackPingFangMetrics.h"
+#include "DriftstackTrackIMetrics.h"
 #include <unordered_map>
 #include <unordered_set>
 #include <wtf/Lock.h>
@@ -231,27 +232,30 @@ void Font::platformInit()
         return env && env[0] == '1';
     }();
     if (s_metricOverridesEnabled && familyName) {
+        // Wave 29-240 Slice 240.1: Track I override entry extended to support
+        // BOTH per-weight metric resolution (PingFang variants — V-602) and
+        // static metric values (Track I non-CJK fonts — wave 29-239 capture).
+        //
+        // resolveMetric: function ptr; if non-null, weight-dependent lookup
+        // staticMetric: pointer to TrackIFontMetric; if non-null, static
+        // exactly one is non-null per entry.
         struct DriftstackFontMetricOverrideEntry {
             CFStringRef macFamilyName;
-            // Function pointer returning the iOS metric source for a given
-            // CSS weight. Each entry can pull from its own source table
-            // (e.g., PingFang for Hiragino, .SF UI Symbols for Apple
-            // Symbols substitutes, etc.).
             const WebCore::Driftstack::PingFangMetricEntry& (*resolveMetric)(uint16_t cssWeight);
+            const WebCore::Driftstack::TrackIFontMetric* staticMetric;
         };
-        // Mac family names that route to PingFang metrics (V-602 original).
-        // Track I extends this table with new entries as Mac→iOS font
-        // divergences are empirically captured.
         static const DriftstackFontMetricOverrideEntry kOverrideTable[] = {
-            { CFSTR(".Hiragino Kaku Gothic Interface"), &WebCore::Driftstack::pingFangMetricForWeight },
-            { CFSTR("Hiragino Kaku Gothic"),            &WebCore::Driftstack::pingFangMetricForWeight },
-            { CFSTR("HiraginoSans"),                    &WebCore::Driftstack::pingFangMetricForWeight },
-            // Track I future entries land here as BS captures provide
-            // per-font reference metrics. Currently empirical-data-pending:
-            //   ".AppleIndicFont"        → .SF Devanagari metrics (V-433.Z 0x1CDA, 0x20B9)
-            //   "Geeza Pro"              → Apple Symbols metrics (V-433.Z 0x21E4)
-            //   "Kohinoor Devanagari"    → .SF Devanagari metrics
-            //   "Khmer Sangam MN"        → Apple Symbols metrics (V-433.Z 0x17DD)
+            // V-602 (per-weight): Mac Hiragino → iOS PingFang
+            { CFSTR(".Hiragino Kaku Gothic Interface"), &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
+            { CFSTR("Hiragino Kaku Gothic"),            &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
+            { CFSTR("HiraginoSans"),                    &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
+            // Track I (static metric from wave 29-239 BS capture iPhone 17 / Safari 26.4)
+            { CFSTR("Devanagari Sangam MN"),  nullptr, &WebCore::Driftstack::kTrackIFontMetrics[0] },
+            { CFSTR("Geeza Pro"),             nullptr, &WebCore::Driftstack::kTrackIFontMetrics[1] },
+            { CFSTR("Hebrew"),                nullptr, &WebCore::Driftstack::kTrackIFontMetrics[2] },
+            { CFSTR("Khmer Sangam MN"),       nullptr, &WebCore::Driftstack::kTrackIFontMetrics[3] },
+            { CFSTR("Kohinoor Devanagari"),   nullptr, &WebCore::Driftstack::kTrackIFontMetrics[4] },
+            { CFSTR("Thonburi"),              nullptr, &WebCore::Driftstack::kTrackIFontMetrics[5] },
         };
         const DriftstackFontMetricOverrideEntry* matchedEntry = nullptr;
         for (const auto& entry : kOverrideTable) {
@@ -262,28 +266,55 @@ void Font::platformInit()
         }
         if (matchedEntry) {
             uint16_t cssWeight = 400; // default Regular
-            RetainPtr<CTFontDescriptorRef> v602Desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
-            if (v602Desc) {
-                RetainPtr<CFDictionaryRef> traits = adoptCF(static_cast<CFDictionaryRef>(
-                    CTFontDescriptorCopyAttribute(v602Desc.get(), kCTFontTraitsAttribute)));
-                if (traits) {
-                    CFNumberRef weightNum = static_cast<CFNumberRef>(
-                        CFDictionaryGetValue(traits.get(), kCTFontWeightTrait));
-                    if (weightNum) {
-                        float ctWeight = 0.f;
-                        CFNumberGetValue(weightNum, kCFNumberFloatType, &ctWeight);
-                        cssWeight = static_cast<uint16_t>(std::clamp(
-                            400.0f + ctWeight * 400.0f, 100.0f, 900.0f));
+            uint16_t targetUnitsPerEm;
+            int16_t targetTypoAscent;
+            int16_t targetTypoDescent;
+            int16_t targetTypoLineGap;
+            const char* targetLabel = "?";
+
+            if (matchedEntry->resolveMetric) {
+                // V-602 per-weight resolution
+                RetainPtr<CTFontDescriptorRef> v602Desc = adoptCF(CTFontCopyFontDescriptor(ctFont.get()));
+                if (v602Desc) {
+                    RetainPtr<CFDictionaryRef> traits = adoptCF(static_cast<CFDictionaryRef>(
+                        CTFontDescriptorCopyAttribute(v602Desc.get(), kCTFontTraitsAttribute)));
+                    if (traits) {
+                        CFNumberRef weightNum = static_cast<CFNumberRef>(
+                            CFDictionaryGetValue(traits.get(), kCTFontWeightTrait));
+                        if (weightNum) {
+                            float ctWeight = 0.f;
+                            CFNumberGetValue(weightNum, kCFNumberFloatType, &ctWeight);
+                            cssWeight = static_cast<uint16_t>(std::clamp(
+                                400.0f + ctWeight * 400.0f, 100.0f, 900.0f));
+                        }
                     }
                 }
+                const auto& targetMetric = matchedEntry->resolveMetric(cssWeight);
+                targetUnitsPerEm = targetMetric.unitsPerEm;
+                targetTypoAscent = targetMetric.typoAscent;
+                targetTypoDescent = targetMetric.typoDescent;
+                targetTypoLineGap = targetMetric.typoLineGap;
+                targetLabel = targetMetric.label;
+            } else if (matchedEntry->staticMetric) {
+                // Track I static metric
+                targetUnitsPerEm = matchedEntry->staticMetric->unitsPerEm;
+                targetTypoAscent = matchedEntry->staticMetric->typoAscent;
+                targetTypoDescent = matchedEntry->staticMetric->typoDescent;
+                targetTypoLineGap = matchedEntry->staticMetric->typoLineGap;
+                targetLabel = matchedEntry->staticMetric->label;
+            } else {
+                // Malformed entry; skip
+                targetUnitsPerEm = unitsPerEm;
+                targetTypoAscent = 0;
+                targetTypoDescent = 0;
+                targetTypoLineGap = 0;
             }
-            const auto& targetMetric = matchedEntry->resolveMetric(cssWeight);
-            unitsPerEm = targetMetric.unitsPerEm;
-            ascent = scaleEmToUnits(targetMetric.typoAscent, unitsPerEm) * pointSize;
-            descent = -scaleEmToUnits(targetMetric.typoDescent, unitsPerEm) * pointSize;
-            lineGap = scaleEmToUnits(targetMetric.typoLineGap, unitsPerEm) * pointSize;
-            WTFLogAlways("[Driftstack-Track-I] metric overlay applied (cssWeight=%u, weightBracket=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
-                static_cast<unsigned>(cssWeight), targetMetric.label,
+            unitsPerEm = targetUnitsPerEm;
+            ascent = scaleEmToUnits(targetTypoAscent, unitsPerEm) * pointSize;
+            descent = -scaleEmToUnits(targetTypoDescent, unitsPerEm) * pointSize;
+            lineGap = scaleEmToUnits(targetTypoLineGap, unitsPerEm) * pointSize;
+            WTFLogAlways("[Driftstack-Track-I] metric overlay applied (cssWeight=%u, target=%s, ascent=%.1f, descent=%.1f, lineGap=%.1f at %.1fpt)",
+                static_cast<unsigned>(cssWeight), targetLabel,
                 static_cast<double>(ascent), static_cast<double>(descent),
                 static_cast<double>(lineGap), static_cast<double>(pointSize));
         }
