@@ -185,6 +185,22 @@ std::optional<DriftstackFontCanonicalEntry> DriftstackFontCanonicalAtlas::lookup
     return std::nullopt;
 }
 
+// Wave 29-284: cross-directory wrapper for Element::getBoundingClientRect
+// (declared as extern free function in dom/Element.cpp). Returns span_w/h
+// for V-405 Font full-surface closure.
+extern bool driftstackLookupFontCanonicalSpan(const String&, const String&, const String&, unsigned, const String&, float&, float&);
+bool driftstackLookupFontCanonicalSpan(const String& family, const String& weight,
+    const String& style, unsigned size, const String& text,
+    float& outSpanW, float& outSpanH)
+{
+    auto entry = DriftstackFontCanonicalAtlas::singleton().lookup(family, weight, style, size, text);
+    if (!entry)
+        return false;
+    outSpanW = entry->spanW;
+    outSpanH = entry->spanH;
+    return true;
+}
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

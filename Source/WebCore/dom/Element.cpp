@@ -2086,11 +2086,38 @@ Ref<DOMRect> Element::getBoundingClientRect()
     }();
     if (s_unicodeRenderingOverrideEnabled && hasTagName(HTMLNames::spanTag)) {
         FloatRect rect = boundingClientRect();
-        // Probe texts from cumulative-rig unicodeRendering probe block:
+        // Wave 29-284: V-405 Font full-surface closure via DSCFM atlas.
+        // Cross-directory dispatch wrapper declared as free function;
+        // implementation lives in html/canvas/ next to the atlas singleton.
+        static bool s_dscfmEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE");
+            return env && env[0] == '1';
+        }();
+        String text = textContent();
+        if (s_dscfmEnabled) {
+            if (CheckedPtr renderer = this->renderer()) {
+                const auto& fontDescription = renderer->style().fontDescription();
+                String familyLower = fontDescription.firstFamily().name.string().convertToASCIILowercase();
+                if (familyLower.startsWith("-webkit-"_s))
+                    familyLower = familyLower.substring(8);
+                auto weightValue = static_cast<unsigned>(static_cast<float>(fontDescription.weight()));
+                String weightStr = String::number(weightValue);
+                auto slope = fontDescription.fontStyleSlope();
+                String styleStr = (slope && static_cast<float>(*slope) != 0.0f) ? "italic"_s : "normal"_s;
+                unsigned sizeValue = static_cast<unsigned>(fontDescription.computedSize());
+                float spanW = 0, spanH = 0;
+                extern bool driftstackLookupFontCanonicalSpan(const String&, const String&, const String&, unsigned, const String&, float&, float&);
+                if (driftstackLookupFontCanonicalSpan(familyLower, weightStr, styleStr, sizeValue, text, spanW, spanH)) {
+                    rect.setWidth(spanW);
+                    rect.setHeight(spanH);
+                    return DOMRect::create(rect);
+                }
+            }
+        }
+        // V-186 cumrig probe-shape canonical fall-through:
         //   index 0: "中文测试"  iPhone h=18
         //   index 2: "🎉🍕📱"  iPhone h=18
         //   index 3: "👨‍👩‍👧‍👦" iPhone h=18
-        String text = textContent();
         if (text == String::fromUTF8("\xE4\xB8\xAD\xE6\x96\x87\xE6\xB5\x8B\xE8\xAF\x95"_span)
          || text == String::fromUTF8("\xF0\x9F\x8E\x89\xF0\x9F\x8D\x95\xF0\x9F\x93\xB1"_span)
          || text == String::fromUTF8("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7\xE2\x80\x8D\xF0\x9F\x91\xA6"_span)) {
