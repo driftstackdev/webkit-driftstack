@@ -787,6 +787,28 @@ void ComplexTextController::adjustGlyphsAndAdvances()
 
             advance.expand(font->syntheticBoldOffset(), 0);
 
+#if PLATFORM(DRIFTSTACK)
+            // V-433.Z combining-mark zero-advance override (wave 29-235 Slice 235.8).
+            // iPhone CT returns 0 advance for Mn (non-spacing mark) codepoints per
+            // Unicode spec. Fork's cascade can route Mn to a font without the glyph
+            // → CT returns glyph=0 (notdef) with ~36/54 width (notdef placeholder
+            // size). This produces width-divergence vs iPhone for the V-433.Z target
+            // combining marks (e.g., U+1CDA Vedic, U+20E3 Combining Enclosing Keycap).
+            //
+            // Fix: if character is Mn (U_NON_SPACING_MARK / U_GC_MN_MASK) AND the
+            // returned glyph is notdef (==0), force zero advance to match iPhone.
+            //
+            // Gated by env var to allow A/B comparison.
+            static bool s_v433zCombiningMarkZeroAdvance = []() {
+                const char* env = std::getenv("DRIFTSTACK_V433Z_COMBINING_MARK_ZERO");
+                return env && env[0] == '1';
+            }();
+            if (s_v433zCombiningMarkZeroAdvance && glyph == 0
+                && (U_GET_GC_MASK(character) & U_GC_MN_MASK)) {
+                advance.setWidth(0);
+            }
+#endif
+
             if (hasExtraSpacing) {
                 // If we're a glyph with an advance, add in letter-spacing.
                 // That way we weed out zero width lurkers. This behavior matches the fast text code path.
