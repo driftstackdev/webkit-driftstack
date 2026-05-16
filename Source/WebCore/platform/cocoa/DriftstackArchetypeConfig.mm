@@ -202,6 +202,20 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
         else if (env[0] == '0') m_applePaySetUp = false;
     }
 
+    // storage { quota_bytes, quota_variance_percent } — Slice 244.9 /
+    // file 99 S11 / file 110 § Storage quota. Per-session value seeded
+    // from archetype profile (60% × disk-size-class). Defaults to 0
+    // (inherit existing V-072 fallback halving).
+    if (auto stValue = rootObj->getValue("storage"_s)) {
+        if (auto st = stValue->asObject()) {
+            if (auto v = st->getValue("quota_bytes"_s)) {
+                if (auto n = v->asInteger())
+                    m_storageQuotaBytes = static_cast<uint64_t>(*n);
+            }
+            m_storageQuotaVariancePercent = getInt(*st, "quota_variance_percent"_s);
+        }
+    }
+
     // fonts {...}
     if (auto fontsValue = rootObj->getValue("fonts"_s)) {
         if (auto fonts = fontsValue->asObject()) {

@@ -97,6 +97,14 @@ public:
     // Phase 2 value seeded from archetype profile probability distribution.
     bool applePaySetUp() const { return m_applePaySetUp; }
 
+    // Storage quota (Slice 244.9 / file 99 S11 / file 110 § Storage quota):
+    // navigator.storage.estimate() returns 60% × disk-size-class with
+    // ±5% Apple-AFP session variance. Mac mini's actual disk derives a
+    // wildly-wrong-for-iPhone value (potentially 1-2 TB). 0 = inherit
+    // existing V-072 halving fallback. Phase 2 per-session value.
+    uint64_t storageQuotaBytes() const { return m_storageQuotaBytes; }
+    int storageQuotaVariancePercent() const { return m_storageQuotaVariancePercent; }
+
     // Resource paths (per-archetype binaries)
     String fontsDir() const { return m_fontsDir; }
     String voicesListPath() const { return m_voicesListPath; }
@@ -164,6 +172,10 @@ private:
 
     // Apple Pay (Slice 244.2)
     bool m_applePaySetUp { false };
+
+    // Storage quota (Slice 244.9)
+    uint64_t m_storageQuotaBytes { 0 };
+    int m_storageQuotaVariancePercent { 0 };
 
     // Resource paths
     String m_fontsDir;
