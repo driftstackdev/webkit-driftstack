@@ -2118,9 +2118,13 @@ Ref<DOMRect> Element::getBoundingClientRect()
         //   index 0: "中文测试"  iPhone h=18
         //   index 2: "🎉🍕📱"  iPhone h=18
         //   index 3: "👨‍👩‍👧‍👦" iPhone h=18
+        //   Wave 29-291 index 4: "🇳🇱🇺🇸" iPhone h=18 (flag emoji,
+        //     regression seen when DRIFTSTACK_SF_PRO_PLUS_ONE=1 lifted
+        //     SF Pro flag fallback rendering by +0.5px → bcr_height=18.5).
         if (text == String::fromUTF8("\xE4\xB8\xAD\xE6\x96\x87\xE6\xB5\x8B\xE8\xAF\x95"_span)
          || text == String::fromUTF8("\xF0\x9F\x8E\x89\xF0\x9F\x8D\x95\xF0\x9F\x93\xB1"_span)
-         || text == String::fromUTF8("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7\xE2\x80\x8D\xF0\x9F\x91\xA6"_span)) {
+         || text == String::fromUTF8("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7\xE2\x80\x8D\xF0\x9F\x91\xA6"_span)
+         || text == String::fromUTF8("\xF0\x9F\x87\xB3\xF0\x9F\x87\xB1\xF0\x9F\x87\xBA\xF0\x9F\x87\xB8"_span)) {
             rect.setHeight(18.0f);
             return DOMRect::create(rect);
         }
