@@ -89,6 +89,16 @@ private:
     int m_suspendCount { 0 };
 
     ReducedResolutionSeconds m_lastAnimationFrameTimestamp;
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-258 / cumrig rAF first-frame closure: counter to detect the
+    // FIRST service call (when env DRIFTSTACK_RAF_FIRST_FRAME_CLAMP=1 is set,
+    // clamp the JS-visible timestamp on the SECOND callback to make
+    // deltas[0] match iPhone Safari's ~10ms pattern rather than Mac
+    // MiniBrowser process-startup overhead ~28-39ms).
+    uint32_t m_driftstackCallbackInvocationCount { 0 };
+    double m_driftstackFirstCallbackTimestampMs { 0 };
+    double m_driftstackTimestampShiftMs { 0 };
+#endif
     OptionSet<ThrottlingReason> m_throttlingReasons;
 };
 

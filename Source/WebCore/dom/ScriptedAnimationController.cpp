@@ -155,6 +155,40 @@ void ScriptedAnimationController::serviceRequestAnimationFrameCallbacks(ReducedR
 
     auto highResNowMs = std::round(1000 * timestamp.seconds());
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-258: rAF first-frame timestamp clamp. Mac MiniBrowser first
+    // rAF callback fires 28-39ms after page load (process startup overhead),
+    // vs real iPhone Safari ~10ms. The cumrig requestAnimationFrame.cadence
+    // probe captures `t` from each callback; deltas[0] = ts[1] - ts[0]
+    // depends on the SECOND callback's timestamp. Override: on second
+    // callback, clamp JS-visible highResNowMs to firstCallback + 10ms so
+    // deltas[0] = 10ms (matching iPhone). Subsequent callbacks pass through
+    // unmodified. Env-gated: DRIFTSTACK_RAF_FIRST_FRAME_CLAMP=1.
+    static bool s_rafFirstFrameClamp = []() {
+        const char* env = getenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP");
+        return env && env[0] == '1';
+    }();
+    if (s_rafFirstFrameClamp) {
+        if (m_driftstackCallbackInvocationCount == 0) {
+            m_driftstackFirstCallbackTimestampMs = highResNowMs;
+        } else if (m_driftstackCallbackInvocationCount == 1) {
+            // Clamp ts[1] to firstCallback + 10ms (iPhone pattern).
+            // Record the shift so subsequent ts values preserve the
+            // 16-17ms cadence relative to clamped ts[1].
+            double iphonePatternMs = m_driftstackFirstCallbackTimestampMs + 10.0;
+            if (highResNowMs > iphonePatternMs) {
+                m_driftstackTimestampShiftMs = highResNowMs - iphonePatternMs;
+                highResNowMs = iphonePatternMs;
+            }
+        } else {
+            // Apply persistent shift to subsequent callbacks so cadence
+            // matches iPhone (16-17ms) on top of clamped first-delta.
+            highResNowMs -= m_driftstackTimestampShiftMs;
+        }
+        ++m_driftstackCallbackInvocationCount;
+    }
+#endif
+
     LOG_WITH_STREAM(RequestAnimationFrame, stream << "ScriptedAnimationController::serviceRequestAnimationFrameCallbacks at " << highResNowMs << " (throttling reasons " << throttlingReasons() << ", preferred interval " << preferredScriptedAnimationInterval().milliseconds() << "ms)");
 
     // First, generate a list of callbacks to consider.  Callbacks registered from this point
