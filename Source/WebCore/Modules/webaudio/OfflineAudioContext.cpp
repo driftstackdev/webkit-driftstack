@@ -45,6 +45,12 @@
 // search path. Use the platform/graphics-relative path that mirrors
 // how other Modules/ files reference platform/graphics/ headers.
 #include "platform/graphics/cocoa/DriftstackAudioAtlas.h"
+#include "AudioNodeInput.h"
+#include "BiquadFilterNode.h"
+#include "GainNode.h"
+#include "OscillatorNode.h"
+#include <CommonCrypto/CommonDigest.h>
+#include <wtf/text/StringBuilder.h>
 #endif
 #include <JavaScriptCore/ConsoleTypes.h>
 #include <wtf/Scope.h>
@@ -319,6 +325,95 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
             if (!loggedOnce) {
                 loggedOnce = true;
                 WTFLogAlways("[Driftstack-V153] Float16 quantization ENABLED via DRIFTSTACK_AUDIO_FLOAT16=1; first apply on %u channels", numChannels);
+            }
+        }
+    }
+
+    // Wave 29-288 Audio v2 Phase A: canonical graph hash diagnostic.
+    // Walks the destination → inputs chain at startRendering completion time;
+    // emits per-node canonical bytes (type + key params); sha256s the
+    // concatenated bytes; logs the 16-byte hex prefix.
+    //
+    // Diag-only — no dispatch change. Compare logged hashes against
+    // JS-side opsHash to validate cross-side parity before Phase B/C
+    // wires graphHash into atlas key derivation.
+    //
+    // Env gate: DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG=1 (+ __XPC_*).
+    if (renderedBuffer && didRendering) {
+        static bool s_graphHashDiagEnabled = []() {
+            const char* env = getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DIAG");
+            return env && env[0] == '1';
+        }();
+        if (s_graphHashDiagEnabled) {
+            StringBuilder canon;
+            HashSet<AudioNode*> visited;
+            auto appendNodeCanonical = [&](AudioNode& node, auto& self) -> void {
+                if (!visited.add(&node).isNewEntry)
+                    return;
+                auto type = node.nodeType();
+                canon.append('N');
+                canon.append(static_cast<char>(static_cast<int>(type) + '0'));
+                canon.append(':');
+                switch (type) {
+                case AudioNode::NodeTypeOscillator:
+                    if (auto* osc = dynamicDowncast<OscillatorNode>(node)) {
+                        canon.append(static_cast<char>(static_cast<int>(osc->typeForBindings()) + 'a'));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(osc->frequency().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(osc->detune().value(), 6));
+                    }
+                    break;
+                case AudioNode::NodeTypeGain:
+                    if (auto* gain = dynamicDowncast<GainNode>(node))
+                        canon.append(FormattedNumber::fixedWidth(gain->gain().value(), 6));
+                    break;
+                case AudioNode::NodeTypeBiquadFilter:
+                    if (auto* bq = dynamicDowncast<BiquadFilterNode>(node)) {
+                        canon.append(static_cast<char>(static_cast<int>(bq->type()) + 'a'));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(bq->frequency().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(bq->q().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(bq->gain().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(bq->detune().value(), 6));
+                    }
+                    break;
+                default:
+                    canon.append('?');
+                    break;
+                }
+                canon.append('|');
+                for (unsigned i = 0; i < node.numberOfInputs(); ++i) {
+                    auto* in = node.input(i);
+                    if (!in) continue;
+                    for (unsigned j = 0; j < in->numberOfRenderingConnections(); ++j) {
+                        auto* out = in->renderingOutput(j);
+                        if (!out || !out->node()) continue;
+                        self(*out->node(), self);
+                    }
+                }
+            };
+            appendNodeCanonical(destination(), appendNodeCanonical);
+            String canonStr = canon.toString();
+            auto utf8 = canonStr.utf8();
+            std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> digest;
+            CC_SHA256(utf8.data(), static_cast<CC_LONG>(utf8.length()), digest.data());
+            StringBuilder hexBuilder;
+            static constexpr ASCIILiteral kLowerHex = "0123456789abcdef"_s;
+            for (size_t i = 0; i < 16; ++i) {
+                hexBuilder.append(kLowerHex[(digest[i] >> 4) & 0xf]);
+                hexBuilder.append(kLowerHex[digest[i] & 0xf]);
+            }
+            static unsigned diagCount = 0;
+            if (++diagCount <= 30) {
+                WTFLogAlways("[Driftstack-AudioGraphHash-DIAG] sr=%g ch=%u frames=%u canonLen=%u sha16=%s",
+                    renderedBuffer->sampleRate(), renderedBuffer->numberOfChannels(),
+                    static_cast<unsigned>(renderedBuffer->length()),
+                    static_cast<unsigned>(utf8.length()),
+                    hexBuilder.toString().utf8().data());
             }
         }
     }
