@@ -46,25 +46,10 @@ inline const TrackIFontMetric kTrackIFontMetrics[] = {
     { "Thonburi",                      1000,     1125,      250,      0 },  // fbbA=18 fbbD=4
 };
 
-inline const TrackIFontMetric* trackIMetricForFamily(const char* familyName)
-{
-    if (!familyName) return nullptr;
-    for (const auto& entry : kTrackIFontMetrics) {
-        // Case-insensitive prefix match
-        const char* a = familyName;
-        const char* b = entry.label;
-        bool match = true;
-        while (*a && *b) {
-            char ca = *a, cb = *b;
-            if (ca >= 'A' && ca <= 'Z') ca += 32;
-            if (cb >= 'A' && cb <= 'Z') cb += 32;
-            if (ca != cb) { match = false; break; }
-            ++a; ++b;
-        }
-        if (match && !*b) return &entry;
-    }
-    return nullptr;
-}
+// trackIMetricForFamily helper removed wave 29-240 r3: callers use
+// kTrackIFontMetrics[N] direct indexing. Avoids -Wunsafe-buffer-usage
+// errors on C-string parameters (WebKit requires std::span / std::string_view
+// for buffer-aware APIs).
 
 } // namespace Driftstack
 } // namespace WebCore
