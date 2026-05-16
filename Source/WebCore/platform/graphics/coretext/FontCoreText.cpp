@@ -113,18 +113,34 @@ static bool shouldUseAdjustment(CTFontRef font)
     return caseInsensitiveCompare(familyName.get(), CFSTR("Times"))
         || caseInsensitiveCompare(familyName.get(), CFSTR("Helvetica"))
         || caseInsensitiveCompare(familyName.get(), CFSTR(".Helvetica NeueUI"));
-    // P-track #46 wave 29-290: tried adding SF Pro family names to this
-    // allow-list. REVERTED — 15% adjustment is FAR too large for SF Pro
-    // (Mac 86→99 vs iPhone 87, over-shot +12 instead of +1). iPhone applies
-    // some SMALLER adjustment-like step for SF Pro (~+1px at 72pt). Need
-    // empirical capture across ptSizes to characterize whether it's:
-    //   - constant +1
-    //   - ceil() rounding at sub-pixel level
-    //   - per-font-metric adjustment table
-    // Cumrig regression also observed when 15% was applied (unicodeRendering
-    // diff). Keep allow-list narrow; investigate via separate metric-table
-    // patch arc.
 }
+
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-291 P-track #46 v2: SF Pro variants get a CONSTANT +1px
+// adjustment (NOT the 15% kLineHeightAdjustment which over-shot +12 in
+// wave 29-290 revert). iPhone reference (3 BS sessions identical):
+// SF Pro 72pt line-height:normal bcr_height = 87, Mac fork = 86, Δ=+1.
+// Env-gated DRIFTSTACK_SF_PRO_PLUS_ONE=1 (+ __XPC_*) for staged rollout.
+static bool shouldUseSfProConstantOnePixelAdjustment(CTFontRef font)
+{
+    static bool s_enabled = []() {
+        const char* env = getenv("DRIFTSTACK_SF_PRO_PLUS_ONE");
+        return env && env[0] == '1';
+    }();
+    if (!s_enabled)
+        return false;
+    RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(font));
+    if (!familyName || !CFStringGetLength(familyName.get()))
+        return false;
+    return caseInsensitiveCompare(familyName.get(), CFSTR(".SF NS"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".SF NS Display"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".SF NS Text"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".AppleSystemUIFont"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro Display"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro Text"));
+}
+#endif
 
 #else
 
@@ -219,6 +235,12 @@ void Font::platformInit()
 
 #if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     CGFloat adjustment = shouldUseAdjustment(ctFont.get()) ? ceil((ascent + descent) * kLineHeightAdjustment) : 0;
+#if PLATFORM(DRIFTSTACK)
+    // P-track #46 v2 (wave 29-291): constant +1 adjustment for SF Pro
+    // variants (NOT the 15% kLineHeightAdjustment). Env-gated.
+    if (adjustment == 0 && shouldUseSfProConstantOnePixelAdjustment(ctFont.get()))
+        adjustment = 1;
+#endif
 
     lineGap = ceilf(lineGap);
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
