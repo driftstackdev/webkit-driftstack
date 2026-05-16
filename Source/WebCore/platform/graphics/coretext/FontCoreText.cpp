@@ -113,6 +113,17 @@ static bool shouldUseAdjustment(CTFontRef font)
     return caseInsensitiveCompare(familyName.get(), CFSTR("Times"))
         || caseInsensitiveCompare(familyName.get(), CFSTR("Helvetica"))
         || caseInsensitiveCompare(familyName.get(), CFSTR(".Helvetica NeueUI"));
+    // P-track #46 wave 29-290: tried adding SF Pro family names to this
+    // allow-list. REVERTED — 15% adjustment is FAR too large for SF Pro
+    // (Mac 86→99 vs iPhone 87, over-shot +12 instead of +1). iPhone applies
+    // some SMALLER adjustment-like step for SF Pro (~+1px at 72pt). Need
+    // empirical capture across ptSizes to characterize whether it's:
+    //   - constant +1
+    //   - ceil() rounding at sub-pixel level
+    //   - per-font-metric adjustment table
+    // Cumrig regression also observed when 15% was applied (unicodeRendering
+    // diff). Keep allow-list narrow; investigate via separate metric-table
+    // patch arc.
 }
 
 #else
