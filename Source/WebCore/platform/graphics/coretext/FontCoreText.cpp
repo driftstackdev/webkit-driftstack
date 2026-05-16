@@ -249,13 +249,17 @@ void Font::platformInit()
             { CFSTR(".Hiragino Kaku Gothic Interface"), &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
             { CFSTR("Hiragino Kaku Gothic"),            &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
             { CFSTR("HiraginoSans"),                    &WebCore::Driftstack::pingFangMetricForWeight, nullptr },
-            // Track I (static metric from wave 29-239 BS capture iPhone 17 / Safari 26.4)
-            { CFSTR("Devanagari Sangam MN"),  nullptr, &WebCore::Driftstack::kTrackIFontMetrics[0] },
-            { CFSTR("Geeza Pro"),             nullptr, &WebCore::Driftstack::kTrackIFontMetrics[1] },
-            { CFSTR("Hebrew"),                nullptr, &WebCore::Driftstack::kTrackIFontMetrics[2] },
-            { CFSTR("Khmer Sangam MN"),       nullptr, &WebCore::Driftstack::kTrackIFontMetrics[3] },
-            { CFSTR("Kohinoor Devanagari"),   nullptr, &WebCore::Driftstack::kTrackIFontMetrics[4] },
-            { CFSTR("Thonburi"),              nullptr, &WebCore::Driftstack::kTrackIFontMetrics[5] },
+            // Track I (wave 29-239 capture) REVERTED wave 29-242 r4 after cumrig 1259/337
+            // regression vs 1264 baseline. Hypothesis: Mac CT returns iPhone-equivalent metrics
+            // natively for these fonts; applying iOS-side overrides DIVERGED from natural match.
+            // Header DriftstackTrackIMetrics.h retained for future per-archetype-divergence
+            // re-deployment when empirical data justifies it.
+            // { CFSTR("Devanagari Sangam MN"),  nullptr, &WebCore::Driftstack::kTrackIFontMetrics[0] },
+            // { CFSTR("Geeza Pro"),             nullptr, &WebCore::Driftstack::kTrackIFontMetrics[1] },
+            // { CFSTR("Hebrew"),                nullptr, &WebCore::Driftstack::kTrackIFontMetrics[2] },
+            // { CFSTR("Khmer Sangam MN"),       nullptr, &WebCore::Driftstack::kTrackIFontMetrics[3] },
+            // { CFSTR("Kohinoor Devanagari"),   nullptr, &WebCore::Driftstack::kTrackIFontMetrics[4] },
+            // { CFSTR("Thonburi"),              nullptr, &WebCore::Driftstack::kTrackIFontMetrics[5] },
         };
         const DriftstackFontMetricOverrideEntry* matchedEntry = nullptr;
         for (const auto& entry : kOverrideTable) {
