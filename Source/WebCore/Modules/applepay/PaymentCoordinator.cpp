@@ -36,6 +36,9 @@
 #include "ApplePayShippingMethodUpdate.h"
 #include "Document.h"
 #include "DocumentPage.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
 #include "ExceptionDetails.h"
 #include "LinkIconCollector.h"
 #include "Logging.h"
@@ -77,6 +80,17 @@ bool PaymentCoordinator::supportsVersion(Document&, unsigned version) const
 
 bool PaymentCoordinator::canMakePayments()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Slice 244.7: per file 99 V2 + file 110 § Apple Pay — canMakePayments
+    // varies per real iPhone user. Override Mac fork's m_client (always
+    // returns false on macOS for iOS-archetype sessions) with the
+    // per-session archetype value.
+    auto& archetype = WebCore::DriftstackArchetypeConfig::singleton();
+    if (archetype.isValid()) {
+        PAYMENT_COORDINATOR_RELEASE_LOG("canMakePayments() driftstack-override -> %d", archetype.applePaySetUp());
+        return archetype.applePaySetUp();
+    }
+#endif
     auto canMakePayments = m_client->canMakePayments();
     PAYMENT_COORDINATOR_RELEASE_LOG("canMakePayments() -> %d", canMakePayments);
     return canMakePayments;
