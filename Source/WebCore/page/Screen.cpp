@@ -130,6 +130,14 @@ unsigned Screen::colorDepth() const
         return 24;
     if (frame->settings().webAPIStatisticsEnabled())
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::ColorDepth);
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-372 (file 99 P-screen / iPhone reference): real iPhone Safari
+    // reports screen.colorDepth = 24 (8-bit per channel × 3 channels).
+    // screen.pixelDepth (spec-equivalent) also = 24. Mac fleet may include
+    // wide-gamut P3 / HDR displays reporting 30 or 48 via Core Graphics —
+    // detectable divergence. Force 24 to match iPhone universally.
+    return 24;
+#endif
     return static_cast<unsigned>(screenDepth(protect(frame->view()).get()));
 }
 
