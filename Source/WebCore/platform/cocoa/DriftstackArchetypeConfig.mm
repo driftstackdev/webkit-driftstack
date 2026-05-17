@@ -75,9 +75,8 @@ static String getString(JSON::Object& obj, ASCIILiteral key)
     auto v = obj.getValue(key);
     if (!v)
         return String();
-    if (auto s = v->asString())
-        return *s;
-    return String();
+    String s = v->asString();
+    return s.isNull() ? String() : s;
 }
 
 static int getInt(JSON::Object& obj, ASCIILiteral key, int defaultVal = 0)
