@@ -30,6 +30,10 @@
 #include "config.h"
 #include "Screen.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "DocumentLoader.h"
 #include "DocumentPage.h"
 #include "DocumentQuirks.h"
@@ -84,7 +88,10 @@ int Screen::height() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Height);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-074: iPhone 16 Pro portrait screen height (CSS pixels).
+    // V-074 + Wave 29-367: per-archetype screen height (Phase 2 Config) with
+    // iPhone 16 Pro portrait fallback when Config not loaded.
+    if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
+        return h;
     return 874;
 #endif
 
@@ -103,7 +110,10 @@ int Screen::width() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Width);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-074: iPhone 16 Pro portrait screen width (CSS pixels).
+    // V-074 + Wave 29-367: per-archetype screen width (Phase 2 Config) with
+    // iPhone 16 Pro portrait fallback when Config not loaded.
+    if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+        return w;
     return 402;
 #endif
 
@@ -172,7 +182,9 @@ int Screen::availHeight() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailHeight);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-074: iPhone Safari fullscreen — availHeight matches screen.height.
+    // V-074 + Wave 29-367: iPhone Safari fullscreen — availHeight matches screen.height (Config or fallback).
+    if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
+        return h;
     return 874;
 #endif
 
@@ -192,7 +204,9 @@ int Screen::availWidth() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailWidth);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-074: iPhone Safari fullscreen — availWidth matches screen.width.
+    // V-074 + Wave 29-367: iPhone Safari fullscreen — availWidth matches screen.width (Config or fallback).
+    if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+        return w;
     return 402;
 #endif
 
