@@ -1034,6 +1034,47 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             }
         }
     }
+
+    // P-#48.J Wave 29-324: Mn-category advance override.
+    // iPhone synthesizes non-zero advance for standalone combining marks
+    // (U+1CDA, U+20E3 in our V-433.Z target list). Mac returns 0 per
+    // Unicode spec. Override to iPhone-canonical advance (ptSize-scaled
+    // from reference 72pt: U+1CDA=27→0.375, U+20E3=72→1.0).
+    // Env-gated DRIFTSTACK_V433Z_MN_OVERRIDE=1 for staged rollout.
+    static bool s_v433zMnOverrideEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_V433Z_MN_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_v433zMnOverrideEnabled && platformData().size() > 0) {
+        RetainPtr<CTFontRef> font = ctFont();
+        // Check if glyph matches U+1CDA or U+20E3 in this font
+        const struct { char32_t cp; float ratio; } kMnOverrides[] = {
+            { 0x1CDA, 27.0f / 72.0f },  // Vedic Sign Three Dots Above
+            { 0x20E3, 72.0f / 72.0f },  // Combining Enclosing Keycap
+        };
+        for (const auto& o : kMnOverrides) {
+            UniChar ch[2] = { 0 };
+            CGGlyph cpGlyph[2] = { 0 };
+            CFIndex len = 1;
+            if (o.cp > 0xFFFF) {
+                uint32_t scalar = o.cp - 0x10000;
+                ch[0] = 0xD800 | (scalar >> 10);
+                ch[1] = 0xDC00 | (scalar & 0x3FF);
+                len = 2;
+            } else {
+                ch[0] = static_cast<UniChar>(o.cp);
+            }
+            if (CTFontGetGlyphsForCharacters(font.get(), ch, cpGlyph, len) && cpGlyph[0] == glyph) {
+                float synthAdvance = o.ratio * platformData().size();
+                static unsigned mnLogCount = 0;
+                if (mnLogCount++ < 20) {
+                    WTFLogAlways("[Driftstack-V433Z-MnOverride] cp=U+%04X ptSize=%.1f mac=%.3f → synth=%.3f",
+                        (unsigned)o.cp, platformData().size(), advance.width, synthAdvance);
+                }
+                return synthAdvance;
+            }
+        }
+    }
     // V-094 Track 5: iPhone Apple Color Emoji advance is constant per
     // ptSize across all emoji codepoints. Empirical (Track 5 capture
     // 159 probes / 53 codepoints / 3 sizes):
