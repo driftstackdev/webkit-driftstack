@@ -149,6 +149,10 @@
     (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
     ;;; V-689 (Wave 25): Driftstack advance atlas (2.7M (font,size,cp)→width entries, 31 MB)
     (literal "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin")
+    ;;; Wave 29-391: driftstack_font_canonical directory for DRIFTSTACK_FONT_CANONICAL_PATH
+    ;;; env var override. Discovered via sandbox-vs-disk audit (same methodology
+    ;;; as Wave 29-373 canvas_fuzz_atlas + Wave 29-390.B env-var forwarding).
+    (subpath "/Users/john/code/driftstack/reference/driftstack_font_canonical")
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 ;;; V-582: dev-only canvas dump dir for empirical diff vs iPhone reference.
