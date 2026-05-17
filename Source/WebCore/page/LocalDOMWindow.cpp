@@ -27,6 +27,10 @@
 #include "config.h"
 #include "LocalDOMWindow.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "BackForwardController.h"
 #include "BarProp.h"
 #include "CSSComputedStyleDeclaration.h"
@@ -1797,7 +1801,10 @@ double LocalDOMWindow::devicePixelRatio() const
     // since page zoom is applied globally for rendering.
     auto frameScaleRatio = frame->frameScaleFactor() * frame->pageZoomFactor();
 #if PLATFORM(DRIFTSTACK)
-    // V-075: iPhone 16 Pro Super Retina XDR — devicePixelRatio = 3.0.
+    // V-075 + Wave 29-368.8: per-archetype DPR (Phase 2 Config) with
+    // iPhone 16 Pro Super Retina XDR fallback when Config not loaded.
+    if (auto dpr = DriftstackArchetypeConfig::singleton().devicePixelRatio(); dpr > 0.0)
+        return dpr * frameScaleRatio;
     return 3.0 * frameScaleRatio;
 #endif
     return page->deviceScaleFactor() * frameScaleRatio;
