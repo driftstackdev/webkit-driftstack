@@ -994,6 +994,46 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
     }
 #if PLATFORM(DRIFTSTACK)
+    // P-#48.I Wave 29-323 diag: when DRIFTSTACK_V433Z_GLYPH_DIAG=1, log
+    // the advance Mac returns for our 10 V-433.Z target codepoints'
+    // glyphs (capped at 30 fires per process to avoid log flood).
+    // Pinpoints which (font, ptSize, cp) Mac returns 0/wrong advance for,
+    // driving Mn-category override design (closure path per wave 29-322).
+    static bool s_v433zGlyphDiagEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_V433Z_GLYPH_DIAG");
+        return env && env[0] == '1';
+    }();
+    if (s_v433zGlyphDiagEnabled && platformData().size() > 0) {
+        static const std::array<char32_t, 10> kTargetCps {
+            0x1CDA, 0x17DD, 0x302E, 0x2C7B, 0x10A0,
+            0xA73D, 0xFFFD, 0x21E4, 0x20E3, 0x20B9
+        };
+        RetainPtr<CTFontRef> font = ctFont();
+        for (auto cp : kTargetCps) {
+            UniChar ch[2] = { 0 };
+            CGGlyph cpGlyph[2] = { 0 };
+            CFIndex len = 1;
+            if (cp > 0xFFFF) {
+                uint32_t scalar = cp - 0x10000;
+                ch[0] = 0xD800 | (scalar >> 10);
+                ch[1] = 0xDC00 | (scalar & 0x3FF);
+                len = 2;
+            } else {
+                ch[0] = static_cast<UniChar>(cp);
+            }
+            if (CTFontGetGlyphsForCharacters(font.get(), ch, cpGlyph, len) && cpGlyph[0] == glyph) {
+                static unsigned diagCount = 0;
+                if (diagCount++ < 30) {
+                    RetainPtr<CFStringRef> family = adoptCF(CTFontCopyFamilyName(font.get()));
+                    WTFLogAlways("[Driftstack-V433Z-GlyphAdv] cp=U+%04X font='%s' ptSize=%.1f advance=%.3f",
+                        (unsigned)cp,
+                        family ? String(family.get()).utf8().data() : "(null)",
+                        platformData().size(), advance.width);
+                }
+                break;
+            }
+        }
+    }
     // V-094 Track 5: iPhone Apple Color Emoji advance is constant per
     // ptSize across all emoji codepoints. Empirical (Track 5 capture
     // 159 probes / 53 codepoints / 3 sizes):
