@@ -27,6 +27,10 @@
 #include "config.h"
 #include "WorkerNavigator.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "Chrome.h"
 #include "ContextDestructionObserverInlines.h"
 #include "GPU.h"
@@ -64,17 +68,26 @@ const String& WorkerNavigator::userAgent() const
     // divergence (CreepJS catches main UA != worker UA instantly).
     // Override here too so all contexts return the same iPhone UA.
     //
-    // Wave 29-360 item 1: env-routed per-archetype UA via
-    // DRIFTSTACK_ARCHETYPE_UA_FULL. Mirrors Navigator.cpp logic verbatim
-    // so main + worker UA stay in sync per archetype.
-    static NeverDestroyed<String> driftstackEnvUA = []() {
+    // Wave 29-360 item 1 + Wave 29-389.B (Config singleton migration):
+    // 3-layer UA resolution priority — mirrors Navigator.cpp exactly so
+    // main/worker UA stay in sync per V-205 Bug 2:
+    //   1. DriftstackArchetypeConfig singleton if valid + non-empty
+    //   2. DRIFTSTACK_ARCHETYPE_UA_FULL env-var (back-compat)
+    //   3. V-202/Wave 1.2 hardcoded launch-archetype default
+    static NeverDestroyed<String> driftstackResolvedUA = []() {
+        auto& cfg = DriftstackArchetypeConfig::singleton();
+        if (cfg.isValid()) {
+            String s = cfg.userAgentFull();
+            if (!s.isEmpty())
+                return s;
+        }
         const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
         if (env && env[0])
             return String::fromUTF8(env);
         return String();
     }();
-    if (!driftstackEnvUA.get().isEmpty())
-        return driftstackEnvUA.get();
+    if (!driftstackResolvedUA.get().isEmpty())
+        return driftstackResolvedUA.get();
     static NeverDestroyed<String> driftstackDefaultUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
     return driftstackDefaultUA.get();
 #endif
