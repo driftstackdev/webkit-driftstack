@@ -233,49 +233,49 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const 
         }
     }
 #endif
-    if (!font) {
 #if PLATFORM(DRIFTSTACK)
-        // P-#48.M Wave 29-328: Mn override for complex-text path missing-glyph
-        // fallback. When DRIFTSTACK_V433Z_MN_OVERRIDE=1 + characters are all
-        // V-433.Z target cps, synthesize iPhone-canonical advances + create
-        // ComplexTextRun with explicit advance vectors instead of notdef-width
-        // missing-glyph run.
-        if (s_p48lDiagEnabled && !characters.empty()) {
-            char32_t cp0 = characters[0];
-            if (cp0 >= 0xD800 && cp0 <= 0xDBFF && characters.size() >= 2) {
-                uint32_t low = characters[1];
-                if (low >= 0xDC00 && low <= 0xDFFF)
-                    cp0 = 0x10000 + ((cp0 - 0xD800) << 10) + (low - 0xDC00);
-            }
-            struct CpRatio { char32_t cp; float ratio72; };
-            static const std::array<CpRatio, 10> kTargets {{
-                {0x1CDA, 27.f/72.f}, {0x17DD, 36.f/72.f},
-                {0x302E, 56.f/72.f}, {0x2C7B, 56.f/72.f},
-                {0x10A0, 61.f/72.f}, {0xA73D, 56.f/72.f},
-                {0xFFFD, 43.f/72.f}, {0x21E4, 43.f/72.f},
-                {0x20E3, 72.f/72.f}, {0x20B9, 37.f/72.f},
-            }};
-            for (const auto& t : kTargets) {
-                if (t.cp == cp0) {
-                    auto primaryFont = protect(m_fontCascade->primaryFont());
-                    float ptSize = primaryFont->platformData().size();
-                    float synthAdv = t.ratio72 * ptSize;
-                    Vector<FloatSize> advances { { synthAdv, 0 } };
-                    Vector<FloatPoint> origins { { 0, 0 } };
-                    Vector<Glyph> glyphs { 0 };
-                    Vector<unsigned> stringIndices { 0 };
-                    m_complexTextRuns.append(ComplexTextRun::create(advances, origins, glyphs, stringIndices,
-                        FloatSize { 0, 0 }, primaryFont, characters, stringLocation, 0,
-                        characters.size(), m_run->ltr()));
-                    static unsigned p48mLogCount = 0;
-                    if (p48mLogCount++ < 20)
-                        WTFLogAlways("[Driftstack-P48-M-Override] complex-path no-font cp=U+%04X ptSize=%.1f → synthAdv=%.3f",
-                            (unsigned)cp0, ptSize, synthAdv);
-                    return;
-                }
+    // P-#48.N Wave 29-329: extend Mn override to BOTH if(!font) AND
+    // if(font!=null) branches. Original Wave 29-328 fired only when
+    // primary font lacks glyph; Wave 29-329 fires whenever first cp is
+    // a V-433.Z target — short-circuits CTLine creation entirely with
+    // synthesized iPhone-canonical advance.
+    if (s_p48lDiagEnabled && !characters.empty()) {
+        char32_t cp0 = characters[0];
+        if (cp0 >= 0xD800 && cp0 <= 0xDBFF && characters.size() >= 2) {
+            uint32_t low = characters[1];
+            if (low >= 0xDC00 && low <= 0xDFFF)
+                cp0 = 0x10000 + ((cp0 - 0xD800) << 10) + (low - 0xDC00);
+        }
+        struct CpRatio { char32_t cp; float ratio72; };
+        static const std::array<CpRatio, 10> kTargets {{
+            {0x1CDA, 27.f/72.f}, {0x17DD, 36.f/72.f},
+            {0x302E, 56.f/72.f}, {0x2C7B, 56.f/72.f},
+            {0x10A0, 61.f/72.f}, {0xA73D, 56.f/72.f},
+            {0xFFFD, 43.f/72.f}, {0x21E4, 43.f/72.f},
+            {0x20E3, 72.f/72.f}, {0x20B9, 37.f/72.f},
+        }};
+        for (const auto& t : kTargets) {
+            if (t.cp == cp0) {
+                auto primaryFont = protect(m_fontCascade->primaryFont());
+                float ptSize = primaryFont->platformData().size();
+                float synthAdv = t.ratio72 * ptSize;
+                Vector<FloatSize> advances { { synthAdv, 0 } };
+                Vector<FloatPoint> origins { { 0, 0 } };
+                Vector<Glyph> glyphs { 0 };
+                Vector<unsigned> stringIndices { 0 };
+                m_complexTextRuns.append(ComplexTextRun::create(advances, origins, glyphs, stringIndices,
+                    FloatSize { 0, 0 }, primaryFont, characters, stringLocation, 0,
+                    characters.size(), m_run->ltr()));
+                static unsigned p48nLogCount = 0;
+                if (p48nLogCount++ < 30)
+                    WTFLogAlways("[Driftstack-P48-N-Override] complex-path cp=U+%04X ptSize=%.1f font=%s → synthAdv=%.3f",
+                        (unsigned)cp0, ptSize, font ? "(present)" : "(null)", synthAdv);
+                return;
             }
         }
+    }
 #endif
+    if (!font) {
         // Create a run of missing glyphs from the primary font.
         m_complexTextRuns.append(ComplexTextRun::create(protect(m_fontCascade->primaryFont()), characters, stringLocation, 0, characters.size(), m_run->ltr()));
         return;
