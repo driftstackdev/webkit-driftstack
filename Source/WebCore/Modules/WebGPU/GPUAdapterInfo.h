@@ -39,7 +39,23 @@ public:
         return adoptRef(*new GPUAdapterInfo(WTF::move(name)));
     }
 
-    String vendor() const { auto v = m_name.split(' '); return v.size() ? normalizedIdentifier(v[0]) : ""_s; }
+    String vendor() const
+    {
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-371 (file 122 / CLAUDE.md WebGPU on iOS 26): verified
+        // iPhone 16 Pro / iOS 26.4.1 returns all four GPUAdapterInfo
+        // fields literally "apple" (V-2026-04-29-015). Apple Silicon
+        // Macs naturally derive "apple" via the split-on-space path
+        // (m_name = "Apple M3"), but Intel-Mac / AMD-Mac fleet hardware
+        // would emit "intel" / "amd" — detectable fingerprint divergence.
+        // Force "apple" universally so iPhone match is guaranteed across
+        // fleet hardware.
+        return "apple"_s;
+#else
+        auto v = m_name.split(' ');
+        return v.size() ? normalizedIdentifier(v[0]) : ""_s;
+#endif
+    }
     String architecture() const { return vendor(); }
     String device() const { return vendor(); }
     String description() const { return vendor(); }
