@@ -266,6 +266,32 @@ void NetworkRTCProvider::createUDPSocket(LibWebRTCSocketIdentifier identifier, c
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-383 (Task #15 observability scaffold): WebRTC UDP socket creation
+    // happens via NetworkRTCUDPSocketCocoa — a Cocoa-native code path NOT
+    // routed through SOCKS5. When DRIFTSTACK_REQUIRE_PROXY=1, this would leak
+    // direct UDP traffic from the Mac fleet IP to the WebRTC peer.
+    //
+    // Mitigation that IS in place (Wave 29-318 EG-WK-1.3 ICE force-relay): all
+    // WebRTC media routes through customer's TURN server, NOT direct UDP. So
+    // even though this socket is Cocoa-direct, the actual datagrams flow
+    // through TURN. Direct UDP is only used for STUN discovery + TURN-server
+    // candidate ping — those LEAK if customer's TURN host is hit directly.
+    //
+    // Phase 2 (Task #15 full closure): subclass NetworkRTCUDPSocketCocoa with a
+    // DriftstackSocks5UDPSocket that routes datagrams through Wave 29-379
+    // udpAssociate() + §7 wrap. Until then, log when SOCKS5 active so it's
+    // visible in production logs.
+    {
+        static bool loggedOnce = false;
+        const char* socks5Env = getenv("DRIFTSTACK_SOCKS5_PROXY");
+        if (!loggedOnce && socks5Env && socks5Env[0]) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] WebRTC UDP socket created via NetworkRTCUDPSocketCocoa — Cocoa-native path NOT routed through SOCKS5. ICE force-relay (Wave 29-318) sends media via TURN, but STUN/TURN ping is direct UDP. Task #15 closure (Wave 29-384+) will subclass for SOCKS5 UDP ASSOCIATE relay.");
+        }
+    }
+#endif
+
     auto socket = makeUnique<NetworkRTCUDPSocketCocoa>(identifier, *this, address.rtcAddress(), m_ipcConnection.copyRef(), String(attributedBundleIdentifierFromPageIdentifier(pageIdentifier)), flags, WTF::move(domain));
     addSocket(identifier, WTF::move(socket));
 }
