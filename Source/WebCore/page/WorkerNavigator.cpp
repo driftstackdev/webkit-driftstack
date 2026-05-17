@@ -63,7 +63,18 @@ const String& WorkerNavigator::userAgent() const
     // inherited Mac WebKit default UA, producing cross-context
     // divergence (CreepJS catches main UA != worker UA instantly).
     // Override here too so all contexts return the same iPhone UA.
-    // Mirror Navigator.cpp line 98 string verbatim.
+    //
+    // Wave 29-360 item 1: env-routed per-archetype UA via
+    // DRIFTSTACK_ARCHETYPE_UA_FULL. Mirrors Navigator.cpp logic verbatim
+    // so main + worker UA stay in sync per archetype.
+    static NeverDestroyed<String> driftstackEnvUA = []() {
+        const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
+        if (env && env[0])
+            return String::fromUTF8(env);
+        return String();
+    }();
+    if (!driftstackEnvUA.get().isEmpty())
+        return driftstackEnvUA.get();
     static NeverDestroyed<String> driftstackDefaultUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
     return driftstackDefaultUA.get();
 #endif
