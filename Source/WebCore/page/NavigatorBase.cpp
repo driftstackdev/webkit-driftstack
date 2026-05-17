@@ -27,6 +27,10 @@
 #include "config.h"
 #include "NavigatorBase.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "ContextDestructionObserverInlines.h"
 #include "Document.h"
 #include "GPU.h"
@@ -193,7 +197,10 @@ int NavigatorBase::hardwareConcurrency(ScriptExecutionContext& context)
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // V-077 (Wave 1.6): iPhone navigator.hardwareConcurrency = 4 (A18 Pro).
+    // V-077 + Wave 29-367: per-archetype hardwareConcurrency (Phase 2 Config)
+    // with iPhone 16 Pro A18 Pro fallback when Config not loaded.
+    if (auto hc = DriftstackArchetypeConfig::singleton().hardwareConcurrency(); hc > 0)
+        return hc;
     return 4;
 #endif
 
