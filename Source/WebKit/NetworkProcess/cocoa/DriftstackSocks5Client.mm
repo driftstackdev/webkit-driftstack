@@ -267,15 +267,84 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
     return Socks5Result::Success;
 }
 
+// RFC 1928 §4 + §6 UDP ASSOCIATE (CMD=0x03). Sends request over the
+// established TCP control channel (handshake required), reads BND.ADDR /
+// BND.PORT from reply. The returned relay endpoint receives UDP datagrams
+// wrapped per §7 (use wrapUdpDatagram / unwrapUdpDatagram).
+//
+// EG-WK-1.8 Phase C closure. The TCP control channel must stay open for
+// the duration of UDP ASSOCIATE — close it and proxy terminates the relay.
 Socks5Result DriftstackSocks5Client::udpAssociate(Socks5UdpRelayChannel& out)
 {
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8] DriftstackSocks5Client::udpAssociate() — Phase A scaffold; UDP ASSOCIATE impl pending Phase C");
+    if (m_impl->udpAssociated) {
+        out.relayHost = "(already-associated)"_s;
+        return Socks5Result::Success;
     }
-    UNUSED_PARAM(out);
-    return Socks5Result::NotImplemented;
+    if (!m_impl->handshakeOk) {
+        auto h = performHandshake();
+        if (h != Socks5Result::Success)
+            return h;
+    }
+    int fd = m_impl->socketFd;
+
+    // [VER=5, CMD=UDP_ASSOC, RSV=0, ATYP=IPV4, 0.0.0.0, port=0]
+    // RFC 1928 §4 — DST.ADDR/PORT in UDP_ASSOCIATE request are the LOCAL
+    // address from which the client will send UDP datagrams. Setting to
+    // 0.0.0.0:0 lets the proxy accept datagrams from any source (which
+    // we then send to the BND endpoint).
+    uint8_t req[10] = {
+        Socks5::kVersion5,
+        Socks5::kCmdUdpAssociate,
+        Socks5::kReserved,
+        Socks5::kAtypIpv4,
+        0x00, 0x00, 0x00, 0x00,   // DST.ADDR = 0.0.0.0
+        0x00, 0x00                 // DST.PORT = 0
+    };
+    if (!sendAll(fd, req, 10))
+        return Socks5Result::UdpAssociateFailed;
+
+    // [VER=5, REP, RSV=0, ATYP, BND.ADDR, BND.PORT_BE]
+    uint8_t hdr[4];
+    if (!recvAll(fd, hdr, 4))
+        return Socks5Result::UdpAssociateFailed;
+    if (hdr[0] != Socks5::kVersion5)
+        return Socks5Result::ProtocolError;
+    if (hdr[1] != Socks5::kReplySucceeded) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8] udpAssociate: SOCKS5 reply REP=0x%02x (non-success) — proxy refused UDP ASSOCIATE (may not support UDP relay)",
+            unsigned(hdr[1]));
+        return Socks5Result::UdpAssociateFailed;
+    }
+    uint8_t replyAtyp = hdr[3];
+    String bndHost;
+    if (replyAtyp == Socks5::kAtypIpv4) {
+        uint8_t addr[4];
+        if (!recvAll(fd, addr, 4)) return Socks5Result::UdpAssociateFailed;
+        bndHost = makeString(unsigned(addr[0]), '.', unsigned(addr[1]), '.', unsigned(addr[2]), '.', unsigned(addr[3]));
+    } else if (replyAtyp == Socks5::kAtypDomain) {
+        uint8_t dlen;
+        if (!recvAll(fd, &dlen, 1)) return Socks5Result::UdpAssociateFailed;
+        Vector<uint8_t> domainBuf;
+        domainBuf.grow(dlen);
+        if (!recvAll(fd, domainBuf.mutableSpan().data(), dlen)) return Socks5Result::UdpAssociateFailed;
+        bndHost = String::fromUTF8(domainBuf.span());
+    } else if (replyAtyp == Socks5::kAtypIpv6) {
+        uint8_t addr[16];
+        if (!recvAll(fd, addr, 16)) return Socks5Result::UdpAssociateFailed;
+        bndHost = "[ipv6]"_s;
+    } else {
+        return Socks5Result::ProtocolError;
+    }
+    uint8_t portBytes[2];
+    if (!recvAll(fd, portBytes, 2)) return Socks5Result::UdpAssociateFailed;
+    uint16_t bndPort = (static_cast<uint16_t>(portBytes[0]) << 8) | portBytes[1];
+
+    out.relayHost = bndHost;
+    out.relayPort = bndPort;
+    m_impl->udpAssociated = true;
+
+    WTFLogAlways("[Driftstack-EG-WK-1.8] udpAssociate: success — UDP relay endpoint %s:%u (TCP control channel must stay open). Send §7-wrapped datagrams here.",
+        bndHost.utf8().data(), unsigned(bndPort));
+    return Socks5Result::Success;
 }
 
 RetainPtr<NSInputStream> DriftstackSocks5Client::tcpReadStream() const
