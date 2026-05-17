@@ -1241,40 +1241,71 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         }
     }
 
-    if (const char* socks5Env = getenv("DRIFTSTACK_SOCKS5_PROXY")) {
-        if (socks5Env[0]) {
-            String spec = String::fromLatin1(socks5Env);
-            size_t colon = spec.find(':');
-            if (colon != notFound) {
-                String host = spec.left(colon);
-                String portStr = spec.substring(colon + 1);
-                bool portOK = true;
-                int portInt = 0;
-                for (unsigned i = 0; i < portStr.length(); ++i) {
-                    UChar c = portStr[i];
-                    if (c < '0' || c > '9') { portOK = false; break; }
-                    portInt = portInt * 10 + (c - '0');
-                    if (portInt > 65535) { portOK = false; break; }
-                }
-                if (portOK && portInt > 0) {
-                    uint16_t portOpt_val = static_cast<uint16_t>(portInt);
-                    std::optional<uint16_t> portOpt { portOpt_val };
-                    NSMutableDictionary *socksDict = [NSMutableDictionary dictionary];
-                    [socksDict setObject:@YES forKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
-                    [socksDict setObject:host.createNSString().get() forKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
-                    [socksDict setObject:@(*portOpt) forKey:(NSString *)kCFNetworkProxiesSOCKSPort];
-                    configuration.get().connectionProxyDictionary = socksDict;
-                    static bool loggedOnce = false;
-                    if (!loggedOnce) {
-                        loggedOnce = true;
-                        WTFLogAlways("[Driftstack-EG-WK-1.1] SOCKS5 proxy injected: %s:%u",
-                            host.utf8().data(), (unsigned)*portOpt);
+    // EG-WK-1.2 Wave 29-366: per-session SOCKS5 priority over env-var fallback.
+    // If parameters.proxyConfiguration (set per-session by UIProcess from the
+    // customer's session.create({proxy: 'socks5://host:port'}) call) already
+    // contains SOCKS5 keys (kCFNetworkProxiesSOCKSEnable + Proxy + Port), keep
+    // that as-is. configuration.connectionProxyDictionary was already populated
+    // from parameters.proxyConfiguration on line ~1213, so per-session SOCKS5
+    // is already routed. Otherwise fall back to EG-WK-1.1 env-var (back-compat
+    // for single-session deploys).
+    bool perSessionSOCKS5 = false;
+    if (parameters.proxyConfiguration) {
+        NSDictionary *psDict = (NSDictionary *)parameters.proxyConfiguration.get();
+        id socksEnable = [psDict objectForKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
+        if (socksEnable && [socksEnable boolValue]) {
+            perSessionSOCKS5 = true;
+            id host = [psDict objectForKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+            id port = [psDict objectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+            static bool loggedOncePerSession = false;
+            if (!loggedOncePerSession) {
+                loggedOncePerSession = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.2] per-session SOCKS5 proxy active: %s:%s",
+                    [[host description] UTF8String] ?: "?",
+                    [[port description] UTF8String] ?: "?");
+            }
+        }
+    }
+
+    if (!perSessionSOCKS5) {
+        // EG-WK-1.1 env-var fallback path. Activates when no per-session
+        // SOCKS5 config provided. Useful for harness-level global proxy
+        // (single-session deploys, dev/test fixtures).
+        if (const char* socks5Env = getenv("DRIFTSTACK_SOCKS5_PROXY")) {
+            if (socks5Env[0]) {
+                String spec = String::fromLatin1(socks5Env);
+                size_t colon = spec.find(':');
+                if (colon != notFound) {
+                    String host = spec.left(colon);
+                    String portStr = spec.substring(colon + 1);
+                    bool portOK = true;
+                    int portInt = 0;
+                    for (unsigned i = 0; i < portStr.length(); ++i) {
+                        UChar c = portStr[i];
+                        if (c < '0' || c > '9') { portOK = false; break; }
+                        portInt = portInt * 10 + (c - '0');
+                        if (portInt > 65535) { portOK = false; break; }
+                    }
+                    if (portOK && portInt > 0) {
+                        uint16_t portOpt_val = static_cast<uint16_t>(portInt);
+                        std::optional<uint16_t> portOpt { portOpt_val };
+                        NSMutableDictionary *socksDict = [NSMutableDictionary dictionary];
+                        [socksDict setObject:@YES forKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
+                        [socksDict setObject:host.createNSString().get() forKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+                        [socksDict setObject:@(*portOpt) forKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+                        configuration.get().connectionProxyDictionary = socksDict;
+                        static bool loggedOnce = false;
+                        if (!loggedOnce) {
+                            loggedOnce = true;
+                            WTFLogAlways("[Driftstack-EG-WK-1.1] SOCKS5 proxy injected (env-fallback): %s:%u",
+                                host.utf8().data(), (unsigned)*portOpt);
+                        }
+                    } else {
+                        WTFLogAlways("[Driftstack-EG-WK-1.1] DRIFTSTACK_SOCKS5_PROXY port parse failed: %s", socks5Env);
                     }
                 } else {
-                    WTFLogAlways("[Driftstack-EG-WK-1.1] DRIFTSTACK_SOCKS5_PROXY port parse failed: %s", socks5Env);
+                    WTFLogAlways("[Driftstack-EG-WK-1.1] DRIFTSTACK_SOCKS5_PROXY missing ':' separator: %s", socks5Env);
                 }
-            } else {
-                WTFLogAlways("[Driftstack-EG-WK-1.1] DRIFTSTACK_SOCKS5_PROXY missing ':' separator: %s", socks5Env);
             }
         }
     }
