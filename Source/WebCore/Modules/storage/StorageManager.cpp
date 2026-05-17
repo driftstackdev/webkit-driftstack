@@ -26,6 +26,10 @@
 #include "config.h"
 #include "StorageManager.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "ClientOrigin.h"
 #include "ContextDestructionObserverInlines.h"
 #include "Document.h"
@@ -151,26 +155,35 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
         // canonical for runtime-determined surface).
         if (!result.hasException()) {
             auto estimate = result.returnValue();
-            // Slice 245.3 (wave 29-246): file 99 S11 + file 110 § Storage
-            // quota — archetype-specific quota matching real iPhone disk
-            // size class. Env-var override path (DRIFTSTACK_STORAGE_QUOTA_BYTES)
-            // takes precedence; falls back to V-072 halving when unset.
-            // Same env-routed pattern as Apple Pay (Slice 245.1) until
-            // DriftstackArchetypeConfig.h registered for cross-module
-            // visibility.
-            if (const char* env = getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES")) {
-                // WebKit-compliant uint64 parse via WTF::parseInteger
-                // (avoids -Werror=-Wunsafe-buffer-usage-in-libc-call /
-                // -Werror=-Wunsafe-buffer-usage from strtoull / raw pointer loops).
-                auto parsed = WTF::parseInteger<uint64_t>(StringView::fromLatin1(env));
-                if (parsed && *parsed > 0) {
-                    estimate.quota = *parsed;
-                } else {
-                    estimate.quota = estimate.quota / 2;
+            // Slice 245.3 + Wave 29-389.D (Config singleton migration):
+            // 3-layer resolution priority for archetype-specific storage quota:
+            //   1. DriftstackArchetypeConfig::singleton().storageQuotaBytes()
+            //      if valid + non-zero (Phase 2 archetype JSON)
+            //   2. DRIFTSTACK_STORAGE_QUOTA_BYTES env-var (Wave 29-246 path,
+            //      back-compat)
+            //   3. V-072 halving fallback (Mac disk size / 2)
+            bool resolved = false;
+            {
+                auto& cfg = DriftstackArchetypeConfig::singleton();
+                if (cfg.isValid()) {
+                    uint64_t q = cfg.storageQuotaBytes();
+                    if (q > 0) {
+                        estimate.quota = q;
+                        resolved = true;
+                    }
                 }
-            } else {
-                estimate.quota = estimate.quota / 2;
             }
+            if (!resolved) {
+                if (const char* env = getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES")) {
+                    auto parsed = WTF::parseInteger<uint64_t>(StringView::fromLatin1(env));
+                    if (parsed && *parsed > 0) {
+                        estimate.quota = *parsed;
+                        resolved = true;
+                    }
+                }
+            }
+            if (!resolved)
+                estimate.quota = estimate.quota / 2;
             estimate.usage = 0;
             promise.resolve(estimate);
             return;
