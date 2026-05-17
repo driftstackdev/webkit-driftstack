@@ -36,16 +36,26 @@ void DriftstackArchetypeConfig::reload()
 
 void DriftstackArchetypeConfig::loadFromEnv()
 {
+    // Wave 29-393 (REVERTED Wave 29-393.B): attempted default to launch
+    // archetype JSON when env var unset; cumrig regressed to 1592/3 with
+    // CRITICAL DIFFS because the iphone17_ios18_7_safari26_4.json contains
+    // UA `Mobile/22F75` (stale build number) vs cumrig REF
+    // `Mobile/15E148` (correct iPhone Safari Mobile build) + apple_pay
+    // value disagreement. The Config JSONs need empirical reconciliation
+    // against cumrig REF before they can become production defaults —
+    // Wave 29-394+ slice will fix the archetype JSON UA fields then
+    // restore the default-path behavior.
+    //
+    // Until then: env-var-only load. Existing individual env vars
+    // (DRIFTSTACK_FONTS_DIR etc.) remain authoritative.
     const char* envPath = getenv("DRIFTSTACK_ARCHETYPE_CONFIG_PATH");
-    if (!envPath || !envPath[0]) {
-        // Backwards-compat: silently no-op. Existing individual env vars
-        // (DRIFTSTACK_FONTS_DIR etc.) remain authoritative.
+    if (!envPath || !envPath[0])
         return;
-    }
+    const char* path = envPath;
 
-    NSString* nsPath = [NSString stringWithUTF8String:envPath];
+    NSString* nsPath = [NSString stringWithUTF8String:path];
     if (![[NSFileManager defaultManager] fileExistsAtPath:nsPath]) {
-        NSLog(@"[Driftstack-ArchetypeConfig] file not found: %s", envPath);
+        NSLog(@"[Driftstack-ArchetypeConfig] file not found: %s", path);
         return;
     }
 
@@ -58,7 +68,7 @@ void DriftstackArchetypeConfig::loadFromEnv()
 
     String jsonText { nsContents };
     if (!parseJSON(jsonText)) {
-        NSLog(@"[Driftstack-ArchetypeConfig] JSON parse failed for %s", envPath);
+        NSLog(@"[Driftstack-ArchetypeConfig] JSON parse failed for %s", path);
         return;
     }
 

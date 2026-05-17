@@ -129,6 +129,13 @@
     ;;; happens to live in driftstack_audio_atlas/ due to historic naming.
     ;;; The Wave 29-370 family-B atlas lives in this directory.)
     (subpath "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas")
+    ;;; Wave 29-393: archetype JSON config directory for
+    ;;; DriftstackArchetypeConfig::loadFromEnv() default path
+    ;;; (operations/archetypes/iphone17_ios18_7_safari26_4.json).
+    ;;; Without this allow, Config sandbox-denies the read even when the
+    ;;; file is on disk → loadFromEnv silently fails → Phase 2 archetype
+    ;;; values unavailable to Wave 29-389 Config-singleton accessor migrations.
+    (subpath "/Users/john/code/driftstack/operations/archetypes")
     ;;; V-770 (Wave 28): Driftstack text-run atlas (Rule N v2 Layer A)
     (subpath "/Users/john/code/driftstack/reference/driftstack_text_run_atlas")
     (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
