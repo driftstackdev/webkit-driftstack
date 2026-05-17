@@ -26,6 +26,10 @@
 #include "config.h"
 #include "PaymentCoordinator.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #if ENABLE(APPLE_PAY)
 
 #include "ApplePayCouponCodeUpdate.h"
@@ -78,14 +82,22 @@ bool PaymentCoordinator::supportsVersion(Document&, unsigned version) const
 bool PaymentCoordinator::canMakePayments()
 {
 #if PLATFORM(DRIFTSTACK)
-    // Slice 244.7 (wave 29-245 fix): per file 99 V2 + file 110 § Apple Pay
-    // canMakePayments varies per real iPhone user. The archetype config
-    // lives in platform/cocoa/DriftstackArchetypeConfig.h but that header
-    // is not currently registered for cross-module visibility in WebCore's
-    // xcode project. Use env var as the per-session override channel for
-    // now (DRIFTSTACK_APPLE_PAY_SET_UP=1 → true, =0 → false). Wiring to
-    // DriftstackArchetypeConfig::singleton().applePaySetUp() pending an
-    // xcode project Headers-phase registration slice.
+    // Slice 244.7 + Wave 29-389.C (Config singleton migration):
+    // per file 99 V2 + file 110 § Apple Pay canMakePayments varies per
+    // real iPhone user. 2-layer resolution:
+    //   1. DriftstackArchetypeConfig::singleton().applePaySetUp() if loaded
+    //   2. DRIFTSTACK_APPLE_PAY_SET_UP env-var fallback (Wave 29-245 path)
+    //
+    // Pre-Wave-29-366.6 the env-var was the only option due to cross-module
+    // visibility limits. Now Config is reachable.
+    {
+        auto& cfg = DriftstackArchetypeConfig::singleton();
+        if (cfg.isValid()) {
+            bool override = cfg.applePaySetUp();
+            PAYMENT_COORDINATOR_RELEASE_LOG("canMakePayments() driftstack-config -> %d", override);
+            return override;
+        }
+    }
     if (const char* env = getenv("DRIFTSTACK_APPLE_PAY_SET_UP")) {
         bool override = (env[0] == '1');
         PAYMENT_COORDINATOR_RELEASE_LOG("canMakePayments() driftstack-env-override -> %d", override);
