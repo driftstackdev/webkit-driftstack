@@ -23,6 +23,10 @@
 #include "config.h"
 #include "Navigator.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "BadgeClient.h"
 #include "Chrome.h"
 #include "CookieJar.h"
