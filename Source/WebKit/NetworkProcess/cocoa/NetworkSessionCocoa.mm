@@ -1267,6 +1267,31 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         }
     }
 
+    // Wave 29-385: DRIFTSTACK_CUSTOM_SOCKS5=1 observability scaffold.
+    // The custom DriftstackSocks5Client (Wave 29-368 scaffold +
+    // Wave 29-375 Phase B TCP CONNECT + Wave 29-379 Phase C UDP ASSOCIATE)
+    // is protocol-complete but NOT yet wired into NSURLSession dispatch.
+    // Replacing CFNetwork's SOCKS5 path requires an NSURLProtocol subclass
+    // (NSURLSession doesn't accept arbitrary socket pairs as transports);
+    // ~4-8h integration deferred to a focused future slice.
+    //
+    // For now: if DRIFTSTACK_CUSTOM_SOCKS5=1 is set AND any SOCKS5 path
+    // is active (per-session OR env-fallback), log a single warning so
+    // production deploys are aware the env-gate is recognized but the
+    // CFNetwork fallback remains the actual transport.
+    {
+        const char* customEnv = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+        bool customRequested = customEnv && customEnv[0] == '1';
+        bool envFallbackSOCKS5 = !perSessionSOCKS5 && getenv("DRIFTSTACK_SOCKS5_PROXY") && getenv("DRIFTSTACK_SOCKS5_PROXY")[0];
+        if (customRequested && (perSessionSOCKS5 || envFallbackSOCKS5)) {
+            static bool loggedOnceCustom = false;
+            if (!loggedOnceCustom) {
+                loggedOnceCustom = true;
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 recognized — DriftstackSocks5Client protocol impl complete (Wave 29-368/29-375/29-379) but dispatch wiring not yet active. CFNetwork SOCKS5 path remains the transport this session. ATYP=0x03 + UDP ASSOCIATE will activate when Wave 29-386+ NSURLProtocol subclass lands.");
+            }
+        }
+    }
+
     if (!perSessionSOCKS5) {
         // EG-WK-1.1 env-var fallback path. Activates when no per-session
         // SOCKS5 config provided. Useful for harness-level global proxy
