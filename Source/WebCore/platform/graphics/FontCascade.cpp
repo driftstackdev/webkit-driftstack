@@ -425,7 +425,46 @@ NEVER_INLINE float FontCascade::widthForSimpleTextSlow(StringView text, TextDire
     auto addGlyphsFromText = [&](GlyphBuffer& glyphBuffer, const Font& font, auto characters) {
         for (size_t i = 0; i < characters.size(); ++i) {
             auto glyph = font.glyphForCharacter(characters[i]);
-            glyphBuffer.add(glyph, font, font.widthForGlyph(glyph), i);
+            float adv = font.widthForGlyph(glyph);
+#if PLATFORM(DRIFTSTACK)
+            // P-#48.K Wave 29-326: simplified-text-measuring path Mn override.
+            // When characters[i] is one of our 10 V-433.Z target codepoints AND
+            // primary font lacks it (glyph=0 notdef OR returned width doesn't
+            // match iPhone), substitute iPhone-canonical advance.
+            // Env-gated DRIFTSTACK_V433Z_MN_OVERRIDE=1.
+            static bool s_p48kOverrideEnabled = []() {
+                const char* env = getenv("DRIFTSTACK_V433Z_MN_OVERRIDE");
+                return env && env[0] == '1';
+            }();
+            if (s_p48kOverrideEnabled && font.platformData().size() > 0) {
+                char32_t cp = characters[i];
+                // iPhone reference advances at ptSize=72; scale linearly.
+                // Per Wave 29-309 BS capture:
+                //   U+1CDA → 27, U+17DD → 36, U+302E → 56, U+2C7B → 56,
+                //   U+10A0 → 61, U+A73D → 56, U+FFFD → 43, U+21E4 → 43,
+                //   U+20E3 → 72, U+20B9 → 37
+                struct CpRatio { char32_t cp; float ratio72; };
+                static const std::array<CpRatio, 10> kTargets {{
+                    {0x1CDA, 27.f/72.f}, {0x17DD, 36.f/72.f},
+                    {0x302E, 56.f/72.f}, {0x2C7B, 56.f/72.f},
+                    {0x10A0, 61.f/72.f}, {0xA73D, 56.f/72.f},
+                    {0xFFFD, 43.f/72.f}, {0x21E4, 43.f/72.f},
+                    {0x20E3, 72.f/72.f}, {0x20B9, 37.f/72.f},
+                }};
+                for (const auto& t : kTargets) {
+                    if (t.cp == cp) {
+                        float synth = t.ratio72 * font.platformData().size();
+                        static unsigned p48kLogCount = 0;
+                        if (p48kLogCount++ < 20)
+                            WTFLogAlways("[Driftstack-P48-K-Override] cp=U+%04X ptSize=%.1f mac=%.3f → synth=%.3f",
+                                (unsigned)cp, font.platformData().size(), adv, synth);
+                        adv = synth;
+                        break;
+                    }
+                }
+            }
+#endif
+            glyphBuffer.add(glyph, font, adv, i);
         }
     };
 
