@@ -424,6 +424,18 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_TEXT_RUN_ATLAS_DIAG", getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") },
             { "DRIFTSTACK_CANVAS_FUZZ_ATLAS", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS") },
             { "DRIFTSTACK_CANVAS_FP10X_OVERRIDE", getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE") },
+            // Wave 29-390 (production launch gap closure): forward atlas
+            // path + SOCKS5 env vars to WebContent/Network child processes.
+            // The harness sets these at MiniBrowser launch; WebContent XPC
+            // didn't inherit them so production behavior diverged from
+            // cumrig (which uses __XPC_DRIFTSTACK_* shadow vars).
+            { "DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH") },
+            { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
+            { "DRIFTSTACK_REQUIRE_PROXY", getenv("DRIFTSTACK_REQUIRE_PROXY") },
+            { "DRIFTSTACK_CUSTOM_SOCKS5", getenv("DRIFTSTACK_CUSTOM_SOCKS5") },
+            { "DRIFTSTACK_ARCHETYPE_UA_FULL", getenv("DRIFTSTACK_ARCHETYPE_UA_FULL") },
+            { "DRIFTSTACK_APPLE_PAY_SET_UP", getenv("DRIFTSTACK_APPLE_PAY_SET_UP") },
+            { "DRIFTSTACK_STORAGE_QUOTA_BYTES", getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
