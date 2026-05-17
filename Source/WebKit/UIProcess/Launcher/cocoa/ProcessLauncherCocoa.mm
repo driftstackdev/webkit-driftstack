@@ -436,6 +436,51 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_ARCHETYPE_UA_FULL", getenv("DRIFTSTACK_ARCHETYPE_UA_FULL") },
             { "DRIFTSTACK_APPLE_PAY_SET_UP", getenv("DRIFTSTACK_APPLE_PAY_SET_UP") },
             { "DRIFTSTACK_STORAGE_QUOTA_BYTES", getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES") },
+            // Wave 29-390.B comprehensive audit: 30+ DRIFTSTACK_ env vars
+            // consumed in fork code but never forwarded. Cumrig didn't catch
+            // because cumrig uses __XPC_DRIFTSTACK_* shadow vars; production
+            // harness uses unprefixed. Forwarding all production-critical
+            // fingerprint env vars per audit Wave 29-390.
+            // Atlas binaries:
+            { "DRIFTSTACK_AUDIO_ATLAS", getenv("DRIFTSTACK_AUDIO_ATLAS") },
+            { "DRIFTSTACK_AUDIO_ATLAS_PATH", getenv("DRIFTSTACK_AUDIO_ATLAS_PATH") },
+            { "DRIFTSTACK_ADVANCE_ATLAS_PATH", getenv("DRIFTSTACK_ADVANCE_ATLAS_PATH") },
+            { "DRIFTSTACK_ASCII_ATLAS_PATH", getenv("DRIFTSTACK_ASCII_ATLAS_PATH") },
+            { "DRIFTSTACK_EMOJI_ATLAS_PATH", getenv("DRIFTSTACK_EMOJI_ATLAS_PATH") },
+            { "DRIFTSTACK_COMPOSITE_ATLAS_PATH", getenv("DRIFTSTACK_COMPOSITE_ATLAS_PATH") },
+            { "DRIFTSTACK_PER_GLYPH_ATLAS_PATH", getenv("DRIFTSTACK_PER_GLYPH_ATLAS_PATH") },
+            { "DRIFTSTACK_TEXT_GLYPH_ATLAS_PATH", getenv("DRIFTSTACK_TEXT_GLYPH_ATLAS_PATH") },
+            { "DRIFTSTACK_TEXT_ATLAS", getenv("DRIFTSTACK_TEXT_ATLAS") },
+            // Fingerprint overrides:
+            { "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE") },
+            { "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE") },
+            { "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", getenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP") },
+            { "DRIFTSTACK_SF_PRO_PLUS_ONE", getenv("DRIFTSTACK_SF_PRO_PLUS_ONE") },
+            { "DRIFTSTACK_FONT_CANONICAL_OVERRIDE", getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE") },
+            { "DRIFTSTACK_FONT_CANONICAL_PATH", getenv("DRIFTSTACK_FONT_CANONICAL_PATH") },
+            { "DRIFTSTACK_REALTIME_ANALYSER_OVERRIDE", getenv("DRIFTSTACK_REALTIME_ANALYSER_OVERRIDE") },
+            // Audio:
+            { "DRIFTSTACK_AUDIO_FLOAT16", getenv("DRIFTSTACK_AUDIO_FLOAT16") },
+            { "DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH", getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH") },
+            // WebRTC:
+            { "DRIFTSTACK_FORCE_ICE_RELAY", getenv("DRIFTSTACK_FORCE_ICE_RELAY") },
+            // Behavioral:
+            { "DRIFTSTACK_BEHAVIORAL_MODEL_PATH", getenv("DRIFTSTACK_BEHAVIORAL_MODEL_PATH") },
+            { "DRIFTSTACK_BEHAVIORAL_SYNTHESIS", getenv("DRIFTSTACK_BEHAVIORAL_SYNTHESIS") },
+            // Layer B ML:
+            { "DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER", getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER") },
+            { "DRIFTSTACK_LAYER_B_SUBSTITUTE", getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE") },
+            // Resources:
+            { "DRIFTSTACK_FONTS_DIR", getenv("DRIFTSTACK_FONTS_DIR") },
+            { "DRIFTSTACK_ARCHETYPE", getenv("DRIFTSTACK_ARCHETYPE") },
+            // GPU:
+            { "DRIFTSTACK_FORCE_CPU_CANVAS", getenv("DRIFTSTACK_FORCE_CPU_CANVAS") },
+            // Layout text-rendering fix:
+            { "DRIFTSTACK_HALFLEADING_ROUND", getenv("DRIFTSTACK_HALFLEADING_ROUND") },
+            // V-433.Z text-rendering specials:
+            { "DRIFTSTACK_V433Z_MN_OVERRIDE", getenv("DRIFTSTACK_V433Z_MN_OVERRIDE") },
+            // Atlas dispatch flag:
+            { "DRIFTSTACK_DISPATCH_PER_GLYPH", getenv("DRIFTSTACK_DISPATCH_PER_GLYPH") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
