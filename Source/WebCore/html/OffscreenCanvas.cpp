@@ -28,6 +28,11 @@
 
 #if ENABLE(OFFSCREEN_CANVAS)
 
+#if PLATFORM(DRIFTSTACK)
+#include "CanvasRenderingContext2DBase.h"
+#include "DriftstackCanvasFingerprint10xOverride.h"
+#include <wtf/text/Base64.h>
+#endif
 #include "BitmapImage.h"
 #include "CSSValuePool.h"
 #include "CanvasRenderingContext.h"
@@ -316,6 +321,46 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         blobData = encodeData(createImageForNoiseInjection(), encodingMIMEType, quality);
     else
         blobData = encodeData(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-347: cross-context V-241/V-510 dispatch parity. Per Wave 29-345
+    // empirical finding (operations/verification-log.md), HTMLCanvasElement
+    // ::toDataURL applies V-241/V-510 canonical-PNG substitution when
+    // FP10X_OVERRIDE=1, but OffscreenCanvas::convertToBlob did NOT, creating
+    // a P1 cross-context fingerprint detection vector. Mirror the dispatch
+    // here so Worker-context PNG output gets the same iPhone-canonical
+    // substitution as main-thread toDataURL. v510AtlasLookup is defined
+    // (non-static) in HTMLCanvasElement.cpp without a header declaration —
+    // forward-declared in this TU for cross-TU linkage.
+    static bool s_canvasFp10xOverrideEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_canvasFp10xOverrideEnabled && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        // V-241 legacy canonical-table lookup (V-510 atlas lookup is
+        // file-local to HTMLCanvasElement.cpp — anonymous namespace —
+        // and not cross-TU accessible without refactor. V-241 covers the
+        // empirically demonstrated FP10x dispatch path per Wave 29-345
+        // MB log [Driftstack-V241] FIRED. V-510 atlas accessibility is
+        // deferred to a follow-up wave.)
+        const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+        if (!canonical)
+            canonical = lookupCanvasFp10xCanonical(width(), height());
+        if (canonical) {
+            auto substitute = String::fromUTF8(canonical);
+            static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
+            if (substitute.startsWith(kPNGPrefix)) {
+                auto b64View = StringView(substitute).substring(kPNGPrefix.length());
+                if (auto decoded = base64Decode(b64View)) {
+                    blobData = std::move(*decoded);
+                    WTFLogAlways("[Driftstack-V241-Worker] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
+                        width(), height(), lastFillText().length());
+                }
+            }
+        }
+    }
+#endif
 
     if (blobData.isEmpty()) {
         promise->reject(ExceptionCode::EncodingError);

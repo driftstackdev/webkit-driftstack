@@ -45,6 +45,9 @@
 #include "TextMetrics.h"
 #include "TextRun.h"
 #include <wtf/TZoneMallocInlines.h>
+#if PLATFORM(DRIFTSTACK)
+#include "OpSequenceRecorder.h"
+#endif
 
 namespace WebCore {
 
@@ -171,11 +174,31 @@ auto OffscreenCanvasRenderingContext2D::fontProxy() -> const FontProxy* {
 
 void OffscreenCanvasRenderingContext2D::fillText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-348: mirror CanvasRenderingContext2D::fillText V-241 tracking.
+    // Without this, worker-context V-241/V-510 lookups fall through to
+    // shape-only entries because lastFillText() returns empty — landed
+    // Wave 29-347 substitution fires on convertToBlob but with wrong table
+    // entry, producing canonical bytes that DIFFER from main toDataURL
+    // canonical bytes (still a cross-context fingerprint vector).
+    if (maxWidth)
+        driftstackOpSequenceRecorder().recordFillTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        driftstackOpSequenceRecorder().recordFillText(text, x, y);
+    canvasBase().recordLastFillText(text);
+#endif
     drawText(text, x, y, true, maxWidth);
 }
 
 void OffscreenCanvasRenderingContext2D::strokeText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (maxWidth)
+        driftstackOpSequenceRecorder().recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        driftstackOpSequenceRecorder().recordStrokeText(text, x, y);
+    canvasBase().recordLastFillText(text);
+#endif
     drawText(text, x, y, false, maxWidth);
 }
 

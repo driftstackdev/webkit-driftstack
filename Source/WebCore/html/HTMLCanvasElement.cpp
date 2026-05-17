@@ -1231,6 +1231,44 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     else
         blobData = encodeData(makeRenderingResultsAvailable(), encodingMIMEType, quality);
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-347: sibling gap to OffscreenCanvas::convertToBlob (per Wave
+    // 29-345). HTMLCanvasElement::toBlob produces PNG bytes but the V-241/
+    // V-510 dispatch lives only at toDataURL above (line ~1078). Vendor
+    // probing via canvas.toBlob() vs canvas.toDataURL() would see natural
+    // Mac fork vs iPhone-canonical respectively — detectable inconsistency.
+    // Mirror dispatch here so toBlob output matches toDataURL canonical
+    // substitution. Gated on FP10X_OVERRIDE=1 (same gate as toDataURL).
+    static bool s_canvasFp10xOverrideToBlob = []() {
+        const char* env = getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_canvasFp10xOverrideToBlob && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        // HTMLCanvasElement::toBlob path mirrors toDataURL V-241 dispatch.
+        // (V-510 atlas lookup is in this TU so it's reachable — but to
+        // keep the patch consistent with OffscreenCanvas.cpp's V-241-only
+        // closure and avoid the early-encode cost on toBlob, use V-241
+        // legacy table only here. Wave 29-348+ can lift v510AtlasLookup
+        // into a public helper and add it back to both paths.)
+        const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+        if (!canonical)
+            canonical = lookupCanvasFp10xCanonical(width(), height());
+        if (canonical) {
+            auto substitute = String::fromUTF8(canonical);
+            static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
+            if (substitute.startsWith(kPNGPrefix)) {
+                auto b64View = StringView(substitute).substring(kPNGPrefix.length());
+                if (auto decoded = base64Decode(b64View)) {
+                    blobData = std::move(*decoded);
+                    WTFLogAlways("[Driftstack-V241-toBlob] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
+                        width(), height(), lastFillText().length());
+                }
+            }
+        }
+    }
+#endif
+
     RefPtr<Blob> blob;
     if (!blobData.isEmpty())
         blob = Blob::create(document.ptr(), WTF::move(blobData), encodingMIMEType);
