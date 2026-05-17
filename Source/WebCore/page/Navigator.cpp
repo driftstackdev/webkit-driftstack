@@ -99,19 +99,35 @@ const String& Navigator::userAgent() const
         ResourceLoadObserver::singleton().logNavigatorAPIAccessed(*protect(frame->document()), NavigatorAPIsAccessed::UserAgent);
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-360 item 1: env-routed per-archetype UA (DRIFTSTACK_ARCHETYPE_UA_FULL).
-    // Same pattern as Storage quota + Apple Pay env routing — avoids cross-module
-    // visibility issue with platform/cocoa/DriftstackArchetypeConfig.h. Falls
-    // back to V-202 / Wave 1.2 hardcoded launch-archetype UA when env unset,
-    // preserving cumrig 1595/0 invariant for sessions without env override.
-    static NeverDestroyed<String> driftstackEnvUA = []() {
+    // Wave 29-360 item 1 + Wave 29-389 (Config singleton migration):
+    // 3-layer UA resolution priority:
+    //   1. DriftstackArchetypeConfig singleton (Phase 2 archetype JSON load)
+    //   2. DRIFTSTACK_ARCHETYPE_UA_FULL env-var fallback (Wave 29-360 path,
+    //      preserved for back-compat with production harness scripts)
+    //   3. V-202 / Wave 1.2 hardcoded launch-archetype default (cumrig invariant)
+    //
+    // Config singleton became cross-module-reachable Wave 29-366.6 Xcode regen.
+    // Pre-29-366.6 the env-var path was the only option due to cross-module
+    // visibility limits. Now Config is preferred — env-var stays as fallback
+    // for scripts that don't set DRIFTSTACK_ARCHETYPE_CONFIG_PATH.
+    // First-call cache: Config singleton then env-var. Both can be empty;
+    // in either case fall through to hardcoded default below.
+    // Function signature returns `const String&` so the cache must outlive
+    // the function — static NeverDestroyed.
+    static NeverDestroyed<String> driftstackResolvedUA = []() {
+        auto& cfg = DriftstackArchetypeConfig::singleton();
+        if (cfg.isValid()) {
+            String s = cfg.userAgentFull();
+            if (!s.isEmpty())
+                return s;
+        }
         const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
         if (env && env[0])
             return String::fromUTF8(env);
         return String();
     }();
-    if (!driftstackEnvUA.get().isEmpty())
-        return driftstackEnvUA.get();
+    if (!driftstackResolvedUA.get().isEmpty())
+        return driftstackResolvedUA.get();
     static NeverDestroyed<String> driftstackDefaultUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
     return driftstackDefaultUA.get();
 #endif
