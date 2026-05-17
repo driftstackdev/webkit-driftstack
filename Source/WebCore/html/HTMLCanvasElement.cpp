@@ -39,6 +39,7 @@
 #include "DocumentQuirks.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
+#include "DriftstackCanvasFingerprint10xRGBA.h"
 // V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
 // (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
 // in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).
@@ -1005,6 +1006,16 @@ String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA
     return String();
 }
 } // anonymous namespace
+
+// Wave 29-349: public Driftstack:: wrapper for v510AtlasLookup so cross-TU
+// callers (OffscreenCanvas::convertToBlob, HTMLCanvasElement::toBlob) can
+// reach V-510 atlas substitution. Declaration in DriftstackCanvasFingerprint10xRGBA.h.
+namespace Driftstack {
+String v510AtlasLookupPublic(const String& macForkDataURL, const String& opSequenceSHA256Hex)
+{
+    return v510AtlasLookup(macForkDataURL, opSequenceSHA256Hex);
+}
+} // namespace Driftstack
 #endif // PLATFORM(DRIFTSTACK)
 
 // https://html.spec.whatwg.org/multipage/canvas.html#a-serialisation-of-the-bitmap-as-a-file
@@ -1245,25 +1256,31 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     }();
     if (s_canvasFp10xOverrideToBlob && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        // HTMLCanvasElement::toBlob path mirrors toDataURL V-241 dispatch.
-        // (V-510 atlas lookup is in this TU so it's reachable — but to
-        // keep the patch consistent with OffscreenCanvas.cpp's V-241-only
-        // closure and avoid the early-encode cost on toBlob, use V-241
-        // legacy table only here. Wave 29-348+ can lift v510AtlasLookup
-        // into a public helper and add it back to both paths.)
-        const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
-        if (!canonical)
-            canonical = lookupCanvasFp10xCanonical(width(), height());
-        if (canonical) {
-            auto substitute = String::fromUTF8(canonical);
-            static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
-            if (substitute.startsWith(kPNGPrefix)) {
-                auto b64View = StringView(substitute).substring(kPNGPrefix.length());
-                if (auto decoded = base64Decode(b64View)) {
-                    blobData = std::move(*decoded);
-                    WTFLogAlways("[Driftstack-V241-toBlob] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
-                        width(), height(), lastFillText().length());
-                }
+        // Wave 29-349: V-510 atlas lookup (in-TU direct call) +
+        // V-241 fallback. Mirrors toDataURL dispatch above.
+        String opSeqSha;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
+        }
+        auto macForkDataURL = makeString("data:image/png;base64,"_s, base64Encoded(blobData.span()));
+        auto substitute = v510AtlasLookup(macForkDataURL, opSeqSha);
+        bool fromV510 = !substitute.isNull();
+        if (substitute.isNull()) {
+            const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+            if (!canonical)
+                canonical = lookupCanvasFp10xCanonical(width(), height());
+            if (canonical)
+                substitute = String::fromUTF8(canonical);
+        }
+        static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
+        if (!substitute.isNull() && substitute.startsWith(kPNGPrefix)) {
+            auto b64View = StringView(substitute).substring(kPNGPrefix.length());
+            if (auto decoded = base64Decode(b64View)) {
+                blobData = std::move(*decoded);
+                WTFLogAlways("[Driftstack-%s-toBlob] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
+                    fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
             }
         }
     }

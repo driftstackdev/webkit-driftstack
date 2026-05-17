@@ -47,6 +47,12 @@ bool isCanvasFp10xOverrideEnabled();
 // outRGBA spans the cached buffer (lifetime is the process).
 bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& lastFillText, std::span<const uint8_t>& outRGBA);
 
+// Wave 29-349: public wrapper for V-510 atlas lookup (HTMLCanvasElement.cpp's
+// anon-namespace v510AtlasLookup is internally linked). Lets cross-TU callers
+// (OffscreenCanvas::convertToBlob, HTMLCanvasElement::toBlob) substitute via
+// V-510 atlas when probe doesn't match a V-241 canonical shape entry.
+WTF::String v510AtlasLookupPublic(const WTF::String& macForkDataURL, const WTF::String& opSequenceSHA256Hex);
+
 } // namespace Driftstack
 } // namespace WebCore
 

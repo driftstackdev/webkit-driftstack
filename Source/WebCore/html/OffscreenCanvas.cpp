@@ -31,6 +31,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "CanvasRenderingContext2DBase.h"
 #include "DriftstackCanvasFingerprint10xOverride.h"
+#include "DriftstackCanvasFingerprint10xRGBA.h"
 #include <wtf/text/Base64.h>
 #endif
 #include "BitmapImage.h"
@@ -338,25 +339,32 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
     }();
     if (s_canvasFp10xOverrideEnabled && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        // V-241 legacy canonical-table lookup (V-510 atlas lookup is
-        // file-local to HTMLCanvasElement.cpp — anonymous namespace —
-        // and not cross-TU accessible without refactor. V-241 covers the
-        // empirically demonstrated FP10x dispatch path per Wave 29-345
-        // MB log [Driftstack-V241] FIRED. V-510 atlas accessibility is
-        // deferred to a follow-up wave.)
-        const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
-        if (!canonical)
-            canonical = lookupCanvasFp10xCanonical(width(), height());
-        if (canonical) {
-            auto substitute = String::fromUTF8(canonical);
-            static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
-            if (substitute.startsWith(kPNGPrefix)) {
-                auto b64View = StringView(substitute).substring(kPNGPrefix.length());
-                if (auto decoded = base64Decode(b64View)) {
-                    blobData = std::move(*decoded);
-                    WTFLogAlways("[Driftstack-V241-Worker] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
-                        width(), height(), lastFillText().length());
-                }
+        // Wave 29-349: V-510 atlas lookup via the public Driftstack::
+        // wrapper, falling back to V-241 canonical table on miss. Mirrors
+        // HTMLCanvasElement.cpp:1078-1199 dispatch logic.
+        String opSeqSha;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t w = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
+        }
+        auto macForkDataURL = makeString("data:image/png;base64,"_s, base64Encoded(blobData.span()));
+        auto substitute = Driftstack::v510AtlasLookupPublic(macForkDataURL, opSeqSha);
+        bool fromV510 = !substitute.isNull();
+        if (substitute.isNull()) {
+            const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+            if (!canonical)
+                canonical = lookupCanvasFp10xCanonical(width(), height());
+            if (canonical)
+                substitute = String::fromUTF8(canonical);
+        }
+        static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
+        if (!substitute.isNull() && substitute.startsWith(kPNGPrefix)) {
+            auto b64View = StringView(substitute).substring(kPNGPrefix.length());
+            if (auto decoded = base64Decode(b64View)) {
+                blobData = std::move(*decoded);
+                WTFLogAlways("[Driftstack-%s-Worker] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
+                    fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
             }
         }
     }
