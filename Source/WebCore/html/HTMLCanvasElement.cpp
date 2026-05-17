@@ -714,7 +714,19 @@ void initV510AtlasOnce()
     // env var unset; logs PASS/FAIL via WTFLogAlways; never aborts startup.
     runOpSequenceRecorderSelfTestIfRequested();
 
-    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_audio_atlas/driftstack-canvas-fuzz-atlas.bin";
+    // Wave 29-392: default path = Wave 29-378 family-B-supplemented atlas
+    // (3084 entries / 30.09 MB / git-tracked) at the correctly-named
+    // driftstack_canvas_fuzz_atlas/ directory. Replaces pre-Wave-29-378
+    // default at driftstack_audio_atlas/ which held a Family-A-polluted
+    // 25.81 MB atlas accumulated through Waves 29-272 → 29-280. Production
+    // sessions that don't set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH now use
+    // the launch-archetype-clean atlas by default — silent-failure mode
+    // removed where harness forgot to set the env var.
+    //
+    // The audio_atlas/ path remains in sandbox + on disk for back-compat
+    // (some scripts may explicitly set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
+    // to it for A/B testing). Production deploy uses the new default.
+    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-family-b-supplemented.bin";
     constexpr size_t kHeaderBytes = 32;
     constexpr size_t kIndexEntryStride = 28;
 
