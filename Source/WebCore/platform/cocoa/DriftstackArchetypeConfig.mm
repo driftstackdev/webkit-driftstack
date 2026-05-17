@@ -36,18 +36,28 @@ void DriftstackArchetypeConfig::reload()
 
 void DriftstackArchetypeConfig::loadFromEnv()
 {
-    // Wave 29-393 (REVERTED Wave 29-393.B): attempted default to launch
-    // archetype JSON when env var unset; cumrig regressed to 1592/3 with
-    // CRITICAL DIFFS because the iphone17_ios18_7_safari26_4.json contains
-    // UA `Mobile/22F75` (stale build number) vs cumrig REF
-    // `Mobile/15E148` (correct iPhone Safari Mobile build) + apple_pay
-    // value disagreement. The Config JSONs need empirical reconciliation
-    // against cumrig REF before they can become production defaults —
-    // Wave 29-394+ slice will fix the archetype JSON UA fields then
-    // restore the default-path behavior.
+    // Wave 29-393 → 29-394 → 29-395 RETRY → 29-395 REVERTED again:
+    // attempted default-path activation TWICE; both attempts broke cumrig
+    // (different fields each time).
     //
-    // Until then: env-var-only load. Existing individual env vars
-    // (DRIFTSTACK_FONTS_DIR etc.) remain authoritative.
+    //  - Wave 29-393.B: Mobile/22F75 UA + apple_pay missing → critical UA
+    //    diffs + Apple Pay false-vs-true. Fixed JSONs in 29-394.A+B.
+    //  - Wave 29-395.B: storage.quota_bytes flows through Wave 29-389.D
+    //    StorageManager.cpp migration → IDL clamps uint64 to INT_MAX 32-bit
+    //    (2147483647) → diverges from cumrig REF (~38.4GB real iPhone disk).
+    //
+    // Conclusion: Config default-path activation needs MORE per-field
+    // reconciliation than just UA+Apple Pay+Storage. Per memory rule
+    // "Default-on activation of Config-singleton-loaded values without
+    // first reconciling JSON contents against empirical cumrig REF causes
+    // critical divergence" (Wave 29-393.E regression class).
+    //
+    // The full reconciliation work is multi-hour: per-field cumrig diff +
+    // JSON value fix + IDL path verification. Deferred to a focused
+    // archetype-JSON-data-cleanup slice.
+    //
+    // Until then: env-var-only load. Wave 29-389.A-D Config-singleton
+    // accessor migrations remain dormant until env var explicitly set.
     const char* envPath = getenv("DRIFTSTACK_ARCHETYPE_CONFIG_PATH");
     if (!envPath || !envPath[0])
         return;
