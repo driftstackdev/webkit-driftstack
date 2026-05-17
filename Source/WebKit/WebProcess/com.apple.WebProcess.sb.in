@@ -124,6 +124,11 @@
     (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
     (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    ;;; Wave 29-373: canvas-fuzz atlas directory (correctly-named home for
+    ;;; V-510 atlas binaries; the legacy driftstack-canvas-fuzz-atlas.bin
+    ;;; happens to live in driftstack_audio_atlas/ due to historic naming.
+    ;;; The Wave 29-370 family-B atlas lives in this directory.)
+    (subpath "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas")
     ;;; V-770 (Wave 28): Driftstack text-run atlas (Rule N v2 Layer A)
     (subpath "/Users/john/code/driftstack/reference/driftstack_text_run_atlas")
     (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
