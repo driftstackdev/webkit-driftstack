@@ -202,6 +202,37 @@ static CFDictionaryRef typesetterOptionsSingleton()
 
 void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const char16_t> characters, unsigned stringLocation, const Font* font)
 {
+#if PLATFORM(DRIFTSTACK)
+    // P-#48.L Wave 29-327 diag: log when our V-433.Z target cps reach
+    // the complex-text path. Confirms which probe queries traverse this
+    // path vs the simplified path (P-#48.K handles that).
+    static bool s_p48lDiagEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_V433Z_MN_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_p48lDiagEnabled && !characters.empty()) {
+        char32_t cp0 = characters[0];
+        if (cp0 >= 0xD800 && cp0 <= 0xDBFF && characters.size() >= 2) {
+            uint32_t low = characters[1];
+            if (low >= 0xDC00 && low <= 0xDFFF)
+                cp0 = 0x10000 + ((cp0 - 0xD800) << 10) + (low - 0xDC00);
+        }
+        static const char32_t kTargets[] = {
+            0x1CDA, 0x17DD, 0x302E, 0x2C7B, 0x10A0,
+            0xA73D, 0xFFFD, 0x21E4, 0x20E3, 0x20B9
+        };
+        for (auto t : kTargets) {
+            if (t == cp0) {
+                static unsigned diagCount = 0;
+                if (diagCount++ < 20)
+                    WTFLogAlways("[Driftstack-P48-L-Diag] complex-path cp=U+%04X len=%zu font='%s'",
+                        (unsigned)cp0, characters.size(),
+                        font ? "(present)" : "(null)");
+                break;
+            }
+        }
+    }
+#endif
     if (!font) {
         // Create a run of missing glyphs from the primary font.
         m_complexTextRuns.append(ComplexTextRun::create(protect(m_fontCascade->primaryFont()), characters, stringLocation, 0, characters.size(), m_run->ltr()));
