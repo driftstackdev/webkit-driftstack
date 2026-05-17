@@ -62980,6 +62980,46 @@ inline const char* driftstackCurrentArchetypeCStr()
     return archetype;
 }
 
+// Wave 29-360 Item 5: classify an archetype slug as canvas pipeline
+// Family A (Safari ≤26.3) or Family B (Safari 26.4+). Boundary confirmed
+// hard-empirical Wave 29-358 Option C (canvas.fingerprint10x hash compare
+// across Safari minors). Used by cross-archetype fallback to prevent
+// serving Family A bytes under a Family B archetype (which would cause
+// vendor cross-signal detection per the BL coherence bug founder spotted
+// 2026-05-17).
+inline bool driftstackArchetypeIsFamilyB(const char* slug)
+{
+    if (!slug) return false;
+    std::string_view s { slug };
+    // Find "_safari" substring (last occurrence — slug pattern is
+    // ..._safari<MAJ>_<MIN>).
+    auto pos = s.rfind("_safari");
+    if (pos == std::string_view::npos) {
+        // Legacy slug like "iphone16pro_ios18_6" → Family A
+        // (these were captured pre-26.4 launch when only iOS 18 Safari shipped).
+        return false;
+    }
+    auto rest = s.substr(pos + 7); // skip past "_safari"
+    auto under = rest.find('_');
+    if (under == std::string_view::npos || under == 0 || under == rest.size() - 1)
+        return false;
+    auto majSV = rest.substr(0, under);
+    auto minSV = rest.substr(under + 1);
+    int major = 0, minor = 0;
+    for (char c : majSV) {
+        if (c < '0' || c > '9') return false;
+        major = major * 10 + (c - '0');
+    }
+    for (char c : minSV) {
+        if (c < '0' || c > '9') return false;
+        minor = minor * 10 + (c - '0');
+    }
+    // Family B threshold: Safari 26.4+ (major > 26 OR major == 26 && minor >= 4).
+    if (major > 26) return true;
+    if (major == 26 && minor >= 4) return true;
+    return false;
+}
+
 // V-245 archetype-aware content-aware dispatch (preferred path).
 // Tries (archetype, w, h, fillText) exact match first.
 inline const char* lookupCanvasFp10xCanonicalForArchetypeWithText(
@@ -63009,36 +63049,46 @@ inline const char* lookupCanvasFp10xCanonicalForArchetype(
 }
 
 // V-241 content-aware dispatch (preferred). Now dispatches via current
-// archetype. Falls back to ANY archetype's content-match if current
-// archetype has no row for this shape (preserves the iOS 18 byte-set as
-// the cross-archetype default until iOS 26.4 founder capture lands).
+// archetype. Wave 29-360 Item 5: family-constrained cross-archetype
+// fallback — when the current archetype is Family B (Safari 26.4+), the
+// fallback skips Family A entries (Safari ≤26.3) to prevent serving
+// wrong-pipeline canvas bytes (BL coherence bug source per Wave 29-358).
 inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, const String& fillText)
 {
     const char* arch = driftstackCurrentArchetypeCStr();
     if (auto* hit = lookupCanvasFp10xCanonicalForArchetypeWithText(arch, width, height, fillText))
         return hit;
-    // Cross-archetype content-match fallback (preserves V-241 behavior
-    // for archetypes that don't yet have all shapes captured).
+    // Wave 29-360 Item 5: family-constrained cross-archetype content-match.
+    // Current archetype's family determines which entries are eligible.
+    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
         if (entry.width != width || entry.height != height)
             continue;
-        if (fillText == String::fromUTF8(entry.lastFillText))
-            return entry.dataURL;
+        if (fillText != String::fromUTF8(entry.lastFillText))
+            continue;
+        if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
+            continue; // Family mismatch — skip to preserve canvas pipeline coherence
+        return entry.dataURL;
     }
     return nullptr;
 }
 
 // V-236 dimension-only fallback (used when fillText is empty or doesn't
 // match any entry). Returns first dimension-match for current archetype;
-// then falls back to first dimension-match in any archetype.
+// then falls back to first dimension-match in any archetype OF THE SAME
+// canvas family per Wave 29-360 Item 5.
 inline const char* lookupCanvasFp10xCanonical(int width, int height)
 {
     const char* arch = driftstackCurrentArchetypeCStr();
     if (auto* hit = lookupCanvasFp10xCanonicalForArchetype(arch, width, height))
         return hit;
+    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
-        if (entry.width == width && entry.height == height)
-            return entry.dataURL;
+        if (entry.width != width || entry.height != height)
+            continue;
+        if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
+            continue; // Family mismatch — skip per Wave 29-360 Item 5
+        return entry.dataURL;
     }
     return nullptr;
 }
