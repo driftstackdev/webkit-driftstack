@@ -481,6 +481,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_V433Z_MN_OVERRIDE", getenv("DRIFTSTACK_V433Z_MN_OVERRIDE") },
             // Atlas dispatch flag:
             { "DRIFTSTACK_DISPATCH_PER_GLYPH", getenv("DRIFTSTACK_DISPATCH_PER_GLYPH") },
+            // Wave 29-390.D additions per audit-driftstack-env-forwarding.sh:
+            { "DRIFTSTACK_WEBGPU_ATLAS", getenv("DRIFTSTACK_WEBGPU_ATLAS") },
+            { "DRIFTSTACK_WEBGPU_ATLAS_PATH", getenv("DRIFTSTACK_WEBGPU_ATLAS_PATH") },
+            { "DRIFTSTACK_WEBGL_READPIXELS_OVERRIDE", getenv("DRIFTSTACK_WEBGL_READPIXELS_OVERRIDE") },
+            { "DRIFTSTACK_V770_MASK_TINT", getenv("DRIFTSTACK_V770_MASK_TINT") },
+            { "DRIFTSTACK_V790L_MULTI_SUB", getenv("DRIFTSTACK_V790L_MULTI_SUB") },
+            { "DRIFTSTACK_V790L_N1_SUB", getenv("DRIFTSTACK_V790L_N1_SUB") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
