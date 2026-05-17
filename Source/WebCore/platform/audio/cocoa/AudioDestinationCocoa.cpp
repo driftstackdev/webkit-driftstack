@@ -66,6 +66,19 @@ Ref<AudioDestination> AudioDestination::create(const CreationOptions& options)
 
 float AudioDestination::hardwareSampleRate()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-369 (file 99 I1 / CLAUDE.md "AudioContext sampleRate (I1, Phase 2)
+    // — must lock to iOS 48000"): real iPhone Safari reports AudioContext.sampleRate
+    // = 48000 consistently. Mac fleet hardware may report 44100 or other rates.
+    // Force 48000 universally so AudioContext.sampleRate is bit-identical to iPhone
+    // regardless of fleet Mac hardware. AudioDestinationResampler handles the
+    // internal resample to whatever the actual hardware unit needs.
+    //
+    // Apple Silicon Macs on this dev box happen to default to 48000 (cumrig
+    // empirical 2026-05-17), but production fleet Macs may differ — this patch
+    // makes the behavior deterministic.
+    return 48000.0f;
+#endif
     return AudioSession::singleton().sampleRate();
 }
 
