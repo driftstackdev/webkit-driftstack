@@ -247,6 +247,9 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const 
                 cp0 = 0x10000 + ((cp0 - 0xD800) << 10) + (low - 0xDC00);
         }
         struct CpRatio { char32_t cp; float ratio72; };
+        // P-#48.O Wave 29-330: per-font variant widths. Default ratio for
+        // uniform cps; per-font overrides resolve from m_fontCascade primary
+        // family name. iPhone Wave 29-309 reference data.
         static const std::array<CpRatio, 10> kTargets {{
             {0x1CDA, 27.f/72.f}, {0x17DD, 36.f/72.f},
             {0x302E, 56.f/72.f}, {0x2C7B, 56.f/72.f},
@@ -258,7 +261,33 @@ void ComplexTextController::collectComplexTextRunsForCharacters(std::span<const 
             if (t.cp == cp0) {
                 auto primaryFont = protect(m_fontCascade->primaryFont());
                 float ptSize = primaryFont->platformData().size();
-                float synthAdv = t.ratio72 * ptSize;
+                float ratio = t.ratio72;
+                // Per-font variant lookup
+                String familyName = primaryFont->platformData().familyName().convertToASCIILowercase();
+                bool isAppleSystem = familyName.startsWith("-apple-system"_s)
+                    || familyName.startsWith("system-ui"_s)
+                    || familyName.startsWith(".sf"_s)
+                    || familyName.startsWith(".applesystem"_s);
+                if (cp0 == 0x302E || cp0 == 0x2C7B || cp0 == 0xA73D) {
+                    // 5-bucket variant: Courier 43 / Helvetica 46 / Arial 54 /
+                    // Times/Tahoma/serif 56 / Georgia/Verdana/-apple/system 72
+                    if (familyName == "courier"_s || familyName == "courier new"_s) ratio = 43.f/72.f;
+                    else if (familyName == "helvetica"_s) ratio = 46.f/72.f;
+                    else if (familyName == "arial"_s) ratio = 54.f/72.f;
+                    else if (familyName == "georgia"_s || familyName == "verdana"_s || isAppleSystem) ratio = 72.f/72.f;
+                    // else: default 56.f/72.f (Times/Tahoma/serif)
+                } else if (cp0 == 0xFFFD) {
+                    if (isAppleSystem) ratio = 75.f/72.f;
+                    // else: default 43.f/72.f
+                } else if (cp0 == 0x20E3) {
+                    if (isAppleSystem) ratio = 77.f/72.f;
+                    // else: default 72.f/72.f
+                } else if (cp0 == 0x20B9) {
+                    if (familyName == "georgia"_s) ratio = 51.f/72.f;
+                    else if (isAppleSystem) ratio = 44.f/72.f;
+                    // else: default 37.f/72.f
+                }
+                float synthAdv = ratio * ptSize;
                 Vector<FloatSize> advances { { synthAdv, 0 } };
                 Vector<FloatPoint> origins { { 0, 0 } };
                 Vector<Glyph> glyphs { 0 };
