@@ -499,6 +499,29 @@
     (literal "/private/var/run/mDNSResponder")
     (remote tcp))
 
+#if PLATFORM(DRIFTSTACK)
+;; EG-WK-1.9 Slice 4 (Wave 29-368): block local DNS paths so customer's
+;; SOCKS5 proxy is the only resolver. Closes the leak surface where
+;; CFNetwork pre-resolves locally via getaddrinfo() → mDNSResponder →
+;; Mac fleet ISP DNS, even when SOCKS5 is configured. Per founder lock
+;; 2026-05-17 ~20:15 UTC: "any code path attempting it crashes loud,
+;; not silently leaks."
+;;
+;; Companion deny rules layered after the parent allow above; SBPL is
+;; additive (later deny overrides earlier allow for same surface).
+;;
+;; Customer constraint (v1.0): proxy must be specified as IP:port, not
+;; hostname:port (we don't allow DNS to resolve the proxy itself). Per
+;; planning 133 + Wave 29-368 V-log.
+;;
+;; Remaining outbound TCP/UDP allowed — needed for SOCKS5 proxy
+;; connection itself. Subsequent slices add port-53/853/8853 denies
+;; once Phase B/C custom SOCKS5 client is wired (Wave 29-369+).
+(deny network-outbound (literal "/private/var/run/mDNSResponder"))
+(deny mach-lookup (global-name "com.apple.dnssd.service"))
+(deny mach-lookup (global-name "com.apple.mDNSResponder"))
+#endif
+
 (with-filter (uid 0)
     (allow mach-lookup
         (global-name "com.apple.system.logger")))
