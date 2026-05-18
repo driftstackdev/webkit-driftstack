@@ -24,6 +24,25 @@ namespace WebKit {
 std::atomic<bool> g_driftstackCustomSocks5Active { false };
 } // namespace WebKit
 
+// Wave 29-396 sub-slice 1.7.2.c helper: write all bytes to CFWriteStream.
+// WTF_ALLOW_UNSAFE_BUFFER_USAGE at function scope per WebKit precedent
+// (pragma push/pop can't balance inside conditional branches).
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+static CFIndex writeAllToCFStream(CFWriteStreamRef stream, NSData *data)
+{
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    CFIndex offset = 0;
+    CFIndex total = data.length;
+    while (offset < total) {
+        CFIndex n = CFWriteStreamWrite(stream, bytes + offset, total - offset);
+        if (n <= 0)
+            return -1;
+        offset += n;
+    }
+    return total;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
 // Wave 29-396 sub-slice 1.7.2.d: lifetime management via ivars.
 // DriftstackSocks5Client + CFStream pair must outlive -startLoading
 // return; stored as ivars released in -stopLoading.
@@ -181,11 +200,67 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
     _readStream = readStreamRef;
     _writeStream = writeStreamRef;
 
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.d SUCCESS — CFStream pair stored in ivars (fd=%d, read=%p, write=%p) for %s:%d via SOCKS5 proxy. HTTP/1.1 driving pending sub-slice 1.7.2.c.",
-        fd, (void*)_readStream, (void*)_writeStream, [host UTF8String], actualPort);
+    // Sub-slice 1.7.2.c: HTTP/1.1 request serialization + write.
+    if (!CFWriteStreamOpen(_writeStream) || !CFReadStreamOpen(_readStream)) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c: CFStream open failed");
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:nil]];
+        return;
+    }
+
+    // Wait for write stream to enter Open state. Background thread,
+    // synchronous spin is acceptable for connect-handshake duration.
+    for (int i = 0; i < 50; i++) {  // ~5s max
+        if (CFWriteStreamGetStatus(_writeStream) == kCFStreamStatusOpen)
+            break;
+        [NSThread sleepForTimeInterval:0.1];
+    }
+    if (CFWriteStreamGetStatus(_writeStream) != kCFStreamStatusOpen) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c: write stream not Open after 5s; status=%ld",
+            CFWriteStreamGetStatus(_writeStream));
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorTimedOut userInfo:nil]];
+        return;
+    }
+
+    // Build HTTP/1.1 request bytes.
+    NSString *method = self.request.HTTPMethod ?: @"GET";
+    NSString *path = url.path;
+    if (path.length == 0) path = @"/";
+    if (url.query.length > 0) path = [NSString stringWithFormat:@"%@?%@", path, url.query];
+
+    NSMutableString *requestStr = [NSMutableString stringWithFormat:@"%@ %@ HTTP/1.1\r\n", method, path];
+    [requestStr appendFormat:@"Host: %@\r\n", host];
+    [requestStr appendString:@"Connection: close\r\n"];  // simplest: one request per connection
+    NSDictionary *headers = self.request.allHTTPHeaderFields ?: @{};
+    for (NSString *key in headers) {
+        // Skip Host (already added) + Connection (overridden)
+        NSString *lowerKey = key.lowercaseString;
+        if ([lowerKey isEqualToString:@"host"] || [lowerKey isEqualToString:@"connection"])
+            continue;
+        [requestStr appendFormat:@"%@: %@\r\n", key, headers[key]];
+    }
+    [requestStr appendString:@"\r\n"];
+
+    NSData *requestData = [requestStr dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *body = self.request.HTTPBody;
+    if (body.length > 0) {
+        NSMutableData *combined = [NSMutableData dataWithData:requestData];
+        [combined appendData:body];
+        requestData = combined;
+    }
+
+    // Write request bytes via helper (handles WTF_ALLOW_UNSAFE_BUFFER_USAGE).
+    CFIndex written = writeAllToCFStream(_writeStream, requestData);
+    if (written < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c: writeAllToCFStream failed");
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNetworkConnectionLost userInfo:nil]];
+        return;
+    }
+
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c SUCCESS — wrote %lu HTTP request bytes for %@ %s:%d via SOCKS5. Response read pending sub-slice 1.7.2.e.",
+        (unsigned long)requestData.length, method, [host UTF8String], actualPort);
 
     [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
-        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.d — ivars stored; HTTP/1.1 driving pending sub-slice 1.7.2.c",
+        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.c — HTTP request written; response read pending sub-slice 1.7.2.e",
     }]];
 }
 
