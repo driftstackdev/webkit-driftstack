@@ -102,16 +102,69 @@ const String& FontGenericFamilies::standardFontFamily(UScriptCode script) const
 
 const String& FontGenericFamilies::fixedFontFamily(UScriptCode script) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d — env-gated iOS-style default.
+    // Same rationale as serifFontFamily(). Mac default `monospace`
+    // resolves to Mac "Menlo" (or "Courier" depending on system version),
+    // diverging from iOS Safari's "Courier". 36.8% of V-405 Text
+    // extreme-tail Subclass C cases use `monospace`.
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)script;
+        static NeverDestroyed<String> iosMonospace { "Courier"_s };
+        return iosMonospace;
+    }
+#endif
     return genericFontFamilyForScript(m_fixedFontFamilyMap, script);
 }
 
 const String& FontGenericFamilies::serifFontFamily(UScriptCode script) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d — env-gated iOS-style default.
+    // Empirical V-405 Text Subclass C extreme-tail (38 cases delta<-50%):
+    // 94.7% use generic font keywords. Mac default `serif` resolves to
+    // Mac "Times" or system serif, diverging from iOS Safari's
+    // "Times New Roman". Compounded cascade fallback for mixed-script
+    // text produces dramatic byteCount delta.
+    //
+    // Env-gate DRIFTSTACK_GENERIC_FONT_OVERRIDE=1: when set, force
+    // iOS-style serif default. Default-off (DRIFTSTACK_GENERIC_FONT_OVERRIDE
+    // unset or =0) preserves upstream Mac behavior so cumrig 130-streak
+    // baseline is unaffected during empirical validation.
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)script;
+        static NeverDestroyed<String> iosSerif { "Times New Roman"_s };
+        return iosSerif;
+    }
+#endif
     return genericFontFamilyForScript(m_serifFontFamilyMap, script);
 }
 
 const String& FontGenericFamilies::sansSerifFontFamily(UScriptCode script) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d — env-gated iOS-style default.
+    // Same rationale as serifFontFamily(). Mac default `sans-serif`
+    // resolves to Mac "Helvetica" or system sans-serif, diverging from
+    // iOS Safari's "Helvetica Neue".
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)script;
+        static NeverDestroyed<String> iosSansSerif { "Helvetica Neue"_s };
+        return iosSansSerif;
+    }
+#endif
     return genericFontFamilyForScript(m_sansSerifFontFamilyMap, script);
 }
 
