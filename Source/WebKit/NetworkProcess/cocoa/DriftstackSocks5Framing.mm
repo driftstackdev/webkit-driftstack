@@ -3,7 +3,17 @@
  * See header for design context. Wave 29-397 Slice 16.4.b.3.
  */
 
+// Wave 29-397 Slice 16.4.b.5.b prep: config.h is WebKit-framework-internal
+// and not on the include path when this .mm is compiled into the
+// standalone DriftstackQuicInterpose dylib. Guard the inclusion: WebKit
+// framework's xcodeproj defines DRIFTSTACK_FRAMING_BUILT_WITH_WEBKIT_CONFIG
+// when including config.h is appropriate; dylib build doesn't define it
+// and skips config.h. PLATFORM(DRIFTSTACK) define is supplied by the
+// build environment (xcodeproj for framework, -DWTF_PLATFORM_DRIFTSTACK=1
+// for dylib).
+#if __has_include("config.h")
 #import "config.h"
+#endif
 #import "DriftstackSocks5Framing.h"
 
 #if PLATFORM(DRIFTSTACK)
