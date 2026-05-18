@@ -101,6 +101,12 @@ private:
     void configureParameters(nw_parameters_t, nw_ip_version_t);
     void setListeningPort(int);
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 2.4.b.2: lazy-init the relay nw_connection_t on
+    // first SOCKS5-active sendTo. Caller must hold m_nwConnectionsLock.
+    bool ensureRelayConnection() WTF_REQUIRES_LOCK(m_nwConnectionsLock);
+#endif
+
     WebCore::LibWebRTCSocketIdentifier m_identifier;
     const Ref<IPC::Connection> m_connection;
     bool m_isFirstParty { false };
@@ -118,6 +124,24 @@ private:
     bool m_isClosed WTF_GUARDED_BY_LOCK(m_nwConnectionsLock) { false };
     HashMap<webrtc::SocketAddress, Connection> m_nwConnections WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
     std::optional<uint32_t> m_trafficClass;
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 2.4.b.2: single relay nw_connection_t replaces the
+    // per-peer m_nwConnections map when DriftstackRTC::isCustomSocks5Active()
+    // returns true. All outbound UDP datagrams flow through m_relayConnection
+    // (bound to SOCKS5 BND.ADDR:BND.PORT from establishRelayChannel) after
+    // being SOCKS5 §7-wrapped. Inbound datagrams arrive on the same channel
+    // and are §7-unwrapped before being dispatched to libwebrtc with the
+    // original peer's IP/port restored.
+    //
+    // Lifetime: created at the first sendTo() with bridge active (lazy init
+    // matches the per-peer map's ensure() pattern); destroyed at close().
+    // Guarded by m_nwConnectionsLock (same lock that protects m_nwConnections
+    // — single locking domain for all UDP connection state).
+    RetainPtr<nw_connection_t> m_relayConnection WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
+    RefPtr<ConnectionStateTracker> m_relayTracker WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
+    bool m_relayStarted WTF_GUARDED_BY_LOCK(m_nwConnectionsLock) { false };
+#endif
 };
 
 static dispatch_queue_t udpSocketQueueSingleton()
@@ -416,6 +440,69 @@ static inline void processUDPData(RetainPtr<nw_connection_t>&& nwConnection, Ref
         processUDPData(WTF::move(nwConnection), WTF::move(connectionStateTracker), errorCode, WTF::move(processData));
     }).get());
 }
+
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-397 Slice 2.4.b.2: lazy-init the relay nw_connection_t on first
+// SOCKS5-active sendTo. Bound to BND.ADDR:BND.PORT from
+// DriftstackRTC::establishRelayChannel (cached by the SharedRelayState
+// singleton — first call performs handshake + udpAssociate; subsequent
+// calls return cached).
+//
+// Returns true if relay channel is up + connection ready. False if
+// establish failed (caller falls through to direct nw_connection unless
+// DRIFTSTACK_REQUIRE_PROXY=1 hard-block kicked in at createUDPSocket time
+// per Slice 2.5.b).
+//
+// Must be called under m_nwConnectionsLock by the caller.
+bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_LOCK(m_nwConnectionsLock)
+{
+    if (m_relayStarted)
+        return m_relayConnection != nullptr;
+
+    DriftstackRTC::RelayChannel channel;
+    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    if (r != DriftstackRTC::BridgeResult::Success) {
+        m_relayStarted = true;
+        return false;
+    }
+
+    auto parameters = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
+    configureParameters(parameters.get(), nw_ip_version_4);
+    if (m_trafficClass)
+        nw_parameters_set_traffic_class(parameters.get(), *m_trafficClass);
+
+    auto relayHostUtf8 = channel.relayHost.utf8();
+    auto endpoint = adoptNS(nw_endpoint_create_host(relayHostUtf8.data(), String::number(channel.relayPort).utf8().data()));
+    m_relayConnection = adoptNS(nw_connection_create(endpoint.get(), parameters.get()));
+    m_relayTracker = ConnectionStateTracker::create();
+
+    nw_connection_set_queue(m_relayConnection.get(), udpSocketQueueSingleton());
+
+    nw_connection_set_state_changed_handler(m_relayConnection.get(), makeBlockPtr([tracker = Ref { *m_relayTracker }](nw_connection_state_t state, _Nullable nw_error_t error) {
+        RELEASE_LOG_ERROR_IF(state == nw_connection_state_failed, WebRTC, "[Driftstack-EG-WK-1.8/Task#15] m_relayConnection failed with error %d", error ? nw_error_get_error_code(error) : 0);
+        if (state == nw_connection_state_failed || state == nw_connection_state_cancelled)
+            tracker->markAsStopped();
+    }).get());
+
+    // Recv-side: Slice 2.x will wire the §7-unwrap + SignalReadPacket
+    // dispatch. For now, drain the relay channel so back-pressure doesn't
+    // accumulate (no-op processData).
+    processUDPData(RetainPtr<nw_connection_t> { m_relayConnection }, Ref { *m_relayTracker }, 0, [](std::span<const uint8_t>, WebRTCNetwork::EcnMarking) {
+        // Slice 2.x will replace this with §7 unwrap + SignalReadPacket.
+    });
+
+    nw_connection_start(m_relayConnection.get());
+
+    static bool loggedOnce = false;
+    if (!loggedOnce) {
+        loggedOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection STARTED — bound to relay %s:%u. All outbound UDP datagrams flow through this connection (Slice 2.4.b.3 redirect activates).",
+            relayHostUtf8.data(), channel.relayPort);
+    }
+    m_relayStarted = true;
+    return true;
+}
+#endif
 
 auto NetworkRTCUDPSocketCocoaConnections::createNWConnection(const webrtc::SocketAddress& remoteAddress) -> Connection
 {
