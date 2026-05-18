@@ -10,12 +10,20 @@
 
 #import "DriftstackSocks5Client.h"
 
+#import <Foundation/Foundation.h>
 #include <mutex>
 #include <stdlib.h>
 #include <string.h>
+// NetworkRTCProvider's include path lets webrtc::SocketAddress reach this
+// translation unit without including <webrtc/rtc_base/socket_address.h>
+// directly (which transitively triggers the macOS-incompatible
+// webrtc/rtc_base/byte_order.h on Apple Silicon).
+#include "NetworkRTCProvider.h"
+#include <webrtc/rtc_base/async_packet_socket.h>
 #include <wtf/Assertions.h>
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/cocoa/SpanCocoa.h>
 
 namespace WebKit {
 
@@ -142,34 +150,67 @@ BridgeResult establishRelayChannel(RelayChannel& out)
     return BridgeResult::Success;
 }
 
-BridgeResult wrapOutgoingDatagram(const webrtc::SocketAddress&, std::span<const uint8_t>, Vector<uint8_t>& out)
+// Wave 29-397 Slice 2.3: socketAddress → Socks5Endpoint. Prefers numeric
+// IP form when set (libwebrtc resolves DNS before passing to the socket
+// layer in most paths); falls back to hostname otherwise.
+static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& address)
 {
-    if (!isCustomSocks5Active())
-        return BridgeResult::Socks5Disabled;
-
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] wrapOutgoingDatagram: Phase A scaffold — NotImplemented. Phase C (slice 2.3) will call DriftstackSocks5Client::wrapUdpDatagram (Wave 29-368 §7 helper).");
+    Socks5Endpoint endpoint;
+    if (!address.ipaddr().IsNil()) {
+        auto ip = address.ipaddr().ToString();
+        endpoint.host = String::fromUTF8(ip.c_str());
+    } else {
+        auto host = address.hostname();
+        endpoint.host = String::fromUTF8(host.c_str());
     }
-    out.clear();
-    return BridgeResult::NotImplemented;
+    endpoint.port = address.port();
+    return endpoint;
 }
 
-BridgeResult unwrapIncomingDatagram(std::span<const uint8_t>, UnwrappedDatagram& out)
+BridgeResult wrapOutgoingDatagram(const webrtc::SocketAddress& dest, std::span<const uint8_t> payload, Vector<uint8_t>& out)
 {
     if (!isCustomSocks5Active())
         return BridgeResult::Socks5Disabled;
 
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] unwrapIncomingDatagram: Phase A scaffold — NotImplemented. Phase C (slice 2.3) will call DriftstackSocks5Client::unwrapUdpDatagram (Wave 29-368 §7 helper).");
+    Socks5Endpoint destination = endpointFromSocketAddress(dest);
+    if (destination.host.isEmpty() || destination.port == 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] wrapOutgoingDatagram: invalid destination (host empty or port=0); dropping datagram to prevent leak");
+        return BridgeResult::ProtocolError;
     }
-    out.sourceHost = String();
-    out.sourcePort = 0;
+    if (destination.host.utf8().length() > 255)
+        return BridgeResult::DomainTooLong;
+
+    RetainPtr<NSData> payloadData = adoptNS([[NSData alloc] initWithBytes:payload.data() length:payload.size()]);
+    RetainPtr<NSData> framed = DriftstackSocks5Client::wrapUdpDatagram(destination, payloadData.get());
+    if (!framed) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] wrapOutgoingDatagram: §7 frame helper returned nil for dest=%s:%u",
+            destination.host.utf8().data(), destination.port);
+        return BridgeResult::ProtocolError;
+    }
+
+    out.clear();
+    out.append(WTF::span(framed.get()));
+    return BridgeResult::Success;
+}
+
+BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDatagram& out)
+{
+    if (!isCustomSocks5Active())
+        return BridgeResult::Socks5Disabled;
+
+    RetainPtr<NSData> frameData = adoptNS([[NSData alloc] initWithBytes:frame.data() length:frame.size()]);
+    Socks5Endpoint source;
+    RetainPtr<NSData> payload = DriftstackSocks5Client::unwrapUdpDatagram(frameData.get(), source);
+    if (!payload) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] unwrapIncomingDatagram: §7 frame helper returned nil (protocol error)");
+        return BridgeResult::ProtocolError;
+    }
+
+    out.sourceHost = source.host;
+    out.sourcePort = source.port;
     out.payload.clear();
-    return BridgeResult::NotImplemented;
+    out.payload.append(WTF::span(payload.get()));
+    return BridgeResult::Success;
 }
 
 } // namespace DriftstackRTC
