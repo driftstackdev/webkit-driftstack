@@ -28,6 +28,10 @@
 
 #if USE(LIBWEBRTC) && PLATFORM(COCOA)
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackRTCSocks5Bridge.h"
+#endif
+
 #include "LibWebRTCNetworkMessages.h"
 #include "Logging.h"
 #include "NetworkRTCUtilitiesCocoa.h"
@@ -427,6 +431,49 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
     ASSERT(!isInCorrectValue);
     if (isInCorrectValue)
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 2.4: send-side SOCKS5 wrap-validation hook.
+    // When DRIFTSTACK_CUSTOM_SOCKS5=1 + DRIFTSTACK_SOCKS5_PROXY set,
+    // exercise the bridge's wrap path to validate end-to-end framing
+    // without yet redirecting the datagram destination (that's Slice
+    // 2.5's PacketSocketFactory hook). Logs SUCCESS / failure under
+    // [Driftstack-EG-WK-1.8/Task#15] tag so production logs reveal
+    // bridge-correctness coverage. Datagram still flows direct via
+    // nw_connection_send — Slice 2.5 activates the actual redirect.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        static bool relayEstablished = false;
+        static bool loggedEstablishOnce = false;
+        if (!relayEstablished) {
+            DriftstackRTC::RelayChannel channel;
+            DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+            if (r == DriftstackRTC::BridgeResult::Success) {
+                relayEstablished = true;
+            } else if (!loggedEstablishOnce) {
+                loggedEstablishOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: relay establish failed (result=%d) — falling through to direct nw_connection; WebRTC will leak until proxy reachable",
+                    static_cast<int>(r));
+            }
+        }
+        if (relayEstablished) {
+            Vector<uint8_t> framed;
+            DriftstackRTC::BridgeResult wr = DriftstackRTC::wrapOutgoingDatagram(remoteAddress, data, framed);
+            static bool loggedWrapSuccessOnce = false;
+            static bool loggedWrapFailOnce = false;
+            if (wr == DriftstackRTC::BridgeResult::Success) {
+                if (!loggedWrapSuccessOnce) {
+                    loggedWrapSuccessOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: §7 wrap SUCCESS — datagram framed (%zu→%zu bytes). Slice 2.5 will redirect destination from peer to relay endpoint; Slice 2.4 ends with framing-validated-only.",
+                        data.size(), framed.size());
+                }
+            } else if (!loggedWrapFailOnce) {
+                loggedWrapFailOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: §7 wrap FAILED (result=%d) — falling through to direct send",
+                    static_cast<int>(wr));
+            }
+        }
+    }
+#endif
 
     auto connection = [&] {
         Locker locker { m_nwConnectionsLock };
