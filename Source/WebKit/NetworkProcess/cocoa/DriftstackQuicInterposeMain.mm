@@ -50,21 +50,21 @@
         (const void *)(unsigned long)&_replacment, (const void *)(unsigned long)&_replacee};
 
 // Cached pointer to original nw_connection_create resolved at first call.
-// std::atomic load/CAS protects against the rare race where two threads
-// both miss the cache on first interpose-trip.
-static nw_connection_t (*originalNwConnectionCreate)(nw_endpoint_t, nw_parameters_t) = nullptr;
+// Function-pointer typedef avoids the ARC void* ↔ nw_connection_t bridge
+// cast confusion — we never store the result as nw_connection_t.
+typedef nw_connection_t (*NwConnectionCreateFn)(nw_endpoint_t, nw_parameters_t);
+static NwConnectionCreateFn originalNwConnectionCreate = nullptr;
 
-static nw_connection_t resolveOriginalNwConnectionCreate()
+static void resolveOriginalNwConnectionCreate()
 {
     if (originalNwConnectionCreate != nullptr)
-        return reinterpret_cast<nw_connection_t>(reinterpret_cast<void*>(originalNwConnectionCreate));
+        return;
     void* sym = dlsym(RTLD_NEXT, "nw_connection_create");
     if (!sym) {
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] dlsym(RTLD_NEXT, nw_connection_create) returned nil — falling through breaks; QUIC will NOT route through SOCKS5");
-        return nullptr;
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] dlsym(RTLD_NEXT, nw_connection_create) returned nil — interpose dead-ends");
+        return;
     }
-    originalNwConnectionCreate = reinterpret_cast<nw_connection_t (*)(nw_endpoint_t, nw_parameters_t)>(sym);
-    return nullptr; // caller checks originalNwConnectionCreate
+    originalNwConnectionCreate = reinterpret_cast<NwConnectionCreateFn>(sym);
 }
 
 extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoint, nw_parameters_t parameters)
@@ -82,7 +82,7 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST QUIC interpose match — redirecting to createRelayConnectionForQuic. Slice 16.4.b interpose ACTIVE.");
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST QUIC interpose match — redirecting to createRelayConnectionForQuic. Slice 16.4.b interpose ACTIVE.");
     }
 
     RetainPtr<nw_connection_t> relayConnection = WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters);
