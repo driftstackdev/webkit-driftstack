@@ -47,6 +47,9 @@
 #include "NetworkRTCTCPSocketCocoa.h"
 #include "NetworkRTCUDPSocketCocoa.h"
 #include "NetworkSessionCocoa.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackRTCSocks5Bridge.h"
+#endif
 #else // PLATFORM(COCOA)
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
@@ -267,27 +270,41 @@ void NetworkRTCProvider::createUDPSocket(LibWebRTCSocketIdentifier identifier, c
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-383 (Task #15 observability scaffold): WebRTC UDP socket creation
-    // happens via NetworkRTCUDPSocketCocoa — a Cocoa-native code path NOT
-    // routed through SOCKS5. When DRIFTSTACK_REQUIRE_PROXY=1, this would leak
-    // direct UDP traffic from the Mac fleet IP to the WebRTC peer.
+    // Wave 29-397 Slice 2.5: PacketSocketFactory hook — eagerly establish
+    // the SOCKS5 UDP ASSOCIATE relay channel at socket-creation time when
+    // DRIFTSTACK_CUSTOM_SOCKS5=1. The first WebRTC socket triggers handshake
+    // + udpAssociate; subsequent sockets share the cached SharedRelayState
+    // (Slice 2.2 singleton). On failure, log loudly + fall through to direct
+    // nw_connection — Slice 2.6 will harden this into hard-block when
+    // DRIFTSTACK_REQUIRE_PROXY=1.
     //
-    // Mitigation that IS in place (Wave 29-318 EG-WK-1.3 ICE force-relay): all
-    // WebRTC media routes through customer's TURN server, NOT direct UDP. So
-    // even though this socket is Cocoa-direct, the actual datagrams flow
-    // through TURN. Direct UDP is only used for STUN discovery + TURN-server
-    // candidate ping — those LEAK if customer's TURN host is hit directly.
-    //
-    // Phase 2 (Task #15 full closure): subclass NetworkRTCUDPSocketCocoa with a
-    // DriftstackSocks5UDPSocket that routes datagrams through Wave 29-379
-    // udpAssociate() + §7 wrap. Until then, log when SOCKS5 active so it's
-    // visible in production logs.
-    {
+    // Pre-Slice-2.5 (Wave 29-383 scaffold): only logged the leak. This slice
+    // upgrades to actively initializing the relay, so sendTo (Slice 2.4)
+    // sees cached relayEstablished=true on first call instead of synchronous
+    // establish-on-hot-path.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        static bool establishLoggedOnce = false;
+        static bool establishOkOnce = false;
+        DriftstackRTC::RelayChannel channel;
+        DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+        if (r == DriftstackRTC::BridgeResult::Success && !establishOkOnce) {
+            establishOkOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: relay channel READY at socket-creation time — relay=%s:%u. Slice 2.6 will redirect nw_connection destination to this endpoint.",
+                channel.relayHost.utf8().data(), channel.relayPort);
+        } else if (r != DriftstackRTC::BridgeResult::Success && !establishLoggedOnce) {
+            establishLoggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: relay channel establish FAILED at socket-creation time (result=%d). WebRTC will continue via direct nw_connection (LEAK). Verify gost/SOCKS5 proxy reachable at DRIFTSTACK_SOCKS5_PROXY.",
+                static_cast<int>(r));
+        }
+    } else {
+        // Legacy Wave 29-383 observability when DRIFTSTACK_CUSTOM_SOCKS5
+        // unset but DRIFTSTACK_SOCKS5_PROXY set (env-fallback path Wave
+        // 29-366 active for HTTP/HTTPS but not WebRTC yet).
         static bool loggedOnce = false;
         const char* socks5Env = getenv("DRIFTSTACK_SOCKS5_PROXY");
         if (!loggedOnce && socks5Env && socks5Env[0]) {
             loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] WebRTC UDP socket created via NetworkRTCUDPSocketCocoa — Cocoa-native path NOT routed through SOCKS5. ICE force-relay (Wave 29-318) sends media via TURN, but STUN/TURN ping is direct UDP. Task #15 closure (Wave 29-384+) will subclass for SOCKS5 UDP ASSOCIATE relay.");
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] WebRTC UDP socket created via NetworkRTCUDPSocketCocoa — DRIFTSTACK_CUSTOM_SOCKS5 unset, falling through to direct nw_connection (env-fallback path only covers HTTP/HTTPS via NSURLSession). Set DRIFTSTACK_CUSTOM_SOCKS5=1 to activate WebRTC SOCKS5 bridge (Slice 2.5).");
         }
     }
 #endif
