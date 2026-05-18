@@ -8,8 +8,14 @@
 
 #if PLATFORM(DRIFTSTACK) && USE(LIBWEBRTC) && PLATFORM(COCOA)
 
+#import "DriftstackSocks5Client.h"
+
+#include <mutex>
 #include <stdlib.h>
+#include <string.h>
 #include <wtf/Assertions.h>
+#include <wtf/Lock.h>
+#include <wtf/NeverDestroyed.h>
 
 namespace WebKit {
 
@@ -23,19 +29,117 @@ bool isCustomSocks5Active()
         && socks5Proxy && socks5Proxy[0];
 }
 
+// Wave 29-397 Slice 2.2: shared relay client + cached channel. Per RFC 1928
+// §6 the TCP control connection MUST stay open for the lifetime of the UDP
+// association; we keep one DriftstackSocks5Client instance in a NeverDestroyed
+// singleton + one Socks5UdpRelayChannel cached after the first successful
+// open. All WebRTC sockets share the same relay endpoint (datagrams are
+// per-destination via the §7 wrap, not per-relay).
+//
+// Thread safety: the WebRTC network thread (m_rtcNetworkThreadQueue) calls
+// establishRelayChannel; std::once_flag guards single-init.
+struct SharedRelayState {
+    Lock lock;
+    std::unique_ptr<DriftstackSocks5Client> client WTF_GUARDED_BY_LOCK(lock);
+    Socks5UdpRelayChannel channel WTF_GUARDED_BY_LOCK(lock);
+    bool established WTF_GUARDED_BY_LOCK(lock) { false };
+};
+
+static SharedRelayState& sharedRelayState()
+{
+    static NeverDestroyed<SharedRelayState> s_state;
+    return s_state.get();
+}
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+static bool parseProxyEndpoint(const char* env, Socks5Endpoint& out)
+{
+    // DRIFTSTACK_SOCKS5_PROXY is "host:port". Plain ASCII, no brackets for
+    // IPv6 expected in Driftstack deployments (Mac fleet uses IPv4 to local
+    // gost or customer SOCKS5). Wraps strrchr / atoi / span ctor under
+    // WTF_ALLOW_UNSAFE_BUFFER_USAGE at function scope per the Wave 29-368
+    // parseUdpFrame helper pattern.
+    if (!env || !env[0])
+        return false;
+    size_t len = 0;
+    while (env[len] && len < 256) ++len;
+    const char* colon = nullptr;
+    for (size_t i = len; i > 0; --i) {
+        if (env[i - 1] == ':') { colon = env + (i - 1); break; }
+    }
+    if (!colon || colon == env)
+        return false;
+    out.host = String::fromUTF8(std::span<const char> { env, static_cast<size_t>(colon - env) });
+    int port = 0;
+    for (const char* p = colon + 1; *p; ++p) {
+        if (*p < '0' || *p > '9')
+            return false;
+        port = port * 10 + (*p - '0');
+        if (port > 0xFFFF)
+            return false;
+    }
+    if (port <= 0)
+        return false;
+    out.port = static_cast<uint16_t>(port);
+    return true;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
 BridgeResult establishRelayChannel(RelayChannel& out)
 {
     if (!isCustomSocks5Active())
         return BridgeResult::Socks5Disabled;
 
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: Phase A scaffold — NotImplemented. Phase B (slice 2.2) will wire DriftstackSocks5Client::udpAssociate() to open the relay channel.");
+    auto& state = sharedRelayState();
+    Locker locker { state.lock };
+
+    if (state.established) {
+        out.relayHost = state.channel.relayHost;
+        out.relayPort = state.channel.relayPort;
+        return BridgeResult::Success;
     }
-    out.relayHost = String();
-    out.relayPort = 0;
-    return BridgeResult::NotImplemented;
+
+    Socks5Endpoint proxy;
+    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: DRIFTSTACK_SOCKS5_PROXY malformed (expected host:port)");
+        return BridgeResult::ProtocolError;
+    }
+
+    Socks5Credentials creds;
+    if (const char* u = getenv("DRIFTSTACK_SOCKS5_USER"))
+        creds.username = String::fromUTF8(u);
+    if (const char* p = getenv("DRIFTSTACK_SOCKS5_PASS"))
+        creds.password = String::fromUTF8(p);
+
+    // DriftstackSocks5Client isn't WTF_MAKE_FAST_ALLOCATED — fall back to
+    // std::make_unique which doesn't require the WTFIsFastMallocAllocated
+    // trait. Future cleanup: add WTF_MAKE_TZONE_ALLOCATED to Wave 29-368
+    // DriftstackSocks5Client class definition.
+    state.client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
+
+    Socks5Result handshakeResult = state.client->performHandshake();
+    if (handshakeResult != Socks5Result::Success) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: SOCKS5 handshake FAILED with proxy %s:%u (result=%d). WebRTC will leak direct UDP until proxy reachable.",
+            proxy.host.utf8().data(), proxy.port, static_cast<int>(handshakeResult));
+        state.client.reset();
+        return BridgeResult::NetworkError;
+    }
+
+    Socks5Result assocResult = state.client->udpAssociate(state.channel);
+    if (assocResult != Socks5Result::Success) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: UDP ASSOCIATE FAILED with proxy %s:%u (result=%d). Proxy may not support UDP relay; WebRTC will leak direct UDP.",
+            proxy.host.utf8().data(), proxy.port, static_cast<int>(assocResult));
+        state.client.reset();
+        return BridgeResult::UdpAssociateFailed;
+    }
+
+    state.established = true;
+    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: SUCCESS — UDP relay endpoint %s:%u (Phase B). Phase C wrap/unwrap (slice 2.3) and PacketSocketFactory hook (slice 2.5) still required before WebRTC datagrams actually transit SOCKS5.",
+        state.channel.relayHost.utf8().data(), state.channel.relayPort);
+
+    out.relayHost = state.channel.relayHost;
+    out.relayPort = state.channel.relayPort;
+    return BridgeResult::Success;
 }
 
 BridgeResult wrapOutgoingDatagram(const webrtc::SocketAddress&, std::span<const uint8_t>, Vector<uint8_t>& out)
