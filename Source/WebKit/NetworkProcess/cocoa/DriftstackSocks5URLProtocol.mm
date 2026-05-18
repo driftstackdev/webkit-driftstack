@@ -165,9 +165,18 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     proxy.port = static_cast<uint16_t>([parts[1] intValue]);
 
     WebKit::Socks5Credentials creds;
-    // No auth for v1.0 (RFC 1928 §3 NO_AUTH method); user/pass support
-    // when DRIFTSTACK_SOCKS5_USER + DRIFTSTACK_SOCKS5_PASS env vars set
-    // (future sub-slice).
+    // Wave 29-396 sub-slice 1.7.3: RFC 1929 §2 user/pass via env vars.
+    // DRIFTSTACK_SOCKS5_USER + DRIFTSTACK_SOCKS5_PASS populate creds.
+    // Empty → NO_AUTH method (RFC 1928 §3 method 0x00). Set → triggers
+    // USERNAME_PASSWORD method (0x02) negotiation in performHandshake().
+    const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+    const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+    if (userEnv && userEnv[0] && passEnv) {
+        creds.username = WTF::String::fromUTF8(userEnv);
+        creds.password = WTF::String::fromUTF8(passEnv);
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.3: RFC 1929 user/pass creds set (user='%s', user-len=%u, pass-len=%u)",
+            userEnv, unsigned(creds.username.utf8().length()), unsigned(creds.password.utf8().length()));
+    }
 
     _socks5Client = std::make_unique<WebKit::DriftstackSocks5Client>(proxy, creds);
     auto& client = _socks5Client;

@@ -433,6 +433,9 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
             { "DRIFTSTACK_REQUIRE_PROXY", getenv("DRIFTSTACK_REQUIRE_PROXY") },
             { "DRIFTSTACK_CUSTOM_SOCKS5", getenv("DRIFTSTACK_CUSTOM_SOCKS5") },
+            // Wave 29-396 sub-1.7.3: RFC 1929 user/pass for custom SOCKS5.
+            { "DRIFTSTACK_SOCKS5_USER", getenv("DRIFTSTACK_SOCKS5_USER") },
+            { "DRIFTSTACK_SOCKS5_PASS", getenv("DRIFTSTACK_SOCKS5_PASS") },
             { "DRIFTSTACK_ARCHETYPE_UA_FULL", getenv("DRIFTSTACK_ARCHETYPE_UA_FULL") },
             { "DRIFTSTACK_APPLE_PAY_SET_UP", getenv("DRIFTSTACK_APPLE_PAY_SET_UP") },
             { "DRIFTSTACK_STORAGE_QUOTA_BYTES", getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES") },
