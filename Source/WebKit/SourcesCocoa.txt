@@ -347,6 +347,7 @@ UIProcess/API/Cocoa/_WKWebsiteDataStoreConfiguration.mm @nonARC
 UIProcess/API/Cocoa/APIAttachmentCocoa.mm @nonARC
 UIProcess/API/Cocoa/APIContentRuleListStoreCocoa.mm @nonARC
 UIProcess/API/Cocoa/APIPageConfigurationCocoa.mm @nonARC
+UIProcess/API/Cocoa/DriftstackJSBridgeMessageHandler.mm @nonARC
 UIProcess/API/Cocoa/LegacyBundleForClass.mm @nonARC
 UIProcess/API/Cocoa/NSAttributedString.mm @nonARC
 UIProcess/API/Cocoa/WKBackForwardList.mm @nonARC
