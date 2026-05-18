@@ -10,12 +10,16 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import "DriftstackSocks5Client.h"
+#import "DriftstackSocks5Framing.h"
 
 #import "../webrtc/DriftstackRTCSocks5Bridge.h"
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
 #include <stdlib.h>
 #include <wtf/Assertions.h>
+#include <wtf/HashMap.h>
+#include <wtf/Lock.h>
+#include <wtf/NeverDestroyed.h>
 #include <wtf/cocoa/SpanCocoa.h>
 
 namespace WebKit {
@@ -161,12 +165,66 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
 
 // Wave 29-397 Slice 16.4.b.6.b: nw_framer_definition for §7 wrap/unwrap.
 // Bidirectional UDP-message processor: outgoing CFNetwork datagrams get
-// §7-wrapped before transit to the relay; incoming relay datagrams get
-// §7-unwrapped before delivery to CFNetwork. The framer is attached to
-// the relay-bound nw_connection's protocol options.
+// §7-wrapped via Socks5Framing::wrap before transit to the relay;
+// incoming relay datagrams get §7-unwrapped via Socks5Framing::unwrap
+// before delivery to CFNetwork.
 //
-// Lazy-init the framer definition once-per-process; same definition
-// reused across all relay connections.
+// Per-framer destination (the original peer endpoint extracted at
+// createRelayConnectionForQuic time): stashed in a small process-wide
+// table keyed by the framer pointer. Phase B atomic scope: one
+// destination per relay connection (h3 to a single server is one
+// destination). Multi-destination per relay (future advanced scenario)
+// not required at v1.0; can be added by promoting the table to per-
+// stream metadata.
+struct FramerDestination {
+    String host;
+    uint16_t port { 0 };
+};
+
+struct FramerDestinationRegistry {
+    Lock lock;
+    HashMap<uintptr_t, FramerDestination> byFramerPtr WTF_GUARDED_BY_LOCK(lock);
+    // Most-recently-set destination — used by start_handler since the
+    // framer pointer is the only handle we have at that point. Single-
+    // connection scenarios (v1.0 norm) write/read in lockstep order
+    // (createRelayConnectionForQuic → nw_connection_create → start_handler
+    // fires synchronously on the same thread for the just-set framer).
+    FramerDestination pendingDestination WTF_GUARDED_BY_LOCK(lock);
+};
+
+static FramerDestinationRegistry& framerDestinationRegistry()
+{
+    static NeverDestroyed<FramerDestinationRegistry> s_registry;
+    return s_registry.get();
+}
+
+static void setPendingFramerDestination(const String& host, uint16_t port)
+{
+    auto& registry = framerDestinationRegistry();
+    Locker locker { registry.lock };
+    registry.pendingDestination.host = host;
+    registry.pendingDestination.port = port;
+}
+
+static FramerDestination claimDestinationForFramer(nw_framer_t framer)
+{
+    auto& registry = framerDestinationRegistry();
+    Locker locker { registry.lock };
+    auto pending = registry.pendingDestination;
+    registry.byFramerPtr.set(reinterpret_cast<uintptr_t>(framer), pending);
+    return pending;
+}
+
+static FramerDestination destinationForFramer(nw_framer_t framer)
+{
+    auto& registry = framerDestinationRegistry();
+    Locker locker { registry.lock };
+    auto it = registry.byFramerPtr.find(reinterpret_cast<uintptr_t>(framer));
+    if (it == registry.byFramerPtr.end())
+        return { };
+    return it->value;
+}
+
 static nw_protocol_definition_t driftstackSocks5FramerDefinition()
 {
     static nw_protocol_definition_t s_definition = nullptr;
@@ -175,34 +233,69 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
         s_definition = nw_framer_create_definition("DriftstackSocks5Framer",
             NW_FRAMER_CREATE_FLAGS_DEFAULT,
             ^nw_framer_start_result_t (nw_framer_t framer) {
-                // start handler: nothing to do per-instance; the framer is
-                // stateless. send/receive handlers process bytes inline.
+                // Claim the pending destination for this framer instance.
+                FramerDestination destination = claimDestinationForFramer(framer);
+
+                // OUTPUT handler — CFNetwork → wire. §7-wrap with destination.
                 nw_framer_set_output_handler(framer, ^(nw_framer_t framerInner, nw_framer_message_t message, size_t messageLength, bool isComplete) {
-                    // Slice 16.4.b.6.b scaffold: read the full outgoing message
-                    // and §7-wrap it via Socks5Framing::wrap. Phase A
-                    // scaffold passes through raw bytes (relay will reject as
-                    // protocol error — visible in gost log; flags missing
-                    // §7 framer to operator).
                     nw_framer_parse_output(framerInner, messageLength, messageLength, nullptr, ^size_t (uint8_t* buffer, size_t bufferLength, bool isComplete) {
-                        // Phase A: write through unchanged.
-                        nw_framer_write_output(framerInner, buffer, bufferLength);
+                        FramerDestination dest = destinationForFramer(framerInner);
+                        if (dest.host.isEmpty() || dest.port == 0) {
+                            // No destination metadata; pass through (will fail at
+                            // gost as malformed SOCKS5 frame, but no crash).
+                            nw_framer_write_output(framerInner, buffer, bufferLength);
+                            return bufferLength;
+                        }
+                        Socks5Framing::Endpoint framingDest { dest.host, dest.port };
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+                        std::span<const uint8_t> payloadSpan = unsafeMakeSpan(buffer, bufferLength);
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+                        Vector<uint8_t> framed;
+                        if (Socks5Framing::wrap(framingDest, payloadSpan, framed))
+                            nw_framer_write_output(framerInner, framed.span().data(), framed.size());
+                        else
+                            nw_framer_write_output(framerInner, buffer, bufferLength);
+                        static bool loggedOnce = false;
+                        if (!loggedOnce) {
+                            loggedOnce = true;
+                            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] nw_framer output: FIRST §7-wrap fired — dest=%s:%u, %zu→%zu bytes",
+                                dest.host.utf8().data(), dest.port, bufferLength, static_cast<size_t>(framed.size()));
+                        }
                         return bufferLength;
                     });
                 });
+
+                // INPUT handler — wire → CFNetwork. §7-unwrap + deliver payload only.
                 nw_framer_set_input_handler(framer, ^size_t (nw_framer_t framerInner) {
-                    // Slice 16.4.b.6.b scaffold: parse §7 header from incoming
-                    // bytes + deliver only payload upstream. Phase A scaffold
-                    // passes through.
                     nw_framer_parse_input(framerInner, 1, UINT16_MAX, nullptr, ^size_t (uint8_t* buffer, size_t bufferLength, bool isComplete) {
-                        nw_framer_deliver_input(framerInner, buffer, bufferLength, nw_framer_message_create(framerInner), true);
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+                        std::span<const uint8_t> frameSpan = unsafeMakeSpan(buffer, bufferLength);
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+                        Socks5Framing::Endpoint source;
+                        Vector<uint8_t> payload;
+                        if (Socks5Framing::unwrap(frameSpan, source, payload)) {
+                            nw_framer_deliver_input(framerInner, payload.span().data(), payload.size(), nw_framer_message_create(framerInner), true);
+                            static bool loggedOnce = false;
+                            if (!loggedOnce) {
+                                loggedOnce = true;
+                                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] nw_framer input: FIRST §7-unwrap fired — src=%s:%u, %zu→%zu bytes",
+                                    source.host.utf8().data(), source.port, bufferLength, payload.size());
+                            }
+                        } else {
+                            // Pass through on protocol error — CFNetwork sees raw
+                            // bytes, will surface its own QUIC error.
+                            nw_framer_deliver_input(framerInner, buffer, bufferLength, nw_framer_message_create(framerInner), true);
+                        }
                         return bufferLength;
                     });
                     return 0;
                 });
-                static bool loggedOnce = false;
-                if (!loggedOnce) {
-                    loggedOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] nw_framer started — Phase A scaffold passes through unchanged. Slice 16.4.b.6.b full impl will §7-wrap output + §7-unwrap input.");
+
+                static bool loggedStartOnce = false;
+                if (!loggedStartOnce) {
+                    loggedStartOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] nw_framer started Phase B — destination=%s:%u. Socks5Framing::wrap/unwrap active on output/input handlers.",
+                        destination.host.utf8().data(), destination.port);
                 }
                 return nw_framer_start_result_ready;
             });
@@ -250,12 +343,24 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     // proxy is plain UDP).
     auto relayParams = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
 
-    // Wave 29-397 Slice 16.4.b.6.b: attach §7 framer to the relay
-    // connection's protocol stack. Phase A scaffold framer passes bytes
-    // through unchanged (gost will see un-framed UDP and reject as
-    // protocol error). Slice 16.4.b.6.b full impl populates the output
-    // handler with Socks5Framing::wrap and input handler with
-    // Socks5Framing::unwrap.
+    // Wave 29-397 Slice 16.4.b.6.b Phase B: attach §7 framer to the relay
+    // connection's protocol stack. The framer's output handler §7-wraps
+    // outgoing CFNetwork bytes with the original peer's host:port; input
+    // handler §7-unwraps incoming bytes from the relay before delivery
+    // to CFNetwork.
+    //
+    // Destination metadata: extracted from originalEndpoint via
+    // endpointToHostPort (Slice 16.4.b.8 helper) and stashed in the
+    // framer-destination registry just before nw_connection_create — the
+    // framer's start_handler claims it for the new framer instance.
+    String destHost;
+    uint16_t destPort = 0;
+    if (endpointToHostPort(originalEndpoint, destHost, destPort))
+        setPendingFramerDestination(destHost, destPort);
+    else {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: endpointToHostPort failed for originalEndpoint — §7 wrap will see empty destination (gost will reject)");
+    }
+
     nw_protocol_definition_t framerDef = driftstackSocks5FramerDefinition();
     if (framerDef) {
         auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
