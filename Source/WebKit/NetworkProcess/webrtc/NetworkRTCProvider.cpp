@@ -199,6 +199,34 @@ void NetworkRTCProvider::createResolver(LibWebRTCResolverIdentifier identifier, 
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 2.7: NetworkRTCResolverCocoa DNS hook (observability
+    // + leak surface). When DRIFTSTACK_CUSTOM_SOCKS5=1, the existing
+    // WebCore::resolveDNS path uses local-system DNS (getaddrinfo) → leaks
+    // STUN/TURN hostnames + responses to local DNS resolvers (LAN router,
+    // ISP, OS resolver cache).
+    //
+    // Phase E full closure (slice 2.7.b+): short-circuit WebCore::resolveDNS
+    // when SOCKS5 active; return the relay's BND.ADDR as the resolved IP +
+    // preserve original hostname in a sidecar map keyed by IP → original-
+    // hostname so Slice 2.3 wrapOutgoingDatagram emits ATYP=0x03 (domain)
+    // frames with the original STUN/TURN hostname embedded. Pairs with
+    // EG-WK-1.9 Slice 1 ATYP=0x03 framing.
+    //
+    // This atomic slice (2.7.a): observability — log resolveDNS invocations
+    // when SOCKS5 active to make the leak surface visible in production
+    // logs. Logging once-per-class to bound volume; future 2.7.b will be
+    // the actual short-circuit + hostname-preservation.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] createResolver: WebRTC DNS resolve for '%s' going through LOCAL DNS (leaks hostname + IP to LAN). Slice 2.7.b will short-circuit + preserve hostname for ATYP=0x03 framing through SOCKS5 relay.",
+                address.utf8().data());
+        }
+    }
+#endif
+
     WebCore::DNSCompletionHandler completionHandler = [connection = m_connection, identifier](auto&& result) {
         ASSERT(isMainRunLoop());
         if (!connection)
