@@ -65,14 +65,29 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
 
 - (void)startLoading
 {
-    // Phase B will implement: parse host/port from self.request.URL.host:port,
-    // call DriftstackSocks5Client::tcpConnect(dest, &bnd), then drive HTTP/
-    // HTTPS over the established TCP socket. For HTTPS, do TLS handshake first
-    // (NSStream + SSL or CFStream with SSL settings).
+    // Wave 29-396 sub-slice 1.7.0: URL parsing + diagnostic log scaffold.
+    // Future sub-slices land actual driving:
+    //   1.7.1: DriftstackSocks5Client construction with session-config
+    //          proxy + performHandshake + tcpConnect
+    //   1.7.2: CFStream pair wrap from socket FD + HTTP request bytes
+    //          serialization + response parsing (HTTP/1.1)
+    //   1.8:   TLS handshake for HTTPS via CFStream SSL settings + SNI
     //
-    // For now: this is dead code since canInitWithRequest returns NO.
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading called unexpectedly — should be dormant per Phase A canInitWithRequest=NO. Likely production misconfiguration.");
-    [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:nil]];
+    // For now: extract URL host/port + log + return UnsupportedURL.
+    // This slice is dead code (canInitWithRequest returns NO) — fires
+    // only if some debug session manually invokes the protocol class.
+    NSURL *url = self.request.URL;
+    NSString *host = url.host ?: @"<nil>";
+    NSNumber *port = url.port;
+    NSString *scheme = url.scheme.lowercaseString ?: @"<nil>";
+    int defaultPort = [scheme isEqualToString:@"https"] ? 443 : 80;
+    int actualPort = port ? port.intValue : defaultPort;
+
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading scheme=%s host=%s port=%d — Wave 29-396 sub-slice 1.7.0 scaffold (URL parsing + log only). Returns UnsupportedURL until sub-slices 1.7.1+ land actual SOCKS5 transport.",
+        scheme.UTF8String, host.UTF8String, actualPort);
+    [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
+        NSLocalizedDescriptionKey: @"DriftstackSocks5URLProtocol Phase B sub-slice 1.7.0 scaffold — actual transport pending sub-slices 1.7.1+",
+    }]];
 }
 
 - (void)stopLoading
