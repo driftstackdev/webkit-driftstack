@@ -13,7 +13,11 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "DriftstackSocks5Client.h"
+#import <stdlib.h>
+#import <string.h>
 #import <wtf/Assertions.h>
+#import <wtf/text/WTFString.h>
 
 namespace WebKit {
 // Wave 29-396 sub-slice 1.6: global dispatch flag definition.
@@ -65,28 +69,83 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
 
 - (void)startLoading
 {
-    // Wave 29-396 sub-slice 1.7.0: URL parsing + diagnostic log scaffold.
-    // Future sub-slices land actual driving:
-    //   1.7.1: DriftstackSocks5Client construction with session-config
-    //          proxy + performHandshake + tcpConnect
-    //   1.7.2: CFStream pair wrap from socket FD + HTTP request bytes
-    //          serialization + response parsing (HTTP/1.1)
-    //   1.8:   TLS handshake for HTTPS via CFStream SSL settings + SNI
-    //
-    // For now: extract URL host/port + log + return UnsupportedURL.
-    // This slice is dead code (canInitWithRequest returns NO) — fires
-    // only if some debug session manually invokes the protocol class.
+    // Wave 29-396 sub-slice 1.7.1: DriftstackSocks5Client construction +
+    // performHandshake + tcpConnect. Future sub-slices land:
+    //   1.7.2: CFStream pair wrap + HTTP/1.1 driving
+    //   1.8:   TLS for HTTPS
+    //   1.9:   protocolClasses registration + CFNetwork SOCKS5 disable
     NSURL *url = self.request.URL;
-    NSString *host = url.host ?: @"<nil>";
+    NSString *host = url.host ?: @"";
     NSNumber *port = url.port;
-    NSString *scheme = url.scheme.lowercaseString ?: @"<nil>";
+    NSString *scheme = url.scheme.lowercaseString ?: @"";
     int defaultPort = [scheme isEqualToString:@"https"] ? 443 : 80;
     int actualPort = port ? port.intValue : defaultPort;
 
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading scheme=%s host=%s port=%d — Wave 29-396 sub-slice 1.7.0 scaffold (URL parsing + log only). Returns UnsupportedURL until sub-slices 1.7.1+ land actual SOCKS5 transport.",
-        scheme.UTF8String, host.UTF8String, actualPort);
+    // Read SOCKS5 proxy from env var (EG-WK-1.1 path). Per-session
+    // proxy_configuration plumb-through is a future sub-slice; for
+    // Phase B v1 we use the env-fallback proxy as the SOCKS5 target.
+    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+    if (!proxyEnv || !proxyEnv[0]) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading: DRIFTSTACK_SOCKS5_PROXY not set — cannot route through SOCKS5. Returning error.");
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse userInfo:@{
+            NSLocalizedDescriptionKey: @"DRIFTSTACK_SOCKS5_PROXY env var required for custom SOCKS5 dispatch",
+        }]];
+        return;
+    }
+
+    // Parse "host:port" from env var
+    NSString *proxySpec = [NSString stringWithUTF8String:proxyEnv];
+    NSArray<NSString *> *parts = [proxySpec componentsSeparatedByString:@":"];
+    if (parts.count != 2) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading: DRIFTSTACK_SOCKS5_PROXY malformed '%s' (need host:port)", proxyEnv);
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorBadServerResponse userInfo:nil]];
+        return;
+    }
+
+    WebKit::Socks5Endpoint proxy;
+    proxy.host = WTF::String::fromUTF8([parts[0] UTF8String]);
+    proxy.port = static_cast<uint16_t>([parts[1] intValue]);
+
+    WebKit::Socks5Credentials creds;
+    // No auth for v1.0 (RFC 1928 §3 NO_AUTH method); user/pass support
+    // when DRIFTSTACK_SOCKS5_USER + DRIFTSTACK_SOCKS5_PASS env vars set
+    // (future sub-slice).
+
+    auto client = std::make_unique<WebKit::DriftstackSocks5Client>(proxy, creds);
+    auto handshakeResult = client->performHandshake();
+    if (handshakeResult != WebKit::Socks5Result::Success) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading: handshake failed (%d) against proxy %s:%u",
+            int(handshakeResult), proxy.host.utf8().data(), unsigned(proxy.port));
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:@{
+            NSLocalizedDescriptionKey: @"SOCKS5 handshake failed",
+        }]];
+        return;
+    }
+
+    WebKit::Socks5Endpoint dest;
+    dest.host = WTF::String::fromUTF8([host UTF8String]);
+    dest.port = static_cast<uint16_t>(actualPort);
+
+    WebKit::Socks5Endpoint bnd;
+    auto connectResult = client->tcpConnect(dest, bnd);
+    if (connectResult != WebKit::Socks5Result::Success) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading: tcpConnect failed (%d) for %s:%d via proxy",
+            int(connectResult), [host UTF8String], actualPort);
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:@{
+            NSLocalizedDescriptionKey: @"SOCKS5 tcpConnect failed",
+        }]];
+        return;
+    }
+
+    // Sub-slice 1.7.1 stops here. The TCP socket is established but not
+    // yet driven for HTTP. Sub-slice 1.7.2 wraps the socket FD in
+    // CFStream pair + sends HTTP/1.1 request bytes + reads response.
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading sub-slice 1.7.1 SUCCESS — handshake + tcpConnect to %s:%d via %s:%u (BND=%s:%u). HTTP/1.1 driving pending sub-slice 1.7.2.",
+        [host UTF8String], actualPort,
+        proxy.host.utf8().data(), unsigned(proxy.port),
+        bnd.host.utf8().data(), unsigned(bnd.port));
     [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
-        NSLocalizedDescriptionKey: @"DriftstackSocks5URLProtocol Phase B sub-slice 1.7.0 scaffold — actual transport pending sub-slices 1.7.1+",
+        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.1 — handshake + tcpConnect succeeded; HTTP/1.1 driving pending sub-slice 1.7.2",
     }]];
 }
 
