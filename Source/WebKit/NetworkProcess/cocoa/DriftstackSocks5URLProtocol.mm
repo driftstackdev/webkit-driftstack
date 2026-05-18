@@ -24,6 +24,16 @@ namespace WebKit {
 std::atomic<bool> g_driftstackCustomSocks5Active { false };
 } // namespace WebKit
 
+// Wave 29-396 sub-slice 1.7.2.d: lifetime management via ivars.
+// DriftstackSocks5Client + CFStream pair must outlive -startLoading
+// return; stored as ivars released in -stopLoading.
+@interface WKDriftstackSocks5URLProtocol () {
+    std::unique_ptr<WebKit::DriftstackSocks5Client> _socks5Client;
+    CFReadStreamRef _readStream;
+    CFWriteStreamRef _writeStream;
+}
+@end
+
 @implementation WKDriftstackSocks5URLProtocol
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request
@@ -111,7 +121,8 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
     // when DRIFTSTACK_SOCKS5_USER + DRIFTSTACK_SOCKS5_PASS env vars set
     // (future sub-slice).
 
-    auto client = std::make_unique<WebKit::DriftstackSocks5Client>(proxy, creds);
+    _socks5Client = std::make_unique<WebKit::DriftstackSocks5Client>(proxy, creds);
+    auto& client = _socks5Client;
     auto handshakeResult = client->performHandshake();
     if (handshakeResult != WebKit::Socks5Result::Success) {
         WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading: handshake failed (%d) against proxy %s:%u",
@@ -166,21 +177,35 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
     // + writes to writeStream + reads response from readStream. Sub-slice
     // 1.7.2.d adds lifetime management via class ivars so the
     // DriftstackSocks5Client outlives this function call.
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.b SUCCESS — CFStream pair constructed (fd=%d, read=%p, write=%p) for %s:%d via SOCKS5 proxy. HTTP/1.1 driving pending sub-slice 1.7.2.c.",
-        fd, (void*)readStreamRef, (void*)writeStreamRef, [host UTF8String], actualPort);
+    // Sub-slice 1.7.2.d: store streams in ivars for lifetime past startLoading.
+    _readStream = readStreamRef;
+    _writeStream = writeStreamRef;
 
-    // Release streams locally (lifetime fix in sub-slice 1.7.2.d)
-    CFRelease(readStreamRef);
-    CFRelease(writeStreamRef);
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.d SUCCESS — CFStream pair stored in ivars (fd=%d, read=%p, write=%p) for %s:%d via SOCKS5 proxy. HTTP/1.1 driving pending sub-slice 1.7.2.c.",
+        fd, (void*)_readStream, (void*)_writeStream, [host UTF8String], actualPort);
 
     [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
-        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.b — CFStream pair constructed; HTTP/1.1 driving pending sub-slice 1.7.2.c",
+        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.d — ivars stored; HTTP/1.1 driving pending sub-slice 1.7.2.c",
     }]];
 }
 
 - (void)stopLoading
 {
-    // No-op until Phase B has an active connection to tear down.
+    // Wave 29-396 sub-slice 1.7.2.d: tear down lifetime-managed resources.
+    // -stopLoading is called by NSURLProtocolClient when the protocol
+    // task is canceled OR after URLProtocolDidFinishLoading. Release ivar
+    // resources to prevent leaks.
+    if (_readStream) {
+        CFReadStreamClose(_readStream);
+        CFRelease(_readStream);
+        _readStream = NULL;
+    }
+    if (_writeStream) {
+        CFWriteStreamClose(_writeStream);
+        CFRelease(_writeStream);
+        _writeStream = NULL;
+    }
+    _socks5Client.reset();  // closes BSD socket FD via Impl destructor
 }
 
 @end
