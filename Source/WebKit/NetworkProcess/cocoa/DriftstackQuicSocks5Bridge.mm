@@ -9,10 +9,13 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "DriftstackSocks5Client.h"
+
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
 #include <stdlib.h>
 #include <wtf/Assertions.h>
+#include <wtf/cocoa/SpanCocoa.h>
 
 namespace WebKit {
 
@@ -47,18 +50,38 @@ bool parametersUseQuic(nw_parameters_t parameters)
     return false;
 }
 
-BridgeResult wrapOutgoingQuicPacket(const String&, uint16_t, std::span<const uint8_t>, Vector<uint8_t>& out)
+BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t destinationPort, std::span<const uint8_t> payload, Vector<uint8_t>& out)
 {
     if (!isCustomSocks5Active())
         return BridgeResult::Socks5Disabled;
 
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] wrapOutgoingQuicPacket: Phase A scaffold — NotImplemented. Slice 16.5 will reuse DriftstackSocks5Client::wrapUdpDatagram §7 helper (Wave 29-368).");
+    if (destinationHost.isEmpty() || destinationPort == 0)
+        return BridgeResult::ProtocolError;
+    if (destinationHost.utf8().length() > 255)
+        return BridgeResult::DomainTooLong;
+
+    Socks5Endpoint destination;
+    destination.host = destinationHost;
+    destination.port = destinationPort;
+
+    RetainPtr<NSData> payloadData = adoptNS([[NSData alloc] initWithBytes:payload.data() length:payload.size()]);
+    RetainPtr<NSData> framed = DriftstackSocks5Client::wrapUdpDatagram(destination, payloadData.get());
+    if (!framed) {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] wrapOutgoingQuicPacket: §7 frame helper returned nil for dest=%s:%u",
+            destinationHost.utf8().data(), destinationPort);
+        return BridgeResult::ProtocolError;
     }
+
+    static bool loggedSuccessOnce = false;
+    if (!loggedSuccessOnce) {
+        loggedSuccessOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] wrapOutgoingQuicPacket: FIRST wrap — dest=%s:%u, %zu→%zu bytes. Task #15 §7 helper reuse confirmed.",
+            destinationHost.utf8().data(), destinationPort, payload.size(), static_cast<size_t>([framed.get() length]));
+    }
+
     out.clear();
-    return BridgeResult::NotImplemented;
+    out.append(WTF::span(framed.get()));
+    return BridgeResult::Success;
 }
 
 BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t>, UnwrappedQuicPacket& out)
