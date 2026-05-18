@@ -49,6 +49,7 @@
 #include "NetworkSessionCocoa.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackRTCSocks5Bridge.h"
+#include <arpa/inet.h>
 #endif
 #else // PLATFORM(COCOA)
 
@@ -200,29 +201,32 @@ void NetworkRTCProvider::createResolver(LibWebRTCResolverIdentifier identifier, 
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-397 Slice 2.7: NetworkRTCResolverCocoa DNS hook (observability
-    // + leak surface). When DRIFTSTACK_CUSTOM_SOCKS5=1, the existing
-    // WebCore::resolveDNS path uses local-system DNS (getaddrinfo) → leaks
-    // STUN/TURN hostnames + responses to local DNS resolvers (LAN router,
-    // ISP, OS resolver cache).
+    // Wave 29-397 Slice 2.7.b.3: SHORT-CIRCUIT DNS resolution when bridge
+    // active. Allocate a sentinel 127.0.0.X IP for the hostname (Slice
+    // 2.7.b.2 allocator); send SetResolvedAddress to libwebrtc with the
+    // sentinel; skip WebCore::resolveDNS entirely. The original hostname
+    // is preserved in the sidecar map for Slice 2.7.b.4's wrap helper
+    // to emit ATYP=0x03 framing via SOCKS5.
     //
-    // Phase E full closure (slice 2.7.b+): short-circuit WebCore::resolveDNS
-    // when SOCKS5 active; return the relay's BND.ADDR as the resolved IP +
-    // preserve original hostname in a sidecar map keyed by IP → original-
-    // hostname so Slice 2.3 wrapOutgoingDatagram emits ATYP=0x03 (domain)
-    // frames with the original STUN/TURN hostname embedded. Pairs with
-    // EG-WK-1.9 Slice 1 ATYP=0x03 framing.
-    //
-    // This atomic slice (2.7.a): observability — log resolveDNS invocations
-    // when SOCKS5 active to make the leak surface visible in production
-    // logs. Logging once-per-class to bound volume; future 2.7.b will be
-    // the actual short-circuit + hostname-preservation.
+    // Replaces Slice 2.7.a's observability-only log path.
     if (DriftstackRTC::isCustomSocks5Active()) {
-        static bool loggedOnce = false;
-        if (!loggedOnce) {
-            loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] createResolver: WebRTC DNS resolve for '%s' going through LOCAL DNS (leaks hostname + IP to LAN). Slice 2.7.b will short-circuit + preserve hostname for ATYP=0x03 framing through SOCKS5 relay.",
-                address.utf8().data());
+        String sentinelStr = DriftstackRTC::allocateSentinelForHostname(address);
+        if (!sentinelStr.isEmpty()) {
+            static bool loggedShortCircuitOnce = false;
+            if (!loggedShortCircuitOnce) {
+                loggedShortCircuitOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] createResolver: SHORT-CIRCUIT — hostname='%s' → sentinel=%s. Local DNS bypassed; ATYP=0x03 framing via Slice 2.7.b.4 wrap helper.",
+                    address.utf8().data(), sentinelStr.utf8().data());
+            }
+            struct in_addr sentinelAddr { };
+            if (inet_pton(AF_INET, sentinelStr.utf8().data(), &sentinelAddr) == 1) {
+                Vector<WebKit::WebRTCNetwork::IPAddress> sentinelAddresses;
+                SUPPRESS_MEMORY_UNSAFE_CAST sentinelAddresses.append(RTCNetwork::IPAddress { webrtc::IPAddress { sentinelAddr } });
+                protect(this->connection())->send(Messages::WebRTCResolver::SetResolvedAddress(sentinelAddresses), identifier);
+                return;
+            }
+            WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] createResolver: inet_pton failed for sentinel '%s'; falling through to local DNS (LEAK)",
+                sentinelStr.utf8().data());
         }
     }
 #endif
