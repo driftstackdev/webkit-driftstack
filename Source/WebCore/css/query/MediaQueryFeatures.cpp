@@ -853,7 +853,7 @@ static const IdentifierSchema& overflowInlineFeatureSchema()
 }
 
 #if ENABLE(DARK_MODE_CSS)
-static bool frameOwnerElementAncestorsUseDarkAppearance(const Frame& frame)
+[[maybe_unused]] static bool frameOwnerElementAncestorsUseDarkAppearance(const Frame& frame)
 {
     {
         RefPtr<const Frame> child = &frame;
@@ -889,9 +889,24 @@ static const IdentifierSchema& prefersColorSchemeFeatureSchema()
         FixedVector { CSSValueLight, CSSValueDark },
         MediaQueryDynamicDependency::Appearance,
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            // Wave 29-397 D#8 Tier A #5: lock prefers-color-scheme to
+            // "light" for archetype coherence. Real iPhone Safari reports
+            // whatever the user set in Settings → Display & Brightness;
+            // the iPhone reference captures were taken under default
+            // (light) appearance, so the Mac fleet must report light
+            // universally to match the reference cumrig values.
+            //
+            // Future enhancement: add Config::prefersColorScheme field
+            // for per-archetype override (some archetypes may need dark
+            // to match dark-mode reference captures).
+            (void)context;
+            return MatchingIdentifiers { CSSValueLight };
+#else
             bool useDarkAppearance = frameOwnerElementAncestorsUseDarkAppearance(*context.document->frame());
 
             return MatchingIdentifiers { useDarkAppearance ? CSSValueDark : CSSValueLight };
+#endif
         }
     };
     return schema;
