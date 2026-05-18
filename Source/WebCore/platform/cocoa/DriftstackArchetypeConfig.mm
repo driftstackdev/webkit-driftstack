@@ -225,11 +225,22 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
     // file 99 S11 / file 110 § Storage quota. Per-session value seeded
     // from archetype profile (60% × disk-size-class). Defaults to 0
     // (inherit existing V-072 fallback halving).
+    //
+    // Wave 29-396 sub-slice 3.5: BUG FIX. asInteger() returns
+    // std::optional<int> per WTF/JSON::Value (Source/WTF/wtf/JSONValues.h:100)
+    // — `int` is 32-bit on macOS. 153600000000 (153.6GB) clamps to
+    // INT_MAX 2147483647. Wave 29-395.B revert root cause located.
+    //
+    // Use asDouble() instead — std::optional<double>. double exact-
+    // represents uint64 up to 2^53 (~9e15), far exceeds quota_bytes
+    // expected range (~10GB-1TB / 10^10-10^12). Cast to uint64_t safely.
     if (auto stValue = rootObj->getValue("storage"_s)) {
         if (auto st = stValue->asObject()) {
             if (auto v = st->getValue("quota_bytes"_s)) {
-                if (auto n = v->asInteger())
-                    m_storageQuotaBytes = static_cast<uint64_t>(*n);
+                if (auto d = v->asDouble()) {
+                    if (*d > 0)
+                        m_storageQuotaBytes = static_cast<uint64_t>(*d);
+                }
             }
             m_storageQuotaVariancePercent = getInt(*st, "quota_variance_percent"_s);
         }
