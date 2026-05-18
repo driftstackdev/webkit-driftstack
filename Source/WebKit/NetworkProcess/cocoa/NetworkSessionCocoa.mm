@@ -1302,20 +1302,36 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             //   - WKDriftstackSocks5URLProtocol (claims HTTP/HTTPS) AND
             //   - CFNetwork built-in SOCKS5 (kCFNetworkProxiesSOCKSEnable)
             // active, requests would get SOCKS5-tunneled-through-SOCKS5 —
-            // broken. Remove the CFNetwork SOCKS5 keys; our URLProtocol
-            // handles HTTP/HTTPS, and there's no other path that needs
-            // CFNetwork SOCKS5 in this session.
-            NSDictionary *currentProxyDict = configuration.get().connectionProxyDictionary;
-            if (currentProxyDict) {
-                NSMutableDictionary *trimmedProxy = [currentProxyDict mutableCopy];
-                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
-                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
-                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
-                // Note: kCFNetworkProxiesSOCKSUser/Pass don't exist as public
-                // symbols on macOS; CFNetwork uses NSURLCredential lookup or
-                // URL-embedded auth. The 3 keys above are sufficient to
-                // disarm the built-in SOCKS5 path.
-                configuration.get().connectionProxyDictionary = trimmedProxy;
+            // broken.
+            //
+            // Wave 29-397 Slice 16.4.b.7.c: gate the disarm on
+            // DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP. When HTTPS-skip is OFF
+            // (default), disarm CFNetwork SOCKS5 (URLProtocol handles
+            // HTTPS). When HTTPS-skip is ON, the URLProtocol skips HTTPS
+            // → CFNetwork picks it up → CFNetwork SOCKS5 needs to STAY
+            // ARMED so TCP HTTPS routes through proxy + h3 routes via
+            // the interpose. This closes the TCP HTTPS leak gap when
+            // HTTPS-skip is enabled for QUIC interpose path testing.
+            const char* httpsSkipForDisarm = getenv("DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP");
+            bool httpsSkipActive = httpsSkipForDisarm && httpsSkipForDisarm[0] == '1';
+            if (!httpsSkipActive) {
+                NSDictionary *currentProxyDict = configuration.get().connectionProxyDictionary;
+                if (currentProxyDict) {
+                    NSMutableDictionary *trimmedProxy = [currentProxyDict mutableCopy];
+                    [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
+                    [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+                    [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+                    // Note: kCFNetworkProxiesSOCKSUser/Pass don't exist as
+                    // public symbols on macOS; CFNetwork uses NSURLCredential
+                    // lookup or URL-embedded auth.
+                    configuration.get().connectionProxyDictionary = trimmedProxy;
+                }
+            } else {
+                static bool loggedSkipDisarmOnce = false;
+                if (!loggedSkipDisarmOnce) {
+                    loggedSkipDisarmOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] HTTPS-skip ACTIVE — CFNetwork SOCKS5 disarm SKIPPED so TCP HTTPS routes through proxy. QUIC HTTPS via interpose (Slice 16.4.b.7.c).");
+                }
             }
 
             static bool loggedOnceCustom = false;
