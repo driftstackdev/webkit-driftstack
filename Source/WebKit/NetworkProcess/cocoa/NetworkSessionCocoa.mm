@@ -1291,23 +1291,37 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // Wave 29-396 sub-slice 1.6: set global flag.
             WebKit::g_driftstackCustomSocks5Active.store(true, std::memory_order_relaxed);
 
-            // Wave 29-396 sub-slice 1.9.a: register URLProtocol class on
-            // NSURLSessionConfiguration.protocolClasses so NSURLSession
-            // routes matching requests through WKDriftstackSocks5URLProtocol
-            // (which uses DriftstackSocks5Client for SOCKS5 + ATYP=0x03).
-            //
-            // CFNetwork SOCKS5 path (Wave 29-366) remains in
-            // connectionProxyDictionary as fallback for requests
-            // canInitWithRequest doesn't claim (e.g. ws/wss schemes).
+            // Wave 29-396 sub-slice 1.9.a: register URLProtocol class.
             NSMutableArray *protocols = [@[[WKDriftstackSocks5URLProtocol class]] mutableCopy];
             if (configuration.get().protocolClasses)
                 [protocols addObjectsFromArray:configuration.get().protocolClasses];
             configuration.get().protocolClasses = protocols;
 
+            // Wave 29-396 sub-slice 1.9.c: disarm CFNetwork SOCKS5 path
+            // to prevent double-routing. With both
+            //   - WKDriftstackSocks5URLProtocol (claims HTTP/HTTPS) AND
+            //   - CFNetwork built-in SOCKS5 (kCFNetworkProxiesSOCKSEnable)
+            // active, requests would get SOCKS5-tunneled-through-SOCKS5 —
+            // broken. Remove the CFNetwork SOCKS5 keys; our URLProtocol
+            // handles HTTP/HTTPS, and there's no other path that needs
+            // CFNetwork SOCKS5 in this session.
+            NSDictionary *currentProxyDict = configuration.get().connectionProxyDictionary;
+            if (currentProxyDict) {
+                NSMutableDictionary *trimmedProxy = [currentProxyDict mutableCopy];
+                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
+                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+                // Note: kCFNetworkProxiesSOCKSUser/Pass don't exist as public
+                // symbols on macOS; CFNetwork uses NSURLCredential lookup or
+                // URL-embedded auth. The 3 keys above are sufficient to
+                // disarm the built-in SOCKS5 path.
+                configuration.get().connectionProxyDictionary = trimmedProxy;
+            }
+
             static bool loggedOnceCustom = false;
             if (!loggedOnceCustom) {
                 loggedOnceCustom = true;
-                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 active — flag set + WKDriftstackSocks5URLProtocol registered on NSURLSessionConfiguration.protocolClasses (Wave 29-396 sub-slices 1.6 + 1.9.a).");
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 active — flag set + WKDriftstackSocks5URLProtocol registered + CFNetwork SOCKS5 disarmed (Wave 29-396 sub-slices 1.6 + 1.9.a + 1.9.c).");
             }
         }
     }
