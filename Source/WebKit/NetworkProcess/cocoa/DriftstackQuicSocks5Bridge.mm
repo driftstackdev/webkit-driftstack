@@ -11,6 +11,7 @@
 
 #import "DriftstackSocks5Client.h"
 
+#import "../webrtc/DriftstackRTCSocks5Bridge.h"
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
 #include <stdlib.h>
@@ -158,17 +159,63 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
     return BridgeResult::Success;
 }
 
-RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t, nw_parameters_t)
+RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEndpoint, nw_parameters_t parameters)
 {
     if (!isCustomSocks5Active())
         return nullptr;
 
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: Phase A scaffold — NotImplemented. Slice 16.4 will bind nw_connection_t to SOCKS5 relay BND.ADDR/BND.PORT via Task #15 SharedRelayState (Slice 2.2 singleton reuse).");
+    // Wave 29-397 Slice 16.4.b.6: bind a fresh nw_connection_t to the SOCKS5
+    // BND.ADDR:BND.PORT obtained from Task #15's SharedRelayState (DriftstackRTC
+    // bridge — ONE UDP ASSOCIATE channel serves WebRTC + WebTransport + future
+    // HTTP/3 simultaneously).
+    //
+    // §7 wrap/unwrap framing on the QUIC payload is NOT YET applied at this
+    // layer — CFNetwork's QUIC stack writes raw QUIC packets to the returned
+    // connection. Slice 16.4.b.6.b will add a custom nw_framer_definition that
+    // injects/strips the §7 header on send/receive. Without that framer, the
+    // SOCKS5 relay receives malformed (un-framed) QUIC packets — the relay
+    // logs a protocol error. The CONNECTION IS BOUND CORRECTLY; the framer
+    // is the missing piece for clean SOCKS5 transit.
+    //
+    // Slice 16.4.b.6 atomic scope: connection creation + bind + start. Framer
+    // injection deferred to 16.4.b.6.b for clarity (one architectural decision
+    // per atomic slice).
+
+    DriftstackRTC::RelayChannel channel;
+    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    if (r != DriftstackRTC::BridgeResult::Success) {
+        static bool loggedFailOnce = false;
+        if (!loggedFailOnce) {
+            loggedFailOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: relay establish failed (result=%d) — fall through; CFNetwork QUIC will use direct UDP (LEAK)",
+                static_cast<int>(r));
+        }
+        return nullptr;
     }
-    return nullptr;
+
+    // Build nw_parameters for the relay-bound connection (UDP only, no QUIC
+    // layer — we want raw UDP to the relay endpoint; the original QUIC
+    // params describe what CFNetwork wants to do, but the wire layer to the
+    // proxy is plain UDP).
+    auto relayParams = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
+
+    auto relayHostUtf8 = channel.relayHost.utf8();
+    auto relayEndpoint = adoptNS(nw_endpoint_create_host(relayHostUtf8.data(), String::number(channel.relayPort).utf8().data()));
+
+    auto relayConnection = adoptNS(nw_connection_create(relayEndpoint.get(), relayParams.get()));
+    if (!relayConnection) {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: nw_connection_create returned nil");
+        return nullptr;
+    }
+
+    static bool loggedSuccessOnce = false;
+    if (!loggedSuccessOnce) {
+        loggedSuccessOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: relay-bound nw_connection created — relay=%s:%u. Slice 16.4.b.6.b will add §7 nw_framer for clean SOCKS5 transit; current connection accepts raw UDP only.",
+            relayHostUtf8.data(), channel.relayPort);
+    }
+
+    return relayConnection;
 }
 
 } // namespace DriftstackQuic
