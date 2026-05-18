@@ -99,6 +99,14 @@ static String getString(JSON::Object& obj, ASCIILiteral key)
     return s.isNull() ? String() : s;
 }
 
+// Wave 29-396 sub-3.5 caveat: this helper returns `int` (32-bit on macOS).
+// Per Source/WTF/wtf/JSONValues.h:100, asInteger() returns std::optional<int>
+// — values > INT_MAX (2147483647) silently clamp during JSON parse. Audit
+// confirms all current callers (screen_width/height up to 1000-ish,
+// hardware_concurrency 4, memory_gb 8, color_depth 24, safe_area_inset
+// small ints, quota_variance_percent ±5) fit in int32. For uint64 fields
+// (e.g. storage.quota_bytes ~10^10-10^12), use asDouble() + cast manually —
+// see m_storageQuotaBytes parsing (line ~230) for the pattern.
 static int getInt(JSON::Object& obj, ASCIILiteral key, int defaultVal = 0)
 {
     auto v = obj.getValue(key);
