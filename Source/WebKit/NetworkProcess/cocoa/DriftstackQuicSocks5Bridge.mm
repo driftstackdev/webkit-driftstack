@@ -159,6 +159,57 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
     return BridgeResult::Success;
 }
 
+// Wave 29-397 Slice 16.4.b.6.b: nw_framer_definition for §7 wrap/unwrap.
+// Bidirectional UDP-message processor: outgoing CFNetwork datagrams get
+// §7-wrapped before transit to the relay; incoming relay datagrams get
+// §7-unwrapped before delivery to CFNetwork. The framer is attached to
+// the relay-bound nw_connection's protocol options.
+//
+// Lazy-init the framer definition once-per-process; same definition
+// reused across all relay connections.
+static nw_protocol_definition_t driftstackSocks5FramerDefinition()
+{
+    static nw_protocol_definition_t s_definition = nullptr;
+    static dispatch_once_t s_token;
+    dispatch_once(&s_token, ^{
+        s_definition = nw_framer_create_definition("DriftstackSocks5Framer",
+            NW_FRAMER_CREATE_FLAGS_DEFAULT,
+            ^nw_framer_start_result_t (nw_framer_t framer) {
+                // start handler: nothing to do per-instance; the framer is
+                // stateless. send/receive handlers process bytes inline.
+                nw_framer_set_output_handler(framer, ^(nw_framer_t framerInner, nw_framer_message_t message, size_t messageLength, bool isComplete) {
+                    // Slice 16.4.b.6.b scaffold: read the full outgoing message
+                    // and §7-wrap it via Socks5Framing::wrap. Phase A
+                    // scaffold passes through raw bytes (relay will reject as
+                    // protocol error — visible in gost log; flags missing
+                    // §7 framer to operator).
+                    nw_framer_parse_output(framerInner, messageLength, messageLength, nullptr, ^size_t (uint8_t* buffer, size_t bufferLength, bool isComplete) {
+                        // Phase A: write through unchanged.
+                        nw_framer_write_output(framerInner, buffer, bufferLength);
+                        return bufferLength;
+                    });
+                });
+                nw_framer_set_input_handler(framer, ^size_t (nw_framer_t framerInner) {
+                    // Slice 16.4.b.6.b scaffold: parse §7 header from incoming
+                    // bytes + deliver only payload upstream. Phase A scaffold
+                    // passes through.
+                    nw_framer_parse_input(framerInner, 1, UINT16_MAX, nullptr, ^size_t (uint8_t* buffer, size_t bufferLength, bool isComplete) {
+                        nw_framer_deliver_input(framerInner, buffer, bufferLength, nw_framer_message_create(framerInner), true);
+                        return bufferLength;
+                    });
+                    return 0;
+                });
+                static bool loggedOnce = false;
+                if (!loggedOnce) {
+                    loggedOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] nw_framer started — Phase A scaffold passes through unchanged. Slice 16.4.b.6.b full impl will §7-wrap output + §7-unwrap input.");
+                }
+                return nw_framer_start_result_ready;
+            });
+    });
+    return s_definition;
+}
+
 RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEndpoint, nw_parameters_t parameters)
 {
     if (!isCustomSocks5Active())
@@ -198,6 +249,19 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     // params describe what CFNetwork wants to do, but the wire layer to the
     // proxy is plain UDP).
     auto relayParams = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
+
+    // Wave 29-397 Slice 16.4.b.6.b: attach §7 framer to the relay
+    // connection's protocol stack. Phase A scaffold framer passes bytes
+    // through unchanged (gost will see un-framed UDP and reject as
+    // protocol error). Slice 16.4.b.6.b full impl populates the output
+    // handler with Socks5Framing::wrap and input handler with
+    // Socks5Framing::unwrap.
+    nw_protocol_definition_t framerDef = driftstackSocks5FramerDefinition();
+    if (framerDef) {
+        auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
+        auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(relayParams.get()));
+        nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+    }
 
     auto relayHostUtf8 = channel.relayHost.utf8();
     auto relayEndpoint = adoptNS(nw_endpoint_create_host(relayHostUtf8.data(), String::number(channel.relayPort).utf8().data()));
