@@ -224,12 +224,36 @@ BridgeResult establishRelayChannel(RelayChannel& out)
 // Wave 29-397 Slice 2.3: socketAddress → Socks5Endpoint. Prefers numeric
 // IP form when set (libwebrtc resolves DNS before passing to the socket
 // layer in most paths); falls back to hostname otherwise.
+//
+// Wave 29-397 Slice 2.7.b.4: when bridge-active + Slice 2.7.b.3 DNS short-
+// circuit allocated a 127.0.0.X sentinel for the original hostname, the
+// SocketAddress here arrives with that sentinel as ipaddr. We MUST consult
+// the sidecar map (lookupHostnameForSentinel) to recover the original
+// hostname — otherwise the wrap helper would emit a §7 frame addressed to
+// 127.0.0.X (which the SOCKS5 proxy can't reach as the actual STUN/TURN
+// host). When sidecar match found, emit the hostname so wrapUdpDatagram
+// produces an ATYP=0x03 (domain) §7 frame with the real hostname embedded.
+// Fall-through when sidecar miss: use the IP literal (ATYP=0x01).
 static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& address)
 {
     Socks5Endpoint endpoint;
     if (!address.ipaddr().IsNil()) {
-        auto ip = address.ipaddr().ToString();
-        endpoint.host = String::fromUTF8(ip.c_str());
+        auto ipStr = address.ipaddr().ToString();
+        String ipString = String::fromUTF8(ipStr.c_str());
+
+        // Sidecar consult (Slice 2.7.b.4): translate sentinel back to hostname.
+        String hostname = lookupHostnameForSentinel(ipString);
+        if (!hostname.isEmpty()) {
+            static bool loggedSentinelHitOnce = false;
+            if (!loggedSentinelHitOnce) {
+                loggedSentinelHitOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] endpointFromSocketAddress: sentinel HIT — %s → '%s'. §7 frame will use ATYP=0x03 domain form.",
+                    ipString.utf8().data(), hostname.utf8().data());
+            }
+            endpoint.host = hostname;
+        } else {
+            endpoint.host = ipString;
+        }
     } else {
         auto host = address.hostname();
         endpoint.host = String::fromUTF8(host.c_str());
