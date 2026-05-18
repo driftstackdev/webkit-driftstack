@@ -31,12 +31,19 @@
 
 #if PLATFORM(DRIFTSTACK)
 
-#import "DriftstackQuicSocks5Bridge.h"
-
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
 #include <dlfcn.h>
-#include <wtf/Assertions.h>
+
+// Slice 16.4.b.5.b: NO direct include of DriftstackQuicSocks5Bridge.h —
+// the interpose dylib loads BEFORE WebKit framework, so WebKit's symbols
+// are not statically linkable. The bridge functions are reached via
+// dlsym(RTLD_DEFAULT, "driftstack_quic_*") at runtime after WebKit has
+// loaded. extern "C" wrappers in DriftstackQuicSocks5Bridge.mm expose
+// stable unmangled names.
+typedef bool (*DriftstackQuicIsActiveFn)(void);
+typedef bool (*DriftstackQuicParamsUseQuicFn)(nw_parameters_t);
+typedef nw_connection_t (*DriftstackQuicCreateRelayFn)(nw_endpoint_t, nw_parameters_t);
 
 // Canonical DYLD_INTERPOSE macro (matches Apple's dyld-interposing.h).
 // Same shape as the ANGLE precedent at
@@ -67,30 +74,60 @@ static void resolveOriginalNwConnectionCreate()
     originalNwConnectionCreate = reinterpret_cast<NwConnectionCreateFn>(sym);
 }
 
+// Cached pointers to bridge symbols resolved at first use via
+// dlsym(RTLD_DEFAULT, ...) — WebKit framework must be loaded into the
+// process before these resolve (loaded right after the interpose dylib
+// during NetworkProcess launch).
+static DriftstackQuicIsActiveFn bridgeIsActive = nullptr;
+static DriftstackQuicParamsUseQuicFn bridgeParamsUseQuic = nullptr;
+static DriftstackQuicCreateRelayFn bridgeCreateRelay = nullptr;
+
+static void resolveBridgeSymbols()
+{
+    if (bridgeIsActive && bridgeParamsUseQuic && bridgeCreateRelay)
+        return;
+    bridgeIsActive = reinterpret_cast<DriftstackQuicIsActiveFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_isCustomSocks5Active"));
+    bridgeParamsUseQuic = reinterpret_cast<DriftstackQuicParamsUseQuicFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_parametersUseQuic"));
+    bridgeCreateRelay = reinterpret_cast<DriftstackQuicCreateRelayFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_createRelayConnection"));
+    if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay) {
+        static bool loggedAbsenceOnce = false;
+        if (!loggedAbsenceOnce) {
+            loggedAbsenceOnce = true;
+            NSLog(@"[Driftstack-EG-WK-1.10/Task#16] resolveBridgeSymbols: dlsym(RTLD_DEFAULT) for one or more driftstack_quic_* failed — WebKit framework may not be loaded yet OR symbols missing. Interpose falls through.");
+        }
+    }
+}
+
 extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoint, nw_parameters_t parameters)
 {
     resolveOriginalNwConnectionCreate();
     if (!originalNwConnectionCreate)
         return nullptr;
 
-    if (!WebKit::DriftstackQuic::isCustomSocks5Active())
+    resolveBridgeSymbols();
+    if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay)
         return originalNwConnectionCreate(endpoint, parameters);
 
-    if (!WebKit::DriftstackQuic::parametersUseQuic(parameters))
+    if (!bridgeIsActive())
+        return originalNwConnectionCreate(endpoint, parameters);
+
+    if (!bridgeParamsUseQuic(parameters))
         return originalNwConnectionCreate(endpoint, parameters);
 
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST QUIC interpose match — redirecting to createRelayConnectionForQuic. Slice 16.4.b interpose ACTIVE.");
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST QUIC interpose match — redirecting to driftstack_quic_createRelayConnection. Slice 16.4.b interpose ACTIVE.");
     }
 
-    RetainPtr<nw_connection_t> relayConnection = WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters);
+    nw_connection_t relayConnection = bridgeCreateRelay(endpoint, parameters);
     if (relayConnection)
-        return relayConnection.leakRef();
+        return relayConnection;
 
-    // Phase A scaffold returns nullptr → fall through to original
-    // (leak; Slice 16.4.b.6 implements relay connection).
+    // Bridge returned nil → fall through to original (relay-establish
+    // failure path; Slice 16.4.b.5 ProcessLauncher injection paired
+    // with DRIFTSTACK_REQUIRE_PROXY=1 will hard-block at socket-open
+    // time when proxy unreachable).
     return originalNwConnectionCreate(endpoint, parameters);
 }
 

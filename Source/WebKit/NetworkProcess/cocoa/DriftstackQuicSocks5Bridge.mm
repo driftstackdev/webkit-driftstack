@@ -391,4 +391,35 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
 
 } // namespace WebKit
 
+// Wave 29-397 Slice 16.4.b.5.b: extern "C" stable-named wrappers for the
+// DYLD_INSERT_LIBRARIES interpose dylib to dlsym(RTLD_DEFAULT, ...) at
+// runtime. The interpose dylib cannot statically link WebKit (circular —
+// dylib loads BEFORE WebKit framework), so it resolves these symbols
+// after WebKit is loaded into NetworkProcess.
+//
+// Naming: driftstack_quic_<lowercased> matches the dylib's dlsym
+// lookup table. Stable across WebKit framework releases.
+extern "C" {
+
+bool driftstack_quic_isCustomSocks5Active(void);
+bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters);
+nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters);
+
+bool driftstack_quic_isCustomSocks5Active(void)
+{
+    return WebKit::DriftstackQuic::isCustomSocks5Active();
+}
+
+bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters)
+{
+    return WebKit::DriftstackQuic::parametersUseQuic(parameters);
+}
+
+nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)
+{
+    return WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters).leakRef();
+}
+
+} // extern "C"
+
 #endif // PLATFORM(DRIFTSTACK)
