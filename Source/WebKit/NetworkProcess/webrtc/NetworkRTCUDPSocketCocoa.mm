@@ -304,6 +304,44 @@ NetworkRTCUDPSocketCocoaConnections::~NetworkRTCUDPSocketCocoaConnections()
 void NetworkRTCUDPSocketCocoaConnections::setListeningPort(int port)
 {
     m_address.SetPort(port);
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 2.6: when DRIFTSTACK_CUSTOM_SOCKS5=1 + relay channel
+    // established, OVERRIDE the libwebrtc-visible local address to the SOCKS5
+    // relay's BND.ADDR / BND.PORT instead of the local Mac IP/port. ICE
+    // candidate generation sees the relay endpoint → server-reflexive +
+    // relay candidates report the relay endpoint to the WebRTC peer, NOT the
+    // Mac fleet's nw_connection-resolved local endpoint.
+    //
+    // This is the address-side closure paired with Slice 2.4/2.5 (send-side
+    // wrap + bridge activation). Together: peer sees SOCKS5 relay as the
+    // src of all datagrams; Mac fleet IP never reaches the ICE wire.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        DriftstackRTC::RelayChannel channel;
+        DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+        if (r == DriftstackRTC::BridgeResult::Success && !channel.relayHost.isEmpty() && channel.relayPort > 0) {
+            auto relayHostUtf8 = channel.relayHost.utf8();
+            webrtc::SocketAddress relayAddr(relayHostUtf8.data(), channel.relayPort);
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] setListeningPort: ICE local-address OVERRIDDEN — was Mac %s:%d → now relay %s:%u. ICE candidates will report relay endpoint, not Mac fleet IP.",
+                    m_address.ipaddr().IsNil() ? m_address.hostname().c_str() : m_address.ipaddr().ToString().c_str(),
+                    port,
+                    relayHostUtf8.data(), channel.relayPort);
+            }
+            m_connection->send(Messages::LibWebRTCNetwork::SignalAddressReady(m_identifier, RTCNetwork::SocketAddress(relayAddr)), 0);
+            return;
+        }
+        static bool loggedFailOnce = false;
+        if (!loggedFailOnce) {
+            loggedFailOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] setListeningPort: SOCKS5 active but relay not established (result=%d) — falling through to Mac-local address (LEAK risk; verify proxy reachable)",
+                static_cast<int>(r));
+        }
+    }
+#endif
+
     m_connection->send(Messages::LibWebRTCNetwork::SignalAddressReady(m_identifier, RTCNetwork::SocketAddress(m_address)), 0);
 }
 
