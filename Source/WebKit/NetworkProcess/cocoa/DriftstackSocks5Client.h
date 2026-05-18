@@ -124,6 +124,12 @@ public:
     RetainPtr<NSInputStream> tcpReadStream() const;
     RetainPtr<NSOutputStream> tcpWriteStream() const;
 
+    // Wave 29-396 sub-slice 1.7.2.a: raw BSD socket descriptor for CFStream
+    // pair wrapping by caller. -1 if no successful tcpConnect yet.
+    // Caller must NOT close() the FD — DriftstackSocks5Client owns it
+    // via Impl destructor.
+    int socketFileDescriptor() const;
+
     // Wrap a UDP datagram per RFC 1928 §7: [RSV 2 bytes][FRAG 1][ATYP 1][DST.ADDR
     // var][DST.PORT 2][DATA var]. Returns the wrapped frame ready to send to the
     // UDP relay endpoint.

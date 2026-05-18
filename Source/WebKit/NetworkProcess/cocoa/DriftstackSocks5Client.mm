@@ -352,6 +352,12 @@ RetainPtr<NSInputStream> DriftstackSocks5Client::tcpReadStream() const
     return m_impl->readStream;
 }
 
+// Wave 29-396 sub-slice 1.7.2.a: raw socket FD accessor.
+int DriftstackSocks5Client::socketFileDescriptor() const
+{
+    return m_impl->tcpConnected ? m_impl->socketFd : -1;
+}
+
 RetainPtr<NSOutputStream> DriftstackSocks5Client::tcpWriteStream() const
 {
     return m_impl->writeStream;
