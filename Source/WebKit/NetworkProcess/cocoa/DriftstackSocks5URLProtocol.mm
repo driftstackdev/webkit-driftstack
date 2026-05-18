@@ -109,14 +109,35 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"])
         return NO;
 
+    // Wave 29-397 Slice 16.4.b.7.b: HTTPS-skip toggle for QUIC interpose
+    // empirical testing. When DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP=1, this
+    // gate declines HTTPS requests so they flow through CFNetwork's
+    // normal NSURLSession stack — which can attempt h3 ALPN negotiation
+    // and trigger the DriftstackQuicInterpose dylib (Slice 16.4.b.5/.6).
+    //
+    // Known trade-off: when HTTPS-skip is active, TCP-only HTTPS
+    // requests (no h3 ALPN from server) flow direct via CFNetwork → IP
+    // leak unless CFNetwork SOCKS5 is RE-ARMED (Wave 29-396 sub-1.9.c
+    // disarmed it to prevent double-routing). Future Slice 16.4.b.7.c
+    // can re-arm CFNetwork SOCKS5 when HTTPS-skip is set so all egress
+    // routes through the proxy, with h3 going via interpose and TCP via
+    // CFNetwork SOCKS5.
+    //
+    // Default OFF — URLProtocol keeps Wave 29-396 sub-1.9.a behavior.
+    if ([scheme isEqualToString:@"https"]) {
+        const char* httpsSkip = getenv("DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP");
+        if (httpsSkip && httpsSkip[0] == '1') {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] HTTPS-skip ACTIVE — DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP=1; HTTPS deferred to CFNetwork for h3 interpose path");
+            }
+            return NO;
+        }
+    }
+
     // Wave 29-396 sub-slice 1.9.b: ACTIVATE — claim the request for
     // SOCKS5 transport via DriftstackSocks5Client.
-    // Phase B sub-slices 1.7.0/.1/.2.a-e + 1.8 implemented -startLoading
-    // for HTTP + HTTPS. Flag-gate prevents activation in cumrig context.
-    //
-    // If production hits a bug here, every HTTP/HTTPS request in a flag-set
-    // session fails. Revert path: clear flag in NetworkSessionCocoa OR
-    // unset DRIFTSTACK_CUSTOM_SOCKS5 env at session start.
     return YES;
 }
 
