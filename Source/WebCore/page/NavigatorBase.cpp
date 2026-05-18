@@ -149,11 +149,32 @@ String NavigatorBase::vendorSub()
 
 String NavigatorBase::language()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 D#8 Tier A #3: prefer DriftstackArchetypeConfig::
+    // singleton().lang() when loaded — per-archetype constant locale
+    // regardless of Mac fleet host's system locale. Eliminates fleet-
+    // host-dependent variance in navigator.language (otherwise reflects
+    // NSLocale.preferredLanguages which differs per host).
+    if (auto& cfg = DriftstackArchetypeConfig::singleton(); cfg.isLoaded()) {
+        if (auto lang = cfg.lang(); !lang.isEmpty())
+            return lang;
+    }
+#endif
     return defaultLanguage();
 }
 
 Vector<String> NavigatorBase::languages()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 D#8 Tier A #3: mirror Config wiring for languages
+    // array. Real iPhone Safari typically returns a single-element
+    // array with the primary language; same for the fleet under
+    // Config-archetype consistency.
+    if (auto& cfg = DriftstackArchetypeConfig::singleton(); cfg.isLoaded()) {
+        if (auto lang = cfg.lang(); !lang.isEmpty())
+            return { lang };
+    }
+#endif
     // We intentionally expose only the primary language for privacy reasons.
     return { defaultLanguage() };
 }
