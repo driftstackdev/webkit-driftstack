@@ -37,12 +37,6 @@
 #import <WebKit/WKWebViewConfigurationPrivate.h>
 #import <WebKit/WKWebsiteDataStorePrivate.h>
 #import <WebKit/WebKit.h>
-// Wave 29-397 H3.exec.5.B.3 — Driftstack JS-bridge.
-// PLATFORM() macro lives in WTF/Platform.h which MiniBrowser doesn't
-// include; this Tools build target compiles ONLY in the Driftstack fork
-// anyway (the .h is in WebKit framework which IS Driftstack-fork-only).
-// Runtime activation gated on DRIFTSTACK_JS_BRIDGE_ENABLED env.
-#import <WebKit/DriftstackJSBridgeMessageHandler.h>
 #import <WebKit/_WKFeature.h>
 #import <WebKit/_WKNotificationData.h>
 #import <WebKit/_WKProcessPoolConfiguration.h>
@@ -329,44 +323,6 @@ static NSNumber *_currentBadge;
 
         if (sForceSiteIsolationSetting)
             configuration.preferences._siteIsolationEnabled = sShouldEnableSiteIsolation;
-
-        // Wave 29-397 H3.exec.5.B.3: Driftstack JS-bridge wire-up.
-        //
-        // When the harness sets DRIFTSTACK_JS_BRIDGE_ENABLED=1 in the
-        // spawned MiniBrowser's env block, register a message handler
-        // + inject bridge.js into the "driftstack-bridge" WKContentWorld.
-        //
-        // Per CLAUDE.md "production builds have zero JS-level fingerprint
-        // modifications": the handler + bridge.js live in an isolated
-        // content world hidden from page-scope JS, so detection scripts
-        // running in pageWorld can't see window.driftstack or enumerate
-        // the message-handler name.
-        NSString *driftstackBridgeEnabled = NSProcessInfo.processInfo.environment[@"DRIFTSTACK_JS_BRIDGE_ENABLED"];
-        if ([driftstackBridgeEnabled isEqualToString:@"1"]) {
-            WKContentWorld *driftstackWorld = [WKContentWorld worldWithName:@"driftstack-bridge"];
-
-            DriftstackJSBridgeMessageHandler *handler = [[DriftstackJSBridgeMessageHandler alloc] init];
-            [configuration.userContentController addScriptMessageHandler:handler
-                                                              contentWorld:driftstackWorld
-                                                                      name:@"driftstackBridge"];
-
-            NSString *bridgeScriptPath = NSProcessInfo.processInfo.environment[@"DRIFTSTACK_JS_BRIDGE_SCRIPT_PATH"]
-                                          ?: @"/usr/local/etc/driftstack/bridge.js";
-            NSError *bridgeReadError = nil;
-            NSString *bridgeJS = [NSString stringWithContentsOfFile:bridgeScriptPath
-                                                            encoding:NSUTF8StringEncoding
-                                                               error:&bridgeReadError];
-            if (bridgeJS != nil) {
-                WKUserScript *bridgeScript = [[WKUserScript alloc] initWithSource:bridgeJS
-                                                                    injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-                                                                 forMainFrameOnly:NO
-                                                                   inContentWorld:driftstackWorld];
-                [configuration.userContentController addUserScript:bridgeScript];
-            } else {
-                NSLog(@"[Driftstack] JS-bridge enabled but bridge.js read failed at %@: %@",
-                      bridgeScriptPath, bridgeReadError);
-            }
-        }
     }
 
     configuration.suppressesIncrementalRendering = _settingsController.incrementalRenderingSuppressed;
