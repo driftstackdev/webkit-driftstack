@@ -137,15 +137,44 @@ std::atomic<bool> g_driftstackCustomSocks5Active { false };
         return;
     }
 
-    // Sub-slice 1.7.1 stops here. The TCP socket is established but not
-    // yet driven for HTTP. Sub-slice 1.7.2 wraps the socket FD in
-    // CFStream pair + sends HTTP/1.1 request bytes + reads response.
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] startLoading sub-slice 1.7.1 SUCCESS — handshake + tcpConnect to %s:%d via %s:%u (BND=%s:%u). HTTP/1.1 driving pending sub-slice 1.7.2.",
-        [host UTF8String], actualPort,
-        proxy.host.utf8().data(), unsigned(proxy.port),
-        bnd.host.utf8().data(), unsigned(bnd.port));
+    // Sub-slice 1.7.2.b: wrap established socket FD into CFStream pair.
+    int fd = client->socketFileDescriptor();
+    if (fd < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.b: socketFileDescriptor() returned -1 (no successful tcpConnect)");
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:nil]];
+        return;
+    }
+
+    CFReadStreamRef readStreamRef = NULL;
+    CFWriteStreamRef writeStreamRef = NULL;
+    CFStreamCreatePairWithSocket(kCFAllocatorDefault, static_cast<CFSocketNativeHandle>(fd), &readStreamRef, &writeStreamRef);
+    if (!readStreamRef || !writeStreamRef) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.b: CFStreamCreatePairWithSocket failed for fd=%d", fd);
+        if (readStreamRef) CFRelease(readStreamRef);
+        if (writeStreamRef) CFRelease(writeStreamRef);
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:nil]];
+        return;
+    }
+
+    // Don't let CFStream close the socket on dispose — DriftstackSocks5Client
+    // owns the FD via its Impl destructor.
+    CFReadStreamSetProperty(readStreamRef, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
+    CFWriteStreamSetProperty(writeStreamRef, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
+
+    // Sub-slice 1.7.2.b stops here. Streams are constructed but not yet
+    // opened/driven. Sub-slice 1.7.2.c serializes HTTP/1.1 request bytes
+    // + writes to writeStream + reads response from readStream. Sub-slice
+    // 1.7.2.d adds lifetime management via class ivars so the
+    // DriftstackSocks5Client outlives this function call.
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.b SUCCESS — CFStream pair constructed (fd=%d, read=%p, write=%p) for %s:%d via SOCKS5 proxy. HTTP/1.1 driving pending sub-slice 1.7.2.c.",
+        fd, (void*)readStreamRef, (void*)writeStreamRef, [host UTF8String], actualPort);
+
+    // Release streams locally (lifetime fix in sub-slice 1.7.2.d)
+    CFRelease(readStreamRef);
+    CFRelease(writeStreamRef);
+
     [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
-        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.1 — handshake + tcpConnect succeeded; HTTP/1.1 driving pending sub-slice 1.7.2",
+        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.b — CFStream pair constructed; HTTP/1.1 driving pending sub-slice 1.7.2.c",
     }]];
 }
 
