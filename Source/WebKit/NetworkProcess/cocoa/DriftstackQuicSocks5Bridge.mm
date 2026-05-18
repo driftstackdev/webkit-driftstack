@@ -84,20 +84,31 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
     return BridgeResult::Success;
 }
 
-BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t>, UnwrappedQuicPacket& out)
+BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQuicPacket& out)
 {
     if (!isCustomSocks5Active())
         return BridgeResult::Socks5Disabled;
 
-    static bool loggedOnce = false;
-    if (!loggedOnce) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] unwrapIncomingQuicPacket: Phase A scaffold — NotImplemented. Slice 16.6 will reuse DriftstackSocks5Client::unwrapUdpDatagram §7 helper.");
+    RetainPtr<NSData> frameData = adoptNS([[NSData alloc] initWithBytes:frame.data() length:frame.size()]);
+    Socks5Endpoint source;
+    RetainPtr<NSData> payload = DriftstackSocks5Client::unwrapUdpDatagram(frameData.get(), source);
+    if (!payload) {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] unwrapIncomingQuicPacket: §7 frame helper returned nil (protocol error)");
+        return BridgeResult::ProtocolError;
     }
-    out.sourceHost = String();
-    out.sourcePort = 0;
+
+    out.sourceHost = source.host;
+    out.sourcePort = source.port;
     out.payload.clear();
-    return BridgeResult::NotImplemented;
+    out.payload.append(WTF::span(payload.get()));
+
+    static bool loggedSuccessOnce = false;
+    if (!loggedSuccessOnce) {
+        loggedSuccessOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] unwrapIncomingQuicPacket: FIRST unwrap — src=%s:%u, %zu→%zu bytes (§7 helper reuse from Task #15)",
+            out.sourceHost.utf8().data(), out.sourcePort, frame.size(), out.payload.size());
+    }
+    return BridgeResult::Success;
 }
 
 RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t, nw_parameters_t)
