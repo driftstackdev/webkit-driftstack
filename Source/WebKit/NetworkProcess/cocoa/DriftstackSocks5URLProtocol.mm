@@ -109,11 +109,15 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"])
         return NO;
 
-    // Currently startLoading returns error → setting return YES here
-    // would break HTTPS requests when env-gate set. Keep gate dormant
-    // (return NO) until -startLoading impl lands sub-slices 1.7-1.8.
-    // The flag-check itself is the wiring scaffold being verified this slice.
-    return NO;
+    // Wave 29-396 sub-slice 1.9.b: ACTIVATE — claim the request for
+    // SOCKS5 transport via DriftstackSocks5Client.
+    // Phase B sub-slices 1.7.0/.1/.2.a-e + 1.8 implemented -startLoading
+    // for HTTP + HTTPS. Flag-gate prevents activation in cumrig context.
+    //
+    // If production hits a bug here, every HTTP/HTTPS request in a flag-set
+    // session fails. Revert path: clear flag in NetworkSessionCocoa OR
+    // unset DRIFTSTACK_CUSTOM_SOCKS5 env at session start.
+    return YES;
 }
 
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request
