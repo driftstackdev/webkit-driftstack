@@ -26,6 +26,10 @@
 #import "config.h"
 #import "NetworkSessionCocoa.h"
 
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackSocks5URLProtocol.h"
+#endif
+
 #import "AppStoreDaemonSPI.h"
 #import "AuthenticationChallengeDisposition.h"
 #import "AuthenticationManager.h"
@@ -1284,10 +1288,19 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         bool customRequested = customEnv && customEnv[0] == '1';
         bool envFallbackSOCKS5 = !perSessionSOCKS5 && getenv("DRIFTSTACK_SOCKS5_PROXY") && getenv("DRIFTSTACK_SOCKS5_PROXY")[0];
         if (customRequested && (perSessionSOCKS5 || envFallbackSOCKS5)) {
+            // Wave 29-396 sub-slice 1.6: set the global dispatch flag that
+            // WKDriftstackSocks5URLProtocol::+canInitWithRequest reads.
+            // Coarse-grained per Phase B impl plan Wave 29-388.B Slice B.1
+            // Approach A (single-customer NetworkProcess deployment ⇒
+            // coarseness OK). The protocol's startLoading still returns
+            // error (sub-slices 1.7-1.8 pending) so canInitWithRequest
+            // ALSO returns NO post-flag-check — flag setting is the
+            // scaffold this slice verifies + commits.
+            WebKit::g_driftstackCustomSocks5Active.store(true, std::memory_order_relaxed);
             static bool loggedOnceCustom = false;
             if (!loggedOnceCustom) {
                 loggedOnceCustom = true;
-                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 recognized — DriftstackSocks5Client protocol impl complete (Wave 29-368/29-375/29-379) but dispatch wiring not yet active. CFNetwork SOCKS5 path remains the transport this session. ATYP=0x03 + UDP ASSOCIATE will activate when Wave 29-386+ NSURLProtocol subclass lands.");
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 recognized — g_driftstackCustomSocks5Active flag SET (Wave 29-396 sub-slice 1.6). DriftstackSocks5Client protocol-complete; -startLoading HTTP driving pending sub-slices 1.7-1.8.");
             }
         }
     }

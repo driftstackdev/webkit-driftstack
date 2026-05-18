@@ -42,8 +42,25 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <Foundation/Foundation.h>
+#include <atomic>
 
 NS_ASSUME_NONNULL_BEGIN
+
+namespace WebKit {
+
+// Wave 29-396 sub-slice 1.6: global dispatch flag set by
+// NetworkSessionCocoa::NetworkSessionCocoa() when both
+// DRIFTSTACK_CUSTOM_SOCKS5=1 AND SOCKS5 is active for ANY session in
+// the NetworkProcess. WKDriftstackSocks5URLProtocol::+canInitWithRequest
+// reads this flag to gate dispatch.
+//
+// Approach A (coarse global, v1.0 acceptable per Phase B impl plan
+// Wave 29-388.B Slice B.1): single-customer NetworkProcess deployment
+// means coarseness doesn't matter — when ANY session has env-gate set,
+// ALL HTTP/HTTPS requests in the process get intercepted.
+extern std::atomic<bool> g_driftstackCustomSocks5Active;
+
+} // namespace WebKit
 
 @interface WKDriftstackSocks5URLProtocol : NSURLProtocol
 @end

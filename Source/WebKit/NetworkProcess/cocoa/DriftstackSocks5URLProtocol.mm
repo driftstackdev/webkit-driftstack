@@ -15,17 +15,46 @@
 
 #import <wtf/Assertions.h>
 
+namespace WebKit {
+// Wave 29-396 sub-slice 1.6: global dispatch flag definition.
+std::atomic<bool> g_driftstackCustomSocks5Active { false };
+} // namespace WebKit
+
 @implementation WKDriftstackSocks5URLProtocol
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request
 {
-    // Phase A: dispatch dormant. Wave 29-387+ Phase B will return YES when
-    // DRIFTSTACK_CUSTOM_SOCKS5=1 + SOCKS5 config active. For now: leave the
-    // CFNetwork SOCKS5 path (Wave 29-366) as the actual transport.
+    // Wave 29-396 sub-slice 1.6: Phase B dispatch gate.
+    // Returns YES iff:
+    //   1. WebKit::g_driftstackCustomSocks5Active flag set by
+    //      NetworkSessionCocoa (when DRIFTSTACK_CUSTOM_SOCKS5=1 + SOCKS5
+    //      active for session), AND
+    //   2. Request URL scheme is http or https (skip ws/wss/file/etc.)
+    //
+    // -startLoading still TODO sub-slices 1.7-1.8 (HTTP/HTTPS driving
+    // through DriftstackSocks5Client established TCP socket). Until those
+    // land, this gate returns NO unconditionally because the flag is
+    // never set in dev/cumrig (only when explicit DRIFTSTACK_CUSTOM_SOCKS5=1
+    // env is wired through to NetworkSessionCocoa).
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] WKDriftstackSocks5URLProtocol class loaded — Phase A scaffold (canInitWithRequest always NO). Phase B impl pending Wave 29-387+.");
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] WKDriftstackSocks5URLProtocol class loaded — gate set on g_driftstackCustomSocks5Active flag (Wave 29-396 sub-slice 1.6).");
     });
+
+    if (!WebKit::g_driftstackCustomSocks5Active.load(std::memory_order_relaxed))
+        return NO;
+
+    // Only intercept HTTP/HTTPS. WebSocket (ws/wss) has its own
+    // NSURLProtocol subclass; file/data/blob schemes don't need SOCKS5.
+    NSURL *url = request.URL;
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"])
+        return NO;
+
+    // Currently startLoading returns error → setting return YES here
+    // would break HTTPS requests when env-gate set. Keep gate dormant
+    // (return NO) until -startLoading impl lands sub-slices 1.7-1.8.
+    // The flag-check itself is the wiring scaffold being verified this slice.
     return NO;
 }
 
