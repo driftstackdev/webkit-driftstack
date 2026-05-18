@@ -300,6 +300,7 @@
 		0FF264A01A1FF9CC001FE759 /* RemoteLayerTreeScrollingPerformanceData.h in Headers */ = {isa = PBXBuildFile; fileRef = 0F707C791A1FEEA300DA7A45 /* RemoteLayerTreeScrollingPerformanceData.h */; };
 		0FFED98E23A3200A00EEF459 /* WKWebViewIOS.h in Headers */ = {isa = PBXBuildFile; fileRef = 0FFED98C23A3200400EEF459 /* WKWebViewIOS.h */; };
 		0FFED99323A3203D00EEF459 /* WKWebViewMac.h in Headers */ = {isa = PBXBuildFile; fileRef = 0FFED99023A3203800EEF459 /* WKWebViewMac.h */; };
+		129328E664D4585A00989924 /* DriftstackSocks5Framing.h in Headers */ = {isa = PBXBuildFile; fileRef = 92DC7F1DF4B96C8E6CE08FE3 /* DriftstackSocks5Framing.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		15739BBD1B42042D00D258C1 /* WebUserMediaClient.h in Headers */ = {isa = PBXBuildFile; fileRef = 4A410F4919AF7B80002EBAB5 /* WebUserMediaClient.h */; };
 		1A002D43196B337000B9AD44 /* _WKSessionStateInternal.h in Headers */ = {isa = PBXBuildFile; fileRef = 1A002D42196B337000B9AD44 /* _WKSessionStateInternal.h */; };
 		1A002D44196B338900B9AD44 /* _WKSessionState.h in Headers */ = {isa = PBXBuildFile; fileRef = 1A002D3F196B329400B9AD44 /* _WKSessionState.h */; settings = {ATTRIBUTES = (Private, ); }; };
@@ -2278,6 +2279,7 @@
 		BCF69FA21176D01400471A52 /* APINavigationData.h in Headers */ = {isa = PBXBuildFile; fileRef = BCF69FA01176D01400471A52 /* APINavigationData.h */; };
 		BCF69FA91176D1CB00471A52 /* WKNavigationDataRef.h in Headers */ = {isa = PBXBuildFile; fileRef = BCF69FA71176D1CB00471A52 /* WKNavigationDataRef.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		BCFD548C132D82680055D816 /* WKErrorCF.h in Headers */ = {isa = PBXBuildFile; fileRef = BCFD548A132D82680055D816 /* WKErrorCF.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		BECD9DCF6611CAC5388DA908 /* DriftstackSocks5Framing.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E594D1C4084C8445DB0DBD4 /* DriftstackSocks5Framing.mm */; };
 		BFA6179F12F0B99D0033E0CA /* WKViewPrivate.h in Headers */ = {isa = PBXBuildFile; fileRef = BFA6179E12F0B99D0033E0CA /* WKViewPrivate.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		C09AE5E9125257C20025825D /* WKNativeEvent.h in Headers */ = {isa = PBXBuildFile; fileRef = C09AE5E8125257C20025825D /* WKNativeEvent.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		C0CE72A11247E71D00BC0EC4 /* WebPageMessages.h in Headers */ = {isa = PBXBuildFile; fileRef = C0CE729F1247E71D00BC0EC4 /* WebPageMessages.h */; };
@@ -5917,6 +5919,7 @@
 		4A410F4819AF7B80002EBAB5 /* WebUserMediaClient.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = WebUserMediaClient.cpp; sourceTree = "<group>"; };
 		4A410F4919AF7B80002EBAB5 /* WebUserMediaClient.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WebUserMediaClient.h; sourceTree = "<group>"; };
 		4CAECB5E27465AE300AB78D0 /* UnifiedSource114.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = UnifiedSource114.cpp; sourceTree = "<group>"; };
+		4E594D1C4084C8445DB0DBD4 /* DriftstackSocks5Framing.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5Framing.mm; sourceTree = "<group>"; };
 		4EA3DEF0CFED4A13AF0C72B2 /* DriftstackQuicSocks5Bridge.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackQuicSocks5Bridge.h; sourceTree = "<group>"; };
 		4F601430155C5A32001FBDE0 /* BlockingResponseMap.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = BlockingResponseMap.h; sourceTree = "<group>"; };
 		51021E9B12B16788005C033C /* WebContextMenuClientMac.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = WebContextMenuClientMac.mm; sourceTree = "<group>"; };
@@ -7344,6 +7347,7 @@
 		9197940723DBC4CA00257892 /* WebPageInspectorAgentBase.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WebPageInspectorAgentBase.h; sourceTree = "<group>"; };
 		9197940923DBC4E000257892 /* APIInspectorClient.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = APIInspectorClient.h; sourceTree = "<group>"; };
 		9197940B23DBC50300257892 /* _WKInspectorDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = _WKInspectorDelegate.h; sourceTree = "<group>"; };
+		92DC7F1DF4B96C8E6CE08FE3 /* DriftstackSocks5Framing.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackSocks5Framing.h; sourceTree = "<group>"; };
 		93085DBA26E152C2000EC6A7 /* WebStorageProvider.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WebStorageProvider.h; sourceTree = "<group>"; };
 		93085DBB26E172F9000EC6A7 /* WebStorageConnection.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WebStorageConnection.h; sourceTree = "<group>"; };
 		93085DBC26E174ED000EC6A7 /* WebStorageConnection.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = WebStorageConnection.cpp; sourceTree = "<group>"; };
@@ -15073,6 +15077,8 @@
 				A44EE557C4628AC28EB60E99 /* DriftstackSocks5URLProtocol.mm */,
 				4EA3DEF0CFED4A13AF0C72B2 /* DriftstackQuicSocks5Bridge.h */,
 				C6287140BBAF446B8227BBCF /* DriftstackQuicSocks5Bridge.mm */,
+				92DC7F1DF4B96C8E6CE08FE3 /* DriftstackSocks5Framing.h */,
+				4E594D1C4084C8445DB0DBD4 /* DriftstackSocks5Framing.mm */,
 			);
 			path = cocoa;
 			sourceTree = "<group>";
@@ -19677,6 +19683,7 @@
 				F2B1BC7F0A4B22155AA524E7 /* DriftstackSocks5URLProtocol.h in Headers */,
 				4E5667922B921FEF7AD09725 /* DriftstackRTCSocks5Bridge.h in Headers */,
 				7D525F9D016FE515082C3193 /* DriftstackQuicSocks5Bridge.h in Headers */,
+				129328E664D4585A00989924 /* DriftstackSocks5Framing.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -22331,6 +22338,7 @@
 				DE7ED8486B859B9E5DF84AA2 /* DriftstackSocks5URLProtocol.mm in Sources */,
 				1C875D600C06BCB2CB948D7D /* DriftstackRTCSocks5Bridge.mm in Sources */,
 				D3A6EA9A69CC436EC0A6B1A2 /* DriftstackQuicSocks5Bridge.mm in Sources */,
+				BECD9DCF6611CAC5388DA908 /* DriftstackSocks5Framing.mm in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -17,6 +17,8 @@
 #import "config.h"
 #import "DriftstackSocks5Client.h"
 
+#import "DriftstackSocks5Framing.h"
+
 #if PLATFORM(DRIFTSTACK)
 
 #import <arpa/inet.h>
@@ -25,6 +27,7 @@
 #import <sys/socket.h>
 #import <unistd.h>
 #import <wtf/Assertions.h>
+#import <wtf/cocoa/SpanCocoa.h>
 #import <wtf/text/MakeString.h>
 
 namespace WebKit {
@@ -363,89 +366,34 @@ RetainPtr<NSOutputStream> DriftstackSocks5Client::tcpWriteStream() const
     return m_impl->writeStream;
 }
 
+// Wave 29-397 Slice 16.4.b.3: §7 framing now delegated to
+// DriftstackSocks5Framing (pure-byte API, no Cocoa types). The methods
+// below are thin Cocoa adaptors that convert NSData ↔ Vector + Socks5-
+// Endpoint ↔ Socks5Framing::Endpoint. The shared framing module is
+// designed to be re-compilable by the (future) DriftstackQuicInterpose
+// dylib without pulling in WebKit framework dependencies.
 RetainPtr<NSData> DriftstackSocks5Client::wrapUdpDatagram(const Socks5Endpoint& destination, NSData* payload)
 {
-    // RFC 1928 §7: [RSV 2][FRAG 1][ATYP 1][DST.ADDR var][DST.PORT 2][DATA var]
-    // We always use ATYP=0x03 (domain) for outbound UDP per EG-WK-1.9 default.
-    auto domainUtf8 = destination.host.utf8();
-    if (domainUtf8.length() > 255) {
-        WTFLogAlways("[Driftstack-EG-WK-1.8] wrapUdpDatagram domain too long (%zu > 255 bytes)", domainUtf8.length());
+    Socks5Framing::Endpoint framingDest { destination.host, destination.port };
+    Vector<uint8_t> frameBytes;
+    if (!Socks5Framing::wrap(framingDest, WTF::span(payload), frameBytes)) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8] wrapUdpDatagram failed (Socks5Framing::wrap returned false)");
         return nullptr;
     }
-
-    NSMutableData* frame = [NSMutableData dataWithCapacity:7 + domainUtf8.length() + (payload ? [payload length] : 0)];
-    uint8_t header[4] = {
-        Socks5::kReserved, Socks5::kReserved,  // RSV
-        0x00,                                    // FRAG (no fragmentation in v1)
-        Socks5::kAtypDomain                      // ATYP=0x03
-    };
-    [frame appendBytes:header length:4];
-
-    uint8_t domainLen = static_cast<uint8_t>(domainUtf8.length());
-    [frame appendBytes:&domainLen length:1];
-    [frame appendBytes:domainUtf8.data() length:domainUtf8.length()];
-
-    uint16_t portNetOrder = htons(destination.port);
-    [frame appendBytes:&portNetOrder length:2];
-
-    if (payload && [payload length])
-        [frame appendData:payload];
-
-    return frame;
+    return [NSData dataWithBytes:frameBytes.span().data() length:frameBytes.size()];
 }
-
-// RFC 1928 §7 frame parser. Self-contained; bounds-checked via explicit
-// span access. Returns parsed payload + populates outSource. Returns nullptr
-// on protocol or size error.
-WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-static RetainPtr<NSData> parseUdpFrame(NSData* frame, Socks5Endpoint& outSource)
-{
-    if (!frame || [frame length] < 7)
-        return nullptr;
-
-    NSUInteger len = [frame length];
-    const uint8_t* bytes = static_cast<const uint8_t*>([frame bytes]);
-
-    // bytes[0..1] RSV; bytes[2] FRAG; bytes[3] ATYP.
-    if (bytes[2] != 0x00)
-        return nullptr;  // v1 doesn't reassemble fragmented datagrams.
-
-    uint8_t atyp = bytes[3];
-    NSUInteger cursor = 4;
-
-    if (atyp == Socks5::kAtypDomain) {
-        if (cursor + 1 > len) return nullptr;
-        uint8_t domainLen = bytes[cursor++];
-        if (cursor + domainLen + 2 > len) return nullptr;
-        outSource.host = String::fromUTF8(unsafeMakeSpan(bytes + cursor, static_cast<size_t>(domainLen)));
-        cursor += domainLen;
-    } else if (atyp == Socks5::kAtypIpv4) {
-        if (cursor + 4 + 2 > len) return nullptr;
-        outSource.host = makeString(
-            unsigned(bytes[cursor]), '.',
-            unsigned(bytes[cursor + 1]), '.',
-            unsigned(bytes[cursor + 2]), '.',
-            unsigned(bytes[cursor + 3]));
-        cursor += 4;
-    } else if (atyp == Socks5::kAtypIpv6) {
-        if (cursor + 16 + 2 > len) return nullptr;
-        outSource.host = "[ipv6]"_s;
-        cursor += 16;
-    } else
-        return nullptr;
-
-    uint16_t portNetOrder = (static_cast<uint16_t>(bytes[cursor]) << 8) | bytes[cursor + 1];
-    outSource.port = ntohs(portNetOrder);
-    cursor += 2;
-
-    if (cursor > len) return nullptr;
-    return [NSData dataWithBytes:(bytes + cursor) length:(len - cursor)];
-}
-WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 RetainPtr<NSData> DriftstackSocks5Client::unwrapUdpDatagram(NSData* frame, Socks5Endpoint& source)
 {
-    return parseUdpFrame(frame, source);
+    if (!frame || ![frame length])
+        return nullptr;
+    Socks5Framing::Endpoint framingSource;
+    Vector<uint8_t> payloadBytes;
+    if (!Socks5Framing::unwrap(WTF::span(frame), framingSource, payloadBytes))
+        return nullptr;
+    source.host = framingSource.host;
+    source.port = framingSource.port;
+    return [NSData dataWithBytes:payloadBytes.span().data() length:payloadBytes.size()];
 }
 
 } // namespace WebKit
