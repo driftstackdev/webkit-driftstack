@@ -319,10 +319,27 @@ void NetworkRTCProvider::createUDPSocket(LibWebRTCSocketIdentifier identifier, c
             establishOkOnce = true;
             WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: relay channel READY at socket-creation time — relay=%s:%u. Slice 2.6 will redirect nw_connection destination to this endpoint.",
                 channel.relayHost.utf8().data(), channel.relayPort);
-        } else if (r != DriftstackRTC::BridgeResult::Success && !establishLoggedOnce) {
-            establishLoggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: relay channel establish FAILED at socket-creation time (result=%d). WebRTC will continue via direct nw_connection (LEAK). Verify gost/SOCKS5 proxy reachable at DRIFTSTACK_SOCKS5_PROXY.",
-                static_cast<int>(r));
+        } else if (r != DriftstackRTC::BridgeResult::Success) {
+            if (!establishLoggedOnce) {
+                establishLoggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: relay channel establish FAILED at socket-creation time (result=%d). Verify gost/SOCKS5 proxy reachable at DRIFTSTACK_SOCKS5_PROXY.",
+                    static_cast<int>(r));
+            }
+            // Wave 29-397 Slice 2.5.b: hard-block WebRTC UDP socket creation
+            // when DRIFTSTACK_REQUIRE_PROXY=1 + relay channel unavailable.
+            // Replaces fall-through-with-leak behavior. signalSocketIsClosed
+            // surfaces the failure to libwebrtc which gracefully terminates
+            // the peer-connection negotiation (better than leaking direct
+            // UDP). When DRIFTSTACK_REQUIRE_PROXY is unset, legacy fall-
+            // through path remains for debugging without the egress lock.
+            const char* requireProxy = getenv("DRIFTSTACK_REQUIRE_PROXY");
+            if (requireProxy && requireProxy[0] == '1') {
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: DRIFTSTACK_REQUIRE_PROXY=1 + relay unavailable → HARD-BLOCK socket creation (id=%" PRIu64 "). libwebrtc will fail this candidate gracefully.",
+                    identifier.toUInt64());
+                signalSocketIsClosed(identifier);
+                return;
+            }
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: DRIFTSTACK_REQUIRE_PROXY unset — falling through to direct nw_connection (LEAK ALLOWED for debugging). Set DRIFTSTACK_REQUIRE_PROXY=1 to enforce egress lock.");
         }
     } else {
         // Legacy Wave 29-383 observability when DRIFTSTACK_CUSTOM_SOCKS5
