@@ -155,18 +155,21 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
         // canonical for runtime-determined surface).
         if (!result.hasException()) {
             auto estimate = result.returnValue();
-            // Slice 245.3 + Wave 29-389.D (Config singleton migration):
-            // 3-layer resolution priority for archetype-specific storage quota:
-            //   1. DriftstackArchetypeConfig::singleton().storageQuotaBytes()
-            //      if valid + non-zero (Phase 2 archetype JSON)
-            //   2. DRIFTSTACK_STORAGE_QUOTA_BYTES env-var (Wave 29-246 path,
-            //      back-compat)
-            //   3. V-072 halving fallback (Mac disk size / 2)
+            // Wave 29-396 sub-slice 3.3: instrumentation — log inbound
+            // estimate.quota (raw Mac quota before Driftstack override).
+            // Investigates where 2147483647 (INT_MAX 32-bit) clamping
+            // observed in Wave 29-395.B retry comes from.
+            WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: INBOUND estimate.quota=%llu usage=%llu",
+                static_cast<unsigned long long>(estimate.quota),
+                static_cast<unsigned long long>(estimate.usage));
+
             bool resolved = false;
             {
                 auto& cfg = DriftstackArchetypeConfig::singleton();
                 if (cfg.isValid()) {
                     uint64_t q = cfg.storageQuotaBytes();
+                    WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: Config.storageQuotaBytes()=%llu (Config.isValid=%d)",
+                        static_cast<unsigned long long>(q), cfg.isValid());
                     if (q > 0) {
                         estimate.quota = q;
                         resolved = true;
@@ -179,11 +182,19 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
                     if (parsed && *parsed > 0) {
                         estimate.quota = *parsed;
                         resolved = true;
+                        WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: env DRIFTSTACK_STORAGE_QUOTA_BYTES=%llu", static_cast<unsigned long long>(*parsed));
                     }
                 }
             }
-            if (!resolved)
-                estimate.quota = estimate.quota / 2;
+            if (!resolved) {
+                uint64_t halved = estimate.quota / 2;
+                WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: V-072 halving fallback %llu → %llu",
+                    static_cast<unsigned long long>(estimate.quota),
+                    static_cast<unsigned long long>(halved));
+                estimate.quota = halved;
+            }
+            WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: OUTBOUND estimate.quota=%llu (resolved=%d)",
+                static_cast<unsigned long long>(estimate.quota), resolved);
             estimate.usage = 0;
             promise.resolve(estimate);
             return;
