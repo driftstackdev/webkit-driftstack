@@ -37,9 +37,12 @@
 #import <WebKit/WKWebViewConfigurationPrivate.h>
 #import <WebKit/WKWebsiteDataStorePrivate.h>
 #import <WebKit/WebKit.h>
-#if PLATFORM(DRIFTSTACK)
+// Wave 29-397 H3.exec.5.B.3 — Driftstack JS-bridge.
+// PLATFORM() macro lives in WTF/Platform.h which MiniBrowser doesn't
+// include; this Tools build target compiles ONLY in the Driftstack fork
+// anyway (the .h is in WebKit framework which IS Driftstack-fork-only).
+// Runtime activation gated on DRIFTSTACK_JS_BRIDGE_ENABLED env.
 #import <WebKit/DriftstackJSBridgeMessageHandler.h>
-#endif
 #import <WebKit/_WKFeature.h>
 #import <WebKit/_WKNotificationData.h>
 #import <WebKit/_WKProcessPoolConfiguration.h>
@@ -327,7 +330,6 @@ static NSNumber *_currentBadge;
         if (sForceSiteIsolationSetting)
             configuration.preferences._siteIsolationEnabled = sShouldEnableSiteIsolation;
 
-#if PLATFORM(DRIFTSTACK)
         // Wave 29-397 H3.exec.5.B.3: Driftstack JS-bridge wire-up.
         //
         // When the harness sets DRIFTSTACK_JS_BRIDGE_ENABLED=1 in the
@@ -365,7 +367,6 @@ static NSNumber *_currentBadge;
                       bridgeScriptPath, bridgeReadError);
             }
         }
-#endif
     }
 
     configuration.suppressesIncrementalRendering = _settingsController.incrementalRenderingSuppressed;
