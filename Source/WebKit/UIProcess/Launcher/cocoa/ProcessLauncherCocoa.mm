@@ -513,6 +513,50 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             if (kv.value)
                 xpc_dictionary_set_string(containerEnvironmentVariables.get(), kv.name, kv.value);
         }
+        // Wave 29-397 Slice 16.4.b.5: DYLD_INSERT_LIBRARIES injection for the
+        // (future) DriftstackQuicInterpose dylib. When DRIFTSTACK_CUSTOM_SOCKS5=1
+        // AND the dylib is built + present at the expected path, append it to
+        // the child process's DYLD_INSERT_LIBRARIES so dyld processes its
+        // __DATA,__interpose section BEFORE CFNetwork loads. This rewires
+        // nw_connection_create globally for the NetworkProcess binary (Slice
+        // 16.4.b.6 will populate the dylib's createRelayConnectionForQuic
+        // body).
+        //
+        // Current state (Wave 29-397 close): dylib target NOT YET in
+        // xcodeproj — Slice 16.4.b.3 source skeleton + Slice 16.4.b.4
+        // parametersUseQuic inspector are in the WebKit framework binary,
+        // but the standalone dylib target needs Xcode project surgery
+        // (separate atomic slice 16.4.b.5.b). This injection code lands
+        // NOW + remains DORMANT until the dylib path exists; the
+        // conditional file-exists check below ensures no harm to current
+        // builds.
+        const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+        if (customSocks5 && customSocks5[0] == '1') {
+            // Probe for the dylib at the standard build product location.
+            // Path is constructed from the WebKit build dir + the dylib
+            // target name (DriftstackQuicInterpose); when Slice 16.4.b.5.b
+            // adds the target, the dylib lands here.
+            const char* dylibPath = "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib";
+            if (access(dylibPath, R_OK) == 0) {
+                const char* existing = getenv("DYLD_INSERT_LIBRARIES");
+                String combined;
+                if (existing && existing[0])
+                    combined = makeString(StringView::fromLatin1(existing), ':', StringView::fromLatin1(dylibPath));
+                else
+                    combined = String::fromUTF8(dylibPath);
+                xpc_dictionary_set_string(containerEnvironmentVariables.get(),
+                    "DYLD_INSERT_LIBRARIES", combined.utf8().data());
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] ProcessLauncher: DYLD_INSERT_LIBRARIES injected — %s",
+                    dylibPath);
+            } else {
+                static bool loggedAbsenceOnce = false;
+                if (!loggedAbsenceOnce) {
+                    loggedAbsenceOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] ProcessLauncher: DRIFTSTACK_CUSTOM_SOCKS5=1 but %s missing — Slice 16.4.b.5.b dylib target not yet built; QUIC interpose dormant",
+                        dylibPath);
+                }
+            }
+        }
 #endif
         xpc_dictionary_set_value(bootstrapMessage.get(), "ContainerEnvironmentVariables", containerEnvironmentVariables.get());
     }
