@@ -29,6 +29,28 @@ bool isCustomSocks5Active()
         && socks5Proxy && socks5Proxy[0];
 }
 
+bool endpointToHostPort(nw_endpoint_t endpoint, String& outHost, uint16_t& outPort)
+{
+    if (!endpoint)
+        return false;
+    nw_endpoint_type_t type = nw_endpoint_get_type(endpoint);
+    if (type != nw_endpoint_type_host && type != nw_endpoint_type_url)
+        return false; // IP-form endpoint — caller uses Socks5Endpoint with IP literal
+    const char* hostname = nw_endpoint_get_hostname(endpoint);
+    if (!hostname || !hostname[0])
+        return false;
+    outHost = String::fromUTF8(hostname);
+    outPort = nw_endpoint_get_port(endpoint);
+
+    static bool loggedOnce = false;
+    if (!loggedOnce && isCustomSocks5Active()) {
+        loggedOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] endpointToHostPort: FIRST hostname extract — '%s':%u. Slice 16.4/16.4.b call sites pass this to wrapOutgoingQuicPacket for ATYP=0x03 framing.",
+            hostname, static_cast<unsigned>(outPort));
+    }
+    return true;
+}
+
 // Slice 16.4.b interpose gate. Inspect nw_parameters protocol stack —
 // return true if QUIC is configured anywhere in the layers. Phase A
 // scaffold inspects via nw_parameters_copy_default_protocol_stack +

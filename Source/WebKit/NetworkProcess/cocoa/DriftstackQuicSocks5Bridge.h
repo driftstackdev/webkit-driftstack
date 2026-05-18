@@ -102,6 +102,18 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
 // set. Shares the SharedRelayState singleton with Task #15.
 bool isCustomSocks5Active();
 
+// Slice 16.8: extract hostname + port from an nw_endpoint for §7
+// ATYP=0x03 framing. Unlike Task #15 WebRTC (where libwebrtc passes
+// pre-resolved peer IPs from STUN), QUIC integration sees the original
+// hostname in the nw_endpoint from nw_endpoint_create_url. ATYP=0x03
+// domain framing can use that hostname directly — no sentinel-IP
+// trick required for the WebTransport intercept path.
+//
+// Returns true on hostname-form endpoint (sets out_host + out_port);
+// false on IP-form endpoint (caller falls back to ATYP=0x01 / 0x04 via
+// Socks5Endpoint with IP host string).
+bool endpointToHostPort(nw_endpoint_t endpoint, String& outHost, uint16_t& outPort);
+
 } // namespace DriftstackQuic
 
 } // namespace WebKit
