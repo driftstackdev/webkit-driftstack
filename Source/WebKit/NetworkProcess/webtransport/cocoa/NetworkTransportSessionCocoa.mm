@@ -34,6 +34,9 @@
 #import "NetworkSessionCocoa.h"
 #import "NetworkTransportStream.h"
 #import "WebTransportSessionMessages.h"
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackQuicSocks5Bridge.h"
+#endif
 #import <Security/Security.h>
 #import <WebCore/AuthenticationChallenge.h>
 #import <WebCore/ClientOrigin.h>
@@ -279,6 +282,31 @@ RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectio
         ASSERT_NOT_REACHED();
         return nullptr;
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 Slice 16.4 — Task #16 EG-WK-1.10 WebTransport hook.
+    // When DRIFTSTACK_CUSTOM_SOCKS5=1, attempt to bind a relay-routed
+    // nw_connection instead of the bare nw_connection_group. Phase A
+    // scaffold (Slice 16.3) returns nullptr from createRelayConnection-
+    // ForQuic; Slices 16.5-16.8 wire actual SOCKS5 UDP ASSOCIATE routing
+    // via Task #15 SharedRelayState singleton reuse.
+    //
+    // Fall-through when bridge returns nullptr: legacy nw_connection_
+    // group_create path runs (direct UDP — fingerprint-coherence leak
+    // surface until Slice 16.4 hard-binds the relay). This atomic slice
+    // ESTABLISHES the hook point; behavior change lands in Slice 16.5+.
+    if (DriftstackQuic::isCustomSocks5Active()) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: bridge ACTIVE — Slice 16.4 hook point reached. Phase A scaffold returns nullptr → falling through to direct nw_connection_group_create (LEAK). Slice 16.5-16.8 will bind the SOCKS5 relay routing.");
+        }
+        // Phase A: createRelayConnectionForQuic returns nullptr; fall
+        // through. Future slices will use the returned relay connection
+        // in place of the connectionGroup-derived datagram channel.
+        (void)DriftstackQuic::createRelayConnectionForQuic(endpoint.get(), parameters.get());
+    }
+#endif
 
     RetainPtr connectionGroup = adoptNS(nw_connection_group_create(groupDescriptor.get(), parameters.get()));
     if (!connectionGroup) {
