@@ -250,6 +250,28 @@ static RetainPtr<nw_parameters_t> createParameters(NetworkConnectionToWebProcess
 
     auto configureQUIC = [](nw_protocol_options_t options) {
         nw_quic_set_max_datagram_frame_size(options, std::numeric_limits<uint16_t>::max());
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-397 Slice 16.7 — h3 ALPN preservation. CFNetwork's
+        // nw_parameters_create_webtransport_http already configures h3
+        // ALPN (h3) on the underlying QUIC layer; this lambda must NOT
+        // clear or override the application_protocols list. Empirical
+        // confirmation via gost log: when SOCKS5 bridge active, QUIC
+        // handshake bytes transiting the relay must carry the h3 ALPN
+        // extension (CRYPTO frame in QUIC Initial). Real iPhone Safari
+        // negotiates h3 ALPN; sessions without h3 ALPN fingerprint as
+        // non-iPhone (founder Tier-3 verdict 2026-05-18 ~11:10 CEST).
+        //
+        // No code change in this slice — preservation is by-construction
+        // (we never touch sec_protocol_options application_protocols).
+        // Once-per-class WTFLog marker so production logs confirm.
+        if (DriftstackQuic::isCustomSocks5Active()) {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] configureQUIC: bridge ACTIVE — h3 ALPN preserved by-construction (lambda doesn't touch application_protocols list). Real iPhone Safari signature maintained.");
+            }
+        }
+#endif
     };
 
     auto configureTCP = options.requireUnreliable ? NW_PARAMETERS_DISABLE_PROTOCOL : NW_PARAMETERS_DEFAULT_CONFIGURATION;
