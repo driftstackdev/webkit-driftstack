@@ -558,43 +558,62 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
         return;
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-397 Slice 2.4: send-side SOCKS5 wrap-validation hook.
-    // When DRIFTSTACK_CUSTOM_SOCKS5=1 + DRIFTSTACK_SOCKS5_PROXY set,
-    // exercise the bridge's wrap path to validate end-to-end framing
-    // without yet redirecting the datagram destination (that's Slice
-    // 2.5's PacketSocketFactory hook). Logs SUCCESS / failure under
-    // [Driftstack-EG-WK-1.8/Task#15] tag so production logs reveal
-    // bridge-correctness coverage. Datagram still flows direct via
-    // nw_connection_send — Slice 2.5 activates the actual redirect.
+    // Wave 29-397 Slice 2.4.b.3: data-plane SOCKS5 redirect. When the
+    // bridge is active + relay channel established, the datagram is
+    // §7-wrapped and sent through m_relayConnection (single nw_connection
+    // bound to SOCKS5 BND.ADDR:BND.PORT) instead of the per-peer
+    // m_nwConnections map. The Mac fleet IP is replaced by the relay's
+    // local-side endpoint on the wire — actual SOCKS5 routing.
+    //
+    // Replaces Slice 2.4's wrap-validate-but-still-send-direct behavior.
+    // Falls through to legacy per-peer path only when:
+    //   - bridge inactive (DRIFTSTACK_CUSTOM_SOCKS5 != 1), OR
+    //   - relay establish failed AND DRIFTSTACK_REQUIRE_PROXY != 1
+    //     (Slice 2.5.b hard-blocks REQUIRE_PROXY=1 at createUDPSocket
+    //     time so this fall-through should be unreachable in that mode).
     if (DriftstackRTC::isCustomSocks5Active()) {
-        static bool relayEstablished = false;
-        static bool loggedEstablishOnce = false;
-        if (!relayEstablished) {
-            DriftstackRTC::RelayChannel channel;
-            DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
-            if (r == DriftstackRTC::BridgeResult::Success) {
-                relayEstablished = true;
-            } else if (!loggedEstablishOnce) {
-                loggedEstablishOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: relay establish failed (result=%d) — falling through to direct nw_connection; WebRTC will leak until proxy reachable",
-                    static_cast<int>(r));
+        bool relayReady;
+        RetainPtr<nw_connection_t> relayConn;
+        RefPtr<ConnectionStateTracker> relayTracker;
+        {
+            Locker locker { m_nwConnectionsLock };
+            relayReady = ensureRelayConnection();
+            if (relayReady) {
+                relayConn = m_relayConnection;
+                relayTracker = m_relayTracker;
             }
         }
-        if (relayEstablished) {
+        if (relayReady && relayConn) {
             Vector<uint8_t> framed;
             DriftstackRTC::BridgeResult wr = DriftstackRTC::wrapOutgoingDatagram(remoteAddress, data, framed);
-            static bool loggedWrapSuccessOnce = false;
-            static bool loggedWrapFailOnce = false;
             if (wr == DriftstackRTC::BridgeResult::Success) {
-                if (!loggedWrapSuccessOnce) {
-                    loggedWrapSuccessOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: §7 wrap SUCCESS — datagram framed (%zu→%zu bytes). Slice 2.5 will redirect destination from peer to relay endpoint; Slice 2.4 ends with framing-validated-only.",
+                static bool loggedRedirectOnce = false;
+                if (!loggedRedirectOnce) {
+                    loggedRedirectOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: REDIRECT to m_relayConnection ACTIVE — datagram %zu→%zu bytes via SOCKS5 §7. Per-peer m_nwConnections bypassed.",
                         data.size(), framed.size());
                 }
-            } else if (!loggedWrapFailOnce) {
+                Ref<ConnectionStateTracker> trackerRef = relayTracker.releaseNonNull();
+                trackerRef->incrementPendingSendCount();
+                OSObjectPtr framedValue = adoptOSObject(dispatch_data_create(framed.span().data(), framed.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT));
+                nw_connection_send(relayConn.get(), framedValue.get(), NW_CONNECTION_DEFAULT_MESSAGE_CONTEXT, true, makeBlockPtr([identifier = m_identifier, ipcConnection = m_connection.copyRef(), trackerRef, options](_Nullable nw_error_t error) mutable {
+                    RELEASE_LOG_ERROR_IF(error, WebRTC, "[Driftstack-EG-WK-1.8/Task#15] m_relayConnection send failed with error %d", error ? nw_error_get_error_code(error) : 0);
+                    ipcConnection->send(Messages::LibWebRTCNetwork::SignalSentPacket { identifier, options.packet_id, webrtc::TimeMillis() }, 0);
+                    trackerRef->decrementPendingSendCount();
+                }).get());
+                return; // bypass per-peer path
+            }
+            static bool loggedWrapFailOnce = false;
+            if (!loggedWrapFailOnce) {
                 loggedWrapFailOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: §7 wrap FAILED (result=%d) — falling through to direct send",
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: §7 wrap FAILED (result=%d) — falling through to direct nw_connection (LEAK)",
                     static_cast<int>(wr));
+            }
+        } else {
+            static bool loggedNoRelayOnce = false;
+            if (!loggedNoRelayOnce) {
+                loggedNoRelayOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: bridge active but m_relayConnection unavailable — falling through to direct nw_connection (LEAK ALLOWED; set DRIFTSTACK_REQUIRE_PROXY=1 to enforce egress lock via createUDPSocket hard-block)");
             }
         }
     }
