@@ -30,6 +30,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackRTCSocks5Bridge.h"
+#include <arpa/inet.h>
 #endif
 
 #include "LibWebRTCNetworkMessages.h"
@@ -484,11 +485,46 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
             tracker->markAsStopped();
     }).get());
 
-    // Recv-side: Slice 2.x will wire the §7-unwrap + SignalReadPacket
-    // dispatch. For now, drain the relay channel so back-pressure doesn't
-    // accumulate (no-op processData).
-    processUDPData(RetainPtr<nw_connection_t> { m_relayConnection }, Ref { *m_relayTracker }, 0, [](std::span<const uint8_t>, WebRTCNetwork::EcnMarking) {
-        // Slice 2.x will replace this with §7 unwrap + SignalReadPacket.
+    // Wave 29-397 Slice 2.x: recv-side §7 unwrap + SignalReadPacket dispatch.
+    // Every inbound datagram on the relay channel is a SOCKS5 §7 frame
+    // (RSV + FRAG + ATYP + DST.ADDR + DST.PORT + DATA). Strip the framing
+    // to recover the original peer's IP/port + the application payload;
+    // dispatch upstream to libwebrtc via SignalReadPacket. Drops malformed
+    // frames silently (logged once-per-class) — bad frames must not crash
+    // the relay channel.
+    processUDPData(RetainPtr<nw_connection_t> { m_relayConnection }, Ref { *m_relayTracker }, 0, [identifier = m_identifier, ipcConnection = m_connection.copyRef()](std::span<const uint8_t> frame, WebRTCNetwork::EcnMarking ecn) {
+        DriftstackRTC::UnwrappedDatagram unwrapped;
+        DriftstackRTC::BridgeResult r = DriftstackRTC::unwrapIncomingDatagram(frame, unwrapped);
+        if (r != DriftstackRTC::BridgeResult::Success) {
+            static bool loggedUnwrapFailOnce = false;
+            if (!loggedUnwrapFailOnce) {
+                loggedUnwrapFailOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: unwrap FAILED (result=%d, frameSize=%zu) — dropping",
+                    static_cast<int>(r), frame.size());
+            }
+            return;
+        }
+        struct in_addr sourceAddr { };
+        webrtc::IPAddress webrtcIp;
+        if (inet_pton(AF_INET, unwrapped.sourceHost.utf8().data(), &sourceAddr) == 1) {
+            webrtcIp = webrtc::IPAddress { sourceAddr };
+        } else {
+            // ATYP=0x03 domain form OR malformed — drop.
+            static bool loggedNonIpv4Once = false;
+            if (!loggedNonIpv4Once) {
+                loggedNonIpv4Once = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: non-IPv4 source '%s' from §7 unwrap; dropping (IPv6 / domain TODO)",
+                    unwrapped.sourceHost.utf8().data());
+            }
+            return;
+        }
+        static bool loggedRecvOnce = false;
+        if (!loggedRecvOnce) {
+            loggedRecvOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: FIRST unwrapped datagram from %s:%u (%zu payload bytes). Dispatching SignalReadPacket to libwebrtc.",
+                unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
+        }
+        SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket { identifier, unwrapped.payload.span(), RTCNetwork::IPAddress(webrtcIp), unwrapped.sourcePort, webrtc::TimeMicros(), ecn }, 0);
     });
 
     nw_connection_start(m_relayConnection.get());
