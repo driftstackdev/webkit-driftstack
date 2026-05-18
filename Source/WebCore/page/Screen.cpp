@@ -135,7 +135,15 @@ unsigned Screen::colorDepth() const
     // reports screen.colorDepth = 24 (8-bit per channel × 3 channels).
     // screen.pixelDepth (spec-equivalent) also = 24. Mac fleet may include
     // wide-gamut P3 / HDR displays reporting 30 or 48 via Core Graphics —
-    // detectable divergence. Force 24 to match iPhone universally.
+    // detectable divergence.
+    //
+    // Wave 29-397 D#8 Tier A #2: prefer DriftstackArchetypeConfig::
+    // screenColorDepth() when the singleton is loaded — lets per-archetype
+    // JSON override the universal default. iPhone 16 Pro / iPhone 17 both
+    // report 24 today, so the override is functionally identical; the
+    // wiring enables future archetype variants without recompile.
+    if (auto cd = DriftstackArchetypeConfig::singleton().screenColorDepth(); cd > 0)
+        return static_cast<unsigned>(cd);
     return 24;
 #endif
     return static_cast<unsigned>(screenDepth(protect(frame->view()).get()));
