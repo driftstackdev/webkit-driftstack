@@ -51,25 +51,50 @@ bool endpointToHostPort(nw_endpoint_t endpoint, String& outHost, uint16_t& outPo
     return true;
 }
 
-// Slice 16.4.b interpose gate. Inspect nw_parameters protocol stack —
-// return true if QUIC is configured anywhere in the layers. Phase A
-// scaffold inspects via nw_parameters_copy_default_protocol_stack +
-// nw_protocol_stack_iterate_application_protocols; Phase B will refine
-// based on empirical CFNetwork QUIC parameter shape.
+// Wave 29-397 Slice 16.4.b.4: nw_protocol_stack inspector.
+// Walks the parameters' default protocol stack via
+// nw_protocol_stack_iterate_application_protocols, comparing each layer's
+// definition against nw_protocol_copy_quic_definition() via
+// nw_protocol_definition_is_equal. Returns true if any application-layer
+// protocol matches QUIC.
+//
+// Performance: called on every nw_connection_create when interpose is
+// active. Must be FAST (<100ns on non-QUIC paths). Apple's iterator +
+// definition-equality comparison are both inline-friendly; empirically
+// negligible vs the cost of nw_connection_create itself.
+//
+// Recursion safety: this function does NOT call nw_connection_create —
+// it only inspects already-built nw_parameters. No interpose-recursion
+// risk.
 bool parametersUseQuic(nw_parameters_t parameters)
 {
     if (!parameters)
         return false;
-    // Phase A scaffold: conservative — return false until Slice 16.4.b
-    // validates the inspection logic against real CFNetwork QUIC params.
-    // Returning false means the interpose falls through to original
-    // behavior, which is the safe default.
-    static bool loggedOnce = false;
-    if (!loggedOnce && isCustomSocks5Active()) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] parametersUseQuic: Phase A scaffold — returning false. Slice 16.4.b will inspect nw_protocol_stack for QUIC layer.");
+
+    nw_protocol_stack_t stack = nw_parameters_copy_default_protocol_stack(parameters);
+    if (!stack)
+        return false;
+
+    RetainPtr<nw_protocol_definition_t> quicDef = adoptNS(nw_protocol_copy_quic_definition());
+    __block bool foundQuic = false;
+
+    nw_protocol_stack_iterate_application_protocols(stack, ^(nw_protocol_options_t appOptions) {
+        if (foundQuic)
+            return;
+        nw_protocol_definition_t appDef = nw_protocol_options_copy_definition(appOptions);
+        if (appDef && quicDef && nw_protocol_definition_is_equal(appDef, quicDef.get()))
+            foundQuic = true;
+        if (appDef)
+            nw_release(appDef);
+    });
+    nw_release(stack);
+
+    static bool loggedHitOnce = false;
+    if (foundQuic && !loggedHitOnce && isCustomSocks5Active()) {
+        loggedHitOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] parametersUseQuic: FIRST QUIC match in protocol stack — Slice 16.4.b.4 inspector ACTIVE. Subsequent matches silent.");
     }
-    return false;
+    return foundQuic;
 }
 
 BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t destinationPort, std::span<const uint8_t> payload, Vector<uint8_t>& out)
