@@ -191,6 +191,13 @@ auto ScreenOrientation::type() const -> Type
 
 uint16_t ScreenOrientation::angle() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 D#8 Tier A #4: iPhone archetype is portrait-primary
+    // by default (V-076 / Wave 1.5). Real iPhone Safari reports
+    // screen.orientation.angle = 0 when held in portrait. Server fleet
+    // is non-rotating; lock to 0 for archetype coherence.
+    return 0;
+#endif
     RefPtr manager = this->manager();
     auto orientation = manager ? manager->currentOrientation() : naturalScreenOrientationType();
 
