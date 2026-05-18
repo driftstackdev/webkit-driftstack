@@ -216,6 +216,27 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     CFReadStreamSetProperty(readStreamRef, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
     CFWriteStreamSetProperty(writeStreamRef, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
 
+    // Wave 29-396 sub-slice 1.8: enable TLS for HTTPS scheme via CFStream
+    // SSL settings dict. SNI populated from URL host. Cert validation ON
+    // (v1.0 default — fail loud on bad certs, customer can disable per-
+    // session via future DRIFTSTACK_TLS_INSECURE env if needed).
+    if ([scheme isEqualToString:@"https"]) {
+        NSDictionary *sslSettings = @{
+            (NSString *)kCFStreamSSLLevel: (NSString *)kCFStreamSocketSecurityLevelNegotiatedSSL,
+            (NSString *)kCFStreamSSLPeerName: host,
+            (NSString *)kCFStreamSSLValidatesCertificateChain: @YES,
+        };
+        if (!CFReadStreamSetProperty(readStreamRef, kCFStreamPropertySSLSettings, (CFTypeRef)sslSettings)
+            || !CFWriteStreamSetProperty(writeStreamRef, kCFStreamPropertySSLSettings, (CFTypeRef)sslSettings)) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.8: CFStreamSetProperty SSL settings failed for %s", [host UTF8String]);
+            CFRelease(readStreamRef);
+            CFRelease(writeStreamRef);
+            [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorSecureConnectionFailed userInfo:nil]];
+            return;
+        }
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.8: TLS enabled for HTTPS %s (SNI + cert validate)", [host UTF8String]);
+    }
+
     // Sub-slice 1.7.2.b stops here. Streams are constructed but not yet
     // opened/driven. Sub-slice 1.7.2.c serializes HTTP/1.1 request bytes
     // + writes to writeStream + reads response from readStream. Sub-slice
