@@ -43,6 +43,31 @@ static CFIndex writeAllToCFStream(CFWriteStreamRef stream, NSData *data)
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
+// Wave 29-396 sub-slice 1.7.2.e helper: read until headers complete OR EOF.
+// Returns: total bytes read into outBuffer (which is the complete response —
+// caller splits headers vs body at "\r\n\r\n"). -1 on stream error.
+// Uses blocking read on CFReadStream (background thread context OK).
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+static NSData* readAllFromCFStream(CFReadStreamRef stream)
+{
+    NSMutableData *out = [NSMutableData data];
+    uint8_t chunk[4096];
+    while (true) {
+        if (CFReadStreamGetStatus(stream) == kCFStreamStatusAtEnd)
+            break;
+        if (CFReadStreamGetStatus(stream) == kCFStreamStatusError)
+            return nil;
+        CFIndex n = CFReadStreamRead(stream, chunk, sizeof(chunk));
+        if (n < 0)
+            return nil;
+        if (n == 0)
+            break;  // EOF
+        [out appendBytes:chunk length:n];
+    }
+    return out;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
 // Wave 29-396 sub-slice 1.7.2.d: lifetime management via ivars.
 // DriftstackSocks5Client + CFStream pair must outlive -startLoading
 // return; stored as ivars released in -stopLoading.
@@ -256,12 +281,64 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
         return;
     }
 
-    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c SUCCESS — wrote %lu HTTP request bytes for %@ %s:%d via SOCKS5. Response read pending sub-slice 1.7.2.e.",
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.c: wrote %lu HTTP request bytes for %@ %s:%d via SOCKS5. Reading response...",
         (unsigned long)requestData.length, method, [host UTF8String], actualPort);
 
-    [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorUnsupportedURL userInfo:@{
-        NSLocalizedDescriptionKey: @"Phase B sub-slice 1.7.2.c — HTTP request written; response read pending sub-slice 1.7.2.e",
-    }]];
+    // Sub-slice 1.7.2.e: read response from CFReadStream + parse + notify.
+    NSData *responseBytes = readAllFromCFStream(_readStream);
+    if (!responseBytes || responseBytes.length == 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.e: empty response or read error");
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorNetworkConnectionLost userInfo:nil]];
+        return;
+    }
+
+    // Find \r\n\r\n header/body boundary
+    NSData *boundary = [@"\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding];
+    NSRange boundaryRange = [responseBytes rangeOfData:boundary options:0 range:NSMakeRange(0, responseBytes.length)];
+    if (boundaryRange.location == NSNotFound) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.e: no \\r\\n\\r\\n header boundary in %lu bytes", (unsigned long)responseBytes.length);
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotParseResponse userInfo:nil]];
+        return;
+    }
+
+    NSData *headerBytes = [responseBytes subdataWithRange:NSMakeRange(0, boundaryRange.location)];
+    NSUInteger bodyOffset = boundaryRange.location + boundaryRange.length;
+    NSData *bodyBytes = [responseBytes subdataWithRange:NSMakeRange(bodyOffset, responseBytes.length - bodyOffset)];
+    NSString *headerStr = [[NSString alloc] initWithData:headerBytes encoding:NSUTF8StringEncoding];
+
+    NSArray<NSString *> *headerLines = [headerStr componentsSeparatedByString:@"\r\n"];
+    if (headerLines.count < 1) {
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotParseResponse userInfo:nil]];
+        return;
+    }
+
+    // Parse status line: HTTP/1.1 200 OK
+    NSString *statusLine = headerLines[0];
+    NSArray<NSString *> *statusParts = [statusLine componentsSeparatedByString:@" "];
+    NSInteger statusCode = (statusParts.count >= 2) ? statusParts[1].integerValue : 0;
+    NSString *httpVersion = (statusParts.count >= 1) ? statusParts[0] : @"HTTP/1.1";
+
+    // Parse response headers (different variable name to avoid shadowing
+    // request `headers` from sub-slice 1.7.2.c)
+    NSMutableDictionary<NSString *, NSString *> *respHeaders = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 1; i < headerLines.count; i++) {
+        NSString *line = headerLines[i];
+        NSRange colon = [line rangeOfString:@":"];
+        if (colon.location == NSNotFound) continue;
+        NSString *key = [line substringToIndex:colon.location];
+        NSString *val = [[line substringFromIndex:colon.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        respHeaders[key] = val;
+    }
+
+    NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:statusCode HTTPVersion:httpVersion headerFields:respHeaders];
+
+    WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.2.e SUCCESS — %s %s:%d via SOCKS5 → HTTP %ld, %lu body bytes",
+        [method UTF8String], [host UTF8String], actualPort, (long)statusCode, (unsigned long)bodyBytes.length);
+
+    [[self client] URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    if (bodyBytes.length > 0)
+        [[self client] URLProtocol:self didLoadData:bodyBytes];
+    [[self client] URLProtocolDidFinishLoading:self];
 }
 
 - (void)stopLoading
