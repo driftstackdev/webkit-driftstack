@@ -1288,19 +1288,26 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         bool customRequested = customEnv && customEnv[0] == '1';
         bool envFallbackSOCKS5 = !perSessionSOCKS5 && getenv("DRIFTSTACK_SOCKS5_PROXY") && getenv("DRIFTSTACK_SOCKS5_PROXY")[0];
         if (customRequested && (perSessionSOCKS5 || envFallbackSOCKS5)) {
-            // Wave 29-396 sub-slice 1.6: set the global dispatch flag that
-            // WKDriftstackSocks5URLProtocol::+canInitWithRequest reads.
-            // Coarse-grained per Phase B impl plan Wave 29-388.B Slice B.1
-            // Approach A (single-customer NetworkProcess deployment ⇒
-            // coarseness OK). The protocol's startLoading still returns
-            // error (sub-slices 1.7-1.8 pending) so canInitWithRequest
-            // ALSO returns NO post-flag-check — flag setting is the
-            // scaffold this slice verifies + commits.
+            // Wave 29-396 sub-slice 1.6: set global flag.
             WebKit::g_driftstackCustomSocks5Active.store(true, std::memory_order_relaxed);
+
+            // Wave 29-396 sub-slice 1.9.a: register URLProtocol class on
+            // NSURLSessionConfiguration.protocolClasses so NSURLSession
+            // routes matching requests through WKDriftstackSocks5URLProtocol
+            // (which uses DriftstackSocks5Client for SOCKS5 + ATYP=0x03).
+            //
+            // CFNetwork SOCKS5 path (Wave 29-366) remains in
+            // connectionProxyDictionary as fallback for requests
+            // canInitWithRequest doesn't claim (e.g. ws/wss schemes).
+            NSMutableArray *protocols = [@[[WKDriftstackSocks5URLProtocol class]] mutableCopy];
+            if (configuration.get().protocolClasses)
+                [protocols addObjectsFromArray:configuration.get().protocolClasses];
+            configuration.get().protocolClasses = protocols;
+
             static bool loggedOnceCustom = false;
             if (!loggedOnceCustom) {
                 loggedOnceCustom = true;
-                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 recognized — g_driftstackCustomSocks5Active flag SET (Wave 29-396 sub-slice 1.6). DriftstackSocks5Client protocol-complete; -startLoading HTTP driving pending sub-slices 1.7-1.8.");
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5] DRIFTSTACK_CUSTOM_SOCKS5=1 active — flag set + WKDriftstackSocks5URLProtocol registered on NSURLSessionConfiguration.protocolClasses (Wave 29-396 sub-slices 1.6 + 1.9.a).");
             }
         }
     }
