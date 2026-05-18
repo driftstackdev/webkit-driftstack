@@ -99,6 +99,24 @@ BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDat
 // fall through to legacy Cocoa-native path.
 bool isCustomSocks5Active();
 
+// Wave 29-397 Slice 2.7.b.2: sentinel-IP allocator + IP→hostname sidecar.
+// Phase E DNS short-circuit support. When NetworkRTCProvider::createResolver
+// runs in bridge-active mode, instead of calling getaddrinfo on the
+// hostname (leak surface), allocate a fresh sentinel IP that uniquely
+// represents the hostname for libwebrtc's IP-based ICE candidate model.
+// sendTo (Slice 2.7.b.4) consults the sidecar to recover the original
+// hostname for ATYP=0x03 framing in the SOCKS5 §7 wrap.
+//
+// allocateSentinelForHostname(host): returns a 127.0.0.X IPv4 string
+//   (X allocated from a monotonically-incrementing counter starting at
+//   2 to avoid colliding with the standard 127.0.0.1 loopback). Same
+//   hostname reuses its allocated sentinel on subsequent calls.
+//
+// lookupHostnameForSentinel(ipString): returns the original hostname
+//   if ipString is a registered sentinel, otherwise empty String.
+String allocateSentinelForHostname(const String& hostname);
+String lookupHostnameForSentinel(const String& ipString);
+
 } // namespace DriftstackRTC
 
 } // namespace WebKit

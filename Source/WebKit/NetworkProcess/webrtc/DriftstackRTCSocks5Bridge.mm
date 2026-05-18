@@ -21,9 +21,12 @@
 #include "NetworkRTCProvider.h"
 #include <webrtc/rtc_base/async_packet_socket.h>
 #include <wtf/Assertions.h>
+#include <wtf/HashMap.h>
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/cocoa/SpanCocoa.h>
+#include <wtf/text/MakeString.h>
+#include <wtf/text/StringHash.h>
 
 namespace WebKit {
 
@@ -35,6 +38,74 @@ bool isCustomSocks5Active()
     const char* socks5Proxy = getenv("DRIFTSTACK_SOCKS5_PROXY");
     return customSocks5 && customSocks5[0] == '1'
         && socks5Proxy && socks5Proxy[0];
+}
+
+// Wave 29-397 Slice 2.7.b.2: sentinel-IP + sidecar map state.
+//
+// Sentinel range: 127.0.0.2 .. 127.0.0.254 (skipping 127.0.0.1 standard
+// loopback + 127.0.0.255 broadcast). Allows ~253 distinct STUN/TURN
+// hostnames per NetworkProcess session — well above typical WebRTC peer-
+// connection requirements (usually 1-3 STUN/TURN servers per session).
+//
+// If exhausted (counter rolls past 254), wraps to 2 and emits a
+// WTFLogAlways warning; in practice this is unreachable under normal use.
+struct SentinelMapState {
+    Lock lock;
+    HashMap<String, String> ipToHostname WTF_GUARDED_BY_LOCK(lock);
+    HashMap<String, String> hostnameToIp WTF_GUARDED_BY_LOCK(lock);
+    unsigned nextOctet WTF_GUARDED_BY_LOCK(lock) { 2 };
+};
+
+static SentinelMapState& sentinelMapState()
+{
+    static NeverDestroyed<SentinelMapState> s_state;
+    return s_state.get();
+}
+
+String allocateSentinelForHostname(const String& hostname)
+{
+    if (hostname.isEmpty())
+        return String();
+
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+
+    auto existing = state.hostnameToIp.find(hostname);
+    if (existing != state.hostnameToIp.end())
+        return existing->value;
+
+    unsigned octet = state.nextOctet;
+    if (octet >= 255) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] allocateSentinelForHostname: 127.0.0.X sentinel range exhausted; wrapping to 2 (may collide with earlier entry — investigate session lifetime)");
+        octet = 2;
+    }
+    state.nextOctet = octet + 1;
+
+    String sentinel = makeString("127.0.0."_s, octet);
+    state.ipToHostname.set(sentinel, hostname);
+    state.hostnameToIp.set(hostname, sentinel);
+
+    static bool loggedFirstAllocOnce = false;
+    if (!loggedFirstAllocOnce) {
+        loggedFirstAllocOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] allocateSentinelForHostname: FIRST allocation — hostname='%s' → sentinel=%s. Subsequent allocations log only on wrap.",
+            hostname.utf8().data(), sentinel.utf8().data());
+    }
+    return sentinel;
+}
+
+String lookupHostnameForSentinel(const String& ipString)
+{
+    if (ipString.isEmpty())
+        return String();
+
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+
+    auto it = state.ipToHostname.find(ipString);
+    if (it == state.ipToHostname.end())
+        return String();
+    return it->value;
 }
 
 // Wave 29-397 Slice 2.2: shared relay client + cached channel. Per RFC 1928
