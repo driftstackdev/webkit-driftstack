@@ -3179,6 +3179,46 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_PROGRAM_TEXEL_OFFSET:
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_SAMPLES:
+#if PLATFORM(DRIFTSTACK)
+        {
+            // Wave 29-404 §11.B archetype-keyed MAX_SAMPLES dispatch
+            // (empirical 2026-05-19 multi-capture):
+            //
+            //   Archetype                                  → MAX_SAMPLES
+            //   iphone17_*           (A19 GPU)              → 8 (BS captured)
+            //   iphone16pro_ios18_6  (A18 Pro, Safari 18.6) → 4 (BS captured)
+            //   iphone16pro_ios26_4  (A18 Pro, Safari 26.4) → 4 (real iPhone
+            //                                                    2026-05-04)
+            //   no archetype env (default)                  → 8 (launch =
+            //                                                    iPhone 17)
+            //
+            // MAX_SAMPLES is GPU-hardware-dependent, not just Safari-version.
+            // A19 (iPhone 17) ships 8x MSAA; A18 Pro (iPhone 16 Pro) ships 4x.
+            // Mac fork's GraphicsContextGLANGLE natively returns 4 (matches
+            // Apple Silicon Mac GPU cap), so iphone17 archetype needs override
+            // to 8, and iphone16pro archetypes are no-ops (already 4).
+            //
+            // Archetype dispatch reads DRIFTSTACK_ARCHETYPE once per
+            // WebContent process (env propagated via ProcessLauncherCocoa
+            // allowlist line 505).
+            static const int s_maxSamples = []() {
+                const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+                // Default (no archetype env) = launch archetype = iPhone 17.
+                if (!archetype)
+                    return 8;
+                std::string_view sv(archetype);
+                // iPhone 16 Pro hardware → 4 regardless of Safari version.
+                if (sv.find("iphone16pro_") != std::string_view::npos)
+                    return 4;
+                // iPhone 17 hardware → 8 regardless of Safari version.
+                if (sv.find("iphone17_") != std::string_view::npos)
+                    return 8;
+                // Unknown archetype slug: fall back to launch default.
+                return 8;
+            }();
+            return s_maxSamples;
+        }
+#endif
         return maxSamples();
     case GraphicsContextGL::MAX_SERVER_WAIT_TIMEOUT:
         return getInt64Parameter(pname);
