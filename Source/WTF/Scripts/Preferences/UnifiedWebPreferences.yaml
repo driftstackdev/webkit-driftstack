@@ -8413,7 +8413,8 @@ TouchEventDOMAttributesEnabled:
   condition: ENABLE(TOUCH_EVENTS)|ENABLE(DRIFTSTACK_TOUCH_STUBS)
   defaultValue:
     WebCore:
-      default: WebCore::screenHasTouchDevice()
+      "ENABLE(TOUCH_EVENTS)": WebCore::screenHasTouchDevice()
+      default: false
 
 TouchInputCompatibilityEnabled:
   type: bool
@@ -8804,6 +8805,25 @@ UseUIProcessForBackForwardItemLoading:
       default: false
     WebCore:
       default: false
+
+# Wave 29-406 §11.A.15 (Driftstack 2026-05-19): per-archetype gate for the
+# URLPattern interface. Upstream WebKit doesn't gate this at IDL level;
+# Driftstack adds a Setting + IDL EnabledBySetting so Family A archetypes
+# (Safari ≤26.3) can hide window.URLPattern (BS empirical: 5/5 real iPhone
+# Safari 18.6 captures have URLPattern undefined; Safari 26.4 has it).
+URLPatternEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "URLPattern"
+  humanReadableDescription: "Expose URLPattern constructor on Window and Worker scopes"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
 
 UserActivationAPIEnabled:
   type: bool

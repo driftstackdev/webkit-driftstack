@@ -5129,6 +5129,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // window.MutationEvent === function (Mac fork = undefined).
         settings.setMutationEventsEnabled(true);
 
+        // Wave 29-406 §11.A.15 — URLPattern hide on Family A. Mac fork
+        // upstream exposes window.URLPattern; iPhone Safari 18.6 hides it.
+        // (New ScrollDrivenAnimations-style gate added in Wave 29-406:
+        // URLPattern.idl has [EnabledBySetting=URLPatternEnabled] + yaml.)
+        settings.setURLPatternEnabled(false);
+
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
         // - FileSystemWritableFileStream undefined
