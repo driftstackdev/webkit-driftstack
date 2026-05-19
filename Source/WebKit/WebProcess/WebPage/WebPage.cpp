@@ -5122,6 +5122,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // Wave 29-406 §11.A.10 (cont'd) — DigitalCredentials hide on Family A.
         settings.setDigitalCredentialsEnabled(false);
 
+        // Wave 29-406 §11.A.14 — Mac fork hides MutationEvent + OverflowEvent
+        // (deprecated APIs removed in WebKit upstream) but real iPhone Safari
+        // 18.6 STILL exposes them. Force-enable on Family A archetype to
+        // restore parity. Empirical 2026-05-19 BS Automate: iPhone Safari 18.6
+        // window.MutationEvent === function (Mac fork = undefined).
+        settings.setMutationEventsEnabled(true);
+
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
         // - FileSystemWritableFileStream undefined
