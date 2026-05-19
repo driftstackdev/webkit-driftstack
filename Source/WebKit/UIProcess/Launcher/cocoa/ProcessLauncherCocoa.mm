@@ -458,6 +458,10 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE") },
             { "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE") },
             { "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", getenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP") },
+            // Wave 29-397 V-MacCT-Realign.B.1.d.3 — env-var forwarding for
+            // generic-font-keyword override (serif/sans-serif/monospace →
+            // iOS-style defaults). Consumed by SystemFontDatabaseCoreText.
+            { "DRIFTSTACK_GENERIC_FONT_OVERRIDE", getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE") },
             { "DRIFTSTACK_SF_PRO_PLUS_ONE", getenv("DRIFTSTACK_SF_PRO_PLUS_ONE") },
             { "DRIFTSTACK_FONT_CANONICAL_OVERRIDE", getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE") },
             { "DRIFTSTACK_FONT_CANONICAL_PATH", getenv("DRIFTSTACK_FONT_CANONICAL_PATH") },

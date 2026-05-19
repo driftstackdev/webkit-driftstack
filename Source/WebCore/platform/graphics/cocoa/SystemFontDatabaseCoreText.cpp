@@ -358,11 +358,44 @@ static String genericFamily(const String& locale, MemoryCompactRobinHoodHashMap<
 
 String SystemFontDatabaseCoreText::serifFamily(const String& locale)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d.2 — env-gated iOS-style default
+    // (corrected location after B.1.d.1 in FontGenericFamilies.cpp had
+    // no empirical effect; CSS serif keyword routes through SystemFont
+    // DatabaseCoreText, not FontGenericFamilies). Same pattern as V-433.Y
+    // cursiveFamily override below.
+    //
+    // Empirical V-405 Text Subclass C extreme-tail (38 cases delta<-50%):
+    // 94.7% use generic font keywords. iOS Safari resolves `serif` to
+    // "Times New Roman"; Mac WebKit's CTFontCreateUIFontForLanguage with
+    // kCTFontCSSFamilySerif may return Mac-specific variant.
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)locale;
+        return "Times New Roman"_str;
+    }
+#endif
     return genericFamily(locale, m_serifFamilies, kCTFontCSSFamilySerif);
 }
 
 String SystemFontDatabaseCoreText::sansSerifFamily(const String& locale)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d.2 — env-gated iOS-style default.
+    // iOS Safari resolves `sans-serif` to "Helvetica Neue"; Mac WebKit
+    // may resolve to "Helvetica" subset.
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)locale;
+        return "Helvetica Neue"_str;
+    }
+#endif
     return genericFamily(locale, m_sansSeriferifFamilies, kCTFontCSSFamilySansSerif);
 }
 
@@ -387,6 +420,19 @@ String SystemFontDatabaseCoreText::fantasyFamily(const String& locale)
 
 String SystemFontDatabaseCoreText::monospaceFamily(const String& locale)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-MacCT-Realign.B.1.d.2 — env-gated iOS-style default.
+    // iOS Safari resolves `monospace` to "Courier"; Mac may resolve to
+    // Menlo or Monaco.
+    static bool s_override = []() {
+        const char* env = getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE");
+        return env && env[0] == '1';
+    }();
+    if (s_override) {
+        (void)locale;
+        return "Courier"_str;
+    }
+#endif
     auto result = genericFamily(locale, m_monospaceFamilies, kCTFontCSSFamilyMonospace);
 #if PLATFORM(MAC) && ENABLE(MONOSPACE_FONT_EXCEPTION)
     // In general, CoreText uses Monaco for monospaced (see: Terminal.app and Xcode.app).
