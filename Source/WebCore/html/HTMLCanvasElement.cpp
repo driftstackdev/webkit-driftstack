@@ -1305,6 +1305,37 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
                 host.utf8().data());
         }
     }
+    // Wave 29-399 §1 AFP fallback (founder Tier-3 verdict 2026-05-19): when
+    // every atlas substitution path (V-510 EARLY + V-241 canonical + V-510
+    // post-encode + Layer B v2 hoist) has missed, AFP fires to replace the
+    // natural Mac CG-rendered bytes with randomized output. Vendors see
+    // randomized output (not Mac-CG-detectable 1.1% match); probe signature
+    // is emitted async (§2 work) for atlas growth via BS Automate (§3+§4).
+    //
+    // createImageForNoiseInjection() generates a solid-color buffer derived
+    // from noiseInjectionHashSalt (which is per-canvas via CanvasBase ctor).
+    // If salt is 0 (Document policy off), we still call it — produces a
+    // deterministic-but-non-Mac-CG-matching color, which is the minimum
+    // viable AFP firing semantic (per founder paste: "Mac CG natural 1.1%
+    // match = worst detectable signal" — anything not Mac CG is improvement).
+    //
+    // Gated env DRIFTSTACK_AFP_FALLBACK_ENABLED=1 (default OFF for safety;
+    // flip ON after §3+§4 atlas-growth pipeline lands per founder paste).
+    static bool s_afpFallbackEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_afpFallbackEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        if (RefPtr noiseImage = createImageForNoiseInjection()) {
+            auto afpEncoded = encodeDataURL(noiseImage.get(), encodingMIMEType, quality);
+            if (!afpEncoded.isEmpty()) {
+                WTFLogAlways("[Driftstack-AFP-Fallback] atlas-miss FIRED (%ux%u, mac-len=%u, afp-len=%u, salt-present=%d)",
+                    width(), height(), encoded.length(), afpEncoded.length(),
+                    canvasBaseScriptExecutionContext() && canvasBaseScriptExecutionContext()->noiseInjectionHashSalt().has_value());
+                return UncachedString { afpEncoded };
+            }
+        }
+    }
 #endif
     return UncachedString { encoded };
 }
@@ -1402,6 +1433,24 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
                                      width(), height(), pred->inference_ms, pred->ane_routed);
                     }
                 }
+            }
+        }
+    }
+    // Wave 29-399 §1 AFP fallback (toBlob) — mirrors toDataURL behavior:
+    // after all atlas substitution paths miss, AFP fires to replace natural
+    // Mac CG bytes with randomized output. Gated DRIFTSTACK_AFP_FALLBACK_ENABLED=1.
+    static bool s_afpFallbackEnabledToBlob = []() {
+        const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_afpFallbackEnabledToBlob && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        if (RefPtr noiseImage = createImageForNoiseInjection()) {
+            auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
+            if (!afpBlobData.isEmpty()) {
+                blobData = WTF::move(afpBlobData);
+                WTFLogAlways("[Driftstack-AFP-Fallback-toBlob] atlas-miss FIRED (%ux%u)",
+                    width(), height());
             }
         }
     }

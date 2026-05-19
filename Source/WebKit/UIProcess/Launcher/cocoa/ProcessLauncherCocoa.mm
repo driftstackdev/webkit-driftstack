@@ -483,6 +483,11 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Layer B ML:
             { "DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER", getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER") },
             { "DRIFTSTACK_LAYER_B_SUBSTITUTE", getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE") },
+            // Wave 29-399 §1 AFP fallback (founder Tier-3 verdict 2026-05-19):
+            // AFP fires on atlas-miss to replace natural Mac CG bytes with
+            // randomized output. Vendor probes see randomized (not Mac-CG-
+            // detectable) output; probe signature emitted async for atlas growth.
+            { "DRIFTSTACK_AFP_FALLBACK_ENABLED", getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED") },
             // Resources:
             { "DRIFTSTACK_FONTS_DIR", getenv("DRIFTSTACK_FONTS_DIR") },
             { "DRIFTSTACK_ARCHETYPE", getenv("DRIFTSTACK_ARCHETYPE") },

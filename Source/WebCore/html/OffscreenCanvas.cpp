@@ -400,6 +400,24 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
             }
         }
     }
+    // Wave 29-399 §1 AFP fallback (Worker context) — mirrors toDataURL/toBlob.
+    // After all atlas substitution paths miss, AFP fires to replace natural
+    // Mac CG bytes with randomized output. Gated DRIFTSTACK_AFP_FALLBACK_ENABLED=1.
+    static bool s_afpFallbackEnabledWorker = []() {
+        const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_afpFallbackEnabledWorker && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        if (RefPtr noiseImage = createImageForNoiseInjection()) {
+            auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
+            if (!afpBlobData.isEmpty()) {
+                blobData = WTF::move(afpBlobData);
+                WTFLogAlways("[Driftstack-AFP-Fallback-Worker] atlas-miss FIRED (%ux%u)",
+                    width(), height());
+            }
+        }
+    }
 #endif
 
     if (blobData.isEmpty()) {
