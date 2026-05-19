@@ -325,6 +325,11 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         blobData = encodeData(makeRenderingResultsAvailable(), encodingMIMEType, quality);
 
 #if PLATFORM(DRIFTSTACK)
+    // Wave 29-400 §9 (founder Tier-3 verdict 2026-05-19): mirrors
+    // HTMLCanvasElement::toBlob — gates §1 AFP fallback below on this flag
+    // so V510 / Layer B v2 substituted bytes are NOT overwritten by AFP
+    // when atlas hits succeed.
+    bool atlasSubstituted = false;
     // Wave 29-347: cross-context V-241/V-510 dispatch parity. Per Wave 29-345
     // empirical finding (operations/verification-log.md), HTMLCanvasElement
     // ::toDataURL applies V-241/V-510 canonical-PNG substitution when
@@ -364,6 +369,7 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
             auto b64View = StringView(substitute).substring(kPNGPrefix.length());
             if (auto decoded = base64Decode(b64View)) {
                 blobData = std::move(*decoded);
+                atlasSubstituted = true;  // §9: gate §1 AFP fallback below
                 WTFLogAlways("[Driftstack-%s-Worker] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
                     fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
             }
@@ -392,6 +398,7 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
                     auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
                     if (!substituted.isEmpty()) {
                         blobData = WTF::move(substituted);
+                        atlasSubstituted = true;  // §9: gate §1 AFP fallback below
                         WTFLogAlways("[Driftstack-LayerBV2-Worker] canvas-level RGBA substitution "
                                      "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
                                      width(), height(), pred->inference_ms, pred->ane_routed);
@@ -450,13 +457,15 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
         return env && env[0] == '1';
     }();
-    if (s_afpFallbackEnabledWorker && !blobData.isEmpty()
+    // §9: gate AFP on !atlasSubstituted — same fix as HTMLCanvasElement::toBlob
+    // to prevent AFP from overwriting V510/Layer B v2 substituted bytes.
+    if (s_afpFallbackEnabledWorker && !atlasSubstituted && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
             if (!afpBlobData.isEmpty()) {
                 blobData = WTF::move(afpBlobData);
-                WTFLogAlways("[Driftstack-AFP-Fallback-Worker] atlas-miss FIRED (%ux%u)",
+                WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=Worker atlas-miss FIRED (%ux%u)",
                     width(), height());
             }
         }

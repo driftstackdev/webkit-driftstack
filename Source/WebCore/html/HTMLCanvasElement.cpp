@@ -1416,11 +1416,17 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
         return env && env[0] == '1';
     }();
+    // §9 (Wave 29-400): toDataURL substitution paths already early-return
+    // (V-510 EARLY at ~1195, V-241 at ~1209, V-510 post-encode at ~1298,
+    // Layer B v2 at ~1336). Reaching here means NO substitution succeeded,
+    // so atlasSubstituted is implicitly false. AFP fires correctly as
+    // intended (atlas-miss path). Tag standardized to [Driftstack-AFP-
+    // Fallback-Fired] across all 3 hook sites.
     if (s_afpFallbackEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpEncoded = encodeDataURL(noiseImage.get(), encodingMIMEType, quality);
             if (!afpEncoded.isEmpty()) {
-                WTFLogAlways("[Driftstack-AFP-Fallback] atlas-miss FIRED (%ux%u, mac-len=%u, afp-len=%u, salt-present=%d)",
+                WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=toDataURL atlas-miss FIRED (%ux%u, mac-len=%u, afp-len=%u, salt-present=%d)",
                     width(), height(), encoded.length(), afpEncoded.length(),
                     canvasBaseScriptExecutionContext() && canvasBaseScriptExecutionContext()->noiseInjectionHashSalt().has_value());
                 return UncachedString { afpEncoded };
@@ -1462,6 +1468,14 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         blobData = encodeData(makeRenderingResultsAvailable(), encodingMIMEType, quality);
 
 #if PLATFORM(DRIFTSTACK)
+    // Wave 29-400 §9 (founder Tier-3 verdict 2026-05-19): track whether ANY
+    // atlas/substitution hook successfully overrode the natural Mac CG
+    // output. Gates §1 AFP fallback below — without this flag, AFP fires
+    // unconditionally after V510 substitution and overwrites the substituted
+    // iPhone bytes. Surfaced empirically during §8.D verification when
+    // cumrig reproduced 1593/2 instead of 1595/0 despite V510-HIT events.
+    // See V-log §9 entry for full diagnosis.
+    bool atlasSubstituted = false;
     // Wave 29-347: sibling gap to OffscreenCanvas::convertToBlob (per Wave
     // 29-345). HTMLCanvasElement::toBlob produces PNG bytes but the V-241/
     // V-510 dispatch lives only at toDataURL above (line ~1078). Vendor
@@ -1498,6 +1512,7 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
             auto b64View = StringView(substitute).substring(kPNGPrefix.length());
             if (auto decoded = base64Decode(b64View)) {
                 blobData = std::move(*decoded);
+                atlasSubstituted = true;  // §9: gate §1 AFP fallback below
                 WTFLogAlways("[Driftstack-%s-toBlob] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
                     fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
             }
@@ -1519,6 +1534,7 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
                     auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
                     if (!substituted.isEmpty()) {
                         blobData = WTF::move(substituted);
+                        atlasSubstituted = true;  // §9: gate §1 AFP fallback below
                         WTFLogAlways("[Driftstack-LayerBV2-toBlob] canvas-level RGBA substitution "
                                      "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
                                      width(), height(), pred->inference_ms, pred->ane_routed);
@@ -1571,13 +1587,20 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
         return env && env[0] == '1';
     }();
-    if (s_afpFallbackEnabledToBlob && !blobData.isEmpty()
+    // §9: gate AFP on !atlasSubstituted — without this, AFP overwrites
+    // V510/Layer B v2 substituted bytes and priority-bin atlas hits don't
+    // reach the customer's blob (cumrig stays 1593/2 instead of 1595/0).
+    if (s_afpFallbackEnabledToBlob && !atlasSubstituted && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
             if (!afpBlobData.isEmpty()) {
                 blobData = WTF::move(afpBlobData);
-                WTFLogAlways("[Driftstack-AFP-Fallback-toBlob] atlas-miss FIRED (%ux%u)",
+                // §9: standardized tag [Driftstack-AFP-Fallback-Fired] across
+                // all 3 hook sites (toDataURL / toBlob / Worker). context=
+                // distinguishes call site. Future verification scripts grep
+                // this tag uniformly.
+                WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=toBlob atlas-miss FIRED (%ux%u)",
                     width(), height());
             }
         }
