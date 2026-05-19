@@ -5065,6 +5065,14 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     if (!s_isFamilyAArchetype)
         settings.setDigitalCredentialsEnabled(true);
 
+    // Wave 29-406 §11.A.11 — global iPhone hides (all archetypes).
+    // Empirical BS Automate 2026-05-19 across Safari 18.4/18.6/26.2/26.3/26.4
+    // (5 captures): document.exitFullscreen absent + CSS.supports
+    // ('overflow-anchor: auto') === false on ALL real iPhone Safari versions.
+    // Mac fork upstream enables both. Apply globally for iPhone fidelity.
+    settings.setFullScreenEnabled(false);
+    settings.setCSSScrollAnchoringEnabled(false);
+
     if (s_isFamilyAArchetype) {
         // Wave 29-403 §11.A: WebGPU cascade hides navigator.gpu + GPU*
         // window globals + GPUSupportedFeatures/Limits + WGSLLanguageFeatures.
