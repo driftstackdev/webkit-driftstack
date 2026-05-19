@@ -113,16 +113,28 @@ LayerB& LayerB::shared()
 
 LayerB::LayerB()
 {
+    WTFLogAlways("[V-790-DEBUG] LayerB ctor entry");
     readFeatureFlag();
-    if (m_isEnabled)
+    WTFLogAlways("[V-790-DEBUG] LayerB readFeatureFlag returned: m_isEnabled=%d m_isV2Enabled=%d",
+        m_isEnabled, m_isV2Enabled);
+    if (m_isEnabled) {
+        WTFLogAlways("[V-790-DEBUG] LayerB loadModel start");
         loadModel();
-    if (m_isV2Enabled)
+        WTFLogAlways("[V-790-DEBUG] LayerB loadModel done: m_isLoaded=%d", m_isLoaded);
+    }
+    if (m_isV2Enabled) {
+        WTFLogAlways("[V-790-DEBUG] LayerB loadModelV2 start");
         loadModelV2();
+        WTFLogAlways("[V-790-DEBUG] LayerB loadModelV2 done: m_isV2Loaded=%d", m_isV2Loaded);
+    }
+    WTFLogAlways("[V-790-DEBUG] LayerB ctor exit");
 }
 
 void LayerB::readFeatureFlag()
 {
     const char* env = std::getenv("DRIFTSTACK_LAYER_B_ENABLED");
+    WTFLogAlways("[V-790-DEBUG] readFeatureFlag: DRIFTSTACK_LAYER_B_ENABLED=%s",
+        env ? env : "(nullptr)");
     // Use string_view for bounds-checked comparison (avoids
     // -Wunsafe-buffer-usage on raw pointer indexing).
     m_isEnabled = env && std::string_view { env } == "1";
@@ -133,6 +145,8 @@ void LayerB::readFeatureFlag()
     // V-790.V2 (wave 29-202) — independent v2 gate. v2 is the canvas-
     // level RGBA tile substitution; can be enabled separately from v1.
     const char* envV2 = std::getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+    WTFLogAlways("[V-790-DEBUG] readFeatureFlag: DRIFTSTACK_LAYER_B_V2_ENABLED=%s",
+        envV2 ? envV2 : "(nullptr)");
     m_isV2Enabled = envV2 && std::string_view { envV2 } == "1";
 
     if (m_isV2Enabled)

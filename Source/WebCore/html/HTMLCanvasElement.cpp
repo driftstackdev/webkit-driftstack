@@ -1143,6 +1143,45 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     if (document->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
         return UncachedString { encodeDataURL(createImageForNoiseInjection(), encodingMIMEType, quality) };
 
+#if PLATFORM(DRIFTSTACK)
+    // V-790.V2 §3.1.3 build r7 (wave 29-398): Layer B v2 ML must fire
+    // BEFORE the USE(CG) `getImageData()` early-return at line 1148 below,
+    // which otherwise short-circuits all Mac fork PNG dataURL generation
+    // and bypasses our hook. When Layer B v2 is enabled, compute the
+    // encoded dataURL upfront (via makeRenderingResultsAvailable()) +
+    // run Layer B v2 substitution + return result if successful.
+    // On Layer B v2 failure (decode/predict/encode), fall through to the
+    // existing CG getImageData() / V-510 atlas / Mac fork natural paths.
+    static bool s_layerBV2HoistedEnabled = []() {
+        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+        WTFLogAlways("[V-790-DEBUG] toDataURL HOISTED static init: DRIFTSTACK_LAYER_B_V2_ENABLED=%s",
+            env ? env : "(nullptr)");
+        return env && env[0] == '1';
+    }();
+    if (s_layerBV2HoistedEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        auto host = document->url().host().toString();
+        if (!Driftstack::isCanaryFingerprintHost(host)) {
+            auto encodedForLayerB = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+            WTFLogAlways("[V-790-DEBUG] toDataURL HOISTED hook: encoded.len=%u w=%u h=%u",
+                encodedForLayerB.length(), width(), height());
+            if (auto macTile = Driftstack::macForkRGBAFromDataURL(encodedForLayerB, width(), height())) {
+                WTFLogAlways("[V-790-DEBUG] HOISTED macForkRGBAFromDataURL ok");
+                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
+                    WTFLogAlways("[V-790-DEBUG] HOISTED predictV2 ok inference_ms=%.3f ane=%d",
+                        pred->inference_ms, pred->ane_routed);
+                    auto substituted = Driftstack::dataURLFromIPhoneRGBA(pred->tile, width(), height());
+                    if (!substituted.isEmpty()) {
+                        WTFLogAlways("[Driftstack-LayerBV2] HOISTED canvas-level RGBA substitution "
+                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
+                                     width(), height(), pred->inference_ms, pred->ane_routed);
+                        return UncachedString { substituted };
+                    }
+                }
+            }
+        }
+    }
+#endif
+
 #if USE(CG)
     // Try to get ImageData first, as that may avoid lossy conversions.
     if (auto imageData = getImageData())
@@ -1228,14 +1267,31 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // (canary fingerprint vendor hosts BYPASS Layer B v2 — atlas-only).
     static bool s_layerBV2Enabled = []() {
         const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+        WTFLogAlways("[V-790-DEBUG] toDataURL static init: DRIFTSTACK_LAYER_B_V2_ENABLED=%s",
+            env ? env : "(nullptr)");
         return env && env[0] == '1';
     }();
+    WTFLogAlways("[V-790-DEBUG] toDataURL hook entered s_layerBV2Enabled=%d mime-png=%d",
+        s_layerBV2Enabled, encodingMIMEType.containsIgnoringASCIICase("png"_s));
     if (s_layerBV2Enabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         auto host = document->url().host().toString();
+        WTFLogAlways("[V-790-DEBUG] toDataURL host=%s", host.utf8().data());
         if (!Driftstack::isCanaryFingerprintHost(host)) {
-            if (auto macTile = Driftstack::macForkRGBAFromDataURL(encoded, width(), height())) {
-                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
+            WTFLogAlways("[V-790-DEBUG] toDataURL calling macForkRGBAFromDataURL encoded.len=%u",
+                encoded.length());
+            auto macTile = Driftstack::macForkRGBAFromDataURL(encoded, width(), height());
+            WTFLogAlways("[V-790-DEBUG] toDataURL macForkRGBAFromDataURL returned: hasValue=%d",
+                macTile.has_value());
+            if (macTile) {
+                WTFLogAlways("[V-790-DEBUG] toDataURL calling predictV2");
+                auto pred = Driftstack::LayerB::shared().predictV2(*macTile);
+                WTFLogAlways("[V-790-DEBUG] toDataURL predictV2 returned: hasValue=%d",
+                    pred.has_value());
+                if (pred) {
+                    WTFLogAlways("[V-790-DEBUG] toDataURL calling dataURLFromIPhoneRGBA");
                     auto substituted = Driftstack::dataURLFromIPhoneRGBA(pred->tile, width(), height());
+                    WTFLogAlways("[V-790-DEBUG] toDataURL dataURLFromIPhoneRGBA returned: len=%u",
+                        substituted.length());
                     if (!substituted.isEmpty()) {
                         WTFLogAlways("[Driftstack-LayerBV2] canvas-level RGBA substitution "
                                      "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
