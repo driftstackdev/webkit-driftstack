@@ -509,6 +509,17 @@ Page::Page(PageConfiguration&& pageConfiguration)
     Ref { m_userContentProvider }->addPage(*this);
     protect(m_visitedLinkStore)->addPage(*this);
 
+    // Wave 29-402/403 Settings-layer archetype gate: moved to
+    // Source/WebKit/WebProcess/WebPage/WebPage.cpp WebPage::updatePreferences,
+    // applied AFTER updatePreferencesGenerated() + updateSettingsGenerated()
+    // sync the UIProcess preference store into Settings::m_values. A hook
+    // here in Page::Page body is overwritten by the subsequent
+    // WebPageUpdatePreferences.cpp:958 settings.setWebGPUEnabled() (and any
+    // other [sharedPreferenceForWebProcess: true] setting), so the only
+    // correct hook point is post-sync inside WebPage::updatePreferences.
+    // Defense-in-depth: Navigator::gpu() / WorkerNavigator::gpu() runtime
+    // nullptr returns are retained as second-layer protection.
+
     static bool firstTimeInitializationRan = false;
     if (!firstTimeInitializationRan) {
         firstTimeInitialization();

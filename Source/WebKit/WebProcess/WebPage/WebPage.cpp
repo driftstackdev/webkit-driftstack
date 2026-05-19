@@ -5010,6 +5010,57 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 
     updateSettingsGenerated(store, settings);
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-403 Q1 lifecycle fix (root cause located 2026-05-19): the
+    // Settings-layer Family A archetype gate previously lived in Page::Page
+    // body, but WebPageUpdatePreferences.cpp:958 runs AFTER Page::Page
+    // returns and unconditionally overwrites webGPUEnabled (and every other
+    // [sharedPreferenceForWebProcess: true] setting) from the UIProcess
+    // preference store, blowing away the Page::Page hook. This is the
+    // CORRECT hook point: per-archetype overrides applied AFTER both
+    // updatePreferencesGenerated() and updateSettingsGenerated() sync the
+    // store, so they stick until the next updatePreferences() call (at
+    // which point this block re-applies them — idempotent).
+    //
+    // Family A (Safari ≤26.3) → navigator.gpu must be undefined, not null.
+    // IDL [EnabledBySetting=WebGPUEnabled] in JSNavigatorPrototype::
+    // finishCreation reads Document::settingsValues().webGPUEnabled and
+    // deletes the accessor when false. With this setter applied here,
+    // finishCreation sees false → accessor is removed from prototype →
+    // 'gpu' in navigator === false, typeof navigator.gpu === 'undefined'.
+    //
+    // See docs/internal/wave-29-402-settings-layer-archetype-gate-pattern.md
+    // for the full pattern. All future Safari-26-only feature hides on
+    // Family A follow this same pattern: add the per-archetype override
+    // here after updateSettingsGenerated().
+    static const bool s_isFamilyAArchetype = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        // Founder research-confirmed 2026-05-19: WebGPU enabled by default
+        // Safari 26.0+ (iOS 26.0 release Sept 2025). Pre-Safari-26 (any
+        // Safari 17.x / 18.x / 19.x major) = Family A; WebGPU undefined.
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (s_isFamilyAArchetype) {
+        settings.setWebGPUEnabled(false);
+        // Future Safari-26-only feature hides for Family A go here.
+        // settings.setViewTransitionsEnabled(false);
+        // settings.setWebAssemblyGCEnabled(false);
+        // etc. (verify each against real iPhone Safari 18.6 BS capture
+        // before adding — never assume.)
+    }
+#endif
+
 #if !PLATFORM(GTK) && !PLATFORM(WIN) && !PLATFORM(PLAYSTATION) && !PLATFORM(WPE)
     if (!settings.acceleratedCompositingEnabled()) {
         WEBPAGE_RELEASE_LOG(Layers, "updatePreferences: acceleratedCompositingEnabled setting was false. WebKit cannot function in this mode; changing setting to true");
