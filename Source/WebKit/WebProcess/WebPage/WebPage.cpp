@@ -5135,6 +5135,15 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // URLPattern.idl has [EnabledBySetting=URLPatternEnabled] + yaml.)
         settings.setURLPatternEnabled(false);
 
+        // Wave 29-406 §11.A.16 DEFERRED — CSSOM descriptor blocks
+        // (CSSStyleProperties / CSSFontFaceDescriptors / CSSPageDescriptors)
+        // need builtinNames registration for EnabledBySetting bindings.
+        // r41 build failed: "no member named 'CSSStylePropertiesPublicName'
+        // in 'WebCore::WebCoreBuiltinNames'". Deferred to a later wave that
+        // also adds the corresponding entries to WebCoreBuiltinNames.h
+        // or uses a different gating mechanism (e.g. compile-time CONDITION
+        // wrapped in PLATFORM(DRIFTSTACK) ifdef).
+
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
         // - FileSystemWritableFileStream undefined
