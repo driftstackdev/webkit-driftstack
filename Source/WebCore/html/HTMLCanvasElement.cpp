@@ -40,7 +40,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
-#include "DriftstackLayerB.h"
+#include "../platform/graphics/coreml/DriftstackLayerB.h"
 // V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
 // (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
 // in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).

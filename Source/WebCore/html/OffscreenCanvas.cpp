@@ -32,7 +32,7 @@
 #include "CanvasRenderingContext2DBase.h"
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
-#include "DriftstackLayerB.h"
+#include "../platform/graphics/coreml/DriftstackLayerB.h"
 #include <wtf/text/Base64.h>
 #endif
 #include "BitmapImage.h"
