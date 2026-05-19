@@ -3151,10 +3151,24 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_COLOR_ATTACHMENTS:
         return maxColorAttachments();
     case GraphicsContextGL::MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-406 §11.B.2 (empirical 2026-05-19 BS Automate fingerprint):
+        // iPhone 17 / iPhone 16 Pro Safari 26.4 both → 53248 (vs Mac ANGLE
+        // backend's 69632). Hardware-archetype-keyed.
+        return 53248LL;
+#endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_COMBINED_UNIFORM_BLOCKS:
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-406 §11.B.2: iPhone Safari 26.4 → 24 (vs Mac → 32).
+        return 24;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-406 §11.B.2: iPhone Safari 26.4 → 53248 (vs Mac → 69632).
+        return 53248LL;
+#endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_DRAW_BUFFERS:
         return maxDrawBuffers();
