@@ -5051,6 +5051,20 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             || sv.find("safari24_") != std::string_view::npos
             || sv.find("safari25_") != std::string_view::npos;
     }();
+    // Wave 29-406 §11.A.9 — MediaSource hide (both Family A AND Family B).
+    // Empirical BS Automate 2026-05-19: real iPhone Safari 18.6 AND 26.4
+    // both hide window.MediaSource and window.SourceBuffer (iOS standardized
+    // on ManagedMediaSource since iOS 17.1). Mac fork upstream exposes
+    // MediaSource — must hide on iPhone archetypes (which is default
+    // and all FA/FB cases on this fork).
+    settings.setMediaSourceEnabled(false);
+
+    // Wave 29-406 §11.A.10 — DigitalCredentials enable on Family B.
+    // Empirical: iPhone Safari 26.4 exposes window.DigitalCredential.
+    // Mac fork upstream may or may not have it enabled by default.
+    if (!s_isFamilyAArchetype)
+        settings.setDigitalCredentialsEnabled(true);
+
     if (s_isFamilyAArchetype) {
         // Wave 29-403 §11.A: WebGPU cascade hides navigator.gpu + GPU*
         // window globals + GPUSupportedFeatures/Limits + WGSLLanguageFeatures.
@@ -5083,6 +5097,15 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // to ScrollTimeline.idl + ViewTimeline.idl since upstream WebKit
         // doesn't gate them at IDL level).
         settings.setScrollDrivenAnimationsEnabled(false);
+
+        // Wave 29-406 §11.A.7 — WebCodecs Audio hide on Family A.
+        // Empirical BS Automate 2026-05-19: AudioData, AudioDecoder,
+        // AudioEncoder, EncodedAudioChunk all undefined on real iPhone
+        // Safari 18.6 but defined on 26.4.
+        settings.setWebCodecsAudioEnabled(false);
+
+        // Wave 29-406 §11.A.10 (cont'd) — DigitalCredentials hide on Family A.
+        settings.setDigitalCredentialsEnabled(false);
     }
 #endif
 

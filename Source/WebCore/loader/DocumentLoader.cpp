@@ -1506,7 +1506,17 @@ void DocumentLoader::applyPoliciesToSettings()
         return;
 
 #if ENABLE(MEDIA_SOURCE)
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-406 §11.A.9 (2026-05-19): real iPhone Safari hides
+    // window.MediaSource and window.SourceBuffer (iOS standardized on
+    // ManagedMediaSource only). DocumentLoader::commitData re-syncs the
+    // MediaSourceEnabled setting from platformDefaultMediaSourceEnabled()
+    // on each load — undoing the WebPage::updatePreferences override.
+    // Force-pin false here for all PLATFORM(DRIFTSTACK) builds.
+    m_frame->settings().setMediaSourceEnabled(false);
+#else
     m_frame->settings().setMediaSourceEnabled(m_mediaSourcePolicy == MediaSourcePolicy::Default ? Settings::platformDefaultMediaSourceEnabled() : m_mediaSourcePolicy == MediaSourcePolicy::Enable);
+#endif
 #endif
 #if ENABLE(WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY)
     if (m_legacyOverflowScrollingTouchPolicy == LegacyOverflowScrollingTouchPolicy::Disable)
