@@ -84,6 +84,18 @@ const String& WorkerNavigator::userAgent() const
         const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
         if (env && env[0])
             return String::fromUTF8(env);
+        // Wave 29-404 §11.A.5 archetype-slug-to-UA fallback for Worker
+        // context (mirrors Navigator.cpp).
+        const char* slug = getenv("DRIFTSTACK_ARCHETYPE");
+        if (slug && slug[0]) {
+            std::string_view sv(slug);
+            if (sv == "iphone16pro_ios18_6_safari18_6")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"_s);
+            if (sv == "iphone17_ios18_7_safari26_4")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s);
+            if (sv == "iphone16pro_ios18_7_safari26_4")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s);
+        }
         return String();
     }();
     if (!driftstackResolvedUA.get().isEmpty())

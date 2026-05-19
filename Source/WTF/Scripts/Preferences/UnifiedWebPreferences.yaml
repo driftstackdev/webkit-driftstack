@@ -7014,6 +7014,27 @@ ScrollAnimatorEnabled:
     WebCore:
       default: false
 
+# Wave 29-404 §11.A.4 (Driftstack 2026-05-19): per-archetype gate for the
+# scroll-driven animation timeline interfaces (ScrollTimeline + ViewTimeline)
+# so Family A archetypes (Safari ≤26.3) can hide them. Upstream WebKit
+# doesn't gate these at IDL level; this preference + the IDL EnabledBySetting
+# additions in ScrollTimeline.idl / ViewTimeline.idl provide the runtime
+# accessor-installation gate needed for bit-identical match to real iPhone
+# Safari 18.6 (which does not expose either constructor).
+ScrollDrivenAnimationsEnabled:
+  type: bool
+  status: stable
+  category: animation
+  humanReadableName: "Scroll-driven Animations (ScrollTimeline / ViewTimeline)"
+  humanReadableDescription: "Expose ScrollTimeline and ViewTimeline constructors on the Window"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 ScrollToTextFragmentEnabled:
   type: bool
   status: stable

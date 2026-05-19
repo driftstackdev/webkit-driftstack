@@ -25,6 +25,7 @@
 
 // https://drafts.csswg.org/scroll-animations/#viewtimeline
 [
+    EnabledBySetting=ScrollDrivenAnimationsEnabled,
     Exposed=Window
 ] interface ViewTimeline : ScrollTimeline {
     [CallWith=CurrentDocument] constructor(optional ViewTimelineOptions options = {});

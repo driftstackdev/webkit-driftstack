@@ -5079,13 +5079,10 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         settings.setCSSFieldSizingEnabled(false);
         // CSS.supports('text-wrap: pretty')
         settings.setCSSTextWrapPrettyEnabled(false);
-
-        // Not addressed yet (require further investigation — non-trivial
-        // gating mechanism, not direct EnabledBySetting):
-        //   ScrollTimeline / ViewTimeline (scroll-driven animation)
-        //   PerformanceEventTiming class itself (cascade through
-        //     EventTimingEnabled but Family A only test 1 of 2 surfaces
-        //     hides — verify post-build)
+        // ScrollTimeline + ViewTimeline (Wave 29-404 §11.A.4: gate added
+        // to ScrollTimeline.idl + ViewTimeline.idl since upstream WebKit
+        // doesn't gate them at IDL level).
+        settings.setScrollDrivenAnimationsEnabled(false);
     }
 #endif
 

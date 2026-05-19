@@ -124,6 +124,23 @@ const String& Navigator::userAgent() const
         const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
         if (env && env[0])
             return String::fromUTF8(env);
+        // Wave 29-404 §11.A.5 (2026-05-19): direct archetype-slug-to-UA
+        // fallback for v1.0 supported archetypes. Lets harness scripts
+        // pass DRIFTSTACK_ARCHETYPE alone (without separate UA_FULL) and
+        // get the matching UA. v1.0 supported set:
+        //   iphone16pro_ios18_6_safari18_6 (Family A)
+        //   iphone17_ios18_7_safari26_4 (Family B launch)
+        //   iphone16pro_ios18_7_safari26_4 (second supported)
+        const char* slug = getenv("DRIFTSTACK_ARCHETYPE");
+        if (slug && slug[0]) {
+            std::string_view sv(slug);
+            if (sv == "iphone16pro_ios18_6_safari18_6")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"_s);
+            if (sv == "iphone17_ios18_7_safari26_4")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s);
+            if (sv == "iphone16pro_ios18_7_safari26_4")
+                return String("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s);
+        }
         return String();
     }();
     if (!driftstackResolvedUA.get().isEmpty())
