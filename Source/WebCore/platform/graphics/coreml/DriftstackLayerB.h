@@ -37,7 +37,10 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <wtf/Noncopyable.h>
+#include <wtf/Vector.h>
+#include <wtf/text/WTFString.h>
 
 namespace WebCore::Driftstack {
 
@@ -135,6 +138,36 @@ private:
     void* m_model { nullptr };
     void* m_modelV2 { nullptr };
 };
+
+// V-790.V2 §3.1.3 canvas-hook helpers (wave 29-398).
+// Implemented in DriftstackLayerB.mm. Used by HTMLCanvasElement::toDataURL,
+// HTMLCanvasElement::toBlob, OffscreenCanvas::convertToBlob.
+
+// Decode a base64 PNG dataURL ("data:image/png;base64,...") to a 256x256
+// RGBA float32 tile [0,1]. Resizes (bilinear) any input dimension to
+// 256x256 since the Layer B v2 model expects fixed 256x256 input.
+// Returns nullopt on decode failure / non-image input.
+WEBCORE_EXPORT std::optional<LayerBV2Tile>
+macForkRGBAFromDataURL(const WTF::String& dataURL, uint16_t canvasW, uint16_t canvasH);
+
+// Decode a raw PNG byte buffer (toBlob output) into a 256x256 RGBA tile.
+WEBCORE_EXPORT std::optional<LayerBV2Tile>
+macForkRGBAFromPNGBytes(std::span<const uint8_t> pngBytes, uint16_t canvasW, uint16_t canvasH);
+
+// Encode a 256x256 RGBA float32 [0,1] tile back to a PNG dataURL,
+// resizing (bilinear) to (canvasW x canvasH). Returns empty string on
+// encode failure.
+WEBCORE_EXPORT WTF::String
+dataURLFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba, uint16_t canvasW, uint16_t canvasH);
+
+// Encode a 256x256 RGBA tile to a raw PNG byte vector (toBlob output).
+WEBCORE_EXPORT WTF::Vector<uint8_t>
+pngBytesFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba, uint16_t canvasW, uint16_t canvasH);
+
+// Rule Q canary detector: returns true if the document URL host matches a
+// known fingerprint vendor pattern. Canary contexts BYPASS Layer B v2 ML
+// (atlas-only per Rule Q + memory feedback_rule_q_canary_probe_atlas_only).
+WEBCORE_EXPORT bool isCanaryFingerprintHost(const WTF::String& host);
 
 } // namespace WebCore::Driftstack
 

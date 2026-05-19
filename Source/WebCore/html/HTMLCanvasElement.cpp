@@ -40,6 +40,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
+#include "DriftstackLayerB.h"
 // V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
 // (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
 // in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).
@@ -1220,6 +1221,34 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             return UncachedString { substitute };
         }
     }
+    // V-790.V2 §3.1.3 Layer B v2 ML canvas-level RGBA substitution
+    // (wave 29-398). Fires only AFTER V-510 atlas + V-241 canonical miss
+    // (last resort before Mac fork natural output). Gated on
+    // DRIFTSTACK_LAYER_B_V2_ENABLED=1 env var + Rule Q canary detector
+    // (canary fingerprint vendor hosts BYPASS Layer B v2 — atlas-only).
+    static bool s_layerBV2Enabled = []() {
+        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_layerBV2Enabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        auto host = document->url().host().toString();
+        if (!Driftstack::isCanaryFingerprintHost(host)) {
+            if (auto macTile = Driftstack::macForkRGBAFromDataURL(encoded, width(), height())) {
+                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
+                    auto substituted = Driftstack::dataURLFromIPhoneRGBA(pred->tile, width(), height());
+                    if (!substituted.isEmpty()) {
+                        WTFLogAlways("[Driftstack-LayerBV2] canvas-level RGBA substitution "
+                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
+                                     width(), height(), pred->inference_ms, pred->ane_routed);
+                        return UncachedString { substituted };
+                    }
+                }
+            }
+        } else {
+            WTFLogAlways("[Driftstack-LayerBV2] BYPASS canary host=%s (Rule Q atlas-only)",
+                host.utf8().data());
+        }
+    }
 #endif
     return UncachedString { encoded };
 }
@@ -1293,6 +1322,30 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
                 blobData = std::move(*decoded);
                 WTFLogAlways("[Driftstack-%s-toBlob] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
                     fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
+            }
+        }
+    }
+    // V-790.V2 §3.1.3 Layer B v2 ML toBlob hook (wave 29-398).
+    // Mirrors toDataURL dispatch: gated on env var + Rule Q canary bypass.
+    static bool s_layerBV2EnabledToBlob = []() {
+        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_layerBV2EnabledToBlob && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        auto host = document->url().host().toString();
+        if (!Driftstack::isCanaryFingerprintHost(host)) {
+            std::span<const uint8_t> blobSpan { blobData.data(), blobData.size() };
+            if (auto macTile = Driftstack::macForkRGBAFromPNGBytes(blobSpan, width(), height())) {
+                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
+                    auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
+                    if (!substituted.isEmpty()) {
+                        blobData = WTFMove(substituted);
+                        WTFLogAlways("[Driftstack-LayerBV2-toBlob] canvas-level RGBA substitution "
+                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
+                                     width(), height(), pred->inference_ms, pred->ane_routed);
+                    }
+                }
             }
         }
     }

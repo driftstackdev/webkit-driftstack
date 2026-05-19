@@ -32,6 +32,7 @@
 #include "CanvasRenderingContext2DBase.h"
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
+#include "DriftstackLayerB.h"
 #include <wtf/text/Base64.h>
 #endif
 #include "BitmapImage.h"
@@ -365,6 +366,37 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
                 blobData = std::move(*decoded);
                 WTFLogAlways("[Driftstack-%s-Worker] canvas-fp blob substitution FIRED (%dx%d, lastFillText=%u chars)",
                     fromV510 ? "V510" : "V241", width(), height(), lastFillText().length());
+            }
+        }
+    }
+    // V-790.V2 §3.1.3 Layer B v2 ML Worker-context hook (wave 29-398).
+    // Mirrors main-thread toDataURL/toBlob dispatch: gated on env var +
+    // Rule Q canary bypass. Layer B v2 is per-WebProcess singleton; same
+    // singleton serves Worker context (main thread + Workers share the
+    // WebContent process). Inference is synchronous; Worker thread
+    // blocks for ≤5ms which respects Rule O v2 HARD cap.
+    static bool s_layerBV2EnabledWorker = []() {
+        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
+        return env && env[0] == '1';
+    }();
+    if (s_layerBV2EnabledWorker && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        // Worker context: document URL lookup is via ScriptExecutionContext.
+        WTF::String host;
+        if (context)
+            host = context->url().host().toString();
+        if (!Driftstack::isCanaryFingerprintHost(host)) {
+            std::span<const uint8_t> blobSpan { blobData.data(), blobData.size() };
+            if (auto macTile = Driftstack::macForkRGBAFromPNGBytes(blobSpan, width(), height())) {
+                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
+                    auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
+                    if (!substituted.isEmpty()) {
+                        blobData = WTFMove(substituted);
+                        WTFLogAlways("[Driftstack-LayerBV2-Worker] canvas-level RGBA substitution "
+                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
+                                     width(), height(), pred->inference_ms, pred->ane_routed);
+                    }
+                }
             }
         }
     }

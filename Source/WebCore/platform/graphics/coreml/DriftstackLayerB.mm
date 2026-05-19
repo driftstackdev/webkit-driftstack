@@ -23,8 +23,10 @@
 
 #if PLATFORM(MAC) || PLATFORM(IOS_FAMILY)
 
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreML/CoreML.h>
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #import <algorithm>
 #import <cmath>
 #import <chrono>
@@ -33,6 +35,13 @@
 #import <string_view>
 #import <wtf/Assertions.h>
 #import <wtf/StdLibExtras.h>
+#import <wtf/text/Base64.h>
+#import <wtf/text/MakeString.h>
+#import <wtf/text/StringView.h>
+
+#if PLATFORM(MAC)
+#import <UniformTypeIdentifiers/UTCoreTypes.h>
+#endif
 
 namespace WebCore::Driftstack {
 
@@ -541,6 +550,246 @@ std::optional<LayerBPrediction> LayerB::predict(
 
         return prediction;
     } // @autoreleasepool
+}
+
+// ============================================================================
+// V-790.V2 §3.1.3 canvas-hook helpers (wave 29-398).
+// ============================================================================
+
+namespace {
+
+// Resize a source RGBA pixel buffer (srcW x srcH, 8bpc, premul-RGBA layout)
+// to dst 256x256 RGBA float32 [0,1] via bilinear interpolation. Layer B v2
+// expects fixed 256x256 input; canvases of any size route through this.
+void resizeRGBA8ToLayerBV2Tile(std::span<const uint8_t> src, size_t srcW,
+                               size_t srcH, LayerBV2Tile& dst)
+{
+    constexpr size_t kDstSize = 256;
+    if (srcW == 0 || srcH == 0)
+        return;
+    const float scaleX = static_cast<float>(srcW - 1) / static_cast<float>(kDstSize - 1);
+    const float scaleY = static_cast<float>(srcH - 1) / static_cast<float>(kDstSize - 1);
+    for (size_t dy = 0; dy < kDstSize; ++dy) {
+        float fy = static_cast<float>(dy) * scaleY;
+        size_t iy0 = static_cast<size_t>(fy);
+        size_t iy1 = std::min(iy0 + 1, srcH - 1);
+        float wy = fy - static_cast<float>(iy0);
+        for (size_t dx = 0; dx < kDstSize; ++dx) {
+            float fx = static_cast<float>(dx) * scaleX;
+            size_t ix0 = static_cast<size_t>(fx);
+            size_t ix1 = std::min(ix0 + 1, srcW - 1);
+            float wx = fx - static_cast<float>(ix0);
+            for (int c = 0; c < 4; ++c) {
+                float v00 = static_cast<float>(src[(iy0 * srcW + ix0) * 4 + c]);
+                float v10 = static_cast<float>(src[(iy0 * srcW + ix1) * 4 + c]);
+                float v01 = static_cast<float>(src[(iy1 * srcW + ix0) * 4 + c]);
+                float v11 = static_cast<float>(src[(iy1 * srcW + ix1) * 4 + c]);
+                float v0 = v00 * (1.0f - wx) + v10 * wx;
+                float v1 = v01 * (1.0f - wx) + v11 * wx;
+                float v  = (v0 * (1.0f - wy) + v1 * wy) / 255.0f;
+                dst.rgba[(dy * kDstSize + dx) * 4 + c] = std::clamp(v, 0.0f, 1.0f);
+            }
+        }
+    }
+}
+
+// Reverse: 256x256 LayerBV2Tile [0,1] → dstW x dstH RGBA 8bpc bilinear.
+void resizeLayerBV2TileToRGBA8(const LayerBV2Tile& src, size_t dstW,
+                               size_t dstH, std::span<uint8_t> dst)
+{
+    constexpr size_t kSrcSize = 256;
+    if (dstW == 0 || dstH == 0)
+        return;
+    const float scaleX = static_cast<float>(kSrcSize - 1) / static_cast<float>(dstW > 1 ? dstW - 1 : 1);
+    const float scaleY = static_cast<float>(kSrcSize - 1) / static_cast<float>(dstH > 1 ? dstH - 1 : 1);
+    for (size_t dy = 0; dy < dstH; ++dy) {
+        float fy = static_cast<float>(dy) * scaleY;
+        size_t iy0 = std::min(static_cast<size_t>(fy), kSrcSize - 1);
+        size_t iy1 = std::min(iy0 + 1, kSrcSize - 1);
+        float wy = fy - static_cast<float>(iy0);
+        for (size_t dx = 0; dx < dstW; ++dx) {
+            float fx = static_cast<float>(dx) * scaleX;
+            size_t ix0 = std::min(static_cast<size_t>(fx), kSrcSize - 1);
+            size_t ix1 = std::min(ix0 + 1, kSrcSize - 1);
+            float wx = fx - static_cast<float>(ix0);
+            for (int c = 0; c < 4; ++c) {
+                float v00 = src.rgba[(iy0 * kSrcSize + ix0) * 4 + c];
+                float v10 = src.rgba[(iy0 * kSrcSize + ix1) * 4 + c];
+                float v01 = src.rgba[(iy1 * kSrcSize + ix0) * 4 + c];
+                float v11 = src.rgba[(iy1 * kSrcSize + ix1) * 4 + c];
+                float v0 = v00 * (1.0f - wx) + v10 * wx;
+                float v1 = v01 * (1.0f - wx) + v11 * wx;
+                float v  = v0 * (1.0f - wy) + v1 * wy;
+                int q = static_cast<int>(std::round(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+                dst[(dy * dstW + dx) * 4 + c] = static_cast<uint8_t>(q);
+            }
+        }
+    }
+}
+
+// Decode raw PNG bytes to a 256x256 LayerBV2Tile via CGImage. Returns
+// nullopt on decode failure or non-image input.
+std::optional<LayerBV2Tile> decodePNGToLayerBV2Tile(NSData* pngData)
+{
+    if (!pngData || pngData.length == 0)
+        return std::nullopt;
+    @autoreleasepool {
+        CGImageSourceRef src = CGImageSourceCreateWithData(
+            (__bridge CFDataRef)pngData, nullptr);
+        if (!src)
+            return std::nullopt;
+        CGImageRef image = CGImageSourceCreateImageAtIndex(src, 0, nullptr);
+        CFRelease(src);
+        if (!image)
+            return std::nullopt;
+        size_t w = CGImageGetWidth(image);
+        size_t h = CGImageGetHeight(image);
+        if (w == 0 || h == 0) {
+            CGImageRelease(image);
+            return std::nullopt;
+        }
+        // Draw into an RGBA8 buffer with known layout (premul-RGBA).
+        std::vector<uint8_t> buf(w * h * 4, 0);
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGContextRef ctx = CGBitmapContextCreate(buf.data(), w, h, 8, w * 4, cs,
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(cs);
+        if (!ctx) {
+            CGImageRelease(image);
+            return std::nullopt;
+        }
+        CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), image);
+        CGContextRelease(ctx);
+        CGImageRelease(image);
+        LayerBV2Tile tile;
+        resizeRGBA8ToLayerBV2Tile(std::span<const uint8_t> { buf.data(), buf.size() }, w, h, tile);
+        return tile;
+    }
+}
+
+// Encode a LayerBV2Tile (resized to canvasW x canvasH) into PNG bytes via
+// CGImageDestination. Returns empty NSData on failure.
+NSData* encodeLayerBV2TileToPNG(const LayerBV2Tile& tile, uint16_t canvasW, uint16_t canvasH)
+{
+    if (canvasW == 0 || canvasH == 0)
+        return nil;
+    @autoreleasepool {
+        size_t w = canvasW;
+        size_t h = canvasH;
+        std::vector<uint8_t> buf(w * h * 4, 0);
+        resizeLayerBV2TileToRGBA8(tile, w, h, std::span<uint8_t> { buf.data(), buf.size() });
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGContextRef ctx = CGBitmapContextCreate(buf.data(), w, h, 8, w * 4, cs,
+            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+        CGColorSpaceRelease(cs);
+        if (!ctx)
+            return nil;
+        CGImageRef image = CGBitmapContextCreateImage(ctx);
+        CGContextRelease(ctx);
+        if (!image)
+            return nil;
+        CFMutableDataRef pngData = CFDataCreateMutable(kCFAllocatorDefault, 0);
+        CGImageDestinationRef dest = CGImageDestinationCreateWithData(
+            pngData, CFSTR("public.png"), 1, nullptr);
+        if (!dest) {
+            CFRelease(pngData);
+            CGImageRelease(image);
+            return nil;
+        }
+        CGImageDestinationAddImage(dest, image, nullptr);
+        bool ok = CGImageDestinationFinalize(dest);
+        CFRelease(dest);
+        CGImageRelease(image);
+        if (!ok) {
+            CFRelease(pngData);
+            return nil;
+        }
+        return (__bridge_transfer NSData*)pngData;
+    }
+}
+
+} // anonymous namespace
+
+std::optional<LayerBV2Tile> macForkRGBAFromDataURL(const WTF::String& dataURL,
+                                                  uint16_t canvasW,
+                                                  uint16_t canvasH)
+{
+    UNUSED_PARAM(canvasW);
+    UNUSED_PARAM(canvasH);
+    static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
+    if (!dataURL.startsWith(kPNGPrefix))
+        return std::nullopt;
+    StringView b64View = StringView(dataURL).substring(kPNGPrefix.length());
+    auto decoded = base64Decode(b64View);
+    if (!decoded)
+        return std::nullopt;
+    NSData* pngData = [NSData dataWithBytes:decoded->data() length:decoded->size()];
+    return decodePNGToLayerBV2Tile(pngData);
+}
+
+std::optional<LayerBV2Tile> macForkRGBAFromPNGBytes(std::span<const uint8_t> pngBytes,
+                                                   uint16_t canvasW,
+                                                   uint16_t canvasH)
+{
+    UNUSED_PARAM(canvasW);
+    UNUSED_PARAM(canvasH);
+    if (pngBytes.empty())
+        return std::nullopt;
+    NSData* pngData = [NSData dataWithBytes:pngBytes.data() length:pngBytes.size()];
+    return decodePNGToLayerBV2Tile(pngData);
+}
+
+WTF::String dataURLFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba,
+                                  uint16_t canvasW, uint16_t canvasH)
+{
+    NSData* pngData = encodeLayerBV2TileToPNG(iphone_rgba, canvasW, canvasH);
+    if (!pngData)
+        return { };
+    auto pngSpan = std::span<const uint8_t> {
+        static_cast<const uint8_t*>(pngData.bytes), pngData.length };
+    return makeString("data:image/png;base64,"_s, base64Encoded(pngSpan));
+}
+
+WTF::Vector<uint8_t> pngBytesFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba,
+                                            uint16_t canvasW, uint16_t canvasH)
+{
+    NSData* pngData = encodeLayerBV2TileToPNG(iphone_rgba, canvasW, canvasH);
+    if (!pngData)
+        return { };
+    WTF::Vector<uint8_t> out;
+    out.reserveInitialCapacity(pngData.length);
+    out.append(std::span<const uint8_t> {
+        static_cast<const uint8_t*>(pngData.bytes), pngData.length });
+    return out;
+}
+
+bool isCanaryFingerprintHost(const WTF::String& host)
+{
+    if (host.isEmpty())
+        return false;
+    // Lower-case the host for case-insensitive matching.
+    auto hostLower = host.convertToASCIILowercase();
+    // Rule Q canary fingerprint vendor patterns. ATLAS-ONLY for these
+    // contexts; Layer B v2 NEVER fires on canary canvases (per
+    // feedback_rule_q_canary_probe_atlas_only).
+    static constexpr ASCIILiteral kCanaryPatterns[] = {
+        "fingerprint.com"_s,
+        "fpjs.io"_s,
+        "fpjscdn.net"_s,
+        "creepjs"_s,
+        "abrahamjuliot.github.io"_s, // CreepJS host on GitHub Pages
+        "botd"_s,
+        "browserleaks.com"_s,
+        "amiunique.org"_s,
+        "coveryourtracks.eff.org"_s,
+        "panopticlick"_s,
+        "deviceandbrowserinfo.com"_s,
+    };
+    for (auto pattern : kCanaryPatterns) {
+        if (hostLower.contains(pattern))
+            return true;
+    }
+    return false;
 }
 
 } // namespace WebCore::Driftstack
