@@ -462,6 +462,10 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // generic-font-keyword override (serif/sans-serif/monospace →
             // iOS-style defaults). Consumed by SystemFontDatabaseCoreText.
             { "DRIFTSTACK_GENERIC_FONT_OVERRIDE", getenv("DRIFTSTACK_GENERIC_FONT_OVERRIDE") },
+            // Wave 29-397 V-LockdownMode — process-global CG private SPIs.
+            // CGEnterLockdownModeForFonts() + CGFontSetShouldUseMulticache(false).
+            { "DRIFTSTACK_CG_LOCKDOWN_FONTS", getenv("DRIFTSTACK_CG_LOCKDOWN_FONTS") },
+            { "DRIFTSTACK_CG_MULTICACHE_OFF", getenv("DRIFTSTACK_CG_MULTICACHE_OFF") },
             { "DRIFTSTACK_SF_PRO_PLUS_ONE", getenv("DRIFTSTACK_SF_PRO_PLUS_ONE") },
             { "DRIFTSTACK_FONT_CANONICAL_OVERRIDE", getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE") },
             { "DRIFTSTACK_FONT_CANONICAL_PATH", getenv("DRIFTSTACK_FONT_CANONICAL_PATH") },

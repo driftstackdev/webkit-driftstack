@@ -986,6 +986,28 @@ void WebProcess::platformInitializeProcess(const AuxiliaryProcessInitializationP
 {
     WebCore::PublicSuffixStore::singleton().enablePublicSuffixCache();
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-LockdownMode probes — process-global CG private SPIs.
+    // Env-gated empirical test: do iOS-style lockdown mode / multicache=false
+    // settings shift Mac CT/CG rasterization output toward iPhone byte-identical?
+    //
+    // Each gate independent (default-off preserves cumrig 131-streak):
+    //   DRIFTSTACK_CG_LOCKDOWN_FONTS=1     → CGEnterLockdownModeForFonts()
+    //   DRIFTSTACK_CG_MULTICACHE_OFF=1     → CGFontSetShouldUseMulticache(false)
+    //
+    // Per V-MacCT-Realign.C + V-AFP-Audit.D + V-iOS-App-Renderer LOSS
+    // convergence: these are the last unexplored process-global CG flags
+    // before committing to Layer B v2 ML un-park (~3-4 weeks).
+    if (const char* env = getenv("DRIFTSTACK_CG_LOCKDOWN_FONTS"); env && env[0] == '1') {
+        CGEnterLockdownModeForFonts();
+        WTFLogAlways("[Driftstack-V-LockdownMode.1] CGEnterLockdownModeForFonts() invoked at WebProcess init");
+    }
+    if (const char* env = getenv("DRIFTSTACK_CG_MULTICACHE_OFF"); env && env[0] == '1') {
+        CGFontSetShouldUseMulticache(false);
+        WTFLogAlways("[Driftstack-V-LockdownMode.2] CGFontSetShouldUseMulticache(false) invoked at WebProcess init");
+    }
+#endif
+
 #if PLATFORM(MAC)
     // Deny the WebContent process access to the WindowServer.
     // This call will not succeed if there are open WindowServer connections at this point.
