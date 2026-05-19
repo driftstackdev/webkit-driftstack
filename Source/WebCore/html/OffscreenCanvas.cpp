@@ -430,18 +430,24 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         // (worker script URL OR document URL for main-thread offscreen).
         // Re-uses existing `RefPtr context = canvasBaseScriptExecutionContext()`
         // declared at the top of convertToBlob (line ~320).
+        // Wave 29-402 Fix 2: archetype from DRIFTSTACK_ARCHETYPE env.
         static const char* s_sessionIdWorker = getenv("DRIFTSTACK_SESSION_ID");
         static const char* s_customerIdWorker = getenv("DRIFTSTACK_CUSTOMER_ID");
+        static const char* s_archetypeWorker = []() {
+            const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+            return env ? env : "iphone17_ios18_7_safari26_4";
+        }();
         String pageURLWorker;
         if (context)
             pageURLWorker = context->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-Worker] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
+            "archetype=%s ts=%lld mime=%s mac_len=%zu "
             "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSigWorker.isEmpty() ? "<empty>" : opSeqShaSigWorker.utf8().data(),
             lastTextSigWorker.left(80).utf8().data(),
+            s_archetypeWorker,
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             blobData.size(),

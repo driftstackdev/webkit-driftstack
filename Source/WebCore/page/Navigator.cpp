@@ -412,6 +412,29 @@ bool Navigator::standalone() const
 GPU* Navigator::gpu()
 {
 #if HAVE(WEBGPU_IMPLEMENTATION)
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 v1.0 navigator.gpu Family A hide (founder verdict
+    // 2026-05-19 "everything perfect in v1.0"). iPhone Safari ≤26.3
+    // (Family A) does NOT expose WebGPU — `navigator.gpu === undefined`.
+    // Empirical capture 2026-05-19 BS Family A 3 sessions confirms
+    // gpu_err='navigator.gpu undefined'. For Family A archetype dispatch,
+    // return nullptr so the IDL binding emits undefined. Family B
+    // (Safari 26.4+) keeps native exposure. Static init reads
+    // DRIFTSTACK_ARCHETYPE env var (forwarded via ProcessLauncherCocoa
+    // allowlist Wave 29-400 §8.A).
+    static bool s_isFamilyA = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype) return false;  // default Family B (launch archetype)
+        // Family A archetype identifiers (per CLAUDE.md launch verdict 2026-05-17):
+        //   iphone16pro_ios18_6_safari18_6 — canonical Family A
+        //   iphone16pro_ios18_*_safari18_* — Family A sub-variants
+        //   any *_safari18_* — Safari major 18 = pre-26 = Family A
+        // Use std::string_view::find to avoid -Wunsafe-buffer-usage flag on strstr.
+        return std::string_view(archetype).find("safari18_") != std::string_view::npos;
+    }();
+    if (s_isFamilyA)
+        return nullptr;
+#endif
     if (!m_gpuForWebGPU) {
         RefPtr frame = this->frame();
         if (!frame)

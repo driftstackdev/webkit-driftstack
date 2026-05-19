@@ -102,6 +102,17 @@ bool WorkerNavigator::onLine() const
 GPU* WorkerNavigator::gpu()
 {
 #if HAVE(WEBGPU_IMPLEMENTATION)
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 v1.0 navigator.gpu Family A hide (Worker context mirror;
+    // founder verdict 2026-05-19). See Navigator.cpp:412 for full rationale.
+    static bool s_isFamilyAWorker = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype) return false;
+        return std::string_view(archetype).find("safari18_") != std::string_view::npos;
+    }();
+    if (s_isFamilyAWorker)
+        return nullptr;
+#endif
     if (!m_gpuForWebGPU) {
         Ref context = downcast<WorkerGlobalScope>(*this->scriptExecutionContext());
         if (!context->graphicsClient())

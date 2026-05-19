@@ -1378,16 +1378,25 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         // injects per-session). page_url from document->url() at the
         // hook site — already accessed elsewhere in the function so
         // re-using `document` local. Statics initialize once per process.
+        // Wave 29-402 Fix 2 (founder verdict 2026-05-19 "everything perfect
+        // in v1.0"): archetype reads from DRIFTSTACK_ARCHETYPE env (forwarded
+        // via ProcessLauncherCocoa allowlist §8.A). Default to Family B
+        // launch archetype if unset (cumrig / dev sessions).
         static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
         static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
+        static const char* s_archetype = []() {
+            const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+            return env ? env : "iphone17_ios18_7_safari26_4";
+        }();
         auto pageURL = document->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toDataURL] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%u "
+            "archetype=%s ts=%lld mime=%s mac_len=%u "
             "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSig.isEmpty() ? "<empty>" : opSeqShaSig.utf8().data(),
             lastTextSig.left(80).utf8().data(),
+            s_archetype,
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             encoded.length(),
@@ -1562,16 +1571,22 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         // Wave 29-400 §8.A observability: per-session + customer + page_url
         // attribution (mirrors toDataURL site). Re-uses the toBlob function's
         // existing `Ref document = this->document();` at line ~1444.
+        // Wave 29-402 Fix 2: archetype from DRIFTSTACK_ARCHETYPE env.
         static const char* s_sessionIdBlob = getenv("DRIFTSTACK_SESSION_ID");
         static const char* s_customerIdBlob = getenv("DRIFTSTACK_CUSTOMER_ID");
+        static const char* s_archetypeBlob = []() {
+            const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+            return env ? env : "iphone17_ios18_7_safari26_4";
+        }();
         auto pageURLBlob = document->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toBlob] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
+            "archetype=%s ts=%lld mime=%s mac_len=%zu "
             "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSigBlob.isEmpty() ? "<empty>" : opSeqShaSigBlob.utf8().data(),
             lastTextSigBlob.left(80).utf8().data(),
+            s_archetypeBlob,
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             blobData.size(),
