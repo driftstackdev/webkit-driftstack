@@ -652,7 +652,7 @@ std::optional<LayerBV2Tile> decodePNGToLayerBV2Tile(NSData* pngData)
         std::vector<uint8_t> buf(w * h * 4, 0);
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGContextRef ctx = CGBitmapContextCreate(buf.data(), w, h, 8, w * 4, cs,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+            static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) | static_cast<uint32_t>(kCGBitmapByteOrder32Big));
         CGColorSpaceRelease(cs);
         if (!ctx) {
             CGImageRelease(image);
@@ -662,7 +662,8 @@ std::optional<LayerBV2Tile> decodePNGToLayerBV2Tile(NSData* pngData)
         CGContextRelease(ctx);
         CGImageRelease(image);
         LayerBV2Tile tile;
-        resizeRGBA8ToLayerBV2Tile(std::span<const uint8_t> { buf.data(), buf.size() }, w, h, tile);
+        auto bufSpan = unsafeMakeSpan(const_cast<const uint8_t*>(buf.data()), buf.size());
+        resizeRGBA8ToLayerBV2Tile(bufSpan, w, h, tile);
         return tile;
     }
 }
@@ -677,10 +678,11 @@ NSData* encodeLayerBV2TileToPNG(const LayerBV2Tile& tile, uint16_t canvasW, uint
         size_t w = canvasW;
         size_t h = canvasH;
         std::vector<uint8_t> buf(w * h * 4, 0);
-        resizeLayerBV2TileToRGBA8(tile, w, h, std::span<uint8_t> { buf.data(), buf.size() });
+        auto bufSpan = unsafeMakeSpan(buf.data(), buf.size());
+        resizeLayerBV2TileToRGBA8(tile, w, h, bufSpan);
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
         CGContextRef ctx = CGBitmapContextCreate(buf.data(), w, h, 8, w * 4, cs,
-            kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+            static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) | static_cast<uint32_t>(kCGBitmapByteOrder32Big));
         CGColorSpaceRelease(cs);
         if (!ctx)
             return nil;
@@ -723,7 +725,8 @@ std::optional<LayerBV2Tile> macForkRGBAFromDataURL(const WTF::String& dataURL,
     auto decoded = base64Decode(b64View);
     if (!decoded)
         return std::nullopt;
-    NSData* pngData = [NSData dataWithBytes:decoded->data() length:decoded->size()];
+    auto decodedSpan = decoded->span();
+    NSData* pngData = [NSData dataWithBytes:decodedSpan.data() length:decodedSpan.size()];
     return decodePNGToLayerBV2Tile(pngData);
 }
 
@@ -745,8 +748,8 @@ WTF::String dataURLFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba,
     NSData* pngData = encodeLayerBV2TileToPNG(iphone_rgba, canvasW, canvasH);
     if (!pngData)
         return { };
-    auto pngSpan = std::span<const uint8_t> {
-        static_cast<const uint8_t*>(pngData.bytes), pngData.length };
+    auto pngSpan = unsafeMakeSpan(
+        static_cast<const uint8_t*>(pngData.bytes), pngData.length);
     return makeString("data:image/png;base64,"_s, base64Encoded(pngSpan));
 }
 
@@ -758,8 +761,9 @@ WTF::Vector<uint8_t> pngBytesFromIPhoneRGBA(const LayerBV2Tile& iphone_rgba,
         return { };
     WTF::Vector<uint8_t> out;
     out.reserveInitialCapacity(pngData.length);
-    out.append(std::span<const uint8_t> {
-        static_cast<const uint8_t*>(pngData.bytes), pngData.length });
+    auto pngSpan = unsafeMakeSpan(
+        static_cast<const uint8_t*>(pngData.bytes), pngData.length);
+    out.append(pngSpan);
     return out;
 }
 

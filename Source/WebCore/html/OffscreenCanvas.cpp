@@ -386,7 +386,7 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         if (context)
             host = context->url().host().toString();
         if (!Driftstack::isCanaryFingerprintHost(host)) {
-            std::span<const uint8_t> blobSpan { blobData.data(), blobData.size() };
+            auto blobSpan = blobData.span();
             if (auto macTile = Driftstack::macForkRGBAFromPNGBytes(blobSpan, width(), height())) {
                 if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
                     auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
