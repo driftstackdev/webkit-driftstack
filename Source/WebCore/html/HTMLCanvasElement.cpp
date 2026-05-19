@@ -761,9 +761,17 @@ static void loadAtlasIntoState(V510AtlasState& state, const char* path, bool isP
     uint16_t version = readU16(4);
     uint8_t keyAlgo = bytesSpan[7];
     // V-581: accept v1/v2 (algo=1, Mac-output sha) and v3 (algo=2, op-seq sha).
+    // Wave 29-399 §7 Q2 (founder Tier-3 verdict 2026-05-19): also accept v4
+    // (algo=2 op-seq sha, but data section = full UTF-8 dataURL strings
+    // instead of pixel-delta encoding). v4 closes the §4-chain format
+    // mismatch: atlas-priority-append.py writes full iPhone dataURL bytes
+    // per priority entry; v3 path dispatched through applyV2DeltaAndReEncode
+    // which expected (W, H, numDeltas, N×deltas) layout and silently dropped
+    // the substitution. v4 dispatches directly to String::fromUTF8.
     bool accept = (version == 1 && keyAlgo == 1)
         || (version == 2 && keyAlgo == 1)
-        || (version == 3 && keyAlgo == 2);
+        || (version == 3 && keyAlgo == 2)
+        || (version == 4 && keyAlgo == 2);
     if (!accept) {
         WTFLogAlways("[Driftstack] V510Atlas[%s]: unsupported version=%u/algo=%u", slot, version, keyAlgo);
         munmap(base, st.st_size); close(fd); return;
@@ -996,10 +1004,16 @@ static String v510AtlasLookupInState(const V510AtlasState& state, const String& 
     //     of CC_SHA256(macForkDataURL.utf8()) — backwards compatible.
     //   v3 atlas (keyHashAlgo=2, formatVersion=3): key = first 16 bytes of
     //     opSequenceSHA256Hex (the JS-side / C++-side op-sequence canonical hash).
+    //     Data section = pixel-delta encoded (W, H, numDeltas, N×8B deltas).
+    //   v4 atlas (keyHashAlgo=2, formatVersion=4): SAME key derivation as v3
+    //     (op-seq sha first 16 bytes) BUT data section = full UTF-8 dataURL
+    //     strings (no delta encoding). Used by §4 auto-learn chain priority
+    //     bin where storing the full iPhone canonical dataURL is simpler
+    //     than computing pixel deltas Mac↔iPhone.
     //     If opSeqSha is empty (e.g. no canvas ops were recorded, or the canvas
-    //     context is not 2D), v3 lookup is skipped and atlas miss returned.
+    //     context is not 2D), v3/v4 lookup is skipped and atlas miss returned.
     std::array<uint8_t, CC_SHA256_DIGEST_LENGTH> fullDigest;
-    if (state.formatVersion == 3) {
+    if (state.formatVersion == 3 || state.formatVersion == 4) {
         if (opSequenceSHA256Hex.length() < 32)
             return String();  // need at least 16 bytes (32 hex chars) of key
         // Decode first 16 bytes from hex.
