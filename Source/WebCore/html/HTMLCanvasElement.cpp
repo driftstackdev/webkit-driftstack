@@ -793,8 +793,15 @@ void initV510AtlasOnce()
     state.dataPayloadSpan = bytesSpan.subspan(dataOffset);
     state.numEntries = numEntries;
     state.available = true;
-    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries; format=v%u",
-        (long long)st.st_size, path, numEntries, state.formatVersion);
+    // Wave 29-399 §5 (founder verdict 2026-05-19): log atlas file mtime
+    // so hot-reload verification can distinguish "fresh init this WebContent
+    // process" (fresh mtime) from "stale cache". Each WebContent process
+    // spawn re-runs initV510AtlasOnce → re-mmaps → re-reads file content.
+    // This log line is the empirical signal that hot-reload semantics
+    // work at session boundary.
+    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries; format=v%u; file_mtime=%lld",
+        (long long)st.st_size, path, numEntries, state.formatVersion,
+        (long long)st.st_mtimespec.tv_sec);
 }
 
 // V-578: apply delta-pixel substitution to a Mac dataURL.
