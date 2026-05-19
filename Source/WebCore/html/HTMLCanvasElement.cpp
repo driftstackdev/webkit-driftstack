@@ -1143,44 +1143,11 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     if (document->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
         return UncachedString { encodeDataURL(createImageForNoiseInjection(), encodingMIMEType, quality) };
 
-#if PLATFORM(DRIFTSTACK)
-    // V-790.V2 §3.1.3 build r7 (wave 29-398): Layer B v2 ML must fire
-    // BEFORE the USE(CG) `getImageData()` early-return at line 1148 below,
-    // which otherwise short-circuits all Mac fork PNG dataURL generation
-    // and bypasses our hook. When Layer B v2 is enabled, compute the
-    // encoded dataURL upfront (via makeRenderingResultsAvailable()) +
-    // run Layer B v2 substitution + return result if successful.
-    // On Layer B v2 failure (decode/predict/encode), fall through to the
-    // existing CG getImageData() / V-510 atlas / Mac fork natural paths.
-    static bool s_layerBV2HoistedEnabled = []() {
-        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
-        WTFLogAlways("[V-790-DEBUG] toDataURL HOISTED static init: DRIFTSTACK_LAYER_B_V2_ENABLED=%s",
-            env ? env : "(nullptr)");
-        return env && env[0] == '1';
-    }();
-    if (s_layerBV2HoistedEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        auto host = document->url().host().toString();
-        if (!Driftstack::isCanaryFingerprintHost(host)) {
-            auto encodedForLayerB = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
-            WTFLogAlways("[V-790-DEBUG] toDataURL HOISTED hook: encoded.len=%u w=%u h=%u",
-                encodedForLayerB.length(), width(), height());
-            if (auto macTile = Driftstack::macForkRGBAFromDataURL(encodedForLayerB, width(), height())) {
-                WTFLogAlways("[V-790-DEBUG] HOISTED macForkRGBAFromDataURL ok");
-                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
-                    WTFLogAlways("[V-790-DEBUG] HOISTED predictV2 ok inference_ms=%.3f ane=%d",
-                        pred->inference_ms, pred->ane_routed);
-                    auto substituted = Driftstack::dataURLFromIPhoneRGBA(pred->tile, width(), height());
-                    if (!substituted.isEmpty()) {
-                        WTFLogAlways("[Driftstack-LayerBV2] HOISTED canvas-level RGBA substitution "
-                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
-                                     width(), height(), pred->inference_ms, pred->ane_routed);
-                        return UncachedString { substituted };
-                    }
-                }
-            }
-        }
-    }
-#endif
+    // Wave 29-399 §2 (founder Tier-3 verdict 2026-05-19): probe signature
+    // emission moved to final atlas-miss point (after V-510 post-encode
+    // check at ~line 1250). Layer B v2 hoist at this location DROPPED per
+    // Wave 29-398 §3.1.7 HALT verdict — see HTMLCanvasElement.cpp end of
+    // toDataURL for §2 emission + §1 AFP fallback combined block.
 
 #if USE(CG)
     // Try to get ImageData first, as that may avoid lossy conversions.
@@ -1305,12 +1272,49 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
                 host.utf8().data());
         }
     }
+    // Wave 29-399 §2 probe signature emission (founder Tier-3 verdict
+    // 2026-05-19) — atlas growth pipeline. Fires at atlas-miss point
+    // (after V-510 post-encode check above). Mac-side log collector
+    // harvests these lines + POSTs to control plane priority queue
+    // (§3 Agent 2 dep — endpoint POST /v1/internal/atlas-priority/
+    // probe-signature). Priority queue → BS Automate iPhone 17 capture
+    // (§4) → atlas update (§5) → next session sees atlas hit →
+    // bit-identical iPhone bytes substituted.
+    //
+    // Signature: (canvas_w, canvas_h, opSeqSha, lastFillText, archetype_id,
+    // timestamp_ms, mime). opSeqSha is canonical (vendor-randomness
+    // stripped via existing driftstackOpSequenceSHA256 byte-spec serialization).
+    //
+    // Gated env DRIFTSTACK_PROBE_SIGNATURE_EMIT=1 (independent of AFP
+    // fallback so each can be enabled separately for testing).
+    static bool s_probeSigEmitEnabledToDataURL = []() {
+        const char* env = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT");
+        return env && env[0] == '1';
+    }();
+    if (s_probeSigEmitEnabledToDataURL && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        String opSeqShaSig;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqShaSig = ctx2D->driftstackOpSequenceSHA256(wSig, hSig);
+        }
+        auto lastTextSig = lastFillText();
+        WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toDataURL] "
+            "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
+            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%u",
+            width(), height(),
+            opSeqShaSig.isEmpty() ? "<empty>" : opSeqShaSig.utf8().data(),
+            lastTextSig.left(80).utf8().data(),
+            static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+            encodingMIMEType.utf8().data(),
+            encoded.length());
+    }
     // Wave 29-399 §1 AFP fallback (founder Tier-3 verdict 2026-05-19): when
     // every atlas substitution path (V-510 EARLY + V-241 canonical + V-510
-    // post-encode + Layer B v2 hoist) has missed, AFP fires to replace the
-    // natural Mac CG-rendered bytes with randomized output. Vendors see
-    // randomized output (not Mac-CG-detectable 1.1% match); probe signature
-    // is emitted async (§2 work) for atlas growth via BS Automate (§3+§4).
+    // post-encode) has missed, AFP fires to replace the natural Mac CG-
+    // rendered bytes with randomized output. Vendors see randomized output
+    // (not Mac-CG-detectable 1.1% match); §2 above has already emitted the
+    // probe signature for atlas growth.
     //
     // createImageForNoiseInjection() generates a solid-color buffer derived
     // from noiseInjectionHashSalt (which is per-canvas via CanvasBase ctor).
@@ -1435,6 +1439,30 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
                 }
             }
         }
+    }
+    // Wave 29-399 §2 probe signature emission (toBlob) — mirrors toDataURL.
+    static bool s_probeSigEmitEnabledToBlob = []() {
+        const char* env = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT");
+        return env && env[0] == '1';
+    }();
+    if (s_probeSigEmitEnabledToBlob && !blobData.isEmpty()
+        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+        String opSeqShaSigBlob;
+        if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+            opSeqShaSigBlob = ctx2D->driftstackOpSequenceSHA256(wSig, hSig);
+        }
+        auto lastTextSigBlob = lastFillText();
+        WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toBlob] "
+            "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
+            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu",
+            width(), height(),
+            opSeqShaSigBlob.isEmpty() ? "<empty>" : opSeqShaSigBlob.utf8().data(),
+            lastTextSigBlob.left(80).utf8().data(),
+            static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+            encodingMIMEType.utf8().data(),
+            blobData.size());
     }
     // Wave 29-399 §1 AFP fallback (toBlob) — mirrors toDataURL behavior:
     // after all atlas substitution paths miss, AFP fires to replace natural

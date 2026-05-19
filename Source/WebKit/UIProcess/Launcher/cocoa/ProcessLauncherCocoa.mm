@@ -488,6 +488,11 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // randomized output. Vendor probes see randomized (not Mac-CG-
             // detectable) output; probe signature emitted async for atlas growth.
             { "DRIFTSTACK_AFP_FALLBACK_ENABLED", getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED") },
+            // Wave 29-399 §2 probe signature emission gate. When ENABLED,
+            // atlas-miss codepath emits (canvas_w, h, opSeqSha, lastFillText,
+            // archetype_id, ts, mime) via WTFLogAlways for Mac-side log
+            // collector → control plane priority queue POST.
+            { "DRIFTSTACK_PROBE_SIGNATURE_EMIT", getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT") },
             // Resources:
             { "DRIFTSTACK_FONTS_DIR", getenv("DRIFTSTACK_FONTS_DIR") },
             { "DRIFTSTACK_ARCHETYPE", getenv("DRIFTSTACK_ARCHETYPE") },
