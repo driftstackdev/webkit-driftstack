@@ -427,6 +427,15 @@ void WebProcess::initializeProcess(const AuxiliaryProcessInitializationParameter
     {
         JSC::Options::AllowUnfinalizedAccessScope scope;
         JSC::Options::allowNonSPTagging() = false;
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-406 §11.A.12: real iPhone Safari 26.4 does NOT expose
+        // WebAssembly JSPI (no SuspendError, Suspending, promising). Mac
+        // fork upstream defaults to useJSPI=true. Disable so WebAssembly
+        // constructor's putDirectWithoutTransition for JSPI symbols never
+        // fires. Empirical BS Automate 2026-05-19: 4 of 4 real iPhone
+        // Safari captures have these JSPI symbols absent on WebAssembly.
+        JSC::Options::useJSPI() = false;
+#endif
         JSC::Options::notifyOptionsChanged();
     }
 
