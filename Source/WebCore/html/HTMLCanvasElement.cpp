@@ -1300,21 +1300,25 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     }();
     if (s_probeSigEmitEnabledToDataURL && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         String opSeqShaSig;
+        String opSeqBytesB64Sig;
         if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
             uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
             uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
             opSeqShaSig = ctx2D->driftstackOpSequenceSHA256(wSig, hSig);
+            opSeqBytesB64Sig = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSig = lastFillText();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toDataURL] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%u",
+            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%u "
+            "opSeqBytesB64=%s",
             width(), height(),
             opSeqShaSig.isEmpty() ? "<empty>" : opSeqShaSig.utf8().data(),
             lastTextSig.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
-            encoded.length());
+            encoded.length(),
+            opSeqBytesB64Sig.isEmpty() ? "<empty>" : opSeqBytesB64Sig.utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (founder Tier-3 verdict 2026-05-19): when
     // every atlas substitution path (V-510 EARLY + V-241 canonical + V-510
@@ -1455,21 +1459,25 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     if (s_probeSigEmitEnabledToBlob && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         String opSeqShaSigBlob;
+        String opSeqBytesB64SigBlob;
         if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
             uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
             uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
             opSeqShaSigBlob = ctx2D->driftstackOpSequenceSHA256(wSig, hSig);
+            opSeqBytesB64SigBlob = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSigBlob = lastFillText();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toBlob] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu",
+            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
+            "opSeqBytesB64=%s",
             width(), height(),
             opSeqShaSigBlob.isEmpty() ? "<empty>" : opSeqShaSigBlob.utf8().data(),
             lastTextSigBlob.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
-            blobData.size());
+            blobData.size(),
+            opSeqBytesB64SigBlob.isEmpty() ? "<empty>" : opSeqBytesB64SigBlob.utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (toBlob) — mirrors toDataURL behavior:
     // after all atlas substitution paths miss, AFP fires to replace natural

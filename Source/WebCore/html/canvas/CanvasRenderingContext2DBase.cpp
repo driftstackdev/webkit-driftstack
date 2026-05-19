@@ -316,6 +316,15 @@ String CanvasRenderingContext2DBase::driftstackOpSequenceSHA256(uint16_t canvasW
     return m_driftstackOpSequenceRecorder->finalizeSHA256Hex(canvasW, canvasH);
 }
 
+// Wave 29-399 §4 (founder Tier-3 verdict 2026-05-19): canonical bytes for
+// BS Automate replay. See OpSequenceRecorder::finalizeCanonicalBytesBase64.
+String CanvasRenderingContext2DBase::driftstackOpSequenceBytesBase64(uint16_t canvasW, uint16_t canvasH) const
+{
+    if (!m_driftstackOpSequenceRecorder)
+        return String();
+    return m_driftstackOpSequenceRecorder->finalizeCanonicalBytesBase64(canvasW, canvasH);
+}
+
 OpSequenceRecorder* CanvasRenderingContext2DBase::driftstackOpRecorderForPath()
 {
     return &driftstackOpSequenceRecorder();

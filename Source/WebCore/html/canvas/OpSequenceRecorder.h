@@ -106,6 +106,13 @@ public:
     // Returns full SHA-256 raw bytes (32 bytes); first 16 = atlas key prefix.
     void finalizeSHA256Bytes(uint16_t canvasW, uint16_t canvasH, uint8_t out[32]) const;
 
+    // Wave 29-399 §4 (founder Tier-3 verdict 2026-05-19): canonical op-sequence
+    // bytes base64-encoded for §2 ProbeSig emission. Format matches the JS-side
+    // canonical serializer in v405-canvas-fuzzer.html (header || op records).
+    // BS Automate synthetic harness page decodes + replays to capture iPhone
+    // canonical output for that probe. Idempotent.
+    String finalizeCanonicalBytesBase64(uint16_t canvasW, uint16_t canvasH) const;
+
     // Reset for reuse on the same context (e.g. canvas resized → ops invalidated).
     void clear() { m_buffer.clear(); }
 

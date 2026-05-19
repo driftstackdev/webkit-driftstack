@@ -409,21 +409,25 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
     if (s_probeSigEmitEnabledWorker && !blobData.isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         String opSeqShaSigWorker;
+        String opSeqBytesB64SigWorker;
         if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
             uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
             uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
             opSeqShaSigWorker = ctx2D->driftstackOpSequenceSHA256(wSig, hSig);
+            opSeqBytesB64SigWorker = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSigWorker = lastFillText();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-Worker] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
-            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu",
+            "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
+            "opSeqBytesB64=%s",
             width(), height(),
             opSeqShaSigWorker.isEmpty() ? "<empty>" : opSeqShaSigWorker.utf8().data(),
             lastTextSigWorker.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
-            blobData.size());
+            blobData.size(),
+            opSeqBytesB64SigWorker.isEmpty() ? "<empty>" : opSeqBytesB64SigWorker.utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (Worker context) — mirrors toDataURL/toBlob.
     // After all atlas substitution paths miss, AFP fires to replace natural

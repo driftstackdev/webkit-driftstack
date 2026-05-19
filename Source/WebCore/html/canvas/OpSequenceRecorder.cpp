@@ -16,7 +16,9 @@
 #include <cstring>
 #include <wtf/StdLibExtras.h>
 #include <wtf/TZoneMallocInlines.h>
+#include <wtf/text/Base64.h>
 #include <wtf/text/CString.h>
+#include <wtf/text/MakeString.h>
 #include <wtf/text/StringView.h>
 
 namespace WebCore {
@@ -307,6 +309,27 @@ String OpSequenceRecorder::finalizeSHA256Hex(uint16_t canvasW, uint16_t canvasH)
         hex[i * 2 + 1] = kLowerHex[digest[i] & 0xf];
     }
     return String(std::span<const char> { hex });
+}
+
+// Wave 29-399 §4 (founder Tier-3 verdict 2026-05-19): canonical bytes
+// base64-encoded for §2 ProbeSig emission. BS Automate synthetic harness
+// page decodes + replays to capture iPhone canonical output.
+//
+// Format: same as SHA256 input (header || recorded ops):
+//   header = u16BE(canvasW) || u16BE(canvasH) || u8(pixelFormat=0)
+//   ops    = m_buffer (canonical-serialized op records)
+String OpSequenceRecorder::finalizeCanonicalBytesBase64(uint16_t canvasW, uint16_t canvasH) const
+{
+    Vector<uint8_t> full;
+    full.reserveCapacity(5 + m_buffer.size());
+    appendBigEndianU16(full, canvasW);
+    appendBigEndianU16(full, canvasH);
+    full.append(static_cast<uint8_t>(0));  // pixelFormat=0 (RGBA8)
+    full.appendVector(m_buffer);
+    // base64Encoded returns Base64Specification (a marker for makeString
+    // concatenation, NOT a String). Wrap in makeString to materialize the
+    // base64 String. Pattern from DriftstackLayerB.mm:767.
+    return makeString(base64Encoded(full.span()));
 }
 
 // ---- Self-test (Phase C-3.A) ------------------------------------------------
