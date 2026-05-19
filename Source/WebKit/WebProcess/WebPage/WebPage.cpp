@@ -5073,6 +5073,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setFullScreenEnabled(false);
     settings.setCSSScrollAnchoringEnabled(false);
 
+    // Wave 29-406 §11.A.13 — Touch event DOM attributes (ontouchstart etc.).
+    // Mac fork DRIFTSTACK_TOUCH_STUBS gate makes the IDL accessors compile;
+    // TouchEventDOMAttributesEnabled defaults to screenHasTouchDevice()
+    // which returns false on Mac. Force-enable globally so 'ontouchstart' in
+    // window === true on iPhone archetypes (5/5 BS captures confirm this).
+    settings.setTouchEventDOMAttributesEnabled(true);
+
     if (s_isFamilyAArchetype) {
         // Wave 29-403 §11.A: WebGPU cascade hides navigator.gpu + GPU*
         // window globals + GPUSupportedFeatures/Limits + WGSLLanguageFeatures.
@@ -5114,6 +5121,23 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 
         // Wave 29-406 §11.A.10 (cont'd) — DigitalCredentials hide on Family A.
         settings.setDigitalCredentialsEnabled(false);
+
+        // Wave 29-406 §11.A.8 — additional Family A hides empirically
+        // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
+        // - FileSystemWritableFileStream undefined
+        settings.setFileSystemWritableStreamEnabled(false);
+        // - LargestContentfulPaint undefined
+        settings.setLargestContentfulPaintEnabled(false);
+        // - ReadableByteStreamController / ReadableStreamBYOBReader undefined
+        settings.setReadableByteStreamAPIEnabled(false);
+        // - document.customElementRegistry undefined
+        settings.setScopedCustomElementRegistryEnabled(false);
+        // - document.event_handlers.onbeforematch undefined
+        settings.setHiddenUntilFoundEnabled(false);
+        // - document.event_handlers.onscrollend undefined
+        settings.setScrollendEventEnabled(false);
+        // - CSS.supports scrollbar-color: false
+        settings.setCSSScrollbarColorEnabled(false);
     }
 #endif
 

@@ -8410,7 +8410,7 @@ TouchEventDOMAttributesEnabled:
   status: embedder
   humanReadableName: "Touch Event DOM Attributes"
   humanReadableDescription: "Enable Touch Event DOM Attributes"
-  condition: ENABLE(TOUCH_EVENTS)
+  condition: ENABLE(TOUCH_EVENTS)|ENABLE(DRIFTSTACK_TOUCH_STUBS)
   defaultValue:
     WebCore:
       default: WebCore::screenHasTouchDevice()
