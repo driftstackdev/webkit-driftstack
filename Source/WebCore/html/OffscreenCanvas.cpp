@@ -417,17 +417,31 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
             opSeqBytesB64SigWorker = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSigWorker = lastFillText();
+        // Wave 29-400 §8.A observability: per-session + customer + page_url
+        // attribution (mirrors HTMLCanvasElement toDataURL/toBlob sites).
+        // In Worker context, page_url is the ScriptExecutionContext URL
+        // (worker script URL OR document URL for main-thread offscreen).
+        // Re-uses existing `RefPtr context = canvasBaseScriptExecutionContext()`
+        // declared at the top of convertToBlob (line ~320).
+        static const char* s_sessionIdWorker = getenv("DRIFTSTACK_SESSION_ID");
+        static const char* s_customerIdWorker = getenv("DRIFTSTACK_CUSTOMER_ID");
+        String pageURLWorker;
+        if (context)
+            pageURLWorker = context->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-Worker] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
             "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
-            "opSeqBytesB64=%s",
+            "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSigWorker.isEmpty() ? "<empty>" : opSeqShaSigWorker.utf8().data(),
             lastTextSigWorker.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             blobData.size(),
-            opSeqBytesB64SigWorker.isEmpty() ? "<empty>" : opSeqBytesB64SigWorker.utf8().data());
+            opSeqBytesB64SigWorker.isEmpty() ? "<empty>" : opSeqBytesB64SigWorker.utf8().data(),
+            s_sessionIdWorker ? s_sessionIdWorker : "<unset>",
+            s_customerIdWorker ? s_customerIdWorker : "<unset>",
+            pageURLWorker.left(256).utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (Worker context) — mirrors toDataURL/toBlob.
     // After all atlas substitution paths miss, AFP fires to replace natural

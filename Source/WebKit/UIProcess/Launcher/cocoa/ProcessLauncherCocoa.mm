@@ -493,6 +493,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // archetype_id, ts, mime) via WTFLogAlways for Mac-side log
             // collector → control plane priority queue POST.
             { "DRIFTSTACK_PROBE_SIGNATURE_EMIT", getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT") },
+            // Wave 29-400 §8.A observability attribution: session_id +
+            // customer_id forwarded into WebContent so §2 ProbeSig log
+            // lines + AFP fallback log lines can attribute per-session
+            // and per-customer. Harness/SessionManager injects these on
+            // WebContent spawn (one process per session).
+            { "DRIFTSTACK_SESSION_ID", getenv("DRIFTSTACK_SESSION_ID") },
+            { "DRIFTSTACK_CUSTOMER_ID", getenv("DRIFTSTACK_CUSTOMER_ID") },
             // Resources:
             { "DRIFTSTACK_FONTS_DIR", getenv("DRIFTSTACK_FONTS_DIR") },
             { "DRIFTSTACK_ARCHETYPE", getenv("DRIFTSTACK_ARCHETYPE") },

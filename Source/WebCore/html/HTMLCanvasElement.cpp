@@ -1372,17 +1372,29 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             opSeqBytesB64Sig = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSig = lastFillText();
+        // Wave 29-400 §8.A observability: per-session + per-customer +
+        // per-document attribution. session_id + customer_id from env
+        // (ProcessLauncherCocoa forwards on WebContent spawn; harness
+        // injects per-session). page_url from document->url() at the
+        // hook site — already accessed elsewhere in the function so
+        // re-using `document` local. Statics initialize once per process.
+        static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
+        static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
+        auto pageURL = document->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toDataURL] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
             "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%u "
-            "opSeqBytesB64=%s",
+            "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSig.isEmpty() ? "<empty>" : opSeqShaSig.utf8().data(),
             lastTextSig.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             encoded.length(),
-            opSeqBytesB64Sig.isEmpty() ? "<empty>" : opSeqBytesB64Sig.utf8().data());
+            opSeqBytesB64Sig.isEmpty() ? "<empty>" : opSeqBytesB64Sig.utf8().data(),
+            s_sessionId ? s_sessionId : "<unset>",
+            s_customerId ? s_customerId : "<unset>",
+            pageURL.left(256).utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (founder Tier-3 verdict 2026-05-19): when
     // every atlas substitution path (V-510 EARLY + V-241 canonical + V-510
@@ -1531,17 +1543,26 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
             opSeqBytesB64SigBlob = ctx2D->driftstackOpSequenceBytesBase64(wSig, hSig);
         }
         auto lastTextSigBlob = lastFillText();
+        // Wave 29-400 §8.A observability: per-session + customer + page_url
+        // attribution (mirrors toDataURL site). Re-uses the toBlob function's
+        // existing `Ref document = this->document();` at line ~1444.
+        static const char* s_sessionIdBlob = getenv("DRIFTSTACK_SESSION_ID");
+        static const char* s_customerIdBlob = getenv("DRIFTSTACK_CUSTOMER_ID");
+        auto pageURLBlob = document->url().string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toBlob] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
             "archetype=iphone17_ios18_7_safari26_4 ts=%lld mime=%s mac_len=%zu "
-            "opSeqBytesB64=%s",
+            "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
             width(), height(),
             opSeqShaSigBlob.isEmpty() ? "<empty>" : opSeqShaSigBlob.utf8().data(),
             lastTextSigBlob.left(80).utf8().data(),
             static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
             encodingMIMEType.utf8().data(),
             blobData.size(),
-            opSeqBytesB64SigBlob.isEmpty() ? "<empty>" : opSeqBytesB64SigBlob.utf8().data());
+            opSeqBytesB64SigBlob.isEmpty() ? "<empty>" : opSeqBytesB64SigBlob.utf8().data(),
+            s_sessionIdBlob ? s_sessionIdBlob : "<unset>",
+            s_customerIdBlob ? s_customerIdBlob : "<unset>",
+            pageURLBlob.left(256).utf8().data());
     }
     // Wave 29-399 §1 AFP fallback (toBlob) — mirrors toDataURL behavior:
     // after all atlas substitution paths miss, AFP fires to replace natural
