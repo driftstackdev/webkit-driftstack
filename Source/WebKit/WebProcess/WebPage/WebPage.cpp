@@ -5052,12 +5052,40 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             || sv.find("safari25_") != std::string_view::npos;
     }();
     if (s_isFamilyAArchetype) {
+        // Wave 29-403 §11.A: WebGPU cascade hides navigator.gpu + GPU*
+        // window globals + GPUSupportedFeatures/Limits + WGSLLanguageFeatures.
+        // Empirical BS capture iPhone 16 Pro Safari 18.6 2026-05-19.
         settings.setWebGPUEnabled(false);
-        // Future Safari-26-only feature hides for Family A go here.
-        // settings.setViewTransitionsEnabled(false);
-        // settings.setWebAssemblyGCEnabled(false);
-        // etc. (verify each against real iPhone Safari 18.6 BS capture
-        // before adding — never assume.)
+
+        // Wave 29-404 §11.A.3: Family A feature-inventory BS capture
+        // 2026-05-19 shows the following additional features must be
+        // hidden so 'feature' in window / navigator === false. Each was
+        // empirically confirmed undefined on iPhone 16 Pro Safari 18.6
+        // (Family A) and defined on iPhone 17 Safari 26.4 (Family B).
+
+        // navigator.navigation, NavigationCurrentEntryChangeEvent
+        settings.setNavigationAPIEnabled(false);
+        // CommandEvent
+        settings.setCommandAttributesEnabled(false);
+        // EventCounts, PerformanceEventTiming
+        settings.setEventTimingEnabled(false);
+        // WebTransport, WebTransportDatagramDuplexStream
+        settings.setWebTransportEnabled(false);
+        // document.caretPositionFromPoint
+        settings.setCaretPositionFromPointEnabled(false);
+        // CSS.supports('top: anchor(top)')
+        settings.setCSSAnchorPositioningEnabled(false);
+        // CSS.supports('field-sizing: content')
+        settings.setCSSFieldSizingEnabled(false);
+        // CSS.supports('text-wrap: pretty')
+        settings.setCSSTextWrapPrettyEnabled(false);
+
+        // Not addressed yet (require further investigation — non-trivial
+        // gating mechanism, not direct EnabledBySetting):
+        //   ScrollTimeline / ViewTimeline (scroll-driven animation)
+        //   PerformanceEventTiming class itself (cascade through
+        //     EventTimingEnabled but Family A only test 1 of 2 surfaces
+        //     hides — verify post-build)
     }
 #endif
 

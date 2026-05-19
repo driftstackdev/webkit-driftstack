@@ -141,7 +141,29 @@ CSSParserContext::CSSParserContext(const Settings& settings)
     // parity; propertySettings is the parser's authority over which
     // properties parse without fallback. Same pattern as
     // applyUASheetBehaviorsToContext line 62.
-    propertySettings.cssAnchorPositioningEnabled = true;
+    //
+    // Wave 29-404 §11.A.3: Family A iPhone Safari 18.6 (BS capture
+    // 2026-05-19) returns `CSS.supports('top: anchor(top)')` === false.
+    // For Family A archetype, RESPECT the Settings value (which
+    // WebPage::updatePreferences sets to false). Force-enable only
+    // applies to Family B archetypes (Safari 26.4+ launch path).
+    static const bool s_isFamilyAArchetype = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (!s_isFamilyAArchetype)
+        propertySettings.cssAnchorPositioningEnabled = true;
 #endif
 }
 
