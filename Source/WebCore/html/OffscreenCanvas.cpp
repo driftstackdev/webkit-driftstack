@@ -391,7 +391,7 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
                 if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
                     auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
                     if (!substituted.isEmpty()) {
-                        blobData = WTFMove(substituted);
+                        blobData = WTF::move(substituted);
                         WTFLogAlways("[Driftstack-LayerBV2-Worker] canvas-level RGBA substitution "
                                      "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
                                      width(), height(), pred->inference_ms, pred->ane_routed);
