@@ -3598,6 +3598,19 @@ RefPtr<ImageBuffer> CanvasRenderingContext2DBase::allocateImageBuffer() const
     RenderingMode renderingMode = !willReadFrequently() && canvasBase().shouldAccelerate() ? RenderingMode::Accelerated : RenderingMode::Unaccelerated;
     if (auto renderingModeForTesting = this->renderingModeForTesting())
         renderingMode = *renderingModeForTesting;
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-397 V-Hacky.B.1 — force IOSurface-backed (Accelerated)
+    // canvas rendering. Hypothesis: GPU-backed CALayer-hosted IOSurface
+    // routes through different CG paths than CPU bitmap; may shift Mac
+    // CT/CG rasterization toward iPhone byte-identical. Low probability
+    // (~<1%) but cheap probe.
+    static bool s_forceIOSurface = []() {
+        const char* env = getenv("DRIFTSTACK_FORCE_IOSURFACE_BACKED");
+        return env && env[0] == '1';
+    }();
+    if (s_forceIOSurface)
+        renderingMode = RenderingMode::Accelerated;
+#endif
     return ImageBuffer::create(canvasBase().size(), renderingMode, RenderingPurpose::Canvas, 1, colorSpace(), pixelFormat(), scriptExecutionContext->graphicsClient());
 }
 

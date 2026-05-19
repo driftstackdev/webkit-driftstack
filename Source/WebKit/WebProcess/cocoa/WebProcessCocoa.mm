@@ -1006,6 +1006,17 @@ void WebProcess::platformInitializeProcess(const AuxiliaryProcessInitializationP
         CGFontSetShouldUseMulticache(false);
         WTFLogAlways("[Driftstack-V-LockdownMode.2] CGFontSetShouldUseMulticache(false) invoked at WebProcess init");
     }
+
+    // Wave 29-397 V-Hacky.A.1 — CFPreferences iOS device family override.
+    // Hypothesis: CT may consult _UIDeviceFamily process-level pref to
+    // decide rasterization path. Setting iPhone-style value at WebContent
+    // init may shift rendering. Low probability (~<1%) but cheap probe.
+    if (const char* env = getenv("DRIFTSTACK_CF_IOS_DEVICE_FAMILY_OVERRIDE"); env && env[0] == '1') {
+        int family = 1;  // iPhone
+        RetainPtr<CFNumberRef> num = adoptCF(CFNumberCreate(nullptr, kCFNumberIntType, &family));
+        CFPreferencesSetAppValue(CFSTR("_UIDeviceFamily"), num.get(), kCFPreferencesCurrentApplication);
+        WTFLogAlways("[Driftstack-V-Hacky.A.1] _UIDeviceFamily=1 (iPhone) set in CFPreferences");
+    }
 #endif
 
 #if PLATFORM(MAC)

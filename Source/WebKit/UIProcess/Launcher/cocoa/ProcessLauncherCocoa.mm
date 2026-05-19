@@ -466,6 +466,8 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // CGEnterLockdownModeForFonts() + CGFontSetShouldUseMulticache(false).
             { "DRIFTSTACK_CG_LOCKDOWN_FONTS", getenv("DRIFTSTACK_CG_LOCKDOWN_FONTS") },
             { "DRIFTSTACK_CG_MULTICACHE_OFF", getenv("DRIFTSTACK_CG_MULTICACHE_OFF") },
+            { "DRIFTSTACK_CF_IOS_DEVICE_FAMILY_OVERRIDE", getenv("DRIFTSTACK_CF_IOS_DEVICE_FAMILY_OVERRIDE") },
+            { "DRIFTSTACK_FORCE_IOSURFACE_BACKED", getenv("DRIFTSTACK_FORCE_IOSURFACE_BACKED") },
             { "DRIFTSTACK_SF_PRO_PLUS_ONE", getenv("DRIFTSTACK_SF_PRO_PLUS_ONE") },
             { "DRIFTSTACK_FONT_CANONICAL_OVERRIDE", getenv("DRIFTSTACK_FONT_CANONICAL_OVERRIDE") },
             { "DRIFTSTACK_FONT_CANONICAL_PATH", getenv("DRIFTSTACK_FONT_CANONICAL_PATH") },
