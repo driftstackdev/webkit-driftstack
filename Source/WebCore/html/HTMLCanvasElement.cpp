@@ -702,63 +702,55 @@ V510AtlasState& v510AtlasState()
     return *s_state;
 }
 
-void initV510AtlasOnce()
+// Wave 29-399 §6.A (founder Tier-3 verdict 2026-05-19): priority-bin slot
+// loaded alongside the main atlas. Auto-learn pipeline (§4) appends
+// BS-captured iPhone canonical bytes here, keyed on opSequenceSHA256.
+// v510AtlasLookup checks this slot FIRST — most-recent captures override
+// the main atlas. Same DSCFA v3 format; same mmap pattern as main; same
+// applyV2DeltaAndReEncode data path on hit. Hot-reload at WebContent
+// session boundary works identically (§5 verified).
+V510AtlasState& v510AtlasStatePriority()
 {
-    auto& state = v510AtlasState();
-    if (state.initialized)
-        return;
-    state.initialized = true;
+    static V510AtlasState* s_state = new V510AtlasState();
+    return *s_state;
+}
 
-    // V-581 Phase C-3.A: run OpSequenceRecorder canonical-serializer self-test
-    // exactly once if DRIFTSTACK_TEST_OPSEQ=1. Placed before the atlas-file
-    // checks so a missing/unreadable atlas does not skip the test. No-ops when
-    // env var unset; logs PASS/FAIL via WTFLogAlways; never aborts startup.
-    runOpSequenceRecorderSelfTestIfRequested();
-
-    // Wave 29-392: default path = Wave 29-378 family-B-supplemented atlas
-    // (3084 entries / 30.09 MB / git-tracked) at the correctly-named
-    // driftstack_canvas_fuzz_atlas/ directory. Replaces pre-Wave-29-378
-    // default at driftstack_audio_atlas/ which held a Family-A-polluted
-    // 25.81 MB atlas accumulated through Waves 29-272 → 29-280. Production
-    // sessions that don't set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH now use
-    // the launch-archetype-clean atlas by default — silent-failure mode
-    // removed where harness forgot to set the env var.
-    //
-    // The audio_atlas/ path remains in sandbox + on disk for back-compat
-    // (some scripts may explicitly set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
-    // to it for A/B testing). Production deploy uses the new default.
-    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-family-b-supplemented.bin";
+// Wave 29-399 §6.A: per-state loader extracted so main + priority share
+// the same mmap + header parse + magic check. isPriority drives the slot
+// tag in logs so empirical verification can distinguish hits per atlas;
+// also softens the open-failed log for priority (expected pre-launch).
+static void loadAtlasIntoState(V510AtlasState& state, const char* path, bool isPriority)
+{
     constexpr size_t kHeaderBytes = 32;
     constexpr size_t kIndexEntryStride = 28;
-
-    // V-511 multi-archetype foundation: orchestrator sets DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
-    // explicitly per archetype (driftstack-canvas-fuzz-atlas-{archetype}.bin). WebKit
-    // dispatch reads single env var; archetype dispatch happens above the WebKit layer
-    // (harness / GUI / agent service per file 04 architecture). Avoids unsafe-buffer-usage
-    // path templating in C++ side.
-    const char* envPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
-    const char* path = envPath ? envPath : kDefaultPath;
+    const char* slot = isPriority ? "priority" : "main";
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        WTFLogAlways("[Driftstack] V510Atlas: open failed for %s (errno=%d) — disabled", path, errno);
+        // Priority slot missing is expected pre-launch (no §4 chain runs
+        // captured iPhone bytes yet); softened log distinguishes from
+        // main-atlas misconfiguration which is a real issue.
+        if (isPriority)
+            WTFLogAlways("[Driftstack] V510Atlas[%s]: not present at %s — disabled (auto-learn pre-seeded)", slot, path);
+        else
+            WTFLogAlways("[Driftstack] V510Atlas[%s]: open failed for %s (errno=%d) — disabled", slot, path, errno);
         return;
     }
     struct stat st;
     if (fstat(fd, &st) < 0 || st.st_size < static_cast<off_t>(kHeaderBytes)) {
-        WTFLogAlways("[Driftstack] V510Atlas: fstat failed or file too small");
+        WTFLogAlways("[Driftstack] V510Atlas[%s]: fstat failed or file too small", slot);
         close(fd);
         return;
     }
     void* base = mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (base == MAP_FAILED) {
-        WTFLogAlways("[Driftstack] V510Atlas: mmap failed (errno=%d)", errno);
+        WTFLogAlways("[Driftstack] V510Atlas[%s]: mmap failed (errno=%d)", slot, errno);
         close(fd);
         return;
     }
     auto bytesSpan = unsafeMakeSpan(static_cast<const uint8_t*>(base), static_cast<size_t>(st.st_size));
     if (bytesSpan[0] != 'D' || bytesSpan[1] != 'S' || bytesSpan[2] != 'C' || bytesSpan[3] != 'F') {
-        WTFLogAlways("[Driftstack] V510Atlas: bad magic at %s", path);
+        WTFLogAlways("[Driftstack] V510Atlas[%s]: bad magic at %s", slot, path);
         munmap(base, st.st_size); close(fd); return;
     }
     auto readU16 = [&](size_t off) { return uint16_t(bytesSpan[off]) | (uint16_t(bytesSpan[off+1]) << 8); };
@@ -773,7 +765,7 @@ void initV510AtlasOnce()
         || (version == 2 && keyAlgo == 1)
         || (version == 3 && keyAlgo == 2);
     if (!accept) {
-        WTFLogAlways("[Driftstack] V510Atlas: unsupported version=%u/algo=%u", version, keyAlgo);
+        WTFLogAlways("[Driftstack] V510Atlas[%s]: unsupported version=%u/algo=%u", slot, version, keyAlgo);
         munmap(base, st.st_size); close(fd); return;
     }
     state.formatVersion = version;
@@ -783,7 +775,7 @@ void initV510AtlasOnce()
     if (indexOffset < kHeaderBytes
         || dataOffset != indexOffset + numEntries * kIndexEntryStride
         || dataOffset > bytesSpan.size()) {
-        WTFLogAlways("[Driftstack] V510Atlas: header invalid");
+        WTFLogAlways("[Driftstack] V510Atlas[%s]: header invalid", slot);
         munmap(base, st.st_size); close(fd); return;
     }
     state.fd = fd;
@@ -793,15 +785,55 @@ void initV510AtlasOnce()
     state.dataPayloadSpan = bytesSpan.subspan(dataOffset);
     state.numEntries = numEntries;
     state.available = true;
-    // Wave 29-399 §5 (founder verdict 2026-05-19): log atlas file mtime
-    // so hot-reload verification can distinguish "fresh init this WebContent
-    // process" (fresh mtime) from "stale cache". Each WebContent process
-    // spawn re-runs initV510AtlasOnce → re-mmaps → re-reads file content.
-    // This log line is the empirical signal that hot-reload semantics
-    // work at session boundary.
-    WTFLogAlways("[Driftstack] V510Atlas: mapped %lld bytes from %s; %u entries; format=v%u; file_mtime=%lld",
-        (long long)st.st_size, path, numEntries, state.formatVersion,
+    // Wave 29-399 §5 mtime log line (per-slot tagged so hot-reload
+    // verification distinguishes priority + main reload events).
+    WTFLogAlways("[Driftstack] V510Atlas[%s]: mapped %lld bytes from %s; %u entries; format=v%u; file_mtime=%lld",
+        slot, (long long)st.st_size, path, numEntries, state.formatVersion,
         (long long)st.st_mtimespec.tv_sec);
+}
+
+void initV510AtlasOnce()
+{
+    auto& state = v510AtlasState();
+    if (state.initialized)
+        return;
+    state.initialized = true;
+    v510AtlasStatePriority().initialized = true;
+
+    // V-581 Phase C-3.A: run OpSequenceRecorder canonical-serializer self-test
+    // exactly once if DRIFTSTACK_TEST_OPSEQ=1. Placed before the atlas-file
+    // checks so a missing/unreadable atlas does not skip the test. No-ops when
+    // env var unset; logs PASS/FAIL via WTFLogAlways; never aborts startup.
+    runOpSequenceRecorderSelfTestIfRequested();
+
+    // Wave 29-392: main atlas default path = Wave 29-378 family-B-supplemented
+    // atlas (3084 entries / 30.09 MB / git-tracked) at the correctly-named
+    // driftstack_canvas_fuzz_atlas/ directory. Replaces pre-Wave-29-378
+    // default at driftstack_audio_atlas/ which held a Family-A-polluted
+    // 25.81 MB atlas accumulated through Waves 29-272 → 29-280. Production
+    // sessions that don't set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH now use
+    // the launch-archetype-clean atlas by default.
+    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-family-b-supplemented.bin";
+    // Wave 29-399 §6.A: priority bin default path matches atlas-priority-append.py
+    // DEFAULT_OUTPUT_BIN. Same directory as main atlas. atlas-priority-append.py
+    // builds this from §4 chain captures (BS-side iPhone canonical bytes for
+    // probe signatures emitted in §2). Pre-launch this file may not exist
+    // (auto-learn hasn't run yet) — loadAtlasIntoState silently disables.
+    constexpr const char* kDefaultPriorityPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-wave29-399-priority.bin";
+
+    // V-511 multi-archetype foundation: orchestrator sets DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
+    // explicitly per archetype. WebKit dispatch reads single env var; archetype
+    // dispatch happens above the WebKit layer (harness / GUI / agent service
+    // per file 04 architecture).
+    const char* envPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+    const char* path = envPath ? envPath : kDefaultPath;
+    loadAtlasIntoState(state, path, /*isPriority*/ false);
+
+    // Wave 29-399 §6.A: priority bin override env. Same archetype-dispatch
+    // pattern — orchestrator passes per-archetype priority path if needed.
+    const char* envPriorityPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PRIORITY_PATH");
+    const char* priorityPath = envPriorityPath ? envPriorityPath : kDefaultPriorityPath;
+    loadAtlasIntoState(v510AtlasStatePriority(), priorityPath, /*isPriority*/ true);
 }
 
 // V-578: apply delta-pixel substitution to a Mac dataURL.
@@ -947,10 +979,12 @@ static String applyV2DeltaAndReEncode(const String& macForkDataURL, std::span<co
     return makeString("data:image/png;base64,"_s, b64Out);
 }
 
-String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA256Hex = String())
+// Wave 29-399 §6.A: per-state binary-search lookup extracted from
+// v510AtlasLookup so priority + main slots share the same code path.
+// slot tag drives the [Driftstack-V510-HIT] log so empirical verification
+// can distinguish where a hit came from.
+static String v510AtlasLookupInState(const V510AtlasState& state, const String& macForkDataURL, const String& opSequenceSHA256Hex, const char* slot)
 {
-    initV510AtlasOnce();
-    auto& state = v510AtlasState();
     if (!state.available || !state.numEntries)
         return String();
 
@@ -1012,8 +1046,8 @@ String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA
             auto entry = state.dataPayloadSpan.subspan(dataOff, dataLen);
             static unsigned hits = 0;
             if (++hits <= 50)
-                WTFLogAlways("[Driftstack-V510-HIT] entry=%zu/%zu off=%u len=%u format=v%u",
-                    mid, state.numEntries, dataOff, dataLen, state.formatVersion);
+                WTFLogAlways("[Driftstack-V510-HIT] slot=%s entry=%zu/%zu off=%u len=%u format=v%u",
+                    slot, mid, state.numEntries, dataOff, dataLen, state.formatVersion);
             // V-578 / V-581: dispatch by atlas format version. v2 (Mac-output-sha
             // keyed) and v3 (op-seq-sha keyed) both use the same delta-pixel
             // data section layout, so applyV2DeltaAndReEncode handles both.
@@ -1024,6 +1058,22 @@ String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA
         }
     }
     return String();
+}
+
+String v510AtlasLookup(const String& macForkDataURL, const String& opSequenceSHA256Hex = String())
+{
+    initV510AtlasOnce();
+    // Wave 29-399 §6.A: priority slot checked FIRST. Auto-learn captures
+    // (BS-side iPhone canonical bytes for novel probe signatures) override
+    // the main atlas. Most-recent capture wins.
+    auto& priorityState = v510AtlasStatePriority();
+    if (priorityState.available && priorityState.numEntries) {
+        String hit = v510AtlasLookupInState(priorityState, macForkDataURL, opSequenceSHA256Hex, "priority");
+        if (!hit.isEmpty())
+            return hit;
+    }
+    // Fall through to main atlas on priority-miss.
+    return v510AtlasLookupInState(v510AtlasState(), macForkDataURL, opSequenceSHA256Hex, "main");
 }
 } // anonymous namespace
 
