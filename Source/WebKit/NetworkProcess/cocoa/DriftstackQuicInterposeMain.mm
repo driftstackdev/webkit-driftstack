@@ -35,6 +35,21 @@
 #import <Network/Network.h>
 #include <dlfcn.h>
 
+// Wave 29-499 Slice 16.6.c PRODUCTION FIX VERIFICATION: constructor-time
+// NSLog fires when the dylib is LOADED by dyld, before any interpose
+// activity. Definitively answers "did the dylib actually load?" — the
+// failure mode where DYLD_INSERT_LIBRARIES is set but the dylib silently
+// fails to load (entitlements / SIP / hardened-runtime / library
+// validation) is otherwise invisible. Without this constructor log, the
+// dlsym-success log only fires if nw_connection_create is called, which
+// itself depends on the dylib having loaded.
+__attribute__((constructor))
+static void driftstackQuicInterposeDylibLoaded(void)
+{
+    NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.c] libDriftstackQuicInterpose.dylib CONSTRUCTOR fired — dylib loaded into process (pid=%d). DYLD_INTERPOSE section should now be active. Subsequent nw_connection_create calls will reach driftstack_nw_connection_create.",
+        getpid());
+}
+
 // Slice 16.4.b.5.b: NO direct include of DriftstackQuicSocks5Bridge.h —
 // the interpose dylib loads BEFORE WebKit framework, so WebKit's symbols
 // are not statically linkable. The bridge functions are reached via
