@@ -17,12 +17,18 @@
 namespace WebCore {
 namespace Driftstack {
 
-// Empirical iPhone canonical extension set (50 entries, identical across
-// Family A and Family B).  Verified n=3 per archetype on
-// 2026-05-20 from reference/iphone17_ios18_7_safari26_4/fingerprint-v2/*
+// Empirical iPhone canonical extension set (51 entries, identical across
+// Family A and Family B).  Initial 50-entry list verified n=3 per archetype
+// on 2026-05-20 from reference/iphone17_ios18_7_safari26_4/fingerprint-v2/*
 // and reference/iphone16pro_ios18_6_safari18_6/fingerprint-v2/* via v2
-// fingerprint capture page (which exercises both WebGL1 and WebGL2
-// getSupportedExtensions() per session).
+// fingerprint capture page.
+//
+// Wave 29-499 §11.D r2 (2026-05-20 r53 cumrig run vs canonical REF
+// 2026-05-04T19-24-11Z_real-iphone-recapture.json): added
+// `NV_shader_noperspective_interpolation` — v2-fp capture missed it but
+// real-iPhone cumrig REF exposed it. Cumrig REF (full real-iPhone capture)
+// is more comprehensive than the v2-fp page's WebGL probe; cumrig REF wins
+// when v2-fp disagrees.
 static const HashSet<String>& iphoneCanonicalSet()
 {
     static NeverDestroyed<HashSet<String>> set = HashSet<String> {
@@ -45,6 +51,7 @@ static const HashSet<String>& iphoneCanonicalSet()
         "EXT_texture_mirror_clamp_to_edge"_s,
         "EXT_texture_norm16"_s,
         "KHR_parallel_shader_compile"_s,
+        "NV_shader_noperspective_interpolation"_s,
         "OES_draw_buffers_indexed"_s,
         "OES_element_index_uint"_s,
         "OES_fbo_render_mipmap"_s,
