@@ -1017,6 +1017,28 @@ void WebProcess::platformInitializeProcess(const AuxiliaryProcessInitializationP
         CFPreferencesSetAppValue(CFSTR("_UIDeviceFamily"), num.get(), kCFPreferencesCurrentApplication);
         WTFLogAlways("[Driftstack-V-Hacky.A.1] _UIDeviceFamily=1 (iPhone) set in CFPreferences");
     }
+
+    // Wave 29-499 §91.F (Task #91) — NSUserDefaults volatile-domain
+    // AppleLanguages override.
+    // WebKit's Intl.* defaults read CFLocale which reads NSUserDefaults
+    // AppleLanguages (NSArgumentDomain, volatile). POSIX LANG env does NOT
+    // affect this. To force WebContent Intl.* defaults to match iPhone
+    // Safari archetype's locale (e.g., en-GB for Family A captured from
+    // BS iPhone 16 Pro Safari 18.6), set AppleLanguages in the volatile
+    // NSArgumentDomain at WebContent init. Mirrors the pattern at
+    // WebProcess::handlePreferenceChange (line ~1490) which handles
+    // runtime AppleLanguages changes.
+    // Env override: DRIFTSTACK_APPLELANGUAGES (comma-sep list).
+    if (const char* langEnv = getenv("DRIFTSTACK_APPLELANGUAGES"); langEnv && langEnv[0]) {
+        RetainPtr<CFStringRef> langStr = adoptCF(CFStringCreateWithCString(nullptr, langEnv, kCFStringEncodingUTF8));
+        RetainPtr<CFArrayRef> langArr = adoptCF(CFStringCreateArrayBySeparatingStrings(nullptr, langStr.get(), CFSTR(",")));
+        RetainPtr<NSDictionary> existingArgs = [[NSUserDefaults standardUserDefaults] volatileDomainForName:NSArgumentDomain];
+        RetainPtr<NSMutableDictionary> newArgs = adoptNS([existingArgs mutableCopy]);
+        [newArgs setValue:(NSArray *)langArr.get() forKey:@"AppleLanguages"];
+        [[NSUserDefaults standardUserDefaults] setVolatileDomain:newArgs.get() forName:NSArgumentDomain];
+        WTF::languageDidChange();
+        WTFLogAlways("[Driftstack-§91.F] AppleLanguages=%s set in NSArgumentDomain volatile + languageDidChange notified", langEnv);
+    }
 #endif
 
 #if PLATFORM(MAC)
