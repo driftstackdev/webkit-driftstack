@@ -1366,6 +1366,19 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                         RetainPtr nwProxyConfig = adoptNS(nw_proxy_config_create_socksv5(endpoint.get()));
                         if (nwProxyConfig) {
                             nw_proxy_config_set_username_and_password(nwProxyConfig.get(), userEnv, passEnv);
+
+                            // Wave 29-499.15 — exclude local/loopback/mDNS
+                            // domains from SOCKS5 routing. Sending these
+                            // names through a remote proxy is wrong (the
+                            // proxy's localhost is not our localhost) and
+                            // breaks dev tools, local servers, mDNS
+                            // bonjour discovery, link-local. Apple's API
+                            // accepts glob-form domain patterns.
+                            nw_proxy_config_add_excluded_domain(nwProxyConfig.get(), "localhost");
+                            nw_proxy_config_add_excluded_domain(nwProxyConfig.get(), "127.0.0.1");
+                            nw_proxy_config_add_excluded_domain(nwProxyConfig.get(), "::1");
+                            nw_proxy_config_add_excluded_domain(nwProxyConfig.get(), "*.local");
+
                             m_nwProxyConfigs.append(nwProxyConfig);
                             // Apply immediately to this configuration object
                             // so the freshly-built session sees the proxy
