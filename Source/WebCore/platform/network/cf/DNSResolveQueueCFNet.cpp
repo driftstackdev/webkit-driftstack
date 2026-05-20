@@ -56,6 +56,31 @@ DNSResolveQueueCFNet::~DNSResolveQueueCFNet() = default;
 
 void DNSResolveQueueCFNet::updateIsUsingProxy()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §92 Slice 16.9 — DNS-leak prevention. When Driftstack
+    // SOCKS5 is active (per-session proxyConfigurations applied via Slice
+    // 16.6.k nw_proxy_config_create_socksv5), the system proxy dictionary
+    // returned by CFNetworkCopySystemProxySettings() is EMPTY — our
+    // SOCKS5 is per-NSURLSession, not system-wide. Without intervention
+    // here, isUsingProxy() returns false, DNS prefetch fires via
+    // getaddrinfo to the system resolver, and the real client IP leaks
+    // to the local DNS infrastructure (mDNSResponder + upstream resolver).
+    //
+    // Fix: when DRIFTSTACK_CUSTOM_SOCKS5=1 is set, force m_isUsingProxy
+    // = true so DNS prefetch is suppressed entirely. Hostname-to-IP
+    // resolution happens at the SOCKS5 proxy itself (ATYP=0x03 domain
+    // form in CONNECT cmd) — no DNS leak.
+    const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+    if (customSocks5 && customSocks5[0] == '1') {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.9] DNSResolveQueueCFNet::updateIsUsingProxy: forcing isUsingProxy=true (DRIFTSTACK_CUSTOM_SOCKS5=1) — DNS prefetch suppressed to prevent client-IP leak via local resolver");
+        }
+        m_isUsingProxy = true;
+        return;
+    }
+#endif
     RetainPtr<CFDictionaryRef> proxySettings = adoptCF(CFNetworkCopySystemProxySettings());
     if (!proxySettings) {
         m_isUsingProxy = false;
