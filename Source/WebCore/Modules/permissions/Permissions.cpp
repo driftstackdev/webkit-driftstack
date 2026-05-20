@@ -158,6 +158,40 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
 
     auto permissionDescriptor = permissionDescriptorConversionResult.releaseReturnValue();
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-408.7 (Driftstack 2026-05-20): on Family A archetypes (Safari
+    // ≤26.3), the PermissionName enum did NOT yet include "storage-access"
+    // (which Apple added in Safari 26.4+). Real iPhone Safari 18.6
+    // empirically throws TypeError when JS calls
+    // `navigator.permissions.query({name:'storage-access'})` — the IDL enum
+    // parse rejects the unknown string. Our PermissionName enum DOES
+    // include "storage-access" because the upstream WebKit branch we forked
+    // is current; we can't conditionally remove it from the IDL enum
+    // without forked binding-generator changes. Instead we intercept here:
+    // post-descriptor parse, if Family A archetype + name===StorageAccess,
+    // reject the promise with TypeError. The v2 fingerprint probe wraps
+    // every query in try/catch, so the rejected promise's TypeError
+    // surfaces identically to the real iPhone IDL-parse rejection.
+    static bool s_familyA = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype || !archetype[0])
+            return false;
+        std::string_view sv { archetype };
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || (sv.find("safari26_") != std::string_view::npos
+                && (sv.find("safari26_0") != std::string_view::npos
+                    || sv.find("safari26_1") != std::string_view::npos
+                    || sv.find("safari26_2") != std::string_view::npos
+                    || sv.find("safari26_3") != std::string_view::npos));
+    }();
+    if (s_familyA && permissionDescriptor.name == PermissionName::StorageAccess) {
+        promise.reject(Exception { ExceptionCode::TypeError, "Type error"_s });
+        return;
+    }
+#endif
+
     RefPtr origin = context->securityOrigin();
     auto originData = origin ? origin->data() : SecurityOriginData { };
 
