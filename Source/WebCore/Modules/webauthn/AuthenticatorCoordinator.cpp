@@ -402,13 +402,27 @@ void AuthenticatorCoordinator::discoverFromExternalSource(const Document& docume
 void AuthenticatorCoordinator::isUserVerifyingPlatformAuthenticatorAvailable(const Document& document, DOMPromiseDeferred<IDLBoolean>&& promise) const
 {
 #if PLATFORM(DRIFTSTACK)
-    // iPhone-archetype reports UVPA available (Face ID / Touch ID present).
-    // Mac MiniBrowser without Touch ID configured would say false; force true
-    // for archetype matching. Real WebAuthn flow against the underlying Mac
-    // platform may then fail at credential-creation time — acceptable
-    // trade-off for fingerprint matching since most pages probe but do not
-    // exercise the UVPA capability.
-    promise.resolve(true);
+    // Wave 29-499 §91 (2026-05-20): Safari pipeline split at version 26.4 —
+    // empirical n=3 Family A (BS iPhone 16 Pro Safari 18.6) all return false;
+    // empirical n=1 Family B (founder physical iPhone 16 Pro iOS 26.4.1)
+    // returns true. Per WebPage::updatePreferences s_isFamilyAArchetype
+    // pattern, archetype detection via DRIFTSTACK_ARCHETYPE env at process
+    // init time.
+    static const bool s_isFamilyAArchetype = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype) return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    promise.resolve(!s_isFamilyAArchetype);
     return;
 #endif
     // The following implements https://www.w3.org/TR/webauthn/#isUserVerifyingPlatformAuthenticatorAvailable
@@ -432,8 +446,25 @@ void AuthenticatorCoordinator::isUserVerifyingPlatformAuthenticatorAvailable(con
 void AuthenticatorCoordinator::isConditionalMediationAvailable(const Document& document, DOMPromiseDeferred<IDLBoolean>&& promise) const
 {
 #if PLATFORM(DRIFTSTACK)
-    // iPhone-archetype reports passkey conditional UI available.
-    promise.resolve(true);
+    // Wave 29-499 §91 (2026-05-20): Safari pipeline split at version 26.4 —
+    // empirical n=3 Family A returns false; empirical n=1 Family B
+    // returns true. Same archetype detection as
+    // isUserVerifyingPlatformAuthenticatorAvailable above.
+    static const bool s_isFamilyAArchetype = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype) return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    promise.resolve(!s_isFamilyAArchetype);
     return;
 #endif
     if (!m_client) {
