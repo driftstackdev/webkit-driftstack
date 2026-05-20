@@ -1769,6 +1769,39 @@ CalendarID iso8601CalendarIDSlow()
 // https://tc39.es/proposal-intl-enumeration/#sec-availablecalendars
 static JSArray* availableCalendars(JSGlobalObject* globalObject)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §91.J (2026-05-20): real iPhone Safari 18.6 (Family A BS
+    // REF) lists 3 calendars Mac WebKit's bundled ICU doesn't include:
+    // hindu-lunar, hindu-solar, malayalam. Append + re-sort to match REF.
+    // Family B (iOS 26.4) REF doesn't include them either (Apple removed
+    // those calendars at some iOS major) — gate to Family A only.
+    static const bool s_appendFamilyACalendars = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (s_appendFamilyACalendars) {
+        Vector<String> extendedCalendars = intlAvailableCalendars();
+        extendedCalendars.append("hindu-lunar"_s);
+        extendedCalendars.append("hindu-solar"_s);
+        extendedCalendars.append("malayalam"_s);
+        std::sort(extendedCalendars.begin(), extendedCalendars.end(),
+            [](const String& a, const String& b) {
+                return WTF::codePointCompare(a, b) < 0;
+            });
+        return createArrayFromStringVector(globalObject, WTF::move(extendedCalendars));
+    }
+#endif
     return createArrayFromStringVector(globalObject, intlAvailableCalendars());
 }
 
