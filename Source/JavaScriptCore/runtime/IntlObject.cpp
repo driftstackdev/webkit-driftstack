@@ -2284,6 +2284,58 @@ void initializeAvailableTimeZones()
 // https://tc39.es/ecma402/#sec-availableprimarytimezoneidentifiers
 static JSArray* availablePrimaryTimeZoneIdentifiers(JSGlobalObject* globalObject)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §91.K (2026-05-20): Family A (real iPhone Safari 18.6 BS
+    // REF) intl.supportedValuesOf("timeZone") has 419 entries; Mac WebKit
+    // returns 445. Mac includes Etc/GMT+1..+12 + America/Coyhaique + others
+    // that iOS 18.6 doesn't list. Filter to Family A REF shape. Family A
+    // additionally has Asia/Choibalsan which Mac lacks — append.
+    static const bool s_filterToFamilyAREF = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (s_filterToFamilyAREF) {
+        // Family-A-extra (Mac-only): the timezone names captured from Mac
+        // cumrig that DON'T appear in FA REF. Remove these from output.
+        static constexpr ASCIILiteral kMacOnlyTimeZones[] = {
+            "America/Coyhaique"_s,
+            "Etc/GMT+1"_s, "Etc/GMT+10"_s, "Etc/GMT+11"_s, "Etc/GMT+12"_s,
+            "Etc/GMT+2"_s, "Etc/GMT+3"_s, "Etc/GMT+4"_s, "Etc/GMT+5"_s,
+            "Etc/GMT+6"_s, "Etc/GMT+7"_s, "Etc/GMT+8"_s, "Etc/GMT+9"_s,
+            "Etc/GMT-1"_s, "Etc/GMT-10"_s, "Etc/GMT-11"_s, "Etc/GMT-12"_s,
+            "Etc/GMT-13"_s, "Etc/GMT-14"_s,
+            "Etc/GMT-2"_s, "Etc/GMT-3"_s, "Etc/GMT-4"_s, "Etc/GMT-5"_s,
+            "Etc/GMT-6"_s, "Etc/GMT-7"_s, "Etc/GMT-8"_s, "Etc/GMT-9"_s,
+        };
+        Vector<String> filtered;
+        for (const String& zone : intlAvailableTimeZones()) {
+            bool skip = false;
+            for (auto macOnly : kMacOnlyTimeZones) {
+                if (zone == macOnly) { skip = true; break; }
+            }
+            if (!skip)
+                filtered.append(zone);
+        }
+        // Family-A-only (REF has, Mac lacks): re-add.
+        filtered.append("Asia/Choibalsan"_s);
+        std::sort(filtered.begin(), filtered.end(),
+            [](const String& a, const String& b) {
+                return WTF::codePointCompare(a, b) < 0;
+            });
+        return createArrayFromStringVector(globalObject, WTF::move(filtered));
+    }
+#endif
     return createArrayFromStringVector(globalObject, intlAvailableTimeZones());
 }
 
