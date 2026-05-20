@@ -61,6 +61,7 @@
 #include "DeviceOrientationAndMotionAccessController.h"
 #include "DeviceOrientationController.h"
 #include "Document.h"
+#include "ViewportArguments.h"
 #include "DocumentEventLoop.h"
 #include "DocumentInlines.h"
 #include "DocumentLoader.h"
@@ -1382,6 +1383,37 @@ int LocalDOMWindow::innerHeight() const
 #if PLATFORM(DRIFTSTACK)
     // V-074: archetype iPhone 16 Pro / iOS 18.7 Safari 26.4: layout viewport
     // height with default URL bar chrome = 714 CSS pixels (874 - 160).
+    //
+    // Wave 29-408.4 (Driftstack 2026-05-20): pages WITHOUT `<meta viewport>`
+    // tag get the iOS Safari legacy desktop layout (980 CSS-px wide,
+    // height-scaled-to-aspect). Real iPhone 17 Safari 26.4 returns
+    // innerHeight=1741 when innerWidth=980; iPhone 16 Pro Safari 18.6
+    // returns 1653 when innerWidth=980. Detect no-meta state via
+    // ViewportArguments and return archetype-appropriate legacy height.
+    if (RefPtr document = this->document()) {
+        const auto& args = document->viewportArguments();
+        bool noViewportMeta = (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit);
+        if (noViewportMeta) {
+            static int s_legacyHeight = []() {
+                const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+                if (!archetype || !archetype[0])
+                    return 1741;
+                std::string_view sv { archetype };
+                // Family A (Safari ≤26.3): iPhone 16 Pro yields 1653
+                if (sv.find("safari17_") != std::string_view::npos
+                    || sv.find("safari18_") != std::string_view::npos
+                    || sv.find("safari19_") != std::string_view::npos
+                    || sv.find("safari26_0") != std::string_view::npos
+                    || sv.find("safari26_1") != std::string_view::npos
+                    || sv.find("safari26_2") != std::string_view::npos
+                    || sv.find("safari26_3") != std::string_view::npos)
+                    return 1653;
+                // Family B (Safari 26.4+ launch): iPhone 17 yields 1741
+                return 1741;
+            }();
+            return s_legacyHeight;
+        }
+    }
     return 714;
 #else
     if (!frame())
@@ -1407,6 +1439,17 @@ int LocalDOMWindow::innerWidth() const
 {
 #if PLATFORM(DRIFTSTACK)
     // V-074: archetype iPhone 16 Pro inner width = 402 CSS pixels.
+    //
+    // Wave 29-408.4 (Driftstack 2026-05-20): pages WITHOUT `<meta viewport>`
+    // tag get the iOS Safari legacy desktop layout (980 CSS-px). Real
+    // iPhone Safari (both 18.6 and 26.4) returns innerWidth=980 in this case.
+    // Detect via ViewportArguments — default-constructed state has
+    // width=ValueAuto && widthWasExplicit=false.
+    if (RefPtr document = this->document()) {
+        const auto& args = document->viewportArguments();
+        if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit)
+            return 980;
+    }
     return 402;
 #else
     if (!frame())
