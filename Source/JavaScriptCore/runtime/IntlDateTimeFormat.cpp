@@ -1260,25 +1260,7 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
         return throwTypeError(globalObject, scope, "failed to format date value"_s);
     replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(result);
 
-#if PLATFORM(DRIFTSTACK)
-    // Wave 29-499 §91.M (2026-05-20): substitute Mac-native TZ display name
-    // substrings with iPhone-canonical equivalents in Intl.DateTimeFormat
-    // format() output. Mirrors DateCache::timeZoneDisplayName (Wave 29-074
-    // wave-c-3 + §91.L) which handles Date.toString. Both code paths call
-    // through to ICU's CLDR timeZoneNames data; macOS bundled ICU CLDR
-    // differs from iOS bundled ICU CLDR for select zones — empirical lock
-    // (Wave 29-499 hard rule #1): both supported archetypes (iPhone 16 Pro
-    // Safari 18.6 + iPhone 17 Safari 26.4) emit "Greenwich Mean Time" for
-    // UTC family. Mac's ICU emits "Coordinated Universal Time" for the
-    // same family. Substring-replace narrowed to UTC family only until BS
-    // Automate canonical capture extends to other zones.
-    String resultString { result.span() };
-    if (resultString.contains("Coordinated Universal Time"_s))
-        resultString = makeStringByReplacingAll(resultString, "Coordinated Universal Time"_s, "Greenwich Mean Time"_s);
-    return jsString(vm, WTF::move(resultString));
-#else
-    return jsString(vm, String { WTF::move(result) });
-#endif
+    return jsString(vm, String(WTF::move(result)));
 }
 
 static ASCIILiteral partTypeString(UDateFormatField field)
@@ -1393,21 +1375,8 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
         previousEndIndex = endIndex;
 
         if (fieldType >= 0) {
-            auto typeLiteral = partTypeString(UDateFormatField(fieldType));
-            auto type = jsNontrivialString(vm, typeLiteral);
-            StringView partView = resultStringView.substring(beginIndex, endIndex - beginIndex);
-            JSString* value;
-#if PLATFORM(DRIFTSTACK)
-            // Wave 29-499 §91.M: substitute Mac-native TZ name with iPhone
-            // canonical (UTC family → "Greenwich Mean Time"). Mirrors the
-            // format() path; both supported archetypes verified empirically.
-            if (typeLiteral == "timeZoneName"_s && partView == "Coordinated Universal Time"_s)
-                value = jsNontrivialString(vm, "Greenwich Mean Time"_s);
-            else
-                value = jsString(vm, partView);
-#else
-            value = jsString(vm, partView);
-#endif
+            auto type = jsNontrivialString(vm, partTypeString(UDateFormatField(fieldType)));
+            auto value = jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
             JSObject* part = sourceType
                 ? createIntlPartObjectWithSource(globalObject, type, value, sourceType)
                 : createIntlPartObject(globalObject, type, value);
