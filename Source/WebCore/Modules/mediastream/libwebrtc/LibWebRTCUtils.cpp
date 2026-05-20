@@ -149,6 +149,10 @@ static inline RTCRtpCodec toRTCRtpCodec(const webrtc::RtpCodec rtcCodec)
         .sdpFmtpLine = toFMTPLine(rtcCodec)
     };
 }
+// Wave 29-499 §91.G note: audio/red sdpFmtpLine="=111/111" Family A injection
+// lives at LibWebRTCProvider.cpp::toRTCRtpCapabilities, not here.
+// toRTCRtpCodec is called for codec-stats reporting (RTCRtpSender/Receiver
+// .getParameters), not for getCapabilities — which is what cumrig probes.
 
 static inline RTCRtpEncodingParameters toRTCEncodingParameters(const webrtc::RtpEncodingParameters& rtcParameters, bool isAudio)
 {

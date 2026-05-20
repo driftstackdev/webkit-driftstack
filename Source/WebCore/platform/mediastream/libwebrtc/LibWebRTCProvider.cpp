@@ -481,7 +481,33 @@ static inline RTCRtpCapabilities toRTCRtpCapabilities(const webrtc::RtpCapabilit
         String sdpFmtpLine;
         if (sdpFmtpLineBuilder.length())
             sdpFmtpLine = sdpFmtpLineBuilder.toString();
-        return RTCRtpCodec { fromStdString(codec.mime_type()), static_cast<uint32_t>(codec.clock_rate ? *codec.clock_rate : 0), codec.num_channels, WTF::move(sdpFmtpLine) };
+        auto mimeType = fromStdString(codec.mime_type());
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-499 §91.G (2026-05-20 Task #91): Family A archetype
+        // audio/red codec has sdpFmtpLine="=111/111" on iPhone Safari 18.6
+        // per cumrig REF (n=3). Mac fork libwebrtc returns audio/red with
+        // empty params → sdpFmtpLine empty. Inject "=111/111" only on
+        // Family A + audio/red. Family B (Safari 26.4) has NO sdpFmtpLine
+        // on audio/red — preserve Mac fork's empty default.
+        if (sdpFmtpLine.isEmpty()
+            && equalLettersIgnoringASCIICase(mimeType, "audio/red"_s)) {
+            static const bool s_isFamilyAArchetypeRTC = []() {
+                const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+                if (!archetype) return false;
+                std::string_view sv(archetype);
+                return sv.find("safari17_") != std::string_view::npos
+                    || sv.find("safari18_") != std::string_view::npos
+                    || sv.find("safari19_") != std::string_view::npos
+                    || sv.find("safari26_0") != std::string_view::npos
+                    || sv.find("safari26_1") != std::string_view::npos
+                    || sv.find("safari26_2") != std::string_view::npos
+                    || sv.find("safari26_3") != std::string_view::npos;
+            }();
+            if (s_isFamilyAArchetypeRTC)
+                sdpFmtpLine = "=111/111"_s;
+        }
+#endif
+        return RTCRtpCodec { WTF::move(mimeType), static_cast<uint32_t>(codec.clock_rate ? *codec.clock_rate : 0), codec.num_channels, WTF::move(sdpFmtpLine) };
 
     });
 
