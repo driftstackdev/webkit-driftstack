@@ -3043,26 +3043,63 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
     // hash full-canvas readPixels output (WebGL pixel-readback probe, FP-library
     // WebGL hash, tracker-detector-suite WebGL probe) bypass V-185 toDataURL
     // dispatch entirely; V-375 closes that bypass at the readPixels
-    // entry. Gate: full-canvas (x=y=0, w=drawingBufferWidth,
-    // h=drawingBufferHeight) + table hit on (w, h, format, type).
+    // entry. Gate: table hit on (drawingBufferWidth, drawingBufferHeight,
+    // format, type).
+    //
+    // Wave 29-499 §10.B-W (2026-05-20 Task #90 sibling): extended to handle
+    // partial-rect + non-zero-origin reads. Mirrors V-373 §90 patch at
+    // CanvasRenderingContext2DBase::getImageData. Look up full-canvas override
+    // bytes then slice the requested rect (x, y, w, h).
     if (Driftstack::isWebGLReadPixelsOverrideEnabled()
-        && rect.x() == 0 && rect.y() == 0
+        && rect.x() >= 0 && rect.y() >= 0
         && rect.width() > 0 && rect.height() > 0
-        && rect.width() == drawingBufferWidth()
-        && rect.height() == drawingBufferHeight()) {
-        std::span<const uint8_t> overrideBytes;
+        && rect.x() + rect.width() <= drawingBufferWidth()
+        && rect.y() + rect.height() <= drawingBufferHeight()) {
+        const auto fullW = drawingBufferWidth();
+        const auto fullH = drawingBufferHeight();
+        std::span<const uint8_t> fullBytes;
         if (Driftstack::getWebGLReadPixelsOverrideBytes(
-                static_cast<uint32_t>(rect.width()),
-                static_cast<uint32_t>(rect.height()),
+                static_cast<uint32_t>(fullW),
+                static_cast<uint32_t>(fullH),
                 static_cast<uint32_t>(format),
                 static_cast<uint32_t>(type),
-                overrideBytes)) {
-            size_t copyBytes = std::min(data.size_bytes(), overrideBytes.size());
-            if (copyBytes) {
-                memcpySpan(data.first(copyBytes), overrideBytes.first(copyBytes));
-                WTFLogAlways("[Driftstack-V375] WebGL readPixels substitution FIRED (%dx%d format=0x%x type=0x%x bytes=%zu)",
-                    rect.width(), rect.height(), static_cast<unsigned>(format), static_cast<unsigned>(type), copyBytes);
-                return;
+                fullBytes)) {
+            const bool isFullCanvas = (rect.x() == 0 && rect.y() == 0
+                && rect.width() == fullW && rect.height() == fullH);
+            if (isFullCanvas) {
+                size_t copyBytes = std::min(data.size_bytes(), fullBytes.size());
+                if (copyBytes) {
+                    memcpySpan(data.first(copyBytes), fullBytes.first(copyBytes));
+                    WTFLogAlways("[Driftstack-V375] WebGL readPixels FULL-rect substitution FIRED (%dx%d format=0x%x type=0x%x bytes=%zu)",
+                        rect.width(), rect.height(), static_cast<unsigned>(format), static_cast<unsigned>(type), copyBytes);
+                    return;
+                }
+            } else {
+                // Wave 29-499 §10.B-W partial-rect path: row-major slice from
+                // fullBytes. WebGL readPixels output is bottom-left origin
+                // row-major RGBA8; for our purposes we slice by (x, y, w, h)
+                // in the same row-major layout (vendor probes always read in
+                // this same orientation).
+                const size_t bytesPerPixel = 4;  // RGBA/UNSIGNED_BYTE assumption (V-375 scope)
+                const size_t subStride = static_cast<size_t>(rect.width()) * bytesPerPixel;
+                const size_t fullStride = static_cast<size_t>(fullW) * bytesPerPixel;
+                size_t totalCopied = 0;
+                for (int row = 0; row < rect.height(); ++row) {
+                    const size_t srcOffset = (static_cast<size_t>(rect.y()) + row) * fullStride
+                                           + static_cast<size_t>(rect.x()) * bytesPerPixel;
+                    const size_t dstOffset = static_cast<size_t>(row) * subStride;
+                    if (srcOffset + subStride > fullBytes.size()) break;
+                    if (dstOffset + subStride > data.size_bytes()) break;
+                    auto srcRow = fullBytes.subspan(srcOffset, subStride);
+                    auto dstRow = data.subspan(dstOffset, subStride);
+                    memcpySpan(dstRow, srcRow);
+                    totalCopied += subStride;
+                }
+                if (totalCopied) {
+                    WTFLogAlways("[Driftstack-V375-§10.B-W] WebGL readPixels PARTIAL-rect substitution FIRED (canvas %dx%d → sub (%d,%d) %dx%d bytes=%zu)",
+                        fullW, fullH, rect.x(), rect.y(), rect.width(), rect.height(), totalCopied);
+                    return;
+                }
             }
         }
     }
