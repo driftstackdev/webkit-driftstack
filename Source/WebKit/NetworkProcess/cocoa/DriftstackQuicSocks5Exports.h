@@ -70,6 +70,11 @@ DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_isCustomSocks5Active(void);
 DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters);
 DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters);
 
+// Wave 29-499 Slice 16.7.b — broader UDP-transport detector to catch WebRTC
+// + raw-datagram UDP nw_connections so they route through createRelayConnection
+// (the existing SOCKS5 UDP_ASSOCIATE relay).
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseUdpTransport(nw_parameters_t parameters);
+
 // Wave 29-397 Slice 16.6 — production observability counters polled by
 // harness telemetry daemon for dashboard panels.
 DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_wrap_fires(void);

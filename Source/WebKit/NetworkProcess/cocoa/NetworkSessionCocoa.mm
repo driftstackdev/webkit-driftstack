@@ -1392,6 +1392,47 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                                 [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
                                 configuration.get().connectionProxyDictionary = trimmedProxy;
                             }
+
+                            // Wave 29-499 Slice 16.7.a — disable HTTP/3 when SOCKS5
+                            // active. Apple's nw_proxy_config_create_socksv5 only
+                            // tunnels TCP (RFC 1928 §4 CONNECT cmd); it does NOT
+                            // perform UDP_ASSOCIATE for QUIC's UDP datagrams.
+                            // Without HTTP/3 disabled, CFNetwork attempts QUIC →
+                            // direct UDP → real client IP leaks to destination.
+                            //
+                            // Detection rationale: real iPhone Safari falls back to
+                            // HTTP/2-over-TCP whenever QUIC handshake fails (UDP-
+                            // blocking corporate firewalls, lossy networks). This
+                            // is observable normal iPhone behavior — not a
+                            // detection-positive signal. Sites that test HTTP/3
+                            // availability (browserleaks.com/quic) will report
+                            // "HTTP/3 not detected", matching the network-
+                            // restricted-iPhone fingerprint.
+                            //
+                            // Implementation: NSURLSessionConfiguration has a
+                            // private _allowsHTTP3 property settable via KVC.
+                            // Setting to @NO prevents CFNetwork from attempting
+                            // Alt-Svc h3 upgrade, keeping all traffic TCP.
+                            //
+                            // Future Slice 16.7.b: route UDP through nw_connection
+                            // -level SOCKS5 UDP_ASSOCIATE relay (existing
+                            // DriftstackQuic::createRelayConnectionForQuic infra)
+                            // — once stable, this HTTP/3 disable can lift.
+                            @try {
+                                [configuration.get() setValue:@NO forKey:@"_allowsHTTP3"];
+                                static bool loggedOnceH3 = false;
+                                if (!loggedOnceH3) {
+                                    loggedOnceH3 = true;
+                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3=NO APPLIED — CFNetwork will not attempt Alt-Svc h3 upgrade; all HTTP traffic stays TCP through SOCKS5 (no QUIC UDP leak)");
+                                }
+                            } @catch (NSException *ex) {
+                                static bool loggedOnceH3Failure = false;
+                                if (!loggedOnceH3Failure) {
+                                    loggedOnceH3Failure = true;
+                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3 KVC threw — Apple may have removed the private property. Reason: %s",
+                                        [[ex reason] UTF8String] ?: "unknown");
+                                }
+                            }
                         }
                     }
                 }

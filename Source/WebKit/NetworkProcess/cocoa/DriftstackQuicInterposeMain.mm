@@ -216,6 +216,7 @@ static void driftstackQuicInterposeDylibLoaded(void)
 // stable unmangled names.
 typedef bool (*DriftstackQuicIsActiveFn)(void);
 typedef bool (*DriftstackQuicParamsUseQuicFn)(nw_parameters_t);
+typedef bool (*DriftstackQuicParamsUseUdpFn)(nw_parameters_t);
 typedef nw_connection_t (*DriftstackQuicCreateRelayFn)(nw_endpoint_t, nw_parameters_t);
 
 // Canonical DYLD_INTERPOSE macro (matches Apple's dyld-interposing.h).
@@ -268,6 +269,7 @@ static void resolveOriginalNwConnectionCreate()
 // during NetworkProcess launch).
 static DriftstackQuicIsActiveFn bridgeIsActive = nullptr;
 static DriftstackQuicParamsUseQuicFn bridgeParamsUseQuic = nullptr;
+static DriftstackQuicParamsUseUdpFn bridgeParamsUseUdp = nullptr;
 static DriftstackQuicCreateRelayFn bridgeCreateRelay = nullptr;
 
 static void resolveBridgeSymbols()
@@ -276,6 +278,10 @@ static void resolveBridgeSymbols()
         return;
     bridgeIsActive = reinterpret_cast<DriftstackQuicIsActiveFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_isCustomSocks5Active"));
     bridgeParamsUseQuic = reinterpret_cast<DriftstackQuicParamsUseQuicFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_parametersUseQuic"));
+    // Slice 16.7.b: optional UDP-transport predicate (may be nullptr if
+    // the framework was built before the symbol was added; fall through
+    // to QUIC-only check in that case).
+    bridgeParamsUseUdp = reinterpret_cast<DriftstackQuicParamsUseUdpFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_parametersUseUdpTransport"));
     bridgeCreateRelay = reinterpret_cast<DriftstackQuicCreateRelayFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_createRelayConnection"));
     if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay) {
         static bool loggedAbsenceOnce = false;
@@ -319,13 +325,24 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     if (!bridgeIsActive())
         return originalNwConnectionCreate(endpoint, parameters);
 
-    if (!bridgeParamsUseQuic(parameters))
+    // Wave 29-499 Slice 16.7.b — broader gate: route any UDP-transport
+    // nw_connection through SOCKS5 relay (covers QUIC HTTP/3, WebRTC ICE,
+    // raw-datagram UDP, future protocols). The relay infrastructure
+    // (createRelayConnectionForQuic + nw_framer §7 wrap/unwrap) handles
+    // both QUIC and plain UDP identically since SOCKS5 UDP_ASSOCIATE is
+    // payload-agnostic at the relay framing layer.
+    bool needsRelay = false;
+    if (bridgeParamsUseUdp && bridgeParamsUseUdp(parameters))
+        needsRelay = true;
+    else if (bridgeParamsUseQuic(parameters))
+        needsRelay = true;
+    if (!needsRelay)
         return originalNwConnectionCreate(endpoint, parameters);
 
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST QUIC interpose match — redirecting to driftstack_quic_createRelayConnection. Slice 16.4.b interpose ACTIVE.");
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST UDP/QUIC interpose match — redirecting to driftstack_quic_createRelayConnection. Slice 16.7.b broader UDP-transport gate ACTIVE.");
     }
 
     nw_connection_t relayConnection = bridgeCreateRelay(endpoint, parameters);

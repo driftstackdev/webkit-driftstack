@@ -167,6 +167,54 @@ bool parametersUseQuic(nw_parameters_t parameters)
     return foundQuic;
 }
 
+// Wave 29-499 Slice 16.7.b — detect plain UDP transport (WebRTC, WebTransport
+// raw UDP, raw datagram nw_connection). When SOCKS5 is active and the
+// parameters are UDP-transport, the interpose must redirect through
+// createRelayConnectionForQuic so the UDP datagrams flow through the
+// SOCKS5 UDP_ASSOCIATE relay (existing infrastructure) instead of leaking
+// the real client IP to the destination.
+//
+// Approach: pull the transport protocol options from the default protocol
+// stack and compare its definition to nw_protocol_copy_udp_definition().
+// Since QUIC parameters built with nw_parameters_create_secure_udp ALSO
+// have UDP as transport, parametersUseUdpTransport will return true for
+// both plain-UDP and QUIC; callers should typically OR the two predicates
+// or just use this helper as the broader gate.
+//
+// Recursion safety: like parametersUseQuic, this function only inspects
+// nw_parameters — no nw_connection_create call — so it cannot trigger
+// interpose recursion.
+bool parametersUseUdpTransport(nw_parameters_t parameters)
+{
+    if (!parameters)
+        return false;
+
+    nw_protocol_stack_t stack = nw_parameters_copy_default_protocol_stack(parameters);
+    if (!stack)
+        return false;
+
+    nw_protocol_options_t transport = nw_protocol_stack_copy_transport_protocol(stack);
+    nw_release(stack);
+    if (!transport)
+        return false;
+
+    nw_protocol_definition_t transportDef = nw_protocol_options_copy_definition(transport);
+    nw_release(transport);
+    if (!transportDef)
+        return false;
+
+    RetainPtr<nw_protocol_definition_t> udpDef = adoptNS(nw_protocol_copy_udp_definition());
+    bool isUdp = udpDef && nw_protocol_definition_is_equal(transportDef, udpDef.get());
+    nw_release(transportDef);
+
+    static bool loggedHitOnce = false;
+    if (isUdp && !loggedHitOnce && isCustomSocks5Active()) {
+        loggedHitOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16/Slice16.7.b] parametersUseUdpTransport: FIRST UDP-transport match (covers WebRTC + QUIC + raw datagram nw_connection) — relay path will engage on subsequent UDP nw_connection_create calls. Subsequent matches silent.");
+    }
+    return isUdp;
+}
+
 BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t destinationPort, std::span<const uint8_t> payload, Vector<uint8_t>& out)
 {
     if (!isCustomSocks5Active())
@@ -578,6 +626,14 @@ DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_isCustomSocks5Active(void)
 DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters)
 {
     return WebKit::DriftstackQuic::parametersUseQuic(parameters);
+}
+
+// Wave 29-499 Slice 16.7.b — interpose checks UDP transport (broader than
+// QUIC) to catch WebRTC + raw-datagram UDP so they route through the SOCKS5
+// UDP_ASSOCIATE relay infrastructure, preventing real-client-IP leak.
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseUdpTransport(nw_parameters_t parameters)
+{
+    return WebKit::DriftstackQuic::parametersUseUdpTransport(parameters);
 }
 
 DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)

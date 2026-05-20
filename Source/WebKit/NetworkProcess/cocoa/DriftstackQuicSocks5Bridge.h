@@ -75,6 +75,13 @@ enum class BridgeResult : uint8_t {
 // to original nw_connection_create (TCP / non-QUIC UDP unchanged).
 bool parametersUseQuic(nw_parameters_t parameters);
 
+// Wave 29-499 Slice 16.7.b — broader UDP-transport detector. Returns true
+// when the parameters specify UDP at the transport layer (covers WebRTC,
+// QUIC, raw datagram nw_connections). When SOCKS5 is active, the interpose
+// routes any UDP nw_connection through createRelayConnectionForQuic so
+// real-client-IP doesn't leak directly.
+bool parametersUseUdpTransport(nw_parameters_t parameters);
+
 // Slice 16.5: wrap an outgoing QUIC packet in RFC 1928 §7 framing for
 // transit through the SOCKS5 UDP ASSOCIATE relay channel.
 // destinationHost = remote QUIC server hostname (or sentinel-mapped
