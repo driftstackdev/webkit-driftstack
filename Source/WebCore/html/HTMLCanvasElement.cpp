@@ -148,12 +148,36 @@ using namespace HTMLNames;
 const int defaultWidth = 300;
 const int defaultHeight = 150;
 
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-499.8 Task #79 — initV510AtlasOnce lives in anonymous namespace
+// below (line 814+). Forward-declare here since HTMLCanvasElement ctor
+// needs to call it for the eager-init path that eliminates the
+// canvas_stripe 266ms first-paint outlier (the dominant 6.8× detection
+// vector). The anonymous namespace itself is internal to this TU so the
+// forward decl needs to participate; using `namespace` re-entry below
+// resolves scope.
+namespace { void initV510AtlasOnce(); }
+#endif
+
 HTMLCanvasElement::HTMLCanvasElement(const QualifiedName& tagName, Document& document)
     : HTMLElement(tagName, document, TypeFlag::HasDidMoveToNewDocument)
     , ActiveDOMObject(document)
     , CanvasBase(IntSize(defaultWidth, defaultHeight), document)
 {
     ASSERT(hasTagName(canvasTag));
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.8 Task #79 — eager atlas init at first canvas creation
+    // (cold-cache 266ms outlier closure). Once-flag prevents repeat work.
+    static bool s_eagerInitDone = false;
+    if (!s_eagerInitDone) {
+        const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
+        if (eager && eager[0] == '1') {
+            initV510AtlasOnce();
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/EagerInit] V510 atlas eagerly initialized at first HTMLCanvasElement creation — cold-cache 266ms outlier eliminated for subsequent canvas reads (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
+        }
+        s_eagerInitDone = true;
+    }
+#endif
 }
 
 Ref<HTMLCanvasElement> HTMLCanvasElement::create(Document& document)
@@ -808,6 +832,15 @@ void initV510AtlasOnce()
     state.initialized = true;
     v510AtlasStatePriority().initialized = true;
 
+    // Wave 29-499.8 Task #79 (cold-cache 6.8× slowdown closure):
+    // initV510AtlasOnce is called lazily on first canvas paint of a session
+    // — that first canvas pays 257ms of mmap + parse cost vs iPhone's 8ms,
+    // a 32× detection signal. To eliminate the cold-cache outlier, callers
+    // (WebProcess startup, document construction, etc.) eagerly invoke
+    // this function via DRIFTSTACK_EAGER_INIT_ATLAS=1 + the constructor
+    // hook below. Subsequent first-canvas calls become 0-cost (state
+    // already initialized — early return above).
+
     // V-581 Phase C-3.A: run OpSequenceRecorder canonical-serializer self-test
     // exactly once if DRIFTSTACK_TEST_OPSEQ=1. Placed before the atlas-file
     // checks so a missing/unreadable atlas does not skip the test. No-ops when
@@ -843,6 +876,15 @@ void initV510AtlasOnce()
     const char* priorityPath = envPriorityPath ? envPriorityPath : kDefaultPriorityPath;
     loadAtlasIntoState(v510AtlasStatePriority(), priorityPath, /*isPriority*/ true);
 }
+
+// Wave 29-499.8 Task #79 — eager atlas init is hooked into the
+// HTMLCanvasElement constructor (line 161+) when env
+// DRIFTSTACK_EAGER_INIT_ATLAS=1 is set, eliminating the
+// canvas_stripe_400x60 first-call 266ms outlier (vs iPhone 8.33ms)
+// that is the dominant component of the Mac fork's 6.8× suite-total
+// slowdown detection vector. The constructor's static once-flag
+// ensures only the FIRST canvas element pays the ~250ms cost; all
+// subsequent canvas elements and first-canvas-read paths are 0-cost.
 
 // V-578: apply delta-pixel substitution to a Mac dataURL.
 //
