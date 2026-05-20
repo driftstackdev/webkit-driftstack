@@ -25,6 +25,7 @@
 
 [
     ActiveDOMObject,
+    EnabledBySetting=ViewTransitionsEnabled,
     Exposed=Window
 ]
 interface ViewTransition {

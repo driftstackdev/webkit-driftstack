@@ -27,6 +27,7 @@
 typedef USVString CSSOMString;
 
 [
+    EnabledBySetting=CSSDescriptorBlocksEnabled,
     JSGenerateToNativeObject,
     Exposed=Window,
 ] interface CSSFontFaceDescriptors : CSSStyleDeclaration {

@@ -133,6 +133,7 @@ namespace WebCore {
     macro(CSSCounterStyleRule) \
     macro(CSSColor) \
     macro(CSSColorValue) \
+    macro(CSSFontFaceDescriptors) \
     macro(CSSFunctionDeclarations) \
     macro(CSSFunctionDescriptors) \
     macro(CSSFunctionRule) \
@@ -155,6 +156,7 @@ namespace WebCore {
     macro(CSSNumericValue) \
     macro(CSSOKLCH) \
     macro(CSSOKLab) \
+    macro(CSSPageDescriptors) \
     macro(CSSPaintSize) \
     macro(CSSPerspective) \
     macro(CSSPositionTryDescriptors) \
@@ -167,6 +169,7 @@ namespace WebCore {
     macro(CSSSkewX) \
     macro(CSSSkewY) \
     macro(CSSStartingStyleRule) \
+    macro(CSSStyleProperties) \
     macro(CSSStyleValue) \
     macro(CSSTransformComponent) \
     macro(CSSTransformValue) \

@@ -23,6 +23,7 @@
 typedef USVString CSSOMString;
 
 [
+    EnabledBySetting=CSSDescriptorBlocksEnabled,
     JSGenerateToNativeObject,
     SkipVTableValidation,
     Exposed=Window,

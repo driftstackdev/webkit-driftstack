@@ -51,8 +51,33 @@ void WeakMapPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->get, protoFuncWeakMapGet, static_cast<unsigned>(PropertyAttribute::DontEnum), 1, ImplementationVisibility::Public, JSWeakMapGetIntrinsic);
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->has, protoFuncWeakMapHas, static_cast<unsigned>(PropertyAttribute::DontEnum), 1, ImplementationVisibility::Public, JSWeakMapHasIntrinsic);
     JSC_NATIVE_INTRINSIC_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->set, protoFuncWeakMapSet, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public, JSWeakMapSetIntrinsic);
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-407.4 (2026-05-20): real iPhone Safari 18.6 (Family A) does
+    // NOT expose WeakMap.prototype.getOrInsert / getOrInsertComputed.
+    // Skip registration for Family A archetypes.
+    static const bool s_skipWeakMapGetOrInsert = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (!s_skipWeakMapGetOrInsert) {
+        JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getOrInsert"_s, protoFuncWeakMapGetOrInsert, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public);
+        JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getOrInsertComputed"_s, protoFuncWeakMapGetOrInsertComputed, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public);
+    }
+#else
     JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getOrInsert"_s, protoFuncWeakMapGetOrInsert, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public);
     JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getOrInsertComputed"_s, protoFuncWeakMapGetOrInsertComputed, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public);
+#endif
     JSC_TO_STRING_TAG_WITHOUT_TRANSITION();
 }
 

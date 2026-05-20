@@ -350,6 +350,37 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // (V-085 capture data) iPhone falls back to Helvetica for these
     // family names (identical width=160.0625 / fBBA=14 / fBBD=4 metrics
     // when CSS asks for them on iPhone).
+    //
+    // Wave 29-407.7 (2026-05-20): family-of-archetype detection. Empirical
+    // (BS Automate 5/5 captures) iPhone Safari 18.6 (Family A) does NOT
+    // detect these 4 Indic-script fonts as present (per offsetWidth probe).
+    // The Helvetica alias above PRODUCES a false positive on Family A
+    // (Mac fork renders with Helvetica metrics ≠ monospace baseline, so
+    // detection triggers as present). For Family A archetypes, return
+    // nullptr instead so the natural cascade falls through to monospace
+    // baseline (matches iPhone Safari 18.6).
+    static const bool s_isFamilyAArchetype = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (s_isFamilyAArchetype) {
+        if (lowercase == "gujarati sangam mn"_s
+            || lowercase == "oriya sangam mn"_s
+            || lowercase == "plantagenet cherokee"_s
+            || lowercase == "gurmukhi mn"_s)
+            return nullptr;
+    }
     if (lowercase == "kefa"_s
         || lowercase == "gujarati sangam mn"_s
         || lowercase == "oriya sangam mn"_s

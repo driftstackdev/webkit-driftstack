@@ -1093,6 +1093,25 @@ CSSDPropertyEnabled:
     WebCore:
       default: false
 
+# Wave 29-407.1 (Driftstack 2026-05-20): per-archetype gate for the CSSOM
+# descriptor block subclasses (CSSStyleProperties, CSSFontFaceDescriptors,
+# CSSPageDescriptors). Companion WebCoreBuiltinNames.h entries added for
+# PublicName lookup. Real iPhone Safari 18.6 hides these 3; Safari 26.4
+# exposes them.
+CSSDescriptorBlocksEnabled:
+  type: bool
+  status: stable
+  category: css
+  humanReadableName: "CSSOM Descriptor Blocks"
+  humanReadableDescription: "Expose CSSStyleProperties, CSSFontFaceDescriptors, CSSPageDescriptors subclass constructors on Window"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 CSSDynamicRangeLimitMixEnabled:
   type: bool
   category: css
@@ -9059,6 +9078,28 @@ ViewGestureDebuggingEnabled:
   defaultValue:
     WebKit:
       default: false
+
+# Wave 29-407.6 (Driftstack 2026-05-20): per-archetype gate for the
+# View Transitions API. Upstream WebKit doesn't gate the JS-side
+# interfaces (ViewTransition, ViewTransitionTypeSet, CSSViewTransitionRule,
+# document.startViewTransition, document.activeViewTransition) at IDL
+# level. Driftstack adds Setting + IDL EnabledBySetting on each so
+# Family A archetypes (Safari ≤26.3) can hide the entire API.
+# Empirical BS Automate: 5/5 real iPhone Safari 18.6 captures have all
+# View Transitions API surfaces undefined; Safari 26.4 has them.
+ViewTransitionsEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "View Transitions API"
+  humanReadableDescription: "Expose ViewTransition, ViewTransitionTypeSet, CSSViewTransitionRule, document.startViewTransition, document.activeViewTransition"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
 
 VisibleDebugOverlayRegions:
   type: uint32_t
