@@ -187,6 +187,42 @@ void ScriptedAnimationController::serviceRequestAnimationFrameCallbacks(ReducedR
         }
         ++m_driftstackCallbackInvocationCount;
     }
+
+    // Wave 29-499.6 Task #76 — per-frame long-tail jitter clamp. Real
+    // iPhone 17 rAF deltas are tight in the 17-24ms band (60Hz ProMotion
+    // non-fast). Mac fork sees outlier deltas up to 376ms under main-
+    // thread contention (GC, layout, network completion handlers). Any
+    // probe recording per-frame deltas + computing p95/p99/max catches
+    // the divergence as a detection vector.
+    //
+    // Mitigation: when env DRIFTSTACK_RAF_DELTA_CLAMP=1 set, ensure
+    // each JS-visible timestamp delta is at most
+    // DRIFTSTACK_RAF_DELTA_CLAMP_MS (default 17.0ms ≈ 60Hz quantum).
+    // Accumulates persistent shift so all subsequent timestamps stay
+    // in iPhone distribution.
+    //
+    // Composes with first-frame clamp above (operates after that shift).
+    // Skipped on callback index 0 (no previous timestamp to compute
+    // delta from).
+    static bool s_rafDeltaClamp = []() {
+        const char* env = getenv("DRIFTSTACK_RAF_DELTA_CLAMP");
+        return env && env[0] == '1';
+    }();
+    // Default 17.0ms = iPhone 60Hz quantum (non-fast ProMotion). Override
+    // requires WTF-safe parsing; current scope keeps it hardcoded.
+    constexpr double s_rafDeltaClampMs = 17.0;
+    if (s_rafDeltaClamp && m_driftstackLastClampedTimestampMs > 0.0) {
+        double maxAllowed = m_driftstackLastClampedTimestampMs + s_rafDeltaClampMs;
+        if (highResNowMs > maxAllowed) {
+            // The wall-clock delta exceeded the iPhone quantum — clamp
+            // to maxAllowed and accumulate shift so future timestamps
+            // stay in iPhone distribution.
+            m_driftstackTimestampShiftMs += (highResNowMs - maxAllowed);
+            highResNowMs = maxAllowed;
+        }
+    }
+    if (s_rafDeltaClamp)
+        m_driftstackLastClampedTimestampMs = highResNowMs;
 #endif
 
     LOG_WITH_STREAM(RequestAnimationFrame, stream << "ScriptedAnimationController::serviceRequestAnimationFrameCallbacks at " << highResNowMs << " (throttling reasons " << throttlingReasons() << ", preferred interval " << preferredScriptedAnimationInterval().milliseconds() << "ms)");

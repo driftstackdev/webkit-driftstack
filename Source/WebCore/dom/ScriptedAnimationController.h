@@ -98,6 +98,19 @@ private:
     uint32_t m_driftstackCallbackInvocationCount { 0 };
     double m_driftstackFirstCallbackTimestampMs { 0 };
     double m_driftstackTimestampShiftMs { 0 };
+    // Wave 29-499.6 Task #76 — long-tail jitter clamp. Mac fork rAF
+    // sometimes sees wall-clock deltas up to 376ms vs iPhone tight
+    // 17-24ms band (60Hz ProMotion-non-fast mode). Detection vector:
+    // any probe that records per-frame deltas + computes p95/p99 or
+    // max catches the divergence. Mitigation: when env
+    // DRIFTSTACK_RAF_DELTA_CLAMP=1 set, cap each JS-visible delta at
+    // DRIFTSTACK_RAF_DELTA_CLAMP_MS (default 17ms = 60Hz quantum),
+    // accumulating the shift. Subsequent timestamps stay in iPhone
+    // distribution even if Mac main-thread scheduling produced
+    // hiccups. Tradeoff: under heavy load, JS animations may drift
+    // ~Nms behind wall-clock — same graceful-degradation pattern real
+    // iPhone exhibits under main-thread contention.
+    double m_driftstackLastClampedTimestampMs { 0 };
 #endif
     OptionSet<ThrottlingReason> m_throttlingReasons;
 };
