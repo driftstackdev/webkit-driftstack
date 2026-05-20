@@ -5155,6 +5155,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // generic infrastructure but Family A flip removed — default true
         // matches both archetypes.
 
+        // Wave 29-408.2 — OverflowEvent restoration on Family A.
+        // Real iPhone Safari 18.4 / 18.6 still expose window.OverflowEvent
+        // as `function`; upstream WebKit removed the impl after a Q1 2024
+        // cleanup. Driftstack restored a minimal modern-spec OverflowEvent
+        // (constructor + 3 const enums + orient / horizontalOverflow /
+        // verticalOverflow attrs). Setting default off; Family A flips on
+        // so the JSC constructor installs. Family B (Safari 26.4) leaves it
+        // off — that's what real Safari 26.4 does.
+        settings.setOverflowEventEnabled(true);
+
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
         // - FileSystemWritableFileStream undefined

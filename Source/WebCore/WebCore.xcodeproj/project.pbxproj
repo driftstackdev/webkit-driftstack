@@ -12227,6 +12227,9 @@
 		49C66C4D299C294C00073276 /* ToggleEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ToggleEvent.h; sourceTree = "<group>"; };
 		49C66C4D299C294C00073277 /* ToggleEventTask.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ToggleEventTask.h; sourceTree = "<group>"; };
 		49C66C4D299C294C00073279 /* CommandEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CommandEvent.h; sourceTree = "<group>"; };
+		DR1F408201299C294C00073280 /* OverflowEvent.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = OverflowEvent.cpp; sourceTree = "<group>"; };
+		DR1F408201299C294C00073281 /* OverflowEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = OverflowEvent.h; sourceTree = "<group>"; };
+		DR1F408201299C294C00073282 /* OverflowEvent.idl */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = OverflowEvent.idl; sourceTree = "<group>"; };
 		49C7B9801042D2D30009D447 /* JSWebGLBuffer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSWebGLBuffer.cpp; sourceTree = "<group>"; };
 		49C7B9811042D2D30009D447 /* JSWebGLBuffer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = JSWebGLBuffer.h; sourceTree = "<group>"; };
 		49C7B9841042D2D30009D447 /* JSWebGLFramebuffer.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSWebGLFramebuffer.cpp; sourceTree = "<group>"; };
@@ -42591,6 +42594,9 @@
 				A84377B82CD9C91100CD134E /* ObservableInspector.idl */,
 				A89D454F2CD9EA18009F14E5 /* ObservableInspectorAbortCallback.h */,
 				A89D45502CD9EA18009F14E5 /* ObservableInspectorAbortCallback.idl */,
+				DR1F408201299C294C00073280 /* OverflowEvent.cpp */,
+				DR1F408201299C294C00073281 /* OverflowEvent.h */,
+				DR1F408201299C294C00073282 /* OverflowEvent.idl */,
 				A79CF8852C5B2A5700F67C7A /* PageRevealEvent.cpp */,
 				A79CF8842C5B2A5700F67C7A /* PageRevealEvent.h */,
 				A79CF8862C5B2A5700F67C7A /* PageRevealEvent.idl */,

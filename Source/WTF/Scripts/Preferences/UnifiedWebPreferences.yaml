@@ -5974,6 +5974,25 @@ OriginAPIEnabled:
     WebCore:
       default: true
 
+# Wave 29-408.2 (Driftstack 2026-05-20): OverflowEvent restoration for
+# Family A. Real iPhone Safari 18.4/18.6 expose window.OverflowEvent as
+# `function` (legacy DOM event API). Upstream WebKit removed it. Driftstack
+# restores a minimal modern-spec impl gated by this setting. Family A flips
+# to true; Family B keeps false (Safari 26.4 dropped the API).
+OverflowEventEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "OverflowEvent (legacy)"
+  humanReadableDescription: "Expose window.OverflowEvent legacy DOM event interface"
+  defaultValue:
+    WebKitLegacy:
+      default: false
+    WebKit:
+      default: false
+    WebCore:
+      default: false
+
 OverlayRegionsEnabled:
   type: bool
   status: testable

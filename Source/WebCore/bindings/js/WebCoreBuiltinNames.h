@@ -358,6 +358,7 @@ namespace WebCore {
     macro(OffscreenCanvasRenderingContext2D) \
     macro(Origin) \
     macro(OscillatorNode) \
+    macro(OverflowEvent) \
     macro(PaintRenderingContext2D) \
     macro(PannerNode) \
     macro(PaymentAddress) \
