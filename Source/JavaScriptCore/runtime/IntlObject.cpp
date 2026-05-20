@@ -1922,7 +1922,30 @@ static JSArray* availableNumberingSystems(JSGlobalObject* globalObject)
     // number formatting; calling Intl.NumberFormat(..., {numberingSystem:
     // 'tols'}) will throw RangeError. iPhone presumably supports it in
     // some way; this stub matches the supportedValuesOf surface only.
-    elements.append("tols"_s);
+    //
+    // Wave 29-499 §91.I (2026-05-20): Family A archetypes (iOS Safari 18.6
+    // BS REF) do NOT list 'tols' — that's iOS 26.4+ only. Gate the append
+    // on Family B (safari26_+) archetypes.
+    static const bool s_appendTols = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return true; // default Family B behavior (preserves existing).
+        std::string_view sv(archetype);
+        // Family A (safari17_ through safari25_) does NOT append.
+        if (sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos)
+            return false;
+        return true; // Family B + future.
+    }();
+    if (s_appendTols)
+        elements.append("tols"_s);
 #endif
 
     // The AvailableNumberingSystems abstract operation returns a List, ordered as if an Array of the same
