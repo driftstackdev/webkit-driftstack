@@ -40,6 +40,33 @@
                 <string>App</string>
 		<key>_MultipleInstances</key>
 		<true/>
+		<!--
+		  Wave 29-499 Slice 16.6.d (Task #16 EG-WK-1.10) Path A FIX:
+		  launchd reads this EnvironmentVariables dict at XPC service
+		  registration and sets the env BEFORE launching the service binary.
+		  dyld then processes DYLD_INSERT_LIBRARIES correctly at process
+		  startup, loading the QUIC SOCKS5 interpose dylib + activating its
+		  __DATA,__interpose section.
+
+		  The XPC bootstrap-dict mechanism (ProcessLauncherCocoa Wave 29-397
+		  Slice 16.4.b.5) cannot set DYLD env vars — setenv() inside the
+		  service runs AFTER dyld has loaded. Path A bypasses that
+		  limitation.
+
+		  Path is the dev-build absolute path. Production deployment will
+		  switch to @executable_path/.. token when NetworkProcess bundles
+		  are finalized for the harness fleet.
+
+		  Interpose dylib is HARMLESS when SOCKS5 inactive — its
+		  isCustomSocks5Active() check returns false on
+		  DRIFTSTACK_CUSTOM_SOCKS5 absence, falling through to original
+		  nw_connection_create.
+		-->
+		<key>EnvironmentVariables</key>
+		<dict>
+			<key>DYLD_INSERT_LIBRARIES</key>
+			<string>/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib</string>
+		</dict>
 	</dict>
 </dict>
 </plist>

@@ -43,11 +43,35 @@
 // validation) is otherwise invisible. Without this constructor log, the
 // dlsym-success log only fires if nw_connection_create is called, which
 // itself depends on the dylib having loaded.
+// Wave 29-499 Slice 16.6.e (Task #16 EG-WK-1.10) — fast-path no-op gate.
+// The dylib is now always loaded via Info.plist EnvironmentVariables
+// (Slice 16.6.d Path A). For cumrig + any session where
+// DRIFTSTACK_CUSTOM_SOCKS5 is unset, the interpose should be a near-zero-
+// overhead pass-through to the original nw_connection_create. Cache the
+// flag at constructor time to avoid repeated getenv() calls on the hot
+// data path.
+static bool g_driftstackCustomSocks5GatedAtLoad = false;
+
 __attribute__((constructor))
 static void driftstackQuicInterposeDylibLoaded(void)
 {
-    NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.c] libDriftstackQuicInterpose.dylib CONSTRUCTOR fired — dylib loaded into process (pid=%d). DYLD_INTERPOSE section should now be active. Subsequent nw_connection_create calls will reach driftstack_nw_connection_create.",
+    // Slice 16.6.c: dylib-load anchor. NSLog may not work in the
+    // dyld-constructor phase if CoreFoundation hasn't initialized yet —
+    // use fprintf(stderr) as the primary signal (always works from C
+    // stdio); NSLog as a secondary signal that should fire once CF is up.
+    fprintf(stderr, "[Driftstack-EG-WK-1.10/Task#16/Slice16.6.c] libDriftstackQuicInterpose.dylib CONSTRUCTOR fired — dylib loaded into process (pid=%d). DYLD_INTERPOSE section active.\n",
         getpid());
+    fflush(stderr);
+
+    // Slice 16.6.e: cache the gate flag at constructor time.
+    const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+    g_driftstackCustomSocks5GatedAtLoad = (customSocks5 && customSocks5[0] == '1');
+    fprintf(stderr, "[Driftstack-EG-WK-1.10/Task#16/Slice16.6.e] gate flag at load: DRIFTSTACK_CUSTOM_SOCKS5=%s (interpose %s)\n",
+        customSocks5 ?: "(unset)",
+        g_driftstackCustomSocks5GatedAtLoad ? "ACTIVE" : "INERT (fast-pass-through)");
+    fflush(stderr);
+
+    NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.c] CONSTRUCTOR NSLog (secondary, post-CF) — pid=%d gated=%d", getpid(), g_driftstackCustomSocks5GatedAtLoad);
 }
 
 // Slice 16.4.b.5.b: NO direct include of DriftstackQuicSocks5Bridge.h —
@@ -81,12 +105,37 @@ static void resolveOriginalNwConnectionCreate()
 {
     if (originalNwConnectionCreate != nullptr)
         return;
-    void* sym = dlsym(RTLD_NEXT, "nw_connection_create");
+    // Wave 29-499 Slice 16.6.f INFINITE RECURSION FIX: dlsym(RTLD_NEXT, ...)
+    // on macOS with DYLD_INTERPOSE returns the address of our OWN interpose
+    // function — not Apple's original. The interpose binding propagates
+    // through RTLD_NEXT lookups too. Calling our cached pointer recurses
+    // infinitely → stack overflow → crash (verified empirically via crash
+    // dump, depth 3325).
+    //
+    // Fix: explicitly open Network.framework by absolute path and dlsym
+    // from that specific handle. Network.framework's own image table is
+    // untouched by our interpose binding; the symbol resolves to Apple's
+    // real implementation.
+    void* networkHandle = dlopen("/System/Library/Frameworks/Network.framework/Network", RTLD_LAZY | RTLD_LOCAL);
+    if (!networkHandle) {
+        fprintf(stderr, "[Driftstack-EG-WK-1.10/Task#16/Slice16.6.f] dlopen(Network.framework) returned nil — interpose dead-ends. dlerror: %s\n",
+            dlerror() ?: "(unset)");
+        fflush(stderr);
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.f] dlopen(Network.framework) returned nil — interpose dead-ends");
+        return;
+    }
+    void* sym = dlsym(networkHandle, "nw_connection_create");
     if (!sym) {
-        NSLog(@"[Driftstack-EG-WK-1.10/Task#16] dlsym(RTLD_NEXT, nw_connection_create) returned nil — interpose dead-ends");
+        fprintf(stderr, "[Driftstack-EG-WK-1.10/Task#16/Slice16.6.f] dlsym(Network.framework, nw_connection_create) returned nil — interpose dead-ends. dlerror: %s\n",
+            dlerror() ?: "(unset)");
+        fflush(stderr);
+        NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.f] dlsym(Network.framework, nw_connection_create) returned nil — interpose dead-ends");
         return;
     }
     originalNwConnectionCreate = reinterpret_cast<NwConnectionCreateFn>(sym);
+    fprintf(stderr, "[Driftstack-EG-WK-1.10/Task#16/Slice16.6.f] dlsym resolved original nw_connection_create via Network.framework handle: %p\n",
+        sym);
+    fflush(stderr);
 }
 
 // Cached pointers to bridge symbols resolved at first use via
@@ -130,6 +179,14 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     resolveOriginalNwConnectionCreate();
     if (!originalNwConnectionCreate)
         return nullptr;
+
+    // Slice 16.6.e: fast-path no-op when SOCKS5 unset at process launch.
+    // Avoids per-call dlsym + WebKit bridge symbol resolution overhead for
+    // the majority of sessions (cumrig, dev sessions without SOCKS5). The
+    // gate flag is cached at constructor time so the only hot-path cost
+    // is one bool load + branch.
+    if (!g_driftstackCustomSocks5GatedAtLoad)
+        return originalNwConnectionCreate(endpoint, parameters);
 
     resolveBridgeSymbols();
     if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay)
