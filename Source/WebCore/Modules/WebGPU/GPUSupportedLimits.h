@@ -59,6 +59,9 @@ public:
     uint32_t NODELETE maxVertexAttributes() const;
     uint32_t NODELETE maxVertexBufferArrayStride() const;
     uint32_t NODELETE maxInterStageShaderVariables() const;
+    // Wave 29-408.3 (Driftstack): legacy alias for archetype parity (iPhone
+    // 17 Safari 26.4 still exposes the pre-rename `maxInterStageShaderComponents`).
+    uint32_t NODELETE maxInterStageShaderComponents() const;
     uint32_t NODELETE maxColorAttachments() const;
     uint32_t NODELETE maxColorAttachmentBytesPerSample() const;
     uint32_t NODELETE maxComputeWorkgroupStorageSize() const;

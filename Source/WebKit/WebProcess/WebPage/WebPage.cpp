@@ -5144,13 +5144,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // to this build) then re-applies the IDL gate.
         settings.setCSSDescriptorBlocksEnabled(false);
 
-        // Wave 29-407.6 — View Transitions API hide on Family A.
-        // Empirical BS Automate 2026-05-19: 5/5 real iPhone Safari 18.6
-        // captures have window.ViewTransition / ViewTransitionTypeSet /
-        // CSSViewTransitionRule / document.startViewTransition /
-        // document.activeViewTransition === undefined. Safari 26.4 has all.
-        // Driftstack-added ViewTransitionsEnabled setting + 5 IDL gates.
-        settings.setViewTransitionsEnabled(false);
+        // Wave 29-408.1 — REVERTED Wave 29-407.6 ViewTransitions Family A
+        // hide. Empirical re-verification 2026-05-20 vs the actual canonical
+        // BS Automate captures shows real iPhone Safari 18.4 / 18.6 / 26.2 /
+        // 26.3 / 26.4 ALL expose ViewTransition / ViewTransitionTypeSet /
+        // CSSViewTransitionRule / document.startViewTransition / activeView-
+        // Transition. The Wave 29-407.6 "hide on Family A" patch was based
+        // on a misread of an FA-vs-FB audit; the surfaces are NOT FB-only.
+        // ViewTransitionsEnabled Setting + 5 IDL gates kept in tree as
+        // generic infrastructure but Family A flip removed — default true
+        // matches both archetypes.
 
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:

@@ -161,6 +161,21 @@ uint32_t GPUSupportedLimits::maxInterStageShaderVariables() const
     return m_backing->maxInterStageShaderVariables();
 }
 
+uint32_t GPUSupportedLimits::maxInterStageShaderComponents() const
+{
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-408.3 (Driftstack 2026-05-20): empirical BS Automate iPhone 17
+    // Safari 26.4 exposes the legacy `maxInterStageShaderComponents`
+    // alongside the new `maxInterStageShaderVariables`, both reporting 124.
+    // Upstream WebKit removed the legacy attribute (CL ~2024-Q4) but iOS
+    // Safari 26.4 — built from a slightly older WebCore branch — still
+    // ships it. Mirror the Variables value so Family B reports both keys
+    // and the byte-for-byte iPhone surface inventory match holds.
+    return maxInterStageShaderVariables();
+#endif
+    return m_backing->maxInterStageShaderVariables();
+}
+
 uint32_t GPUSupportedLimits::maxColorAttachments() const
 {
     return m_backing->maxColorAttachments();

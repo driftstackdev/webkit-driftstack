@@ -54,6 +54,12 @@ interface GPUSupportedLimits {
     readonly attribute unsigned long maxVertexAttributes;
     readonly attribute unsigned long maxVertexBufferArrayStride;
     readonly attribute unsigned long maxInterStageShaderVariables;
+    // Wave 29-408.3 (Driftstack 2026-05-20): empirical BS Automate
+    // iPhone 17 Safari 26.4 exposes both the new `maxInterStageShaderVariables`
+    // AND the legacy `maxInterStageShaderComponents` (same value: 124).
+    // Upstream WebKit dropped the legacy name; restoring as alias so Family B
+    // matches real iPhone Safari 26.4 surface inventory exactly.
+    readonly attribute unsigned long maxInterStageShaderComponents;
     readonly attribute unsigned long maxColorAttachments;
     readonly attribute unsigned long maxColorAttachmentBytesPerSample;
     readonly attribute unsigned long maxComputeWorkgroupStorageSize;
