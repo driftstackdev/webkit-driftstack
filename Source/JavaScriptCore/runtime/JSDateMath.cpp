@@ -458,6 +458,14 @@ String DateCache::timeZoneDisplayName(bool isDST)
         static constexpr TZDisplayName iPhoneTZDisplayNames[] = {
             { "Europe/Istanbul"_s,           "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
             { "Asia/Istanbul"_s,             "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
+            // Wave 29-499 §91.L (2026-05-20): iOS Safari renders UTC TZ as
+            // "Greenwich Mean Time" via ICU; macOS bundled ICU returns
+            // "Coordinated Universal Time" instead. FA REF date.behavior.toString
+            // confirms "GMT+0000 (Greenwich Mean Time)" for TZ=UTC.
+            { "UTC"_s,                       "Greenwich Mean Time",               "Greenwich Mean Time" },
+            { "Etc/UTC"_s,                   "Greenwich Mean Time",               "Greenwich Mean Time" },
+            { "Etc/GMT"_s,                   "Greenwich Mean Time",               "Greenwich Mean Time" },
+            { "GMT"_s,                       "Greenwich Mean Time",               "Greenwich Mean Time" },
             // Additional TZ entries land here as iPhone reference captures cover them.
         };
         String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
