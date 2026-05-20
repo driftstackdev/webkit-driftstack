@@ -1291,11 +1291,37 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // Wave 29-396 sub-slice 1.6: set global flag.
             WebKit::g_driftstackCustomSocks5Active.store(true, std::memory_order_relaxed);
 
-            // Wave 29-396 sub-slice 1.9.a: register URLProtocol class.
+            // Wave 29-396 sub-slice 1.9.a: register URLProtocol class on
+            // the per-session NSURLSessionConfiguration.
             NSMutableArray *protocols = [@[[WKDriftstackSocks5URLProtocol class]] mutableCopy];
             if (configuration.get().protocolClasses)
                 [protocols addObjectsFromArray:configuration.get().protocolClasses];
             configuration.get().protocolClasses = protocols;
+
+            // Wave 29-499 Slice 16.6.h (Task #16 EG-WK-1.10) — GLOBAL
+            // registration via [NSURLProtocol registerClass:]. Empirical
+            // finding (founder smoke test 2026-05-20): WebKit creates
+            // NSURLSession instances from configurations that are COPIED
+            // before our configuration.protocolClasses modification reaches
+            // them, so the per-session registration above doesn't fire for
+            // actual page-load requests. canInitWithRequest is never called.
+            //
+            // Global registration via NSURLProtocol class registry catches
+            // all NSURLSessions in the process regardless of which
+            // configuration they were built from. This is the system-wide
+            // hook that ensures HTTPS requests reach our SOCKS5 URL
+            // protocol where RFC 1929 user/pass auth is handled via the
+            // DRIFTSTACK_SOCKS5_USER/PASS env vars.
+            //
+            // Idempotent: NSURLProtocol registerClass returns NO if class
+            // already registered. Safe to call repeatedly across session
+            // creations.
+            static dispatch_once_t globalRegisterOnce;
+            dispatch_once(&globalRegisterOnce, ^{
+                BOOL registered = [NSURLProtocol registerClass:[WKDriftstackSocks5URLProtocol class]];
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.h] global [NSURLProtocol registerClass:] returned %d — system-wide URL protocol hook installed for all NSURLSession instances",
+                    registered ? 1 : 0);
+            });
 
             // Wave 29-396 sub-slice 1.9.c: disarm CFNetwork SOCKS5 path
             // to prevent double-routing. With both
@@ -1314,7 +1340,25 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // HTTPS-skip is enabled for QUIC interpose path testing.
             const char* httpsSkipForDisarm = getenv("DRIFTSTACK_URLPROTOCOL_HTTPS_SKIP");
             bool httpsSkipActive = httpsSkipForDisarm && httpsSkipForDisarm[0] == '1';
-            if (!httpsSkipActive) {
+
+            // Wave 29-499 Slice 16.6.i (Task #16 EG-WK-1.10): when the
+            // SOCKS5 proxy requires auth (DRIFTSTACK_SOCKS5_USER set),
+            // KEEP CFNetwork SOCKS5 armed even when URL protocol is also
+            // registered. Empirically the URL protocol's
+            // canInitWithRequest does NOT fire for WebKit's NSURLSession
+            // page-load requests (registration on configuration.protocol-
+            // Classes is silently ignored by the session-creation path).
+            // Without keeping CFNetwork SOCKS5 armed + NSURLCredential
+            // pre-population (Slice 16.6.i), HTTPS requests fail.
+            //
+            // No double-routing concern: URL protocol isn't actually
+            // intercepting requests in this codebase right now (pending
+            // future invocation-path fix). CFNetwork SOCKS5 + NSURLCredential
+            // is the working primary path for auth-required proxies.
+            const char* userCheckEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+            bool hasSocks5AuthCreds = userCheckEnv && userCheckEnv[0];
+
+            if (!httpsSkipActive && !hasSocks5AuthCreds) {
                 NSDictionary *currentProxyDict = configuration.get().connectionProxyDictionary;
                 if (currentProxyDict) {
                     NSMutableDictionary *trimmedProxy = [currentProxyDict mutableCopy];
@@ -1323,8 +1367,14 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                     [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
                     // Note: kCFNetworkProxiesSOCKSUser/Pass don't exist as
                     // public symbols on macOS; CFNetwork uses NSURLCredential
-                    // lookup or URL-embedded auth.
+                    // lookup or URL-embedded auth (Slice 16.6.i wires this).
                     configuration.get().connectionProxyDictionary = trimmedProxy;
+                }
+            } else if (hasSocks5AuthCreds) {
+                static bool loggedKeepArmedOnce = false;
+                if (!loggedKeepArmedOnce) {
+                    loggedKeepArmedOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.i] CFNetwork SOCKS5 STAYS armed (DRIFTSTACK_SOCKS5_USER set — auth-required proxy). NSURLCredentialStorage pre-populated; URL protocol registration redundant but harmless.");
                 }
             } else {
                 static bool loggedSkipDisarmOnce = false;
@@ -1369,6 +1419,47 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                         [socksDict setObject:host.createNSString().get() forKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
                         [socksDict setObject:@(*portOpt) forKey:(NSString *)kCFNetworkProxiesSOCKSPort];
                         configuration.get().connectionProxyDictionary = socksDict;
+
+                        // Wave 29-499 Slice 16.6.i (Task #16 EG-WK-1.10) —
+                        // SOCKS5 RFC 1929 user/pass auth via NSURLCredential.
+                        // kCFNetworkProxiesSOCKSUser/Pass don't exist as public
+                        // CFNetwork keys; instead pre-populate NSURLCredential-
+                        // Storage with a credential matching the proxy's
+                        // NSURLProtectionSpace. CFNetwork's SOCKS5 client
+                        // consults this storage on auth challenge.
+                        const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+                        const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+                        if (userEnv && userEnv[0] && passEnv) {
+                            RetainPtr credUser = [NSString stringWithUTF8String:userEnv];
+                            RetainPtr credPass = [NSString stringWithUTF8String:passEnv];
+                            RetainPtr credential = [NSURLCredential credentialWithUser:credUser.get() password:credPass.get() persistence:NSURLCredentialPersistenceForSession];
+                            RetainPtr protSpace = adoptNS([[NSURLProtectionSpace alloc]
+                                initWithProxyHost:host.createNSString().get()
+                                port:portOpt_val
+                                type:NSURLProtectionSpaceSOCKSProxy
+                                realm:nil
+                                authenticationMethod:NSURLAuthenticationMethodDefault]);
+                            [[NSURLCredentialStorage sharedCredentialStorage]
+                                setDefaultCredential:credential.get()
+                                forProtectionSpace:protSpace.get()];
+                            // Also attach to the session-specific credential
+                            // storage so per-session-isolated requests can
+                            // find the credential (configuration may have
+                            // its own URLCredentialStorage).
+                            if (configuration.get().URLCredentialStorage) {
+                                [configuration.get().URLCredentialStorage
+                                    setDefaultCredential:credential.get()
+                                    forProtectionSpace:protSpace.get()];
+                            }
+                            static bool loggedAuthOnce = false;
+                            if (!loggedAuthOnce) {
+                                loggedAuthOnce = true;
+                                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.i] NSURLCredential pre-populated for SOCKS5 proxy %s:%u (user-len=%u, pass-len=%u) — CFNetwork SOCKS5 RFC 1929 auth wired",
+                                    host.utf8().data(), (unsigned)portOpt_val,
+                                    (unsigned)[credUser.get() length], (unsigned)[credPass.get() length]);
+                            }
+                        }
+
                         static bool loggedOnce = false;
                         if (!loggedOnce) {
                             loggedOnce = true;
