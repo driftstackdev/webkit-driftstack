@@ -30,6 +30,9 @@
 
 #include "CachedImage.h"
 #include "ContextDestructionObserverInlines.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackWebGLExtensionAllowlist.h"
+#endif
 #include "EXTClipControl.h"
 #include "EXTColorBufferFloat.h"
 #include "EXTColorBufferHalfFloat.h"
@@ -2744,6 +2747,15 @@ std::optional<Vector<String>> WebGL2RenderingContext::getSupportedExtensions()
     APPEND_IF_SUPPORTED("WEBGL_provoking_vertex", WebGLProvokingVertex::supported(*context))
     APPEND_IF_SUPPORTED("WEBGL_render_shared_exponent", WebGLRenderSharedExponent::supported(*context))
     APPEND_IF_SUPPORTED("WEBGL_stencil_texturing", WebGLStencilTexturing::supported(*context))
+
+#if PLATFORM(DRIFTSTACK)
+    // §11.D Task #89: post-filter to iPhone canonical allowlist (50
+    // entries identical Family A + B per V-2026-05-20-W11D V-log). Safe
+    // by construction — only removes Mac-fork-natural extras the iPhone
+    // doesn't expose. Missing-on-Mac (iPhone-has-but-Mac-doesn't) cases
+    // are tracked separately as stub-implement follow-ups.
+    Driftstack::filterWebGLExtensionsToIphoneCanonical(result);
+#endif
 
     return result;
 }

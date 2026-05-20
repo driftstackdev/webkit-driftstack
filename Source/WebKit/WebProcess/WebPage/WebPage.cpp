@@ -5080,6 +5080,21 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // window === true on iPhone archetypes (5/5 BS captures confirm this).
     settings.setTouchEventDOMAttributesEnabled(true);
 
+    // Wave 29-499.9 §80 — setTimeout(0) clamp Safari pipeline split.
+    // Empirical n=22 BS Safari 26.4 captures + n=13 Safari 26.3 + n=5 founder
+    // physical iOS 26.5 (V-2026-05-20-W29-499-CANONICAL-BASELINES):
+    //   Family A (Safari 18.6 / 26.3 OLD pipeline): setTimeout(0) p50 = 5 ms
+    //   Family B (Safari 26.4+ NEW pipeline):       setTimeout(0) p50 = 8 ms
+    // WebKit default `DOMTimer::defaultMinimumInterval()` = 4 ms; we override
+    // the per-page `minimumDOMTimerInterval` to match the iPhone canonical
+    // clamp for the active archetype's Safari pipeline. setTimeout actual-
+    // delay = max(clamp, scheduler_overhead); these constants make setTimeout
+    // (fn, 0).p50 match iPhone canonical at 5 or 8 ms.
+    if (s_isFamilyAArchetype)
+        settings.setMinimumDOMTimerInterval(5_ms);
+    else
+        settings.setMinimumDOMTimerInterval(8_ms);
+
     if (s_isFamilyAArchetype) {
         // Wave 29-403 §11.A: WebGPU cascade hides navigator.gpu + GPU*
         // window globals + GPUSupportedFeatures/Limits + WGSLLanguageFeatures.
