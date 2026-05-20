@@ -15,6 +15,7 @@
 #import "../webrtc/DriftstackRTCSocks5Bridge.h"
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
+#include <atomic>
 #include <stdlib.h>
 #include <wtf/Assertions.h>
 #include <wtf/HashMap.h>
@@ -25,6 +26,69 @@
 namespace WebKit {
 
 namespace DriftstackQuic {
+
+// Wave 29-397 Slice 16.6 (Task #16 EG-WK-1.10 production observability):
+// atomic counters for SOCKS5 QUIC code path activity. Counters expose
+// internal state to:
+//   - the harness (via the extern "C" diagnostic accessors at file end)
+//   - periodic summary logs (every 100 events of any type)
+//
+// These counters cover the full lifecycle of a SOCKS5-routed QUIC packet:
+// outgoing wraps, incoming unwraps, framer fires, relay setup failures,
+// endpoint extraction failures. Customer-facing dashboards in the harness
+// poll these to detect SOCKS5-routing degradation (e.g., elevated unwrap
+// failures may signal proxy MITM).
+//
+// All counters are std::atomic to avoid lock overhead on the hot data path.
+struct Slice16_6_Counters {
+    std::atomic<uint64_t> wrapOutgoingFires { 0 };
+    std::atomic<uint64_t> wrapOutgoingFailures { 0 };
+    std::atomic<uint64_t> unwrapIncomingFires { 0 };
+    std::atomic<uint64_t> unwrapIncomingFailures { 0 };
+    std::atomic<uint64_t> framerOutputFires { 0 };
+    std::atomic<uint64_t> framerInputFires { 0 };
+    std::atomic<uint64_t> framerWithoutDestination { 0 };
+    std::atomic<uint64_t> framerWrapFailures { 0 };
+    std::atomic<uint64_t> relayEstablishFailures { 0 };
+    std::atomic<uint64_t> relayConnectionCreateFailures { 0 };
+    std::atomic<uint64_t> attachFramerFailures { 0 };
+    std::atomic<uint64_t> endpointExtractFailures { 0 };
+};
+
+static Slice16_6_Counters& slice16_6_counters()
+{
+    static NeverDestroyed<Slice16_6_Counters> s_counters;
+    return s_counters.get();
+}
+
+// Periodic summary log: every 100 events (sum across all counters), emit
+// a snapshot. Throttled to avoid log spam at high throughput.
+static void maybeLogCounterSummary()
+{
+    auto& c = slice16_6_counters();
+    uint64_t totalFires = c.wrapOutgoingFires.load(std::memory_order_relaxed)
+        + c.unwrapIncomingFires.load(std::memory_order_relaxed)
+        + c.framerOutputFires.load(std::memory_order_relaxed)
+        + c.framerInputFires.load(std::memory_order_relaxed);
+    if (totalFires == 0 || totalFires % 100)
+        return;
+    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16/Slice16.6] counter snapshot — "
+        "wraps=%llu (fail=%llu)  unwraps=%llu (fail=%llu)  framer_out=%llu  framer_in=%llu  "
+        "no_dest=%llu  framer_wrap_fail=%llu  relay_est_fail=%llu  conn_create_fail=%llu  "
+        "attach_fail=%llu  endpoint_fail=%llu",
+        static_cast<unsigned long long>(c.wrapOutgoingFires.load()),
+        static_cast<unsigned long long>(c.wrapOutgoingFailures.load()),
+        static_cast<unsigned long long>(c.unwrapIncomingFires.load()),
+        static_cast<unsigned long long>(c.unwrapIncomingFailures.load()),
+        static_cast<unsigned long long>(c.framerOutputFires.load()),
+        static_cast<unsigned long long>(c.framerInputFires.load()),
+        static_cast<unsigned long long>(c.framerWithoutDestination.load()),
+        static_cast<unsigned long long>(c.framerWrapFailures.load()),
+        static_cast<unsigned long long>(c.relayEstablishFailures.load()),
+        static_cast<unsigned long long>(c.relayConnectionCreateFailures.load()),
+        static_cast<unsigned long long>(c.attachFramerFailures.load()),
+        static_cast<unsigned long long>(c.endpointExtractFailures.load()));
+}
 
 bool isCustomSocks5Active()
 {
@@ -119,10 +183,14 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
     RetainPtr<NSData> payloadData = adoptNS([[NSData alloc] initWithBytes:payload.data() length:payload.size()]);
     RetainPtr<NSData> framed = DriftstackSocks5Client::wrapUdpDatagram(destination, payloadData.get());
     if (!framed) {
+        slice16_6_counters().wrapOutgoingFailures.fetch_add(1, std::memory_order_relaxed);
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] wrapOutgoingQuicPacket: §7 frame helper returned nil for dest=%s:%u",
             destinationHost.utf8().data(), destinationPort);
         return BridgeResult::ProtocolError;
     }
+
+    slice16_6_counters().wrapOutgoingFires.fetch_add(1, std::memory_order_relaxed);
+    maybeLogCounterSummary();
 
     static bool loggedSuccessOnce = false;
     if (!loggedSuccessOnce) {
@@ -145,6 +213,7 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
     Socks5Endpoint source;
     RetainPtr<NSData> payload = DriftstackSocks5Client::unwrapUdpDatagram(frameData.get(), source);
     if (!payload) {
+        slice16_6_counters().unwrapIncomingFailures.fetch_add(1, std::memory_order_relaxed);
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] unwrapIncomingQuicPacket: §7 frame helper returned nil (protocol error)");
         return BridgeResult::ProtocolError;
     }
@@ -153,6 +222,9 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
     out.sourcePort = source.port;
     out.payload.clear();
     out.payload.append(WTF::span(payload.get()));
+
+    slice16_6_counters().unwrapIncomingFires.fetch_add(1, std::memory_order_relaxed);
+    maybeLogCounterSummary();
 
     static bool loggedSuccessOnce = false;
     if (!loggedSuccessOnce) {
@@ -243,6 +315,7 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
                         if (dest.host.isEmpty() || dest.port == 0) {
                             // No destination metadata; pass through (will fail at
                             // gost as malformed SOCKS5 frame, but no crash).
+                            slice16_6_counters().framerWithoutDestination.fetch_add(1, std::memory_order_relaxed);
                             nw_framer_write_output(framerInner, buffer, bufferLength);
                             return bufferLength;
                         }
@@ -251,10 +324,14 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
                         std::span<const uint8_t> payloadSpan = unsafeMakeSpan(buffer, bufferLength);
                         WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
                         Vector<uint8_t> framed;
-                        if (Socks5Framing::wrap(framingDest, payloadSpan, framed))
+                        if (Socks5Framing::wrap(framingDest, payloadSpan, framed)) {
                             nw_framer_write_output(framerInner, framed.span().data(), framed.size());
-                        else
+                            slice16_6_counters().framerOutputFires.fetch_add(1, std::memory_order_relaxed);
+                            maybeLogCounterSummary();
+                        } else {
+                            slice16_6_counters().framerWrapFailures.fetch_add(1, std::memory_order_relaxed);
                             nw_framer_write_output(framerInner, buffer, bufferLength);
+                        }
                         static bool loggedOnce = false;
                         if (!loggedOnce) {
                             loggedOnce = true;
@@ -275,6 +352,8 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
                         Vector<uint8_t> payload;
                         if (Socks5Framing::unwrap(frameSpan, source, payload)) {
                             nw_framer_deliver_input(framerInner, payload.span().data(), payload.size(), nw_framer_message_create(framerInner), true);
+                            slice16_6_counters().framerInputFires.fetch_add(1, std::memory_order_relaxed);
+                            maybeLogCounterSummary();
                             static bool loggedOnce = false;
                             if (!loggedOnce) {
                                 loggedOnce = true;
@@ -284,6 +363,7 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
                         } else {
                             // Pass through on protocol error — CFNetwork sees raw
                             // bytes, will surface its own QUIC error.
+                            slice16_6_counters().unwrapIncomingFailures.fetch_add(1, std::memory_order_relaxed);
                             nw_framer_deliver_input(framerInner, buffer, bufferLength, nw_framer_message_create(framerInner), true);
                         }
                         return bufferLength;
@@ -328,6 +408,7 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     DriftstackRTC::RelayChannel channel;
     DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
     if (r != DriftstackRTC::BridgeResult::Success) {
+        slice16_6_counters().relayEstablishFailures.fetch_add(1, std::memory_order_relaxed);
         static bool loggedFailOnce = false;
         if (!loggedFailOnce) {
             loggedFailOnce = true;
@@ -358,6 +439,7 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     if (endpointToHostPort(originalEndpoint, destHost, destPort))
         setPendingFramerDestination(destHost, destPort);
     else {
+        slice16_6_counters().endpointExtractFailures.fetch_add(1, std::memory_order_relaxed);
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: endpointToHostPort failed for originalEndpoint — §7 wrap will see empty destination (gost will reject)");
     }
 
@@ -373,6 +455,7 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
 
     auto relayConnection = adoptNS(nw_connection_create(relayEndpoint.get(), relayParams.get()));
     if (!relayConnection) {
+        slice16_6_counters().relayConnectionCreateFailures.fetch_add(1, std::memory_order_relaxed);
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] createRelayConnectionForQuic: nw_connection_create returned nil");
         return nullptr;
     }
@@ -406,6 +489,8 @@ bool attachSocks5FramerToParameters(nw_parameters_t parameters, const String& de
     DriftstackRTC::RelayChannel channel;
     DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
     if (r != DriftstackRTC::BridgeResult::Success) {
+        slice16_6_counters().relayEstablishFailures.fetch_add(1, std::memory_order_relaxed);
+        slice16_6_counters().attachFramerFailures.fetch_add(1, std::memory_order_relaxed);
         static bool loggedFailOnce = false;
         if (!loggedFailOnce) {
             loggedFailOnce = true;
@@ -416,14 +501,17 @@ bool attachSocks5FramerToParameters(nw_parameters_t parameters, const String& de
     }
 
     nw_protocol_definition_t framerDef = driftstackSocks5FramerDefinition();
-    if (!framerDef)
+    if (!framerDef) {
+        slice16_6_counters().attachFramerFailures.fetch_add(1, std::memory_order_relaxed);
         return false;
+    }
 
     setPendingFramerDestination(destinationHost, destinationPort);
 
     auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
     auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(parameters));
     if (!stack) {
+        slice16_6_counters().attachFramerFailures.fetch_add(1, std::memory_order_relaxed);
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] attachSocks5FramerToParameters: nw_parameters_copy_default_protocol_stack returned nil");
         return false;
     }
@@ -487,6 +575,49 @@ nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw
 {
     return WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters).leakRef();
 }
+
+// Wave 29-397 Slice 16.6 (Task #16 EG-WK-1.10): production observability
+// accessors. Harness reads via dlsym(RTLD_DEFAULT, "driftstack_quic_counter_*")
+// + polls for dashboard updates. NO LOCKING — atomic load is wait-free.
+// Stable signature: returns uint64_t. Naming: driftstack_quic_counter_<lowercase>.
+
+uint64_t driftstack_quic_counter_wrap_fires(void);
+uint64_t driftstack_quic_counter_wrap_failures(void);
+uint64_t driftstack_quic_counter_unwrap_fires(void);
+uint64_t driftstack_quic_counter_unwrap_failures(void);
+uint64_t driftstack_quic_counter_framer_output_fires(void);
+uint64_t driftstack_quic_counter_framer_input_fires(void);
+uint64_t driftstack_quic_counter_framer_without_destination(void);
+uint64_t driftstack_quic_counter_framer_wrap_failures(void);
+uint64_t driftstack_quic_counter_relay_establish_failures(void);
+uint64_t driftstack_quic_counter_relay_connection_create_failures(void);
+uint64_t driftstack_quic_counter_attach_framer_failures(void);
+uint64_t driftstack_quic_counter_endpoint_extract_failures(void);
+
+uint64_t driftstack_quic_counter_wrap_fires(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().wrapOutgoingFires.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_wrap_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().wrapOutgoingFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_unwrap_fires(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().unwrapIncomingFires.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_unwrap_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().unwrapIncomingFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_framer_output_fires(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().framerOutputFires.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_framer_input_fires(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().framerInputFires.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_framer_without_destination(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().framerWithoutDestination.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_framer_wrap_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().framerWrapFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_relay_establish_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().relayEstablishFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_relay_connection_create_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().relayConnectionCreateFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_attach_framer_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().attachFramerFailures.load(std::memory_order_relaxed); }
+uint64_t driftstack_quic_counter_endpoint_extract_failures(void)
+{ return WebKit::DriftstackQuic::slice16_6_counters().endpointExtractFailures.load(std::memory_order_relaxed); }
 
 } // extern "C"
 
