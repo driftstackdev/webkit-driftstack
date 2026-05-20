@@ -387,6 +387,74 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     return relayConnection;
 }
 
+// Wave 29-397 Slice 16.5 (Task #16 EG-WK-1.10): attach §7 framer to
+// caller-owned nw_parameters_t. Used by WebTransport hook (Network-
+// TransportSessionCocoa.mm) where we cannot swap the parameters wholesale
+// — they were built by createParameters() with webtransport-specific
+// configuration. We instead prepend the framer to the existing protocol
+// stack and stash the destination metadata so the framer's start_handler
+// claims it for the new framer instance.
+bool attachSocks5FramerToParameters(nw_parameters_t parameters, const String& destinationHost, uint16_t destinationPort)
+{
+    if (!isCustomSocks5Active())
+        return false;
+    if (!parameters)
+        return false;
+    if (destinationHost.isEmpty() || destinationPort == 0)
+        return false;
+
+    DriftstackRTC::RelayChannel channel;
+    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    if (r != DriftstackRTC::BridgeResult::Success) {
+        static bool loggedFailOnce = false;
+        if (!loggedFailOnce) {
+            loggedFailOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] attachSocks5FramerToParameters: relay establish failed (result=%d) — caller falls through to direct UDP (LEAK)",
+                static_cast<int>(r));
+        }
+        return false;
+    }
+
+    nw_protocol_definition_t framerDef = driftstackSocks5FramerDefinition();
+    if (!framerDef)
+        return false;
+
+    setPendingFramerDestination(destinationHost, destinationPort);
+
+    auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
+    auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(parameters));
+    if (!stack) {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] attachSocks5FramerToParameters: nw_parameters_copy_default_protocol_stack returned nil");
+        return false;
+    }
+    nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+
+    static bool loggedSuccessOnce = false;
+    if (!loggedSuccessOnce) {
+        loggedSuccessOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] attachSocks5FramerToParameters: §7 framer prepended to caller parameters — dest=%s:%u, relay=%s:%u. Caller must now swap connection-group endpoint to getRelayEndpoint().",
+            destinationHost.utf8().data(), destinationPort,
+            channel.relayHost.utf8().data(), channel.relayPort);
+    }
+
+    return true;
+}
+
+RetainPtr<nw_endpoint_t> getRelayEndpoint()
+{
+    if (!isCustomSocks5Active())
+        return nullptr;
+
+    DriftstackRTC::RelayChannel channel;
+    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    if (r != DriftstackRTC::BridgeResult::Success)
+        return nullptr;
+
+    auto relayHostUtf8 = channel.relayHost.utf8();
+    return adoptNS(nw_endpoint_create_host(relayHostUtf8.data(),
+        String::number(channel.relayPort).utf8().data()));
+}
+
 } // namespace DriftstackQuic
 
 } // namespace WebKit

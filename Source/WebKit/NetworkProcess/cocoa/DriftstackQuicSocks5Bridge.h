@@ -98,6 +98,25 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
 // callbacks dispatch unwrapped packets back to libwebrtc / CFNetwork.
 RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEndpoint, nw_parameters_t parameters);
 
+// Slice 16.5 (WebTransport in-place hook): attach the §7 nw_framer to the
+// caller's existing nw_parameters_t protocol stack + stash original peer
+// destination metadata in the framer-destination registry so the framer's
+// start_handler can claim it. After this returns true, the caller swaps
+// the connection group's endpoint to the SOCKS5 relay's BND.ADDR:BND.PORT
+// (via getRelayEndpoint()) and calls nw_connection_group_create normally —
+// CFNetwork's WebTransport layer then writes QUIC packets through the
+// framer, which §7-wraps them for SOCKS5 UDP ASSOCIATE relay transit.
+//
+// Returns false if SOCKS5 disabled, relay unestablished, or destination
+// extraction fails — caller falls through to direct-UDP path (LEAK).
+bool attachSocks5FramerToParameters(nw_parameters_t parameters, const String& destinationHost, uint16_t destinationPort);
+
+// Slice 16.5 companion: returns the SOCKS5 relay BND.ADDR:BND.PORT as an
+// nw_endpoint suitable for nw_group_descriptor_create_multiplex. Caller
+// must have first ensured establishRelayChannel succeeded (e.g., via a
+// prior attachSocks5FramerToParameters call).
+RetainPtr<nw_endpoint_t> getRelayEndpoint();
+
 // Helper: gate on DRIFTSTACK_CUSTOM_SOCKS5=1 + DRIFTSTACK_SOCKS5_PROXY
 // set. Shares the SharedRelayState singleton with Task #15.
 bool isCustomSocks5Active();

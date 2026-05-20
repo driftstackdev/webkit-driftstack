@@ -306,27 +306,54 @@ RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectio
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-397 Slice 16.4 — Task #16 EG-WK-1.10 WebTransport hook.
-    // When DRIFTSTACK_CUSTOM_SOCKS5=1, attempt to bind a relay-routed
-    // nw_connection instead of the bare nw_connection_group. Phase A
-    // scaffold (Slice 16.3) returns nullptr from createRelayConnection-
-    // ForQuic; Slices 16.5-16.8 wire actual SOCKS5 UDP ASSOCIATE routing
-    // via Task #15 SharedRelayState singleton reuse.
+    // Wave 29-397 Slice 16.5 — Task #16 EG-WK-1.10 WebTransport hook
+    // (in-place §7 framer + relay endpoint swap).
     //
-    // Fall-through when bridge returns nullptr: legacy nw_connection_
-    // group_create path runs (direct UDP — fingerprint-coherence leak
-    // surface until Slice 16.4 hard-binds the relay). This atomic slice
-    // ESTABLISHES the hook point; behavior change lands in Slice 16.5+.
+    // When DRIFTSTACK_CUSTOM_SOCKS5=1:
+    //   (a) Extract original peer host:port from the WebTransport URL
+    //       endpoint via DriftstackQuic::endpointToHostPort.
+    //   (b) Attach the §7 nw_framer to the existing webtransport-http
+    //       parameters' protocol stack — outgoing QUIC payloads get
+    //       §7-wrapped with the original peer's host:port; incoming
+    //       relay payloads get §7-unwrapped and delivered to CFNetwork.
+    //   (c) Rebuild the group descriptor against the SOCKS5 relay
+    //       BND.ADDR:BND.PORT endpoint instead of the original peer
+    //       endpoint. nw_connection_group_create then opens UDP to the
+    //       relay, not the peer.
+    //
+    // Fall-through on failure (relay unestablished, framer attach failed,
+    // endpoint extraction failed): legacy direct-UDP path runs (LEAK
+    // path retained as a fail-open during scaffold; Slice 16.4.b.7
+    // closes the leak gap on the CFNetwork interpose side; this hook
+    // closes the explicit WebTransport API side).
     if (DriftstackQuic::isCustomSocks5Active()) {
-        static bool loggedOnce = false;
-        if (!loggedOnce) {
-            loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: bridge ACTIVE — Slice 16.4 hook point reached. Phase A scaffold returns nullptr → falling through to direct nw_connection_group_create (LEAK). Slice 16.5-16.8 will bind the SOCKS5 relay routing.");
+        String destHost;
+        uint16_t destPort = 0;
+        if (DriftstackQuic::endpointToHostPort(endpoint.get(), destHost, destPort)
+            && DriftstackQuic::attachSocks5FramerToParameters(parameters.get(), destHost, destPort)) {
+            if (auto relayEndpoint = DriftstackQuic::getRelayEndpoint()) {
+                RetainPtr relayGroupDescriptor = adoptNS(nw_group_descriptor_create_multiplex(relayEndpoint.get()));
+                if (relayGroupDescriptor) {
+                    groupDescriptor = WTF::move(relayGroupDescriptor);
+                    static bool loggedSwapOnce = false;
+                    if (!loggedSwapOnce) {
+                        loggedSwapOnce = true;
+                        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: Slice 16.5 RELAY-SWAP ACTIVE — peer=%s:%u, §7 framer attached, group descriptor rebound to SOCKS5 relay. WebTransport explicit path now routes through SOCKS5 UDP ASSOCIATE.",
+                            destHost.utf8().data(), static_cast<unsigned>(destPort));
+                    }
+                } else {
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: relay group descriptor create returned nil — fall through to direct UDP (LEAK)");
+                }
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: getRelayEndpoint returned nil — fall through to direct UDP (LEAK)");
+            }
+        } else {
+            static bool loggedAttachFailOnce = false;
+            if (!loggedAttachFailOnce) {
+                loggedAttachFailOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: endpoint extract or framer attach failed — fall through to direct UDP (LEAK)");
+            }
         }
-        // Phase A: createRelayConnectionForQuic returns nullptr; fall
-        // through. Future slices will use the returned relay connection
-        // in place of the connectionGroup-derived datagram channel.
-        (void)DriftstackQuic::createRelayConnectionForQuic(endpoint.get(), parameters.get());
     }
 #endif
 
