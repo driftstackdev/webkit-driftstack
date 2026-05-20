@@ -2774,20 +2774,60 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
     // existing override table when (sx, sy) == (0, 0), the requested
     // rect spans the whole canvas backing store, output format is
     // RGBA8Unorm, and the canvas state matches a V-185 entry.
+    // Wave 29-499 §90 (2026-05-20 Task #90): extend V-373 to partial-rect
+    // + non-zero-origin getImageData. Looks up the FULL canvas-state RGBA
+    // from V-185 table (keyed on canvas full dims, not request sub-rect)
+    // then slices the requested rect (sx, sy, sw, sh) from it. Closes the
+    // detection vector where vendors call getImageData on a sub-rect of a
+    // canvas whose full output is in the V-185 atlas (e.g., FPJS sometimes
+    // probes specific sub-regions for noise sensitivity).
     if (Driftstack::isCanvasFp10xOverrideEnabled()
         && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
-        && sx == 0 && sy == 0
         && sw > 0 && sh > 0
-        && static_cast<unsigned>(sw) == canvasBase().width()
-        && static_cast<unsigned>(sh) == canvasBase().height()) {
-        std::span<const uint8_t> rgba;
-        if (Driftstack::getCanvasFp10xRGBAForCanvasState(sw, sh, canvasBase().lastFillTextForDispatch(), rgba)) {
-            WTFLogAlways("[Driftstack-V373] canvas-fp getImageData substitution FIRED (%dx%d RGBA, lastFillText=%u chars)",
-                sw, sh, static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
-            PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
-            IntSize substSize { sw, sh };
-            if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, rgba))
-                return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+        && sx >= 0 && sy >= 0
+        && static_cast<unsigned>(sx + sw) <= canvasBase().width()
+        && static_cast<unsigned>(sy + sh) <= canvasBase().height()) {
+        const auto fullW = canvasBase().width();
+        const auto fullH = canvasBase().height();
+        std::span<const uint8_t> fullRGBA;
+        if (Driftstack::getCanvasFp10xRGBAForCanvasState(fullW, fullH, canvasBase().lastFillTextForDispatch(), fullRGBA)) {
+            const bool isFullCanvas = (sx == 0 && sy == 0
+                && static_cast<unsigned>(sw) == fullW
+                && static_cast<unsigned>(sh) == fullH);
+            if (isFullCanvas) {
+                // Full-canvas fast path (Wave 29-499 V-373 r1 behavior).
+                WTFLogAlways("[Driftstack-V373] canvas-fp getImageData FULL-rect substitution FIRED (%dx%d RGBA, lastFillText=%u chars)",
+                    sw, sh, static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
+                PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
+                IntSize substSize { sw, sh };
+                if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, fullRGBA))
+                    return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+            } else {
+                // Wave 29-499 §90 partial-rect path: slice (sx, sy, sw, sh)
+                // from fullRGBA. Mac CG returns same RGBA layout as iPhone
+                // canonical → row-major BGRA8 in unpremultiplied state.
+                const size_t subSize = static_cast<size_t>(sw) * sh * 4;
+                const size_t subStride = static_cast<size_t>(sw) * 4;
+                Vector<uint8_t> subRGBA(subSize);
+                auto subSpan = subRGBA.mutableSpan();
+                const auto fullW_s = static_cast<size_t>(fullW);
+                for (int row = 0; row < sh; ++row) {
+                    const size_t srcOffset = ((static_cast<size_t>(sy) + row) * fullW_s + sx) * 4;
+                    const size_t dstOffset = static_cast<size_t>(row) * subStride;
+                    if (srcOffset + subStride > fullRGBA.size())
+                        break;
+                    auto srcRow = fullRGBA.subspan(srcOffset, subStride);
+                    auto dstRow = subSpan.subspan(dstOffset, subStride);
+                    std::copy(srcRow.begin(), srcRow.end(), dstRow.begin());
+                }
+                WTFLogAlways("[Driftstack-V373-§90] canvas-fp getImageData PARTIAL-rect substitution FIRED (canvas %dx%d → sub (%d,%d) %dx%d, lastFillText=%u chars)",
+                    fullW, fullH, sx, sy, sw, sh,
+                    static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
+                PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
+                IntSize substSize { sw, sh };
+                if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
+                    return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+            }
         }
     }
 #endif
