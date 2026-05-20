@@ -335,6 +335,34 @@ static void initializeDriftstackIOSFontMapIfNeeded()
                 WTFLogAlways("[Driftstack-V486-PINGFANG] registered family key='%s' variants=%zu", key.utf8().data(), it->value.size());
         }
     }
+
+    // Wave 29-499.16 Task #79 follow-up — CoreText emoji shaper warmup.
+    // canvas_emoji probe shows Mac fork first-call 48ms vs iPhone 20ms
+    // (28ms detection signal). The cost is CoreText's emoji shaper init
+    // on first emoji-codepoint render: AppleColorEmoji.ttc parse +
+    // shaper table build + glyph cache prime. Pre-warm by invoking
+    // CTFontCreateForString with an emoji codepoint at font-map init
+    // (same gating as V510 atlas eager init — happens before first
+    // canvas creation when DRIFTSTACK_EAGER_INIT_ATLAS=1).
+    //
+    // Per file 105 timing classification: shaper warmup is a Phase 1
+    // build-time concern (binary already shipped with AppleColorEmoji
+    // available); pre-warming at process startup matches iPhone's
+    // post-warmup distribution from probe N=0.
+    {
+        const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
+        if (eager && eager[0] == '1') {
+            RetainPtr<CFStringRef> emojiStr = adoptCF(CFStringCreateWithCString(kCFAllocatorDefault, "\xF0\x9F\x98\x80", kCFStringEncodingUTF8));
+            if (emojiStr) {
+                RetainPtr<CTFontRef> baseFont = adoptCF(CTFontCreateWithName(CFSTR("AppleColorEmoji"), 20.0, nullptr));
+                if (baseFont) {
+                    RetainPtr<CTFontRef> substitute = adoptCF(CTFontCreateForString(baseFont.get(), emojiStr.get(), CFRangeMake(0, 1)));
+                    (void)substitute;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/EmojiWarmup] CoreText emoji shaper pre-warmed at font-map init — canvas_emoji 28ms cold-cache outlier eliminated for subsequent renders (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
+                }
+            }
+        }
+    }
 }
 
 static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, const FontDescription& fontDescription, float size)
