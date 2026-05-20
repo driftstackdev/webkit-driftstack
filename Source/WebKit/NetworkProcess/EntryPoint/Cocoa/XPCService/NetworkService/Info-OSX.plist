@@ -41,24 +41,27 @@
 		<key>_MultipleInstances</key>
 		<true/>
 		<!--
-		  Wave 29-499 Slice 16.6.d (Task #16 EG-WK-1.10) Path A:
-		  EnvironmentVariables / DYLD_INSERT_LIBRARIES temporarily REVERTED
-		  due to Slice 16.6.g latent interpose-recursion bug exposed when
-		  the dylib actually loads. The mechanism IS correct (dylib loads,
-		  dlsym resolves bridge symbols) but calling the dlsym-resolved
-		  original nw_connection_create still recurses through Apple's
-		  dyld interposition (RTLD_NEXT, dlopen+dlsym, function-pointer
-		  call all redirect back to our interpose).
+		  Wave 29-499 Slice 16.6.d Path A + Slice 16.6.g G1 (recursion bypass):
+		  launchd reads EnvironmentVariables at service registration and sets
+		  env BEFORE process launch. dyld processes DYLD_INSERT_LIBRARIES at
+		  startup, loading the interpose dylib + activating its __DATA,__inter-
+		  pose section.
 
-		  Re-enable this block AFTER Slice 16.6.g recursion-bypass arc
-		  closes. See V-2026-05-20-T92-SLICE16.6F-RECURSION-NOT-FIXED.
+		  The Slice 16.6.g G1 fix in DriftstackQuicInterposeMain.mm captures
+		  Network.framework's nw_connection_create address from its Mach-O
+		  symbol table via _dyld_register_func_for_add_image callback, BEFORE
+		  the interpose binding fixups complete. The raw symbol address
+		  bypasses dyld's interpose redirection, allowing recursion-free
+		  pass-through to the original function.
 
-		  <key>EnvironmentVariables</key>
-		  <dict>
-		    <key>DYLD_INSERT_LIBRARIES</key>
-		    <string>/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib</string>
-		  </dict>
+		  Dev-build absolute path. Production: switch to @executable_path/..
+		  token when NetworkProcess bundles are finalized for harness fleet.
 		-->
+		<key>EnvironmentVariables</key>
+		<dict>
+			<key>DYLD_INSERT_LIBRARIES</key>
+			<string>/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib</string>
+		</dict>
 	</dict>
 </dict>
 </plist>
