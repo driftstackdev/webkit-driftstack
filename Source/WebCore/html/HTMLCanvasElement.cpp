@@ -1465,6 +1465,35 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         ResourceLoadObserver::singleton().logCanvasRead(document);
 
     auto encodingMIMEType = toEncodingMimeType(mimeType);
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §91.D (2026-05-20 Task #91): Family A archetype canvas.toBlob
+    // with image/avif or image/heic falls back to PNG, AND the resulting Blob's
+    // type field is normalized to "image/png" (not the originally-requested
+    // type). Empirical: BS iPhone 16 Pro Safari 18.6 n=3 cumrig captures show
+    // canvas.toBlobMIMETypes['image/avif'] = {type: 'image/png', size: 304}.
+    // ImageUtilitiesCG.cpp encoder already redirects avif/heic → png bytes
+    // (V-090 Track 6); this patch matches Family A's Blob.type normalization.
+    // Family B (Safari 26.4+) emits image/avif natively, so leaves type intact.
+    static const bool s_isFamilyAArchetypeToBlob = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype) return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari26_0") != std::string_view::npos
+            || sv.find("safari26_1") != std::string_view::npos
+            || sv.find("safari26_2") != std::string_view::npos
+            || sv.find("safari26_3") != std::string_view::npos;
+    }();
+    // image/avif only (Family A Safari 18.6 supports image/heic natively but
+    // not image/avif). Empirical FA REF: image/heic → type=image/heic;
+    // image/avif → type=image/png.
+    if (s_isFamilyAArchetypeToBlob
+        && equalLettersIgnoringASCIICase(encodingMIMEType, "image/avif"_s)) {
+        encodingMIMEType = "image/png"_s;
+    }
+#endif
     auto quality = qualityFromJSValue(qualityValue);
     Vector<uint8_t> blobData;
     if (document->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
