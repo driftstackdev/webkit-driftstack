@@ -504,16 +504,32 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
             }
             return;
         }
-        struct in_addr sourceAddr { };
         webrtc::IPAddress webrtcIp;
-        if (inet_pton(AF_INET, unwrapped.sourceHost.utf8().data(), &sourceAddr) == 1) {
-            webrtcIp = webrtc::IPAddress { sourceAddr };
+        // Wave 29-499.14 — close IPv6 TODO in WebRTC SOCKS5 §7 unwrap path.
+        // ATYP=0x01 (IPv4) is the common case; ATYP=0x04 (IPv6) now handled
+        // for SOCKS5 servers that relay IPv6 traffic (e.g., STUN/TURN over
+        // IPv6 peer endpoints). ATYP=0x03 (domain) on RECEIVE is still
+        // dropped because resolving domains at the client side would defeat
+        // the SOCKS5 proxy resolution discipline (and leak DNS).
+        struct in_addr sourceAddr4 { };
+        struct in6_addr sourceAddr6 { };
+        if (inet_pton(AF_INET, unwrapped.sourceHost.utf8().data(), &sourceAddr4) == 1) {
+            webrtcIp = webrtc::IPAddress { sourceAddr4 };
+        } else if (inet_pton(AF_INET6, unwrapped.sourceHost.utf8().data(), &sourceAddr6) == 1) {
+            webrtcIp = webrtc::IPAddress { sourceAddr6 };
+            static bool loggedIpv6Once = false;
+            if (!loggedIpv6Once) {
+                loggedIpv6Once = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: FIRST IPv6 source '%s' from §7 unwrap accepted (ATYP=0x04 path)",
+                    unwrapped.sourceHost.utf8().data());
+            }
         } else {
-            // ATYP=0x03 domain form OR malformed — drop.
-            static bool loggedNonIpv4Once = false;
-            if (!loggedNonIpv4Once) {
-                loggedNonIpv4Once = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: non-IPv4 source '%s' from §7 unwrap; dropping (IPv6 / domain TODO)",
+            // ATYP=0x03 domain form OR malformed — drop. Resolving at client
+            // would defeat the no-DNS-leak property of proxy-side resolution.
+            static bool loggedDropOnce = false;
+            if (!loggedDropOnce) {
+                loggedDropOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: domain-form (ATYP=0x03) or malformed source '%s' — dropping (client-side resolution would leak DNS)",
                     unwrapped.sourceHost.utf8().data());
             }
             return;
