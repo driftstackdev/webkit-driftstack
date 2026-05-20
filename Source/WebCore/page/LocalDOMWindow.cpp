@@ -1414,7 +1414,26 @@ int LocalDOMWindow::innerHeight() const
             return s_legacyHeight;
         }
     }
-    return 714;
+    // Wave 29-499 §91.B (2026-05-20 Task #91): meta-viewport-with-default-
+    // chrome path archetype split. Empirical n=3 BS iPhone 16 Pro Safari 18.6
+    // returns 678 (taller Safari chrome). Family B (Safari 26.4+) returns 714
+    // (slimmer chrome). Mirrors VisualViewport::height archetype branch.
+    static int s_metaViewportHeight = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype || !archetype[0])
+            return 714;
+        std::string_view sv { archetype };
+        if (sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari26_0") != std::string_view::npos
+            || sv.find("safari26_1") != std::string_view::npos
+            || sv.find("safari26_2") != std::string_view::npos
+            || sv.find("safari26_3") != std::string_view::npos)
+            return 678;
+        return 714;
+    }();
+    return s_metaViewportHeight;
 #else
     if (!frame())
         return 0;
