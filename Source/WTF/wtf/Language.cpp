@@ -106,6 +106,44 @@ String defaultLanguage(ShouldMinimizeLanguages shouldMinimizeLanguages)
 static Vector<String>& computeUserPreferredLanguages(ShouldMinimizeLanguages shouldMinimizeLanguages) WTF_REQUIRES_LOCK(languagesLock)
 {
     Vector<String>& override = preferredLanguagesOverride();
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §91.F.b (Task #91) — seed preferredLanguagesOverride from
+    // DRIFTSTACK_APPLELANGUAGES env on first call. The Cocoa platform
+    // overrideUserPreferredLanguages (LanguageCocoa.mm:88) sets only
+    // NSArgumentDomain AppleLanguages; it does NOT populate the WTF
+    // preferredLanguagesOverride() vector that computeUserPreferredLanguages
+    // checks FIRST. NSLocale platform-pref cache + CFLocale + ICU caching
+    // means the NSArgumentDomain volatile setting is unreliable in practice
+    // (§91.F empirical: late hook fires, Intl.* still returns en-US).
+    //
+    // Seeding the WTF override directly here bypasses all NSLocale / CFLocale
+    // / ICU caching layers — computeUserPreferredLanguages returns the
+    // override immediately, JSC IntlObject::defaultLocale resolves
+    // through globalObject->defaultLanguage() → userPreferredLanguages()[0]
+    // → override[0]. Per-archetype locale (e.g., "en-GB,en" for Family A
+    // BS iPhone 16 Pro Safari 18.6 capture environment) gets applied
+    // before any Intl.* JS code runs.
+    //
+    // Seeded once via static call_once: env capture at first invocation.
+    // Empty / unset env passes through to platform lookup unchanged.
+    static std::once_flag s_driftstackEnvSeedFlag;
+    std::call_once(s_driftstackEnvSeedFlag, [&] {
+        const char* envLangs = getenv("DRIFTSTACK_APPLELANGUAGES");
+        if (!envLangs || !envLangs[0])
+            return;
+        Vector<String> envOverride;
+        StringView envView = StringView::fromLatin1(envLangs);
+        for (auto langView : envView.split(',')) {
+            String trimmed = langView.toString().trim(isASCIIWhitespace<UChar>);
+            if (!trimmed.isEmpty())
+                envOverride.append(trimmed);
+        }
+        if (!envOverride.isEmpty()) {
+            override = envOverride;
+            LOG_WITH_STREAM(Language, stream << "[Driftstack-§91.F.b] preferredLanguagesOverride seeded from DRIFTSTACK_APPLELANGUAGES env: " << override);
+        }
+    });
+#endif
     if (!override.isEmpty()) {
         LOG_WITH_STREAM(Language, stream << "Languages are overridden: " << override);
         return override;
