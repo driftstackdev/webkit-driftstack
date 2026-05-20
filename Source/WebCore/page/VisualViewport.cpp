@@ -136,7 +136,26 @@ double VisualViewport::height() const
 {
 #if PLATFORM(DRIFTSTACK)
     // V-074: visualViewport.height = 714 (innerHeight; layout viewport with URL bar).
-    return 714;
+    // Wave 29-499 §91.B archetype split (2026-05-20 Task #91): Family A
+    // (Safari ≤26.3) returns 678 due to taller browser chrome; Family B
+    // (Safari 26.4+) returns 714. Mirrors LocalDOMWindow::innerHeight()
+    // post-meta-viewport branch.
+    static double s_height = []() -> double {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype || !archetype[0])
+            return 714.0;
+        std::string_view sv { archetype };
+        if (sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari26_0") != std::string_view::npos
+            || sv.find("safari26_1") != std::string_view::npos
+            || sv.find("safari26_2") != std::string_view::npos
+            || sv.find("safari26_3") != std::string_view::npos)
+            return 678.0;
+        return 714.0;
+    }();
+    return s_height;
 #else
     if (!frame())
         return 0;
