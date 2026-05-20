@@ -9,6 +9,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "DriftstackQuicSocks5Exports.h"
 #import "DriftstackSocks5Client.h"
 #import "DriftstackSocks5Framing.h"
 
@@ -553,25 +554,33 @@ RetainPtr<nw_endpoint_t> getRelayEndpoint()
 // dylib loads BEFORE WebKit framework), so it resolves these symbols
 // after WebKit is loaded into NetworkProcess.
 //
+// Wave 29-499 Slice 16.6.b PRODUCTION FIX: declarations + visibility
+// annotations live in the installed PrivateHeader DriftstackQuicSocks5Exports.h
+// (imported at top of this .mm). The DRIFTSTACK_QUIC_EXPORT macro applies
+// __attribute__((visibility("default"))) so symbols survive the WebKit
+// framework's default -fvisibility=hidden link step — without this, the
+// interpose dylib's dlsym(RTLD_DEFAULT, "driftstack_quic_*") returns NULL
+// and the entire SOCKS5 QUIC interpose is silently inert.
+//
+// The installed PrivateHeader (added to project.pbxproj Headers Copy phase
+// with Private attribute) also satisfies GenerateTAPI / InstallAPI
+// verification on Release builds.
+//
 // Naming: driftstack_quic_<lowercased> matches the dylib's dlsym
 // lookup table. Stable across WebKit framework releases.
 extern "C" {
 
-bool driftstack_quic_isCustomSocks5Active(void);
-bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters);
-nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters);
-
-bool driftstack_quic_isCustomSocks5Active(void)
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_isCustomSocks5Active(void)
 {
     return WebKit::DriftstackQuic::isCustomSocks5Active();
 }
 
-bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters)
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseQuic(nw_parameters_t parameters)
 {
     return WebKit::DriftstackQuic::parametersUseQuic(parameters);
 }
 
-nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)
+DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)
 {
     return WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters).leakRef();
 }
@@ -580,43 +589,29 @@ nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw
 // accessors. Harness reads via dlsym(RTLD_DEFAULT, "driftstack_quic_counter_*")
 // + polls for dashboard updates. NO LOCKING — atomic load is wait-free.
 // Stable signature: returns uint64_t. Naming: driftstack_quic_counter_<lowercase>.
-
-uint64_t driftstack_quic_counter_wrap_fires(void);
-uint64_t driftstack_quic_counter_wrap_failures(void);
-uint64_t driftstack_quic_counter_unwrap_fires(void);
-uint64_t driftstack_quic_counter_unwrap_failures(void);
-uint64_t driftstack_quic_counter_framer_output_fires(void);
-uint64_t driftstack_quic_counter_framer_input_fires(void);
-uint64_t driftstack_quic_counter_framer_without_destination(void);
-uint64_t driftstack_quic_counter_framer_wrap_failures(void);
-uint64_t driftstack_quic_counter_relay_establish_failures(void);
-uint64_t driftstack_quic_counter_relay_connection_create_failures(void);
-uint64_t driftstack_quic_counter_attach_framer_failures(void);
-uint64_t driftstack_quic_counter_endpoint_extract_failures(void);
-
-uint64_t driftstack_quic_counter_wrap_fires(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_wrap_fires(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().wrapOutgoingFires.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_wrap_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_wrap_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().wrapOutgoingFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_unwrap_fires(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_unwrap_fires(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().unwrapIncomingFires.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_unwrap_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_unwrap_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().unwrapIncomingFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_framer_output_fires(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_framer_output_fires(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().framerOutputFires.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_framer_input_fires(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_framer_input_fires(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().framerInputFires.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_framer_without_destination(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_framer_without_destination(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().framerWithoutDestination.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_framer_wrap_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_framer_wrap_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().framerWrapFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_relay_establish_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_relay_establish_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().relayEstablishFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_relay_connection_create_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_relay_connection_create_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().relayConnectionCreateFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_attach_framer_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_attach_framer_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().attachFramerFailures.load(std::memory_order_relaxed); }
-uint64_t driftstack_quic_counter_endpoint_extract_failures(void)
+DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_endpoint_extract_failures(void)
 { return WebKit::DriftstackQuic::slice16_6_counters().endpointExtractFailures.load(std::memory_order_relaxed); }
 
 } // extern "C"

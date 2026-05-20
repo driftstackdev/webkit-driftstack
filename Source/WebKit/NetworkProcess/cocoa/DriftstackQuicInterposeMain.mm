@@ -95,6 +95,18 @@ static void resolveBridgeSymbols()
             loggedAbsenceOnce = true;
             NSLog(@"[Driftstack-EG-WK-1.10/Task#16] resolveBridgeSymbols: dlsym(RTLD_DEFAULT) for one or more driftstack_quic_* failed — WebKit framework may not be loaded yet OR symbols missing. Interpose falls through.");
         }
+    } else {
+        // Wave 29-499 Slice 16.6.b PRODUCTION FIX VERIFICATION: log dlsym
+        // success on first resolution so smoke tests can confirm the
+        // visibility-fix arc closure (symbols exported + dlsym resolves).
+        // Without this log, smoke could pass with all 3 dlsym calls
+        // returning non-NULL but no observable evidence.
+        static bool loggedSuccessOnce = false;
+        if (!loggedSuccessOnce) {
+            loggedSuccessOnce = true;
+            NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.b] resolveBridgeSymbols: ALL THREE dlsym(RTLD_DEFAULT) RESOLVED — bridge active. Interpose ACTIVE on subsequent nw_connection_create calls. isActive=%p paramsUseQuic=%p createRelay=%p",
+                (void*)bridgeIsActive, (void*)bridgeParamsUseQuic, (void*)bridgeCreateRelay);
+        }
     }
 }
 
