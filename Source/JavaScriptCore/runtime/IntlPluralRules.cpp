@@ -175,7 +175,32 @@ JSObject* IntlPluralRules::resolvedOptions(JSGlobalObject* globalObject) const
     JSObject* options = constructEmptyObject(globalObject);
     options->putDirect(vm, vm.propertyNames->locale, jsNontrivialString(vm, m_locale));
     options->putDirect(vm, vm.propertyNames->type, jsNontrivialString(vm, m_type == Type::Ordinal ? "ordinal"_s : "cardinal"_s));
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499 §91.H (2026-05-20): Family A archetypes (real iPhone
+    // Safari 18.6 captured via BS Automate, cumrig FA REF) do NOT include
+    // "notation" in Intl.PluralRules resolvedOptions output. The field
+    // was added to JSC at a Safari version > 18.6. Skip the field for
+    // Family A archetypes to match BS REF.
+    static const bool s_skipPluralRulesNotation = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        return sv.find("safari17_") != std::string_view::npos
+            || sv.find("safari18_") != std::string_view::npos
+            || sv.find("safari19_") != std::string_view::npos
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
+    }();
+    if (!s_skipPluralRulesNotation)
+        options->putDirect(vm, Identifier::fromString(vm, "notation"_s), jsNontrivialString(vm, IntlNumberFormat::notationString(m_notation)));
+#else
     options->putDirect(vm, Identifier::fromString(vm, "notation"_s), jsNontrivialString(vm, IntlNumberFormat::notationString(m_notation)));
+#endif
     options->putDirect(vm, vm.propertyNames->minimumIntegerDigits, jsNumber(m_minimumIntegerDigits));
     switch (m_roundingType) {
     case IntlRoundingType::FractionDigits:
