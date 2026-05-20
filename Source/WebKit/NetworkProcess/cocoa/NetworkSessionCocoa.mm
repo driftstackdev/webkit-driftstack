@@ -578,8 +578,38 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 #if HAVE(NW_PROXY_CONFIG)
         && sessionCocoa->proxyConfigs().isEmpty()
 #endif
-        && !sessionCocoa->preventsSystemHTTPProxyAuthentication())
+        && !sessionCocoa->preventsSystemHTTPProxyAuthentication()) {
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-499 Slice 16.6.j (Task #16 EG-WK-1.10): supply SOCKS5
+        // credential explicitly on proxy challenge. CFNetwork's "internal"
+        // proxy auth handling only consults NSURLCredentialStorage when
+        // the delegate returns NSURLSessionAuthChallengePerformDefaultHandling
+        // — but the existing code returns UseCredential+nil which means
+        // "no credential", failing auth-required SOCKS5 proxies.
+        //
+        // Fix: detect SOCKSProxy challenge + DRIFTSTACK_SOCKS5_USER/PASS env
+        // and build an NSURLCredential inline. Falls through to original
+        // UseCredential+nil behavior for HTTP/HTTPS proxies (Apple's
+        // existing CFNetwork flow handles those via configured creds).
+        if ([challenge.protectionSpace.proxyType isEqualToString:NSURLProtectionSpaceSOCKSProxy]) {
+            const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+            const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+            if (userEnv && userEnv[0] && passEnv) {
+                RetainPtr credUser = [NSString stringWithUTF8String:userEnv];
+                RetainPtr credPass = [NSString stringWithUTF8String:passEnv];
+                RetainPtr credential = [NSURLCredential credentialWithUser:credUser.get() password:credPass.get() persistence:NSURLCredentialPersistenceForSession];
+                static bool loggedOnce = false;
+                if (!loggedOnce) {
+                    loggedOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.j] proxy challenge for SOCKS5 — supplying NSURLCredential from env (user-len=%u). previousFailureCount=%ld",
+                        (unsigned)[credUser.get() length], (long)challenge.previousFailureCount);
+                }
+                return completionHandler(NSURLSessionAuthChallengeUseCredential, credential.get());
+            }
+        }
+#endif
         return completionHandler(NSURLSessionAuthChallengeUseCredential, nil);
+    }
 
     NegotiatedLegacyTLS negotiatedLegacyTLS = NegotiatedLegacyTLS::No;
 
@@ -1290,6 +1320,83 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         if (customRequested && (perSessionSOCKS5 || envFallbackSOCKS5)) {
             // Wave 29-396 sub-slice 1.6: set global flag.
             WebKit::g_driftstackCustomSocks5Active.store(true, std::memory_order_relaxed);
+
+#if HAVE(NW_PROXY_CONFIG)
+            // Wave 29-499 Slice 16.6.k (Task #16 EG-WK-1.10): SOCKS5 with
+            // RFC 1929 auth via Apple's modern Network.framework proxy API.
+            // The legacy connectionProxyDictionary (kCFNetworkProxiesSOCKS*)
+            // doesn't support auth on macOS public API surface. The modern
+            // nw_proxy_config_create_socksv5 +
+            // nw_proxy_config_set_username_and_password supports it
+            // natively. Assign via configuration.proxyConfigurations
+            // (the modern equivalent of connectionProxyDictionary).
+            {
+                String hostEnvStr;
+                int port = 0;
+                String socks5Host;
+                {
+                    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+                    if (proxyEnv && proxyEnv[0]) {
+                        hostEnvStr = String::fromUTF8(proxyEnv);
+                        size_t colon = hostEnvStr.find(':');
+                        if (colon != notFound && colon > 0 && colon + 1 < hostEnvStr.length()) {
+                            socks5Host = hostEnvStr.left(colon);
+                            auto portStr = hostEnvStr.substring(colon + 1);
+                            // Parse port digit-by-digit (no parseInteger header inclusion)
+                            int parsedPort = 0;
+                            bool portOK = !portStr.isEmpty();
+                            for (unsigned i = 0; i < portStr.length() && portOK; ++i) {
+                                UChar c = portStr[i];
+                                if (c < '0' || c > '9') { portOK = false; break; }
+                                parsedPort = parsedPort * 10 + (c - '0');
+                                if (parsedPort > 65535) { portOK = false; break; }
+                            }
+                            if (portOK && parsedPort > 0)
+                                port = parsedPort;
+                        }
+                    }
+                }
+                const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+                const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+                if (!hostEnvStr.isEmpty() && port > 0 && userEnv && userEnv[0] && passEnv) {
+                    auto hostNS = socks5Host.createNSString();
+                    auto portNS = [NSString stringWithFormat:@"%d", port];
+                    RetainPtr endpoint = adoptNS(nw_endpoint_create_host([hostNS UTF8String], [portNS UTF8String]));
+                    if (endpoint) {
+                        RetainPtr nwProxyConfig = adoptNS(nw_proxy_config_create_socksv5(endpoint.get()));
+                        if (nwProxyConfig) {
+                            nw_proxy_config_set_username_and_password(nwProxyConfig.get(), userEnv, passEnv);
+                            m_nwProxyConfigs.append(nwProxyConfig);
+                            // Apply immediately to this configuration object
+                            // so the freshly-built session sees the proxy
+                            // configuration via configuration.proxyConfigurations
+                            // (applyProxyConfigurationToSessionConfiguration
+                            // pushes m_nwProxyConfigs into this property).
+                            this->applyProxyConfigurationToSessionConfiguration(configuration.get());
+
+                            static bool loggedOnceNW = false;
+                            if (!loggedOnceNW) {
+                                loggedOnceNW = true;
+                                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k] nw_proxy_config_create_socksv5 + set_username_and_password APPLIED — modern Network.framework SOCKS5+auth path active for proxy %s:%d (user-len=%u)",
+                                    socks5Host.utf8().data(), port, (unsigned)WTF::String::fromUTF8(userEnv).length());
+                            }
+
+                            // Also remove the legacy connectionProxyDictionary
+                            // SOCKS5 keys so we don't double-route through both
+                            // legacy + modern paths.
+                            NSDictionary *currentProxyDict = configuration.get().connectionProxyDictionary;
+                            if (currentProxyDict) {
+                                NSMutableDictionary *trimmedProxy = [currentProxyDict mutableCopy];
+                                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSEnable];
+                                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSProxy];
+                                [trimmedProxy removeObjectForKey:(NSString *)kCFNetworkProxiesSOCKSPort];
+                                configuration.get().connectionProxyDictionary = trimmedProxy;
+                            }
+                        }
+                    }
+                }
+            }
+#endif
 
             // Wave 29-396 sub-slice 1.9.a: register URLProtocol class on
             // the per-session NSURLSessionConfiguration.
