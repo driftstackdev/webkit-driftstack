@@ -702,12 +702,11 @@ void NetworkDataTaskCocoa::resume()
         static bool loggedOnce = false;
         if (!loggedOnce) {
             loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.131] NetworkDataTaskCocoa::resume — routing via DriftstackNetworkLoader (BSD-socket SOCKS5 path)");
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.132] NetworkDataTaskCocoa::resume — Phase 1 ACTIVE: routing via DriftstackNetworkLoader BSD-socket SOCKS5+TLS+HTTP/1.1");
         }
-        // Phase 1: not yet wired; placeholder for Day 9+ work
-        // m_driftstackLoader = DriftstackNetworkLoader::create(*this, m_request);
-        // m_driftstackLoader->resume();
-        // return;
+        m_driftstackLoader = WebKit::DriftstackNetworkLoader::create(*this, firstRequest());
+        m_driftstackLoader->resume();
+        return;
     }
 #endif
 

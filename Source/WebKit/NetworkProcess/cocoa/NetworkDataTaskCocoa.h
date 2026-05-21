@@ -47,6 +47,9 @@ namespace WebKit {
 
 class Download;
 class NetworkSessionCocoa;
+#if PLATFORM(DRIFTSTACK)
+class DriftstackNetworkLoader;
+#endif
 struct SessionWrapper;
 
 class NetworkDataTaskCocoa final : public NetworkDataTask, public NetworkTaskCocoa {
@@ -112,6 +115,9 @@ private:
     WeakPtr<SessionWrapper> m_sessionWrapper;
     RefPtr<SandboxExtension> m_sandboxExtension;
     RetainPtr<NSURLSessionDataTask> m_task;
+#if PLATFORM(DRIFTSTACK)
+    RefPtr<DriftstackNetworkLoader> m_driftstackLoader;
+#endif
     WebCore::NetworkLoadMetrics m_networkLoadMetrics;
     Markable<WebCore::FrameIdentifier> m_frameID;
     Markable<WebCore::PageIdentifier> m_pageID;
