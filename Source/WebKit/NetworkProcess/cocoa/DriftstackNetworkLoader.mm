@@ -121,8 +121,9 @@ void DriftstackNetworkLoader::resume()
     URL url = m_request.url();
     String httpMethod = m_request.httpMethod();
     if (httpMethod.isEmpty()) httpMethod = "GET"_s;
-    auto httpBody = m_request.httpBody();
     auto httpHeaders = m_request.httpHeaderFields();
+    // TODO Phase 2: support request body (POST)
+    (void)m_request.httpBody();
 
     Ref protectedThis { *this };
     dispatch_async(loaderQueue(), ^{
