@@ -114,7 +114,7 @@ static void initDriftstackSslCtx()
 
 // Returns a connected SSL* on success (caller frees with SSL_free).
 // hostUtf8 is used for SNI + cert validation.
-static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
+[[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
 {
     initDriftstackSslCtx();
     if (!g_driftstackSslCtx)
