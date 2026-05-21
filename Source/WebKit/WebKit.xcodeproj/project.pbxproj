@@ -247,6 +247,7 @@
 		07FE63E82ED11D5900D5ED9E /* ClassStructPtr.h in Headers */ = {isa = PBXBuildFile; fileRef = 07FE63E72ED11D5900D5ED9E /* ClassStructPtr.h */; };
 		07FEBC9A2E035A8B004A6D5D /* WKMouseDeviceObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07FEBC992E035950004A6D5D /* WKMouseDeviceObserver.swift */; };
 		0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */ = {isa = PBXBuildFile; fileRef = 086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */; settings = {ATTRIBUTES = (Project, ); }; };
+		BE0917868E0CA5B166814FC5 /* DriftstackSocks5TCPFramer.h in Headers */ = {isa = PBXBuildFile; fileRef = A865D7AC3B233DE22ADEFE92 /* DriftstackSocks5TCPFramer.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		0D433CF52F857D62004ED8DF /* USDModel+Deformation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D433CF42F857D62004ED8DF /* USDModel+Deformation.swift */; };
 		0D4599052C86B00F00435F48 /* WKDigitalCredentialsPicker.h in Headers */ = {isa = PBXBuildFile; fileRef = 0D9D28E72C81473B002CB4C7 /* WKDigitalCredentialsPicker.h */; };
 		0D4C005A2F4182F100DF1BBF /* ModelUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D653B392F3453C40022454D /* ModelUtils.swift */; };
@@ -1643,6 +1644,7 @@
 		71F62F752D076DEE00B591D2 /* RemoteAnimation.h in Headers */ = {isa = PBXBuildFile; fileRef = 71F62F722D076DEE00B591D2 /* RemoteAnimation.h */; };
 		71FB810B2260627E00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h in Headers */ = {isa = PBXBuildFile; fileRef = 71FB810A2260627A00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h */; };
 		7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */ = {isa = PBXBuildFile; fileRef = 84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */; };
+		50DCD6C5E1F30FF6DF9B336E /* DriftstackSocks5TCPFramer.mm in Sources */ = {isa = PBXBuildFile; fileRef = ECC66E90E9E179A9753E38AC /* DriftstackSocks5TCPFramer.mm */; };
 		726952E02B7F4636009E5F0C /* WebExtensionAPIWebPageRuntime.h in Headers */ = {isa = PBXBuildFile; fileRef = 726952DF2B7F4636009E5F0C /* WebExtensionAPIWebPageRuntime.h */; };
 		728E86F11795188C0087879E /* WebColorPickerMac.h in Headers */ = {isa = PBXBuildFile; fileRef = 728E86EF1795188C0087879E /* WebColorPickerMac.h */; };
 		74C2F54129AC9C44006C5F97 /* DeferredPaymentRequest.h in Headers */ = {isa = PBXBuildFile; fileRef = 74C2F54029AC9C44006C5F97 /* DeferredPaymentRequest.h */; };
@@ -3568,6 +3570,7 @@
 		07FEBC992E035950004A6D5D /* WKMouseDeviceObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WKMouseDeviceObserver.swift; sourceTree = "<group>"; };
 		07FEBC9C2E036C6D004A6D5D /* WKMouseDeviceObserver.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WKMouseDeviceObserver.mm; sourceTree = "<group>"; };
 		086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackSocks5Client.h; sourceTree = "<group>"; };
+		A865D7AC3B233DE22ADEFE92 /* DriftstackSocks5TCPFramer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackSocks5TCPFramer.h; sourceTree = "<group>"; };
 		0867D6A5FE840307C02AAC07 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		089C1667FE841158C02AAC07 /* en */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		0D02BE3129B6D0F7005852BF /* WebGPUInternalError.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WebGPUInternalError.h; sourceTree = "<group>"; };
@@ -7267,6 +7270,7 @@
 		848A33AE294AA847002DD640 /* OSX_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = OSX_Private.modulemap; sourceTree = "<group>"; };
 		849944302943E2550086CDBB /* iOS_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = iOS_Private.modulemap; sourceTree = "<group>"; };
 		84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5Client.mm; sourceTree = "<group>"; };
+		ECC66E90E9E179A9753E38AC /* DriftstackSocks5TCPFramer.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5TCPFramer.mm; sourceTree = "<group>"; };
 		860A5EA0FD5FBC32B5398AC3 /* WKImmersiveEnvironmentDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKImmersiveEnvironmentDelegate.h; sourceTree = "<group>"; };
 		8623B1272ACE1B66002BA9EA /* WebPageNetworkParameters.serialization.in */ = {isa = PBXFileReference; lastKnownFileType = text; path = WebPageNetworkParameters.serialization.in; sourceTree = "<group>"; };
 		8623B1282ACE1DE4002BA9EA /* ResourceLoadInfo.serialization.in */ = {isa = PBXFileReference; lastKnownFileType = text; path = ResourceLoadInfo.serialization.in; sourceTree = "<group>"; };
@@ -15075,6 +15079,8 @@
 				5C2C6FA727C96FF900CCDA9E /* WKURLSessionTaskDelegate.mm */,
 				086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */,
 				84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */,
+				A865D7AC3B233DE22ADEFE92 /* DriftstackSocks5TCPFramer.h */,
+				ECC66E90E9E179A9753E38AC /* DriftstackSocks5TCPFramer.mm */,
 				CD28D2EF5A442B6BAC61CE91 /* DriftstackSocks5URLProtocol.h */,
 				A44EE557C4628AC28EB60E99 /* DriftstackSocks5URLProtocol.mm */,
 				4EA3DEF0CFED4A13AF0C72B2 /* DriftstackQuicSocks5Bridge.h */,
@@ -19683,6 +19689,7 @@
 				A1D4D23A2B7E82D90008C40E /* XPCEndpointMessages.h in Headers */,
 				BCBECDE816B6416800047A1A /* XPCServiceEntryPoint.h in Headers */,
 				0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */,
+				BE0917868E0CA5B166814FC5 /* DriftstackSocks5TCPFramer.h in Headers */,
 				F2B1BC7F0A4B22155AA524E7 /* DriftstackSocks5URLProtocol.h in Headers */,
 				4E5667922B921FEF7AD09725 /* DriftstackRTCSocks5Bridge.h in Headers */,
 				7D525F9D016FE515082C3193 /* DriftstackQuicSocks5Bridge.h in Headers */,
@@ -22339,6 +22346,7 @@
 				C14D306924B79BE000480387 /* XPCEndpoint.mm in Sources */,
 				C14D306A24B79BE400480387 /* XPCEndpointClient.mm in Sources */,
 				7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */,
+				50DCD6C5E1F30FF6DF9B336E /* DriftstackSocks5TCPFramer.mm in Sources */,
 				DE7ED8486B859B9E5DF84AA2 /* DriftstackSocks5URLProtocol.mm in Sources */,
 				1C875D600C06BCB2CB948D7D /* DriftstackRTCSocks5Bridge.mm in Sources */,
 				D3A6EA9A69CC436EC0A6B1A2 /* DriftstackQuicSocks5Bridge.mm in Sources */,
