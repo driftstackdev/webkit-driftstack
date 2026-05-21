@@ -11,6 +11,14 @@
 #import "DriftstackSocks5Client.h"
 
 #import <Foundation/Foundation.h>
+// Wave 29-499.93 — BSD socket headers for getaddrinfo (sentinel → real IP
+// resolution). Required because gost has a bug with SOCKS5 §7 ATYP=0x03
+// (domain-form) — doesn't resolve hostnames server-side. WebKit must
+// pre-resolve and emit ATYP=0x01 (IPv4) for gost to relay correctly.
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <mutex>
 #include <stdlib.h>
 #include <string.h>
@@ -234,6 +242,63 @@ BridgeResult establishRelayChannel(RelayChannel& out)
 // host). When sidecar match found, emit the hostname so wrapUdpDatagram
 // produces an ATYP=0x03 (domain) §7 frame with the real hostname embedded.
 // Fall-through when sidecar miss: use the IP literal (ATYP=0x01).
+// Wave 29-499.93 — gost-compatible §7 outbound: pre-resolve sentinel
+// hostnames to IPv4 and emit ATYP=0x01 instead of ATYP=0x03.
+//
+// Empirical (.92 hex dump on browserleaks/webrtc):
+//   WebKit outbound: ATYP=0x03 11 "stun.l.google.com" 4b66 [stun]
+//   Python via same proxy with ATYP=0x01 + pre-resolved IP: WORKED
+//   Python via same proxy with ATYP=0x03 + hostname: TIMED OUT
+//
+// gost's SOCKS5 UDP_ASSOCIATE §7 handler doesn't resolve domain names
+// server-side. Force ATYP=0x01 by pre-resolving sentinel→hostname→IP
+// at sendTo time, using cached map for hot-path (resolve once per
+// hostname for the process).
+//
+// Trade-off: DNS resolution happens at Mac (one query per unique
+// hostname, cached). Minor DNS leak via Mac-side getaddrinfo for STUN/
+// TURN hostnames — fixed in v1.1 by routing the resolution through
+// SOCKS5 TCP DNS-over-CONNECT.
+static String resolveHostnameToIPv4(const String& hostname)
+{
+    // Cache resolved IPs per-hostname for the process lifetime.
+    static NeverDestroyed<HashMap<String, String>> s_resolvedCache;
+    static NeverDestroyed<Lock> s_cacheLock;
+    {
+        Locker locker { s_cacheLock.get() };
+        auto it = s_resolvedCache.get().find(hostname);
+        if (it != s_resolvedCache.get().end())
+            return it->value;
+    }
+    struct addrinfo hints { };
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    struct addrinfo* res = nullptr;
+    auto cs = hostname.utf8();
+    int rc = getaddrinfo(cs.data(), nullptr, &hints, &res);
+    if (rc != 0 || !res) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.93] resolveHostnameToIPv4: getaddrinfo('%s') failed rc=%d",
+            cs.data(), rc);
+        return { };
+    }
+    char ipBuf[INET_ADDRSTRLEN] = { };
+    auto* sin = reinterpret_cast<const struct sockaddr_in*>(res->ai_addr);
+    inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf));
+    freeaddrinfo(res);
+    String ipString = String::fromUTF8(ipBuf);
+    {
+        Locker locker { s_cacheLock.get() };
+        s_resolvedCache.get().set(hostname, ipString);
+    }
+    static bool loggedFirstResolveOnce = false;
+    if (!loggedFirstResolveOnce) {
+        loggedFirstResolveOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.93] resolveHostnameToIPv4: FIRST resolve — '%s' → '%s'. Forces ATYP=0x01 to work around gost ATYP=0x03 bug.",
+            cs.data(), ipBuf);
+    }
+    return ipString;
+}
+
 static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& address)
 {
     Socks5Endpoint endpoint;
@@ -244,19 +309,30 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
         // Sidecar consult (Slice 2.7.b.4): translate sentinel back to hostname.
         String hostname = lookupHostnameForSentinel(ipString);
         if (!hostname.isEmpty()) {
-            static bool loggedSentinelHitOnce = false;
-            if (!loggedSentinelHitOnce) {
-                loggedSentinelHitOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15] endpointFromSocketAddress: sentinel HIT — %s → '%s'. §7 frame will use ATYP=0x03 domain form.",
-                    ipString.utf8().data(), hostname.utf8().data());
+            // Wave 29-499.93 — pre-resolve hostname to IPv4 instead of using
+            // ATYP=0x03 domain form (gost bug).
+            String resolvedIp = resolveHostnameToIPv4(hostname);
+            if (!resolvedIp.isEmpty()) {
+                endpoint.host = resolvedIp;
+                static bool loggedSentinelHitOnce = false;
+                if (!loggedSentinelHitOnce) {
+                    loggedSentinelHitOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15/Wave29-499.93] endpointFromSocketAddress: sentinel %s → hostname='%s' → IPv4='%s'. §7 frame uses ATYP=0x01 (gost-compatible).",
+                        ipString.utf8().data(), hostname.utf8().data(), resolvedIp.utf8().data());
+                }
+            } else {
+                // Fall back to domain form if resolution fails.
+                endpoint.host = hostname;
             }
-            endpoint.host = hostname;
         } else {
             endpoint.host = ipString;
         }
     } else {
         auto host = address.hostname();
-        endpoint.host = String::fromUTF8(host.c_str());
+        String hostString = String::fromUTF8(host.c_str());
+        // Wave 29-499.93 — pre-resolve hostname when address is hostname-only.
+        String resolvedIp = resolveHostnameToIPv4(hostString);
+        endpoint.host = resolvedIp.isEmpty() ? hostString : resolvedIp;
     }
     endpoint.port = address.port();
     return endpoint;
