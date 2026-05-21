@@ -108,6 +108,21 @@ void StunRequestManager::Clear() {
 bool StunRequestManager::CheckResponse(StunMessage* msg) {
   RTC_DCHECK_RUN_ON(thread_);
   RequestMap::iterator iter = requests_.find(msg->transaction_id());
+  // Wave 29-499.105 — trace STUN response matching. inServerSet=YES per
+  // .104 trace but no srflx → CheckResponse either fails to find the
+  // request OR rejects it post-find. Fprintf each CheckResponse with
+  // txn lookup result + request count.
+  {
+    static std::atomic<unsigned> s_count { 0 };
+    unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 5) {
+      fprintf(stderr, "[Wave29-499.105] CheckResponse #%u: txn=%s found=%s outstanding_requests=%zu msgType=0x%04x\n",
+          n, msg->transaction_id().c_str(),
+          (iter == requests_.end()) ? "NO" : "YES",
+          requests_.size(), (unsigned)msg->type());
+      fflush(stderr);
+    }
+  }
   if (iter == requests_.end())
     return false;
 
@@ -196,13 +211,43 @@ bool StunRequestManager::CheckResponse(ArrayView<const uint8_t> payload) {
   // Check the appropriate bytes of the stream to see if they match the
   // transaction ID of a response we are expecting.
 
-  if (payload.size() < 20)
+  if (payload.size() < 20) {
+    fprintf(stderr, "[Wave29-499.105/raw] CheckResponse(payload): too short %zu < 20\n", payload.size());
+    fflush(stderr);
     return false;
+  }
 
   absl::string_view id(
       reinterpret_cast<const char*>(payload.data()) + kStunTransactionIdOffset,
       kStunTransactionIdLength);
   RequestMap::iterator iter = requests_.find(id);
+  // Wave 29-499.105 — trace raw-payload variant. This is the entry point
+  // from UDPPort::OnReadPacket. Logs txn ID + lookup result.
+  {
+    static std::atomic<unsigned> s_count { 0 };
+    unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 5) {
+      // Print txn ID as hex
+      char idHex[64] = {};
+      for (size_t i = 0; i < id.size() && i < 16; ++i)
+        snprintf(idHex + i*2, sizeof(idHex)-i*2, "%02x", (unsigned char)id[i]);
+      // Print first outstanding request's txn for comparison
+      std::string firstReqTxn;
+      if (!requests_.empty()) {
+        const auto& first = requests_.begin()->first;
+        for (size_t i = 0; i < first.size() && i < 16; ++i) {
+          char buf[3];
+          snprintf(buf, sizeof(buf), "%02x", (unsigned char)first[i]);
+          firstReqTxn += buf;
+        }
+      }
+      fprintf(stderr, "[Wave29-499.105/raw] CheckResponse(payload) #%u: incoming txn=%s found=%s outstanding=%zu first_outstanding_txn=%s\n",
+          n, idHex,
+          (iter == requests_.end()) ? "NO" : "YES",
+          requests_.size(), firstReqTxn.c_str());
+      fflush(stderr);
+    }
+  }
   if (iter == requests_.end())
     return false;
 
