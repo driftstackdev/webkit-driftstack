@@ -84,7 +84,7 @@ static FramerInstance* claimPendingDestination()
         return nullptr;
     // FIFO: framers start in the order their connections were created.
     auto entry = WTF::move(queue.entries.first());
-    queue.entries.remove(0);
+    queue.entries.removeAt(0);
     auto* instance = new FramerInstance;
     instance->destHost = WTF::move(entry.destHost);
     instance->destPort = entry.destPort;
@@ -340,7 +340,7 @@ void setPendingTcpDestination(const String& destHost, uint16_t destPort,
     // Cap queue size to prevent unbounded growth if framer never claims
     // (e.g., connection cancelled). Conservative cap: 256 entries.
     if (queue.entries.size() > 256) {
-        queue.entries.remove(0);
+        queue.entries.removeAt(0);
     }
 }
 
