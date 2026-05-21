@@ -713,28 +713,27 @@ RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoi
         auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
         auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(parameters));
         if (stack) {
-            // Capture existing application protocols (TLS + anything else)
-            NSMutableArray* existingProtocols = [NSMutableArray array];
+            // Wave 29-499.126 — RETAIN options before clear (nw_protocol_options_t
+            // uses nw_retain/nw_release; ARC __bridge doesn't increment).
+            // Without retain, clear_application_protocols releases them and
+            // re-prepend operates on dangling pointers (silent no-op).
+            __block Vector<RetainPtr<nw_protocol_options_t>> existingProtocols;
             nw_protocol_stack_iterate_application_protocols(stack.get(),
                 ^(nw_protocol_options_t opt) {
                     if (opt)
-                        [existingProtocols addObject:(__bridge id)opt];
+                        existingProtocols.append(RetainPtr<nw_protocol_options_t> { opt });
                 });
-            // Clear them
             nw_protocol_stack_clear_application_protocols(stack.get());
-            // Add framer first → it ends up at bottom
+            // Add framer first → it ends up at bottom (closest to TCP)
             nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
-            // Re-prepend original protocols → they go on top of framer
-            // Iterate in REVERSE so original order is preserved
-            for (NSInteger i = [existingProtocols count] - 1; i >= 0; --i) {
-                nw_protocol_options_t opt = (__bridge nw_protocol_options_t)[existingProtocols objectAtIndex:i];
-                nw_protocol_stack_prepend_application_protocol(stack.get(), opt);
-            }
+            // Re-prepend originals in reverse so original ordering preserved
+            for (size_t i = existingProtocols.size(); i > 0; --i)
+                nw_protocol_stack_prepend_application_protocol(stack.get(), existingProtocols[i - 1].get());
             static bool loggedStackOnce = false;
             if (!loggedStackOnce) {
                 loggedStackOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.125] protocol stack: framer inserted BELOW %lu existing app protocols (TLS et al)",
-                    (unsigned long)[existingProtocols count]);
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.126] protocol stack: framer inserted BELOW %zu existing app protocols (RETAINED before clear)",
+                    existingProtocols.size());
             }
         }
     }
