@@ -319,14 +319,19 @@ static String hardcodedSTUNHostnameLookup(const String& hostname)
         return "52.26.250.139"_s; // Mozilla STUN (AWS Oregon).
     if (hostname == "stun.miwifi.com"_s)
         return "111.206.174.3"_s;
-    // Wave 29-499.110 — Twilio TURN servers. Twilio's networktest TURN
-    // diagnostics use global.turn.twilio.com. Adding to hardcoded map
-    // ensures ATYP=0x01 outbound wrap (gost-compatible). Real Twilio TURN
-    // server IPs rotate per-region — this is one of the active anycast IPs
-    // observed at our T-Mobile egress (34.203.x range = AWS US-East).
-    if (hostname == "global.turn.twilio.com"_s
-        || hostname == "global.stun.twilio.com"_s)
-        return "34.203.250.255"_s; // Twilio TURN/STUN anycast (AWS us-east-1).
+    // Wave 29-499.110-revert — Twilio TURN servers REMOVED from hardcoded map.
+    // Twilio uses GeoDNS anycast — hardcoding a specific IP routes to wrong
+    // region. Empirical: ATYP=0x03 domain fallback (when getaddrinfo fails)
+    // correctly reaches Twilio's geo-routed TURN server, but Twilio NTS test
+    // still fails because:
+    //   - SOCKS5+UDP NAT mapping doesn't expose a public IP for Twilio's
+    //     TURN servers to reach (structural SOCKS5 limit; iPhone+SOCKS5
+    //     has same issue)
+    //   - Twilio's auth retry flow may not complete through proxy
+    //
+    // For full TURN over customer proxy: requires Phase 2/3 WireGuard/
+    // OpenVPN customer-proxy modes (network-level tunnel, not application-
+    // level SOCKS5) per planning 133.
     return { };
 }
 
