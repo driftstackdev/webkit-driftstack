@@ -424,16 +424,12 @@ void NetworkRTCUDPSocketCocoaConnections::setOption(int option, int value)
 static inline void processUDPData(RetainPtr<nw_connection_t>&& nwConnection, Ref<NetworkRTCUDPSocketCocoaConnections::ConnectionStateTracker> connectionStateTracker, int errorCode, Function<void(std::span<const uint8_t>, WebRTCNetwork::EcnMarking)>&& processData)
 {
     auto nwConnectionReference = nwConnection.get();
-    // Wave 29-499.96 — switch from nw_connection_receive(min=1, max=UINT32_MAX)
-    // to nw_connection_receive_message for proper UDP datagram-boundary
-    // semantics. Per Apple docs, nw_connection_receive_message returns exactly
-    // one complete message per callback for datagram protocols. The prior
-    // nw_connection_receive with UINT32_MAX was coalescing multiple UDP
-    // datagrams into 4096-byte buffers, breaking SOCKS5 §7 unwrap (which
-    // expects one §7 frame per call). Empirical: .91 hex dump showed
-    // 4096-byte buffers full of repeating 12-byte §7 headers — that's many
-    // datagrams concatenated.
-    nw_connection_receive_message(nwConnectionReference, makeBlockPtr([nwConnection = WTF::move(nwConnection), processData = WTF::move(processData), errorCode, connectionStateTracker = WTF::move(connectionStateTracker)](dispatch_data_t content, nw_content_context_t context, bool, nw_error_t error) mutable {
+    // Wave 29-499.97 — try bounded nw_connection_receive max=1500 (UDP MTU)
+    // instead of nw_connection_receive_message (which empirically still
+    // returned 4096-byte buffers despite Apple docs claiming per-message
+    // semantics). With max=1500, each call should return one datagram (or
+    // truncated if real datagrams >1500 bytes, which is rare for STUN/UDP).
+    nw_connection_receive(nwConnectionReference, 1, 1500, makeBlockPtr([nwConnection = WTF::move(nwConnection), processData = WTF::move(processData), errorCode, connectionStateTracker = WTF::move(connectionStateTracker)](dispatch_data_t content, nw_content_context_t context, bool, nw_error_t error) mutable {
         if (content) {
             dispatch_data_apply_span(content, [&](std::span<const uint8_t> data) {
                 processData(data, getECN(context, connectionStateTracker.get()));
