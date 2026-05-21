@@ -41,11 +41,6 @@
 #include "SystemFontDatabaseCoreText.h"
 #include "UnrealizedCoreTextFont.h"
 #include <CoreText/SFNTLayoutTypes.h>
-// Wave 29-499.38 — Metal framework for MTLCreateSystemDefaultDevice
-// pre-warm. Used inside initializeDriftstackIOSFontMapIfNeeded under
-// DRIFTSTACK_EAGER_INIT_ATLAS gate for the webgl_getParameter 9ms
-// cold-cache outlier closure.
-#import <Metal/Metal.h>
 #include <array>
 #include <pal/spi/cf/CoreTextSPI.h>
 #include <pal/spi/cocoa/AccessibilitySupportSPI.h>
@@ -369,26 +364,12 @@ static void initializeDriftstackIOSFontMapIfNeeded()
         }
     }
 
-    // Wave 29-499.38 Task #79 follow-up — Metal device pre-warm.
-    // webgl_getParameter probe shows Mac fork first-call 11ms vs iPhone
-    // 1.67ms (9ms cold-cache delta). The cost is GraphicsContextGLCocoa's
-    // MTLCreateSystemDefaultDevice() on first WebGL context creation
-    // (Source/WebCore/platform/graphics/cocoa/GraphicsContextGLCocoa.mm:91).
-    // The Metal device is process-global; the first call pays the init
-    // cost, subsequent calls return cached. Pre-warm via the same env
-    // gate so the WebGL context creation path is fast from probe N=0.
-    {
-        const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
-        if (eager && eager[0] == '1') {
-            @autoreleasepool {
-                id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-                if (device) {
-                    [device release];
-                    WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/MetalWarmup] Metal device (MTLCreateSystemDefaultDevice) pre-warmed at font-map init — webgl_getParameter 9ms cold-cache outlier eliminated for first WebGL context creation (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
-                }
-            }
-        }
-    }
+    // Wave 29-499.38 REVERTED — Metal device pre-warm would need a
+    // separate .mm file because FontCacheCoreText.cpp gets bundled into
+    // a unified-source compiled as plain C++ (no Obj-C++ support for
+    // id<MTLDevice>). webgl_getParameter 9ms outlier remains open;
+    // closure path requires a separate file outside the unified-source
+    // bundle. Deferred.
 
     // Wave 29-499.39 Task #79 follow-up — Latin-text shaper warmup.
     // font_offsetWidth probe shows Mac fork first-call 12ms vs iPhone
