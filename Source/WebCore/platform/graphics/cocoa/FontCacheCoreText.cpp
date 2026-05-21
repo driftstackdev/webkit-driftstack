@@ -60,6 +60,13 @@
 #include <wtf/cf/TypeCastsCF.h>
 #include <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
 
+// Wave 29-499.58 — Forward declaration at file scope (extern "C" cannot
+// appear inside a function body in C++; Wave 29-499.44 had it inside
+// the eager-init block which failed C++ parse at UnifiedSource345
+// compile). Function is defined in DriftstackArchetypeConfig.mm
+// (@no-unify per SourcesCocoa.txt — Obj-C++ semantics preserved).
+extern "C" void driftstackMetalPreWarm();
+
 namespace WebCore {
 
 bool fontNameIsSystemFont(CFStringRef fontName)
@@ -377,7 +384,7 @@ static void initializeDriftstackIOSFontMapIfNeeded()
     {
         const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
         if (eager && eager[0] == '1') {
-            extern "C" void driftstackMetalPreWarm();
+            // Wave 29-499.58 — forward decl at file scope (see top of file).
             driftstackMetalPreWarm();
         }
     }
