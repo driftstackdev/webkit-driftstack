@@ -237,6 +237,8 @@ void DriftstackNetworkLoader::resume()
             // SSLProtocolVersion: 0x0304 = TLS 1.3, 0x0303 = TLS 1.2.
             // kCFStreamPropertySSLContext returns a CFTypeRef wrapping the
             // SSLContextRef which we configure with SSLSetProtocolVersionMax/Min.
+_Pragma("clang diagnostic push")
+_Pragma("clang diagnostic ignored \"-Wdeprecated-declarations\"")
             CFTypeRef sslCtxRead = CFReadStreamCopyProperty(readStream, kCFStreamPropertySSLContext);
             if (sslCtxRead) {
                 SSLContextRef ssl = (SSLContextRef)const_cast<void*>(sslCtxRead);
@@ -251,6 +253,7 @@ void DriftstackNetworkLoader::resume()
                 SSLSetProtocolVersionMax(ssl, kTLSProtocol13);
                 CFRelease(sslCtxWrite);
             }
+_Pragma("clang diagnostic pop")
             static bool loggedOnce = false;
             if (!loggedOnce) {
                 loggedOnce = true;
