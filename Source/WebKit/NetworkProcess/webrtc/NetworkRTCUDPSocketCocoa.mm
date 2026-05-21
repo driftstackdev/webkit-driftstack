@@ -457,11 +457,23 @@ static inline void processUDPData(RetainPtr<nw_connection_t>&& nwConnection, Ref
 // Must be called under m_nwConnectionsLock by the caller.
 bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_LOCK(m_nwConnectionsLock)
 {
-    if (m_relayStarted)
-        return m_relayConnection != nullptr;
+    // Wave 29-499.89 — granular trace inside ensureRelayConnection. The .88
+    // trace showed execution hung INSIDE this function with m_nwConnectionsLock
+    // held. Need to know exact pause point.
+    WTFLogAlways("[Wave29-499.89] ensureRelayConnection: ENTRY (m_relayStarted=%d, m_relayConnection=%p)",
+        m_relayStarted ? 1 : 0, m_relayConnection.get());
 
+    if (m_relayStarted) {
+        WTFLogAlways("[Wave29-499.89] ensureRelayConnection: EXIT-EARLY (m_relayStarted=true, returning %d)",
+            m_relayConnection != nullptr ? 1 : 0);
+        return m_relayConnection != nullptr;
+    }
+
+    WTFLogAlways("[Wave29-499.89] ensureRelayConnection: about to call DriftstackRTC::establishRelayChannel...");
     DriftstackRTC::RelayChannel channel;
     DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    WTFLogAlways("[Wave29-499.89] ensureRelayConnection: establishRelayChannel returned result=%d, relayHost=%s, relayPort=%u",
+        static_cast<int>(r), channel.relayHost.utf8().data(), channel.relayPort);
     if (r != DriftstackRTC::BridgeResult::Success) {
         m_relayStarted = true;
         return false;
