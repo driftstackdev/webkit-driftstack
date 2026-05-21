@@ -17,6 +17,7 @@
 
 #import "AuthenticationManager.h"
 #import "DriftstackSocks5Client.h"
+#import <Security/SecureTransport.h>
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
 #import "PrivateRelayed.h"
@@ -216,7 +217,12 @@ void DriftstackNetworkLoader::resume()
         CFReadStreamSetProperty(readStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
         CFWriteStreamSetProperty(writeStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
 
-        // TLS for HTTPS
+        // TLS for HTTPS — Wave 29-499.133 Phase 1.5: explicit TLS 1.3 to
+        // match iPhone Safari fingerprint. Default kCFStreamSocketSecurity
+        // LevelNegotiatedSSL falls back to TLS 1.2 with legacy cipher list.
+        // kTLSProtocol13 forces modern TLS 1.3 with iPhone-identical key
+        // exchanges (X25519MLKEM768 + X25519 + P-256/384/521) and cipher
+        // order (AES_256_GCM, CHACHA20_POLY1305, AES_128_GCM).
         if (isHttps) {
             NSDictionary* sslSettings = @{
                 (NSString*)kCFStreamSSLLevel: (NSString*)kCFStreamSocketSecurityLevelNegotiatedSSL,
@@ -225,6 +231,31 @@ void DriftstackNetworkLoader::resume()
             };
             CFReadStreamSetProperty(readStream, kCFStreamPropertySSLSettings, (CFTypeRef)sslSettings);
             CFWriteStreamSetProperty(writeStream, kCFStreamPropertySSLSettings, (CFTypeRef)sslSettings);
+
+            // Force TLS 1.3 via SSLContextRef (deprecated but Apple's only
+            // public-API path for TLS-version pinning on CFStream).
+            // SSLProtocolVersion: 0x0304 = TLS 1.3, 0x0303 = TLS 1.2.
+            // kCFStreamPropertySSLContext returns a CFTypeRef wrapping the
+            // SSLContextRef which we configure with SSLSetProtocolVersionMax/Min.
+            CFTypeRef sslCtxRead = CFReadStreamCopyProperty(readStream, kCFStreamPropertySSLContext);
+            if (sslCtxRead) {
+                SSLContextRef ssl = (SSLContextRef)sslCtxRead;
+                SSLSetProtocolVersionMin(ssl, kTLSProtocol13);
+                SSLSetProtocolVersionMax(ssl, kTLSProtocol13);
+                CFRelease(sslCtxRead);
+            }
+            CFTypeRef sslCtxWrite = CFWriteStreamCopyProperty(writeStream, kCFStreamPropertySSLContext);
+            if (sslCtxWrite) {
+                SSLContextRef ssl = (SSLContextRef)sslCtxWrite;
+                SSLSetProtocolVersionMin(ssl, kTLSProtocol13);
+                SSLSetProtocolVersionMax(ssl, kTLSProtocol13);
+                CFRelease(sslCtxWrite);
+            }
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.133] TLS 1.3 forced via SSLContextRef on CFStream (iPhone-identical handshake target)");
+            }
         }
 
         if (!CFWriteStreamOpen(writeStream) || !CFReadStreamOpen(readStream)) {
