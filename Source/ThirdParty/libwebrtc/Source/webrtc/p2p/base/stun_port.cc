@@ -407,7 +407,8 @@ void UDPPort::OnReadPacket(AsyncPacketSocket* socket,
   RTC_DCHECK(!packet.source_address().IsUnresolvedIP());
 
   // Wave 29-499.104 — diagnose UDPPort::OnReadPacket flow + STUN response
-  // path. Logs first 5 packets with source + server_addresses_ membership.
+  // path. RTC_LOG doesn't reach our stderr in MiniBrowser harness;
+  // use fprintf(stderr,...) directly.
   {
     static std::atomic<unsigned> s_count { 0 };
     unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -419,11 +420,12 @@ void UDPPort::OnReadPacket(AsyncPacketSocket* socket,
         if (!serverList.empty()) serverList += ",";
         serverList += sa.ToString();
       }
-      RTC_LOG(LS_ERROR) << "[Wave29-499.104] UDPPort::OnReadPacket #" << n
-          << " src=" << packet.source_address().ToString()
-          << " payloadSize=" << packet.payload().size()
-          << " inServerSet=" << (inServerSet ? "YES" : "NO")
-          << " server_addresses=[" << serverList << "]";
+      fprintf(stderr, "[Wave29-499.104] UDPPort::OnReadPacket #%u src=%s payloadSize=%zu inServerSet=%s server_addresses=[%s]\n",
+          n, packet.source_address().ToString().c_str(),
+          packet.payload().size(),
+          inServerSet ? "YES" : "NO",
+          serverList.c_str());
+      fflush(stderr);
     }
   }
 
