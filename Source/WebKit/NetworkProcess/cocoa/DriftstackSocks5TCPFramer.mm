@@ -27,6 +27,7 @@
 #include <wtf/Assertions.h>
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/StdLibExtras.h>
 #include <wtf/text/CString.h>
 
 namespace WebKit {
@@ -76,10 +77,10 @@ static FramerInstance* claimPendingDestination()
     if (!pending.armed)
         return nullptr;
     auto* instance = new FramerInstance;
-    instance->destHost = WTFMove(pending.destHost);
+    instance->destHost = WTF::move(pending.destHost);
     instance->destPort = pending.destPort;
-    instance->proxyUser = WTFMove(pending.proxyUser);
-    instance->proxyPass = WTFMove(pending.proxyPass);
+    instance->proxyUser = WTF::move(pending.proxyUser);
+    instance->proxyPass = WTF::move(pending.proxyPass);
     pending.armed = false;
     pending.destPort = 0;
     return instance;
@@ -218,7 +219,9 @@ static size_t parseConnectResponse(nw_framer_t framer, FramerInstance* instance)
                 consumed = 4;
                 return 4;
             }
-            uint8_t atyp = buf[3];
+            // ATYP at buf[3] — currently unused (we assume IPv4 reply below).
+            // TODO: handle ATYP-dependent BND.ADDR length.
+            (void)buf[3];
             // Compute trailing length: BND.ADDR + BND.PORT
             // ATYP=0x01 IPv4: 4 + 2 = 6
             // ATYP=0x04 IPv6: 16 + 2 = 18
