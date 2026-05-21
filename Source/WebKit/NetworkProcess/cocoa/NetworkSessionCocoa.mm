@@ -1059,6 +1059,12 @@ static bool sessionsCreated = false;
 // Return value:
 //   true  → proxy supports UDP_ASSOCIATE → KEEP HTTP/3 enabled
 //   false → proxy is TCP-only OR probe failed → DISABLE HTTP/3 (safe default)
+//
+// Wave 29-499.81 — WTF_ALLOW_UNSAFE_BUFFER_USAGE wrap per WebKit precedent
+// (DriftstackSocks5Client.mm + DriftstackSocks5URLProtocol.mm use the
+// same pattern). Raw BSD socket APIs work with C pointers/buffers and
+// can't be cleanly span-ified without rewriting the whole probe.
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const char* user, const char* pass)
 {
     if (!host || !host[0] || port <= 0)
@@ -1136,7 +1142,9 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     // REP=0x00 → success; anything else (0x07 = command not supported) → no UDP
     return udpResp[1] == 0x00;
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 static bool driftstackSocks5UdpSupported()
 {
     static bool s_supported = false;
@@ -1181,6 +1189,7 @@ static bool driftstackSocks5UdpSupported()
     });
     return s_supported;
 }
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 #endif // PLATFORM(DRIFTSTACK)
 
 static RetainPtr<NSURLSessionConfiguration> configurationForSessionID(PAL::SessionID session, bool isFullWebBrowser)
