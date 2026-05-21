@@ -334,8 +334,14 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
             (unsigned)instance->proxyUser.length());
     }
 
-    // Will mark ready after CONNECT response is parsed.
-    return nw_framer_start_result_will_mark_ready;
+    // Wave 29-499.122 — return ready immediately instead of will_mark_ready.
+    // Empirical .121 showed CFNetwork tearing down framer within milliseconds
+    // when we used will_mark_ready (suspect: timeout on framer reaching ready).
+    // With start_result_ready, framer is "ready" from the start; output_handler
+    // (not yet implemented) would buffer CFNetwork writes until handshake done.
+    // This experimental change tests if the framer at least stays alive longer
+    // to let input_handler receive gost's GREETING response.
+    return nw_framer_start_result_ready;
 }
 
 } // anonymous namespace
