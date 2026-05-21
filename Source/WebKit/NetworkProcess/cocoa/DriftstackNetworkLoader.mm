@@ -18,6 +18,14 @@
 #import "AuthenticationManager.h"
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
+
+// Wave 29-499.134 (Phase 1.5b) — try BoringSSL via libwebrtc's bundled
+// headers. WebKit framework links libwebrtc.dylib which exports SSL_*.
+// Header path: ../ThirdParty/libwebrtc/Source/third_party/boringssl/src/include
+#if __has_include("../../../ThirdParty/libwebrtc/Source/third_party/boringssl/src/include/openssl/ssl.h")
+#import "../../../ThirdParty/libwebrtc/Source/third_party/boringssl/src/include/openssl/ssl.h"
+#define DRIFTSTACK_HAS_BORINGSSL 1
+#endif
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
 #import "PrivateRelayed.h"
