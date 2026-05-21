@@ -1644,15 +1644,20 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                                 // post-.106: CFNetwork doesn't attempt h3 despite earlier
                                 // "LEFT ENABLED" assumption. Force explicit @YES to override
                                 // any internal proxy-h3-disable logic.
+                                // Wave 29-499.127 — ObjC runtime introspection revealed TWO
+                                // private h3 gates: `_allowsHTTP3` (we always set) AND
+                                // `_allowsHTTP3Internal` (NEW — never set before). Apple's
+                                // proxy-disables-h3 gate likely checks the _Internal variant.
                                 @try {
                                     [configuration.get() setValue:@YES forKey:@"_allowsHTTP3"];
+                                    [configuration.get() setValue:@YES forKey:@"_allowsHTTP3Internal"];
                                     static bool loggedOnceH3Forced = false;
                                     if (!loggedOnceH3Forced) {
                                         loggedOnceH3Forced = true;
-                                        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.107] _allowsHTTP3=YES FORCE-APPLIED — overrides Apple's internal proxy-disables-h3 gate so CFNetwork attempts h3 Alt-Svc upgrade; UDP packets route via SOCKS5 §7 relay");
+                                        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.127] _allowsHTTP3=YES + _allowsHTTP3Internal=YES BOTH FORCE-APPLIED — bypass Apple's proxy-disables-h3 gate completely.");
                                     }
                                 } @catch (NSException *ex) {
-                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.107] _allowsHTTP3=YES set FAILED: %s",
+                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.127] _allowsHTTP3*=YES set FAILED: %s",
                                         [[ex reason] UTF8String] ?: "unknown");
                                 }
                                 static bool loggedOnceH3Enabled = false;
