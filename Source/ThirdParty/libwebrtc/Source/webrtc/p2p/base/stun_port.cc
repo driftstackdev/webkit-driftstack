@@ -570,6 +570,16 @@ void UDPPort::OnStunBindingRequestSucceeded(
     TimeDelta rtt,
     const SocketAddress& stun_server_addr,
     const SocketAddress& stun_reflected_addr) {
+  // Wave 29-499.106 — trace OnStunBindingRequestSucceeded entry +
+  // duplicate-server guard. The .105 CheckResponse trace confirmed txn ID
+  // matched + msgType=0x0101 success. Now confirm OnStunBindingRequestSucceeded
+  // fires + reflexive addr is extracted correctly.
+  fprintf(stderr, "[Wave29-499.106] OnStunBindingRequestSucceeded: rtt=%dms server=%s reflected=%s shared=%s sockLocal=%s\n",
+      rtt.ms(), stun_server_addr.ToString().c_str(),
+      stun_reflected_addr.ToString().c_str(),
+      SharedSocket() ? "YES" : "NO",
+      socket_ ? socket_->GetLocalAddress().ToString().c_str() : "(null)");
+  fflush(stderr);
   int rtt_ms = rtt.ms();
   RTC_DCHECK(stats_.stun_binding_responses_received <
              stats_.stun_binding_requests_sent);
@@ -578,6 +588,8 @@ void UDPPort::OnStunBindingRequestSucceeded(
   stats_.stun_binding_rtt_ms_squared_total += rtt_ms * rtt_ms;
   if (bind_request_succeeded_servers_.find(stun_server_addr) !=
       bind_request_succeeded_servers_.end()) {
+    fprintf(stderr, "[Wave29-499.106] EARLY RETURN: server already in bind_request_succeeded_servers_\n");
+    fflush(stderr);
     return;
   }
   bind_request_succeeded_servers_.insert(stun_server_addr);
@@ -585,9 +597,12 @@ void UDPPort::OnStunBindingRequestSucceeded(
   // address and mDNS obfuscation is not enabled, or if the same address has
   // been added by another STUN server, then discarding the stun address.
   // For STUN, related address is the local socket address.
-  if ((!SharedSocket() || stun_reflected_addr != socket_->GetLocalAddress() ||
-       Network()->GetMdnsResponder() != nullptr) &&
-      !HasStunCandidateWithAddress(stun_reflected_addr)) {
+  bool sharedCheck = !SharedSocket() || stun_reflected_addr != socket_->GetLocalAddress() || Network()->GetMdnsResponder() != nullptr;
+  bool noDupCheck = !HasStunCandidateWithAddress(stun_reflected_addr);
+  fprintf(stderr, "[Wave29-499.106] AddAddress gate: sharedCheck=%s noDupCheck=%s\n",
+      sharedCheck ? "TRUE" : "FALSE", noDupCheck ? "TRUE" : "FALSE");
+  fflush(stderr);
+  if (sharedCheck && noDupCheck) {
     SocketAddress related_address = socket_->GetLocalAddress();
     // If we can't stamp the related address correctly, empty it to avoid leak.
     if (!MaybeSetDefaultLocalAddress(&related_address)) {
@@ -597,9 +612,17 @@ void UDPPort::OnStunBindingRequestSucceeded(
     StringBuilder url;
     url << "stun:" << stun_server_addr.hostname() << ":"
         << stun_server_addr.port();
+    fprintf(stderr, "[Wave29-499.106] CALLING AddAddress: reflected=%s local=%s related=%s url=%s\n",
+        stun_reflected_addr.ToString().c_str(),
+        socket_->GetLocalAddress().ToString().c_str(),
+        related_address.ToString().c_str(),
+        url.str().c_str());
+    fflush(stderr);
     AddAddress(stun_reflected_addr, socket_->GetLocalAddress(), related_address,
                UDP_PROTOCOL_NAME, "", "", IceCandidateType::kSrflx,
                ICE_TYPE_PREFERENCE_SRFLX, 0, url.str(), false);
+    fprintf(stderr, "[Wave29-499.106] AddAddress returned — srflx candidate should now be visible to libwebrtc\n");
+    fflush(stderr);
   }
   MaybeSetPortCompleteOrError();
 }
