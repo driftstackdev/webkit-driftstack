@@ -82,6 +82,15 @@
 #import <wtf/text/MakeString.h>
 #import <wtf/text/WTFString.h>
 
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-499.63 — BSD socket headers for SOCKS5 UDP_ASSOCIATE probe.
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <mutex>
+#endif
+
 #if USE(APPLE_INTERNAL_SDK)
 
 #if ENABLE(APP_PRIVACY_REPORT) && HAVE(SYMPTOMS_FRAMEWORK)
@@ -1034,6 +1043,128 @@ namespace WebKit {
 static bool sessionsCreated = false;
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-499.63 — SOCKS5 UDP_ASSOCIATE auto-detect.
+// Probes the configured proxy to determine whether it supports UDP relay
+// per RFC 1928 §4 CMD=3. If yes, customers can have HTTP/3 + WebRTC UDP
+// routed through the SOCKS5 UDP_ASSOCIATE relay (existing
+// Slice 16.7.b + WebRTC §7 relay infrastructure). If no, fall back to
+// the conservative Slice 16.7.a HTTP/3 disable so QUIC packets don't
+// leak around the TCP-only proxy.
+//
+// Called once per process via std::call_once at first SOCKS5
+// customization. Probe uses raw BSD sockets (no WebKit dep, no
+// nw_connection_create interpose recursion).
+//
+// Return value:
+//   true  → proxy supports UDP_ASSOCIATE → KEEP HTTP/3 enabled
+//   false → proxy is TCP-only OR probe failed → DISABLE HTTP/3 (safe default)
+static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const char* user, const char* pass)
+{
+    if (!host || !host[0] || port <= 0)
+        return false;
+
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0)
+        return false;
+
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        close(sock);
+        return false;
+    }
+
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sock);
+        return false;
+    }
+
+    // SOCKS5 greeting: VER=5, NMETHODS=2, METHODS=[0x00 no-auth, 0x02 user/pass]
+    uint8_t greeting[] = { 0x05, 0x02, 0x00, 0x02 };
+    if (send(sock, greeting, sizeof(greeting), 0) != sizeof(greeting)) { close(sock); return false; }
+    uint8_t greetResp[2];
+    if (recv(sock, greetResp, 2, MSG_WAITALL) != 2 || greetResp[0] != 0x05) { close(sock); return false; }
+
+    if (greetResp[1] == 0x02) {
+        // User/pass auth required
+        if (!user || !user[0] || !pass || !pass[0]) { close(sock); return false; }
+        size_t userLen = strlen(user);
+        size_t passLen = strlen(pass);
+        if (userLen > 255 || passLen > 255) { close(sock); return false; }
+        uint8_t authBuf[3 + 255 + 255];
+        authBuf[0] = 0x01;
+        authBuf[1] = (uint8_t)userLen;
+        memcpy(authBuf + 2, user, userLen);
+        authBuf[2 + userLen] = (uint8_t)passLen;
+        memcpy(authBuf + 3 + userLen, pass, passLen);
+        size_t authLen = 3 + userLen + passLen;
+        if ((size_t)send(sock, authBuf, authLen, 0) != authLen) { close(sock); return false; }
+        uint8_t authResp[2];
+        if (recv(sock, authResp, 2, MSG_WAITALL) != 2 || authResp[1] != 0x00) { close(sock); return false; }
+    } else if (greetResp[1] != 0x00) {
+        // Method not acceptable
+        close(sock);
+        return false;
+    }
+
+    // UDP_ASSOCIATE request: VER=5, CMD=3 (UDP), RSV=0, ATYP=1 (IPv4),
+    // DST.ADDR=0.0.0.0, DST.PORT=0 (per RFC 1928 §6 — client sends 0
+    // when it doesn't yet know its UDP source address/port).
+    uint8_t udpReq[10] = { 0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0 };
+    if (send(sock, udpReq, sizeof(udpReq), 0) != sizeof(udpReq)) { close(sock); return false; }
+    uint8_t udpResp[10];
+    int n = recv(sock, udpResp, 10, MSG_WAITALL);
+    close(sock);
+    if (n < 4 || udpResp[0] != 0x05)
+        return false;
+    // REP=0x00 → success; anything else (0x07 = command not supported) → no UDP
+    return udpResp[1] == 0x00;
+}
+
+static bool driftstackSocks5UdpSupported()
+{
+    static bool s_supported = false;
+    static std::once_flag s_probeOnce;
+    std::call_once(s_probeOnce, []() {
+        const char* host = getenv("DRIFTSTACK_SOCKS5_PROXY");
+        const char* user = getenv("DRIFTSTACK_SOCKS5_USER");
+        const char* pass = getenv("DRIFTSTACK_SOCKS5_PASS");
+        if (!host || !host[0]) {
+            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no DRIFTSTACK_SOCKS5_PROXY set — defaulting to UDP=unsupported (HTTP/3 stays disabled)");
+            return;
+        }
+        const char* colon = strchr(host, ':');
+        if (!colon) {
+            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] DRIFTSTACK_SOCKS5_PROXY missing ':' separator");
+            return;
+        }
+        char hostBuf[256];
+        size_t hostLen = colon - host;
+        if (hostLen >= sizeof(hostBuf)) return;
+        memcpy(hostBuf, host, hostLen);
+        hostBuf[hostLen] = 0;
+        int port = atoi(colon + 1);
+        bool result = driftstackProbeSocks5UdpAssociate(hostBuf, port, user, pass);
+        s_supported = result;
+        if (result) {
+            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] ✓ proxy %s:%d supports SOCKS5 UDP_ASSOCIATE — HTTP/3 + WebRTC UDP will route through Slice 16.7.b + WebRTC §7 relay (NOT disabling HTTP/3)", hostBuf, port);
+        } else {
+            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] proxy %s:%d does NOT support SOCKS5 UDP_ASSOCIATE — falling back to HTTP/3-disable safety gate (TCP-only egress)", hostBuf, port);
+        }
+    });
+    return s_supported;
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 static RetainPtr<NSURLSessionConfiguration> configurationForSessionID(PAL::SessionID session, bool isFullWebBrowser)
 {
     auto loggingPrivacyLevel = nw_context_privacy_level_sensitive;
@@ -1431,19 +1562,35 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                             // -level SOCKS5 UDP_ASSOCIATE relay (existing
                             // DriftstackQuic::createRelayConnectionForQuic infra)
                             // — once stable, this HTTP/3 disable can lift.
-                            @try {
-                                [configuration.get() setValue:@NO forKey:@"_allowsHTTP3"];
-                                static bool loggedOnceH3 = false;
-                                if (!loggedOnceH3) {
-                                    loggedOnceH3 = true;
-                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3=NO APPLIED — CFNetwork will not attempt Alt-Svc h3 upgrade; all HTTP traffic stays TCP through SOCKS5 (no QUIC UDP leak)");
+                            // Wave 29-499.63 — UDP_ASSOCIATE auto-detect gate. If the
+                            // proxy supports SOCKS5 UDP relay (RFC 1928 §4 CMD=3),
+                            // KEEP HTTP/3 enabled — Slice 16.7.b + WebRTC §7 relay
+                            // will carry the UDP packets through the SOCKS5
+                            // UDP_ASSOCIATE channel. Otherwise (TCP-only proxy or
+                            // probe failed), apply the conservative _allowsHTTP3=NO
+                            // gate to prevent QUIC UDP leaks.
+                            bool udpRelaySupported = driftstackSocks5UdpSupported();
+                            if (!udpRelaySupported) {
+                                @try {
+                                    [configuration.get() setValue:@NO forKey:@"_allowsHTTP3"];
+                                    static bool loggedOnceH3 = false;
+                                    if (!loggedOnceH3) {
+                                        loggedOnceH3 = true;
+                                        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3=NO APPLIED (proxy is TCP-only per UDP_ASSOCIATE probe) — CFNetwork will not attempt Alt-Svc h3 upgrade; all HTTP traffic stays TCP through SOCKS5 (no QUIC UDP leak)");
+                                    }
+                                } @catch (NSException *ex) {
+                                    static bool loggedOnceH3Failure = false;
+                                    if (!loggedOnceH3Failure) {
+                                        loggedOnceH3Failure = true;
+                                        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3 KVC threw — Apple may have removed the private property. Reason: %s",
+                                            [[ex reason] UTF8String] ?: "unknown");
+                                    }
                                 }
-                            } @catch (NSException *ex) {
-                                static bool loggedOnceH3Failure = false;
-                                if (!loggedOnceH3Failure) {
-                                    loggedOnceH3Failure = true;
-                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] _allowsHTTP3 KVC threw — Apple may have removed the private property. Reason: %s",
-                                        [[ex reason] UTF8String] ?: "unknown");
+                            } else {
+                                static bool loggedOnceH3Enabled = false;
+                                if (!loggedOnceH3Enabled) {
+                                    loggedOnceH3Enabled = true;
+                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a] HTTP/3 LEFT ENABLED (proxy supports SOCKS5 UDP_ASSOCIATE) — QUIC + WebRTC UDP will route through Slice 16.7.b + WebRTC §7 relay; matches iPhone Safari behavior");
                                 }
                             }
                         }
