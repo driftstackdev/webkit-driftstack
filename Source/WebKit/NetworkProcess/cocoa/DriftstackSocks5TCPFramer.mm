@@ -99,6 +99,8 @@ static void sendGreeting(nw_framer_t framer)
     uint8_t bytes[] = { 0x05, 0x02, 0x00, 0x02 };
     NSData* data = [NSData dataWithBytes:bytes length:sizeof(bytes)];
     nw_framer_write_output_data(framer, (dispatch_data_t)data);
+    fprintf(stderr, "[Wave29-499.120] sendGreeting: 4 bytes written to wire\n");
+    fflush(stderr);
 }
 
 // Send RFC 1929 user/pass auth: VER=1, ULEN, USER, PLEN, PASS
@@ -274,6 +276,13 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
     }
 
     nw_framer_set_input_handler(framer, ^size_t(nw_framer_t innerFramer) {
+        static std::atomic<unsigned> s_inputCount { 0 };
+        unsigned n = s_inputCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 20) {
+            fprintf(stderr, "[Wave29-499.120] input_handler #%u: state=%d\n",
+                n, (int)instance->state);
+            fflush(stderr);
+        }
         switch (instance->state) {
         case HandshakeState::kAwaitGreeting:
             return parseGreetingResponse(innerFramer, instance);
@@ -282,14 +291,10 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
         case HandshakeState::kAwaitConnect:
             return parseConnectResponse(innerFramer, instance);
         case HandshakeState::kTransparent:
-            // Pass-through — return inputs unmodified (no framing).
-            // nw_framer's default behavior already forwards; we just request more.
             return 0;
         case HandshakeState::kError:
-            // Drop further input.
             return 0;
         case HandshakeState::kStart:
-            // Should not happen — start_handler should set kAwaitGreeting.
             return 0;
         }
         return 0;
