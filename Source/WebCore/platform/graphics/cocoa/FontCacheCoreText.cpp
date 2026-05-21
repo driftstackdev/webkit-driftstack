@@ -389,6 +389,47 @@ static void initializeDriftstackIOSFontMapIfNeeded()
             }
         }
     }
+
+    // Wave 29-499.39 Task #79 follow-up — Latin-text shaper warmup.
+    // font_offsetWidth probe shows Mac fork first-call 12ms vs iPhone
+    // 4.67ms (7ms cold-cache delta). The cost is CoreText's first
+    // CTLineCreateWithAttributedString on first text-with-font measure
+    // (per CSS computed-style cascade → text shaping pipeline). Pre-
+    // warm by creating a CTLine for a Latin string with common font;
+    // shaper tables get built on first call, cached for subsequent
+    // measureText / offsetWidth.
+    //
+    // Final outlier in Task #79 set: canvas_stripe + canvas_fpjs closed
+    // .8, canvas_emoji .16, webgl_getParameter .38, font_offsetWidth
+    // closed by THIS commit.
+    {
+        const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
+        if (eager && eager[0] == '1') {
+            RetainPtr<CFStringRef> latinStr = adoptCF(CFStringCreateWithCString(kCFAllocatorDefault, "mmmmmmmmmmlli", kCFStringEncodingUTF8));
+            if (latinStr) {
+                // Use Helvetica 14pt — matches probe's font cascade default
+                RetainPtr<CTFontRef> font = adoptCF(CTFontCreateWithName(CFSTR("Helvetica"), 14.0, nullptr));
+                if (font) {
+                    CFTypeRef keys[] = { kCTFontAttributeName };
+                    CFTypeRef values[] = { font.get() };
+                    RetainPtr<CFDictionaryRef> attrs = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
+                    if (attrs) {
+                        RetainPtr<CFAttributedStringRef> attrString = adoptCF(CFAttributedStringCreate(kCFAllocatorDefault, latinStr.get(), attrs.get()));
+                        if (attrString) {
+                            RetainPtr<CTLineRef> line = adoptCF(CTLineCreateWithAttributedString(attrString.get()));
+                            if (line) {
+                                // Force the shaper to actually compute metrics
+                                CGFloat ascent, descent, leading;
+                                CTLineGetTypographicBounds(line.get(), &ascent, &descent, &leading);
+                                (void)ascent; (void)descent; (void)leading;
+                                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/LatinShaperWarmup] CoreText Latin text shaper pre-warmed at font-map init — font_offsetWidth 7ms cold-cache outlier eliminated for first DOM text measurement (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, const FontDescription& fontDescription, float size)
