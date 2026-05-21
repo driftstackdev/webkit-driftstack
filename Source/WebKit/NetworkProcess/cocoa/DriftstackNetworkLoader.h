@@ -70,7 +70,7 @@ public:
 private:
     DriftstackNetworkLoader(NetworkDataTaskCocoa&, const WebCore::ResourceRequest&);
 
-    NetworkDataTaskCocoa& m_task;
+    [[maybe_unused]] NetworkDataTaskCocoa& m_task;
     WebCore::ResourceRequest m_request;
     bool m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
