@@ -68,7 +68,7 @@ static dispatch_queue_t loaderQueue()
     return queue;
 }
 
-#if DRIFTSTACK_HAS_BORINGSSL
+#if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
 // Wave 29-499.136 — BoringSSL TLS 1.3 wrap on existing BSD fd.
 // Configures iPhone-Safari-matched cipher list + ALPN + key shares.
 // Returns a connected SSL* on success, nullptr on failure.
@@ -324,7 +324,7 @@ void DriftstackNetworkLoader::resume()
         int socketFd = socks5Client->socketFileDescriptor();
         m_fd = socketFd;
 
-#if DRIFTSTACK_HAS_BORINGSSL
+#if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
         // Wave 29-499.137 — BoringSSL TLS 1.3 wrap for HTTPS (iPhone-identical fingerprint)
         SSL* ssl = nullptr;
         if (isHttps) {
@@ -341,8 +341,9 @@ void DriftstackNetworkLoader::resume()
         }
         bool useBoringSSL = isHttps && ssl;
 #else
-        SSL* ssl = nullptr;
+        void* ssl = nullptr;
         bool useBoringSSL = false;
+        (void)ssl;
 #endif
 
         // CFStream fallback only used when BoringSSL is unavailable
@@ -436,7 +437,7 @@ _Pragma("clang diagnostic pop")
         NSData* reqData = [NSData dataWithBytes:requestStr.data() length:requestStr.length()];
 
         NSData* responseBytes = nil;
-#if DRIFTSTACK_HAS_BORINGSSL
+#if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
         if (useBoringSSL) {
             // Write request via SSL_write
             const uint8_t* writeBytes = (const uint8_t*)[reqData bytes];
