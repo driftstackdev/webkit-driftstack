@@ -514,18 +514,17 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
             static std::atomic<unsigned> s_recvCount { 0 };
             unsigned thisRecv = s_recvCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if (thisRecv <= 5) {
-                char hexBuf[64 * 3 + 1] = { };
-                size_t hexLen = std::min<size_t>(frame.size(), 64);
-                char* p = hexBuf;
-                for (size_t i = 0; i < hexLen; ++i) {
-                    static const char hex[] = "0123456789abcdef";
-                    *p++ = hex[frame[i] >> 4];
-                    *p++ = hex[frame[i] & 0xf];
-                    *p++ = ' ';
-                }
-                if (p > hexBuf) *(p - 1) = 0;
-                WTFLogAlways("[Wave29-499.91] recv#%u: frameSize=%zu — first %zu hex: %s",
-                    thisRecv, frame.size(), hexLen, hexBuf);
+                size_t hexLen = std::min<size_t>(frame.size(), 32);
+                // Pull first 32 bytes as individual %02x args (32-arg log).
+                auto b = [&frame](size_t i) -> unsigned {
+                    return i < frame.size() ? static_cast<unsigned>(frame[i]) : 0;
+                };
+                WTFLogAlways("[Wave29-499.91] recv#%u: frameSize=%zu — first %zu bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                    thisRecv, frame.size(), hexLen,
+                    b(0), b(1), b(2), b(3), b(4), b(5), b(6), b(7),
+                    b(8), b(9), b(10), b(11), b(12), b(13), b(14), b(15),
+                    b(16), b(17), b(18), b(19), b(20), b(21), b(22), b(23),
+                    b(24), b(25), b(26), b(27), b(28), b(29), b(30), b(31));
             }
         }
         DriftstackRTC::UnwrappedDatagram unwrapped;
