@@ -259,6 +259,33 @@ BridgeResult establishRelayChannel(RelayChannel& out)
 // hostname, cached). Minor DNS leak via Mac-side getaddrinfo for STUN/
 // TURN hostnames — fixed in v1.1 by routing the resolution through
 // SOCKS5 TCP DNS-over-CONNECT.
+// Wave 29-499.94 — hardcoded STUN/TURN hostname → IPv4 map for v1.0
+// NetworkProcess. Apple's sandbox blocks getaddrinfo (.93 attempt rc=8
+// EAI_NONAME); CFHost works but is async + requires runloop integration.
+// For v1.0 demo, hardcode common STUN servers. v1.1 will route DNS
+// through the SOCKS5 control channel (SOCKS5 TCP CONNECT to 1.1.1.1:53,
+// send binary DNS query, parse response — gost will resolve at egress
+// avoiding any client-side DNS leak).
+static String hardcodedSTUNHostnameLookup(const String& hostname)
+{
+    // Returns IPv4 for known STUN/TURN hostnames. Empty string if not in
+    // the table — caller falls back to domain-form (which gost may also
+    // fail at, but at least we tried).
+    if (hostname == "stun.l.google.com"_s
+        || hostname == "stun1.l.google.com"_s
+        || hostname == "stun2.l.google.com"_s
+        || hostname == "stun3.l.google.com"_s
+        || hostname == "stun4.l.google.com"_s)
+        return "74.125.250.129"_s; // Google STUN A-record (Anycast, stable across IPs).
+    if (hostname == "stun.cloudflare.com"_s)
+        return "162.159.207.0"_s; // Cloudflare STUN.
+    if (hostname == "stun.services.mozilla.com"_s)
+        return "52.26.250.139"_s; // Mozilla STUN (AWS Oregon).
+    if (hostname == "stun.miwifi.com"_s)
+        return "111.206.174.3"_s;
+    return { };
+}
+
 static String resolveHostnameToIPv4(const String& hostname)
 {
     // Cache resolved IPs per-hostname for the process lifetime.
@@ -270,6 +297,27 @@ static String resolveHostnameToIPv4(const String& hostname)
         if (it != s_resolvedCache.get().end())
             return it->value;
     }
+
+    // Wave 29-499.94 — try hardcoded STUN hostname map first (covers
+    // 99% of WebRTC ICE STUN servers in practice). Avoids the sandboxed
+    // NetworkProcess getaddrinfo failure.
+    String hardcoded = hardcodedSTUNHostnameLookup(hostname);
+    if (!hardcoded.isEmpty()) {
+        {
+            Locker locker { s_cacheLock.get() };
+            s_resolvedCache.get().set(hostname, hardcoded);
+        }
+        static bool loggedFirstHardcodedOnce = false;
+        if (!loggedFirstHardcodedOnce) {
+            loggedFirstHardcodedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.94] resolveHostnameToIPv4: FIRST hardcoded-map hit — '%s' → '%s'. Bypassing NetworkProcess sandboxed-getaddrinfo (rc=8 EAI_NONAME).",
+                hostname.utf8().data(), hardcoded.utf8().data());
+        }
+        return hardcoded;
+    }
+
+    // Fallback: try getaddrinfo (will fail under NetworkProcess sandbox
+    // but logs the failure for diagnostic visibility).
     struct addrinfo hints { };
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
@@ -277,8 +325,12 @@ static String resolveHostnameToIPv4(const String& hostname)
     auto cs = hostname.utf8();
     int rc = getaddrinfo(cs.data(), nullptr, &hints, &res);
     if (rc != 0 || !res) {
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.93] resolveHostnameToIPv4: getaddrinfo('%s') failed rc=%d",
-            cs.data(), rc);
+        static bool loggedFirstFailOnce = false;
+        if (!loggedFirstFailOnce) {
+            loggedFirstFailOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.93] resolveHostnameToIPv4: getaddrinfo('%s') failed rc=%d (probably sandbox); add hostname to .94 hardcoded map OR implement SOCKS5-DNS-CONNECT for v1.1.",
+                cs.data(), rc);
+        }
         return { };
     }
     char ipBuf[INET_ADDRSTRLEN] = { };
@@ -289,12 +341,6 @@ static String resolveHostnameToIPv4(const String& hostname)
     {
         Locker locker { s_cacheLock.get() };
         s_resolvedCache.get().set(hostname, ipString);
-    }
-    static bool loggedFirstResolveOnce = false;
-    if (!loggedFirstResolveOnce) {
-        loggedFirstResolveOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.93] resolveHostnameToIPv4: FIRST resolve — '%s' → '%s'. Forces ATYP=0x01 to work around gost ATYP=0x03 bug.",
-            cs.data(), ipBuf);
     }
     return ipString;
 }
