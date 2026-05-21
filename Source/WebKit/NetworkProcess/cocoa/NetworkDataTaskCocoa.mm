@@ -230,6 +230,31 @@ NetworkDataTaskCocoa::NetworkDataTaskCocoa(NetworkSession& session, NetworkDataT
     ASSERT(nsRequest);
     RetainPtr<NSMutableURLRequest> mutableRequest = adoptNS([nsRequest.get() mutableCopy]);
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.128 (Task #104) — set assumesHTTP3Capable on every request
+    // when SOCKS5 customer-proxy is active. This is the PUBLIC Apple API
+    // (NSMutableURLRequest setAssumesHTTP3Capable:) that tells CFNetwork to
+    // attempt h3 immediately without waiting for Alt-Svc. Combined with our
+    // existing DYLD interpose UDP/QUIC path, h3 packets will route through
+    // SOCKS5 UDP_ASSOCIATE relay via gost.
+    //
+    // Per Apple docs: when assumesHTTP3Capable=YES, the request prefers h3
+    // for the initial connection attempt; this bypasses the
+    // proxy-disables-h3 gate observed empirically (Wave 29-499.122-126).
+    {
+        const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+        bool socks5Active = customSocks5 && customSocks5[0] == '1';
+        if (socks5Active) {
+            [mutableRequest setAssumesHTTP3Capable:YES];
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Wave29-499.128] setAssumesHTTP3Capable=YES applied per-request — CFNetwork will attempt h3 immediately, bypassing proxy-disables-h3 gate.");
+            }
+        }
+    }
+#endif
+
     if (parameters.isMainFrameNavigation
         || parameters.hadMainFrameMainResourcePrivateRelayed
         || request.url().host() == request.firstPartyForCookies().host()) {
