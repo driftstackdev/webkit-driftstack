@@ -19,12 +19,12 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.134 (Phase 1.5b reverted) — BoringSSL include requires
-// HEADER_SEARCH_PATHS build setting in pbxproj (openssl/base.h not
-// found via relative path alone). Future work: add per-file Xcode
-// build setting:
-//   HEADER_SEARCH_PATHS += $(SRCROOT)/../ThirdParty/libwebrtc/Source/third_party/boringssl/src/include
-// Then full BoringSSL TLS 1.3 with iPhone-matched ALPN + cipher list.
+// Wave 29-499.135 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
+// (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS).
+#if __has_include(<openssl/ssl.h>)
+#include <openssl/ssl.h>
+#define DRIFTSTACK_HAS_BORINGSSL 1
+#endif
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
 #import "PrivateRelayed.h"
