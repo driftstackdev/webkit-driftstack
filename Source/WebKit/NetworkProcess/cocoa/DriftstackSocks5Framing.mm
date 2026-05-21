@@ -36,25 +36,47 @@ constexpr uint8_t kAtypIpv6   = 0x04;
 
 bool wrap(const Endpoint& destination, std::span<const uint8_t> payload, Vector<uint8_t>& outFrame)
 {
-    auto domainUtf8 = destination.host.utf8();
-    if (domainUtf8.length() == 0 || domainUtf8.length() > 255)
+    auto hostUtf8 = destination.host.utf8();
+    if (hostUtf8.length() == 0 || hostUtf8.length() > 255)
         return false;
 
-    outFrame.clear();
-    outFrame.reserveInitialCapacity(7 + domainUtf8.length() + payload.size());
+    // Wave 29-499.95 — detect dotted-decimal IPv4 string and emit ATYP=0x01
+    // instead of ATYP=0x03 domain form. gost has a bug with ATYP=0x03 (per
+    // .91/.92 empirical: outbound ATYP=0x03 produced response garbage from
+    // gost's own IP; ATYP=0x01 with pre-resolved IP works correctly).
+    struct in_addr ipv4Addr { };
+    bool isIPv4 = inet_pton(AF_INET, hostUtf8.data(), &ipv4Addr) == 1;
 
-    // RSV(2) + FRAG(1) + ATYP(1)
+    outFrame.clear();
+    outFrame.reserveInitialCapacity(10 + hostUtf8.length() + payload.size());
+
+    // RSV(2) + FRAG(1)
     outFrame.append(kReserved);
     outFrame.append(kReserved);
     outFrame.append(static_cast<uint8_t>(0x00));   // FRAG (no fragmentation in v1)
-    outFrame.append(kAtypDomain);
 
-    // Domain length + domain bytes
-    outFrame.append(static_cast<uint8_t>(domainUtf8.length()));
-    {
+    if (isIPv4) {
+        // ATYP=0x01 IPv4 (per RFC 1928 §7)
+        outFrame.append(kAtypIpv4);
+        // s_addr is in network byte order; emit byte-for-byte.
         WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-        outFrame.append(unsafeMakeSpan(reinterpret_cast<const uint8_t*>(domainUtf8.data()), domainUtf8.length()));
+        const uint8_t* addrBytes = reinterpret_cast<const uint8_t*>(&ipv4Addr.s_addr);
+        outFrame.append(addrBytes[0]);
+        outFrame.append(addrBytes[1]);
+        outFrame.append(addrBytes[2]);
+        outFrame.append(addrBytes[3]);
         WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+    } else {
+        // ATYP=0x03 domain (fallback for hostnames we can't pre-resolve;
+        // gost likely fails on these so the caller should ensure most
+        // STUN/TURN hostnames are pre-resolved via the .94 hardcoded map).
+        outFrame.append(kAtypDomain);
+        outFrame.append(static_cast<uint8_t>(hostUtf8.length()));
+        {
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+            outFrame.append(unsafeMakeSpan(reinterpret_cast<const uint8_t*>(hostUtf8.data()), hostUtf8.length()));
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+        }
     }
 
     // Port (network byte order)
