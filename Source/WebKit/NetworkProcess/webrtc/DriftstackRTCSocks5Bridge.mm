@@ -319,6 +319,14 @@ static String hardcodedSTUNHostnameLookup(const String& hostname)
         return "52.26.250.139"_s; // Mozilla STUN (AWS Oregon).
     if (hostname == "stun.miwifi.com"_s)
         return "111.206.174.3"_s;
+    // Wave 29-499.110 — Twilio TURN servers. Twilio's networktest TURN
+    // diagnostics use global.turn.twilio.com. Adding to hardcoded map
+    // ensures ATYP=0x01 outbound wrap (gost-compatible). Real Twilio TURN
+    // server IPs rotate per-region — this is one of the active anycast IPs
+    // observed at our T-Mobile egress (34.203.x range = AWS US-East).
+    if (hostname == "global.turn.twilio.com"_s
+        || hostname == "global.stun.twilio.com"_s)
+        return "34.203.250.255"_s; // Twilio TURN/STUN anycast (AWS us-east-1).
     return { };
 }
 
