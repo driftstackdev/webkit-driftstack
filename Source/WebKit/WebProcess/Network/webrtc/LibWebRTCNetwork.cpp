@@ -143,9 +143,9 @@ void LibWebRTCNetwork::signalReadPacket(WebCore::LibWebRTCSocketIdentifier ident
         static std::atomic<unsigned> s_count { 0 };
         unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 5) {
-            auto socketPtr = m_socketFactory.socket(identifier);
+            CheckedPtr socketPtr = m_socketFactory.socket(identifier);
             WTFLogAlways("[Wave29-499.103/WebContent] signalReadPacket #%u: identifier=%" PRIu64 " socket=%p data=%zu bytes from %s:%u (lookup %s)",
-                n, identifier.toUInt64(), socketPtr.get(), data.size(),
+                n, identifier.toUInt64(), static_cast<void*>(socketPtr.get()), data.size(),
                 address.rtcAddress().ToString().c_str(), port,
                 socketPtr ? "OK" : "FAILED");
         }
