@@ -664,7 +664,7 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         localAddr.sin_port = 0;
         if (bind(fd, reinterpret_cast<struct sockaddr*>(&localAddr), sizeof(localAddr)) < 0) {
             WTFLogAlways("[Wave29-499.99] BSD bind() failed errno=%d", errno);
-            close(fd);
+            ::close(fd);
         } else {
             socklen_t localLen = sizeof(localAddr);
             getsockname(fd, reinterpret_cast<struct sockaddr*>(&localAddr), &localLen);
@@ -899,14 +899,15 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                     inet_pton(AF_INET, bndHostUtf8.data(), &dst.sin_addr);
                     ssize_t sent = sendto(bsdFd, framed.span().data(), framed.size(), 0,
                         reinterpret_cast<struct sockaddr*>(&dst), sizeof(dst));
+                    int sendErrno = (sent < 0) ? errno : 0;
                     static bool loggedBsdSendOnce = false;
                     if (!loggedBsdSendOnce) {
                         loggedBsdSendOnce = true;
-                        WTFLogAlways("[Wave29-499.99] sendTo BSD: sendto fd=%d → %s:%u, %zu bytes → returned %zd (errno=%d if -1)",
-                            bsdFd, bndHostUtf8.data(), bndPort, framed.size(), sent);
+                        WTFLogAlways("[Wave29-499.99] sendTo BSD: sendto fd=%d → %s:%u, %zu bytes → returned %zd errno=%d",
+                            bsdFd, bndHostUtf8.data(), bndPort, framed.size(), sent, sendErrno);
                     }
                     // Notify libwebrtc that the send completed (immediately).
-                    ipcConnection->send(Messages::LibWebRTCNetwork::SignalSentPacket {
+                    m_connection->send(Messages::LibWebRTCNetwork::SignalSentPacket {
                         m_identifier, options.packet_id, webrtc::TimeMillis() }, 0);
                     return;
                 }
