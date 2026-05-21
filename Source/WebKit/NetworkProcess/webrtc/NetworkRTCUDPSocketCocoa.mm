@@ -713,6 +713,20 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
             if (traceThisCall)
                 WTFLogAlways("[Wave29-499.88] sendTo call#%u: wrapOutgoingDatagram result=%d (Success=0), framedSize=%zu",
                     thisCall, static_cast<int>(wr), framed.size());
+            // Wave 29-499.92 — hex-dump OUTBOUND framed bytes (first 5 sends).
+            // Compare with Python's working IPv4-form §7 frame to determine
+            // if WebKit's wrap format is what gost expects.
+            if (traceThisCall && wr == DriftstackRTC::BridgeResult::Success) {
+                auto fb = [&framed](size_t i) -> unsigned {
+                    return i < framed.size() ? static_cast<unsigned>(framed[i]) : 0;
+                };
+                WTFLogAlways("[Wave29-499.92] sendTo call#%u: OUTBOUND frame first 32 bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                    thisCall,
+                    fb(0), fb(1), fb(2), fb(3), fb(4), fb(5), fb(6), fb(7),
+                    fb(8), fb(9), fb(10), fb(11), fb(12), fb(13), fb(14), fb(15),
+                    fb(16), fb(17), fb(18), fb(19), fb(20), fb(21), fb(22), fb(23),
+                    fb(24), fb(25), fb(26), fb(27), fb(28), fb(29), fb(30), fb(31));
+            }
             if (wr == DriftstackRTC::BridgeResult::Success) {
                 static bool loggedRedirectOnce = false;
                 if (!loggedRedirectOnce) {
