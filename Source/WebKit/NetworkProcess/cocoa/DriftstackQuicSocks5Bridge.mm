@@ -690,31 +690,46 @@ RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoi
     // Stash destination + creds for framer to claim on start
     DriftstackSocks5TCPFramer::setPendingTcpDestination(destHost, destPort, proxyUser, proxyPass);
 
-    // Build TCP nw_parameters with the SOCKS5 framer attached
-    auto tcpParams = adoptNS(nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
-
+    // Wave 29-499.124 (Task #104 Day 7) — CRITICAL FIX: use the original
+    // CFNetwork parameters (preserve TLS config + SNI for destination).
+    // Previously (.116) we created fresh tcpParams with DISABLE_PROTOCOL,
+    // which threw away TLS — CFNetwork's HTTPS handshake then failed
+    // because no TLS layer was in the stack. By keeping original params,
+    // TLS validates against destination's cert via SNI=destHost (preserved
+    // from CFNetwork's original setup), and our framer below TLS rewires
+    // the TCP layer to actually reach gost. After SOCKS5 CONNECT succeeds,
+    // framer is transparent → TLS handshake flows through the tunnel to
+    // the real destination.
     nw_protocol_definition_t framerDef = DriftstackSocks5TCPFramer::getFramerDefinition();
     if (framerDef) {
         auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
-        auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(tcpParams.get()));
-        nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+        auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(parameters));
+        if (stack) {
+            // Prepend our SOCKS5 framer at the TRANSPORT-adjacent layer
+            // (above TCP, below TLS). After framer's SOCKS5 CONNECT
+            // succeeds, it becomes transparent — TLS handshake flows
+            // through the tunnel to destHost (which CFNetwork's existing
+            // TLS options already target via SNI).
+            nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+        }
     }
 
-    // Endpoint = gost SOCKS5 proxy
+    // Endpoint = gost SOCKS5 proxy (so TCP connects to gost, not dest)
     auto proxyHostUtf8 = proxyHost.utf8();
     auto proxyPortStr = String::number(proxyPort).utf8();
     auto proxyEndpoint = adoptNS(nw_endpoint_create_host(proxyHostUtf8.data(), proxyPortStr.data()));
     if (!proxyEndpoint)
         return nullptr;
 
-    auto conn = adoptNS(nw_connection_create(proxyEndpoint.get(), tcpParams.get()));
+    // Use the ORIGINAL parameters (preserves TLS config) — only the
+    // endpoint is rewired to gost.
+    auto conn = adoptNS(nw_connection_create(proxyEndpoint.get(), parameters));
     static bool loggedFirstTCPOnce = false;
     if (conn && !loggedFirstTCPOnce) {
         loggedFirstTCPOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.116] createTCPRelayConnection: FIRST TCP relay created — proxy=%s:%d → dest=%s:%u (auth user-len=%u). Framer will do SOCKS5 GREETING+AUTH+CONNECT at start.",
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.124] createTCPRelayConnection: FIRST TCP relay (preserved-TLS) — proxy=%s:%d → dest=%s:%u. Framer does SOCKS5 CONNECT, then TLS handshakes with dest through tunnel.",
             proxyHost.utf8().data(), proxyPort,
-            destHost.utf8().data(), destPort,
-            (unsigned)proxyUser.length());
+            destHost.utf8().data(), destPort);
     }
     return conn;
 }
