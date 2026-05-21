@@ -275,6 +275,30 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
         return nw_framer_start_result_will_mark_ready;
     }
 
+    // Wave 29-499.121 — also register cleanup + stop + wakeup to confirm
+    // lifecycle (TCP connect state, framer alive vs torn down).
+    nw_framer_set_cleanup_handler(framer, ^(nw_framer_t /*f*/) {
+        fprintf(stderr, "[Wave29-499.121] cleanup_handler fired — framer torn down (state=%d)\n", (int)instance->state);
+        fflush(stderr);
+    });
+    nw_framer_set_stop_handler(framer, ^bool(nw_framer_t /*f*/) {
+        fprintf(stderr, "[Wave29-499.121] stop_handler fired — framer stopping\n");
+        fflush(stderr);
+        return true;
+    });
+    nw_framer_set_wakeup_handler(framer, ^(nw_framer_t /*f*/) {
+        static std::atomic<unsigned> s_wakeCount { 0 };
+        unsigned n = s_wakeCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 5) {
+            fprintf(stderr, "[Wave29-499.121] wakeup_handler #%u: framer alive\n", n);
+            fflush(stderr);
+        }
+    });
+    // Schedule a wakeup in 2 seconds — if TCP isn't connected, framer
+    // might never get input. This forces a callback that confirms framer
+    // is alive even without inbound data.
+    nw_framer_schedule_wakeup(framer, 2 * NSEC_PER_SEC);
+
     nw_framer_set_input_handler(framer, ^size_t(nw_framer_t innerFramer) {
         static std::atomic<unsigned> s_inputCount { 0 };
         unsigned n = s_inputCount.fetch_add(1, std::memory_order_relaxed) + 1;
