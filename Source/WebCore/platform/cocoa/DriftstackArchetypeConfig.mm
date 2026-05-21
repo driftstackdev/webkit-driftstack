@@ -300,6 +300,13 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
 // Exposed as extern "C" so the calling .cpp (FontCacheCoreText.cpp)
 // can declare it without needing Metal headers in its C++-compiled
 // translation unit.
+//
+// Wave 29-499.59 — forward declaration BEFORE the definition to silence
+// `-Werror=-Wmissing-prototypes`. WebCore enables this warning as
+// error; without an explicit prototype the compiler refuses to compile
+// the standalone .mm file.
+extern "C" void driftstackMetalPreWarm();
+
 extern "C" void driftstackMetalPreWarm()
 {
     @autoreleasepool {
