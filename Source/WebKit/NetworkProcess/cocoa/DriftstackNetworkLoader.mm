@@ -15,6 +15,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "Authentication/AuthenticationManager.h"
 #import "DriftstackSocks5Client.h"
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
