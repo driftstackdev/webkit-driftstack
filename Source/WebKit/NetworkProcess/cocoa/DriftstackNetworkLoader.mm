@@ -84,9 +84,10 @@ static void initDriftstackSslCtx()
         SSL_CTX_set_min_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
         SSL_CTX_set_max_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
 
-        // iPhone Safari 26.0 cipher order:
-        // TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
-        SSL_CTX_set_ciphersuites(g_driftstackSslCtx,
+        // iPhone Safari 26.0 TLS 1.3 cipher order:
+        // BoringSSL's TLS 1.3 cipher suites are fixed by the library; using
+        // strict cipher list configures TLS 1.2 ciphers if any are negotiated.
+        SSL_CTX_set_strict_cipher_list(g_driftstackSslCtx,
             "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256");
 
         // Key shares matching iPhone Safari 26.0:
@@ -127,7 +128,7 @@ static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
 
     // Set SNI for hostname-based cert validation
     SSL_set_tlsext_host_name(ssl, hostUtf8);
-    SSL_set_verify_hostname(ssl, hostUtf8);
+    SSL_set1_host(ssl, hostUtf8);
 
     SSL_set_fd(ssl, fd);
 
