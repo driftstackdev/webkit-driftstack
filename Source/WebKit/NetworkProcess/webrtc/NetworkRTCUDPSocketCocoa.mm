@@ -562,28 +562,20 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         }
         // Filter: if source host is the SOCKS5 proxy itself (gost), drop.
         // Real STUN responses come from real STUN servers, not gost.
-        const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
-        if (proxyEnv && proxyEnv[0]) {
-            // Extract IP from "host:port" form.
-            const char* colon = nullptr;
-            for (const char* p = proxyEnv; *p; ++p) {
-                if (*p == ':') { colon = p; break; }
-            }
-            if (colon) {
-                size_t ipLen = colon - proxyEnv;
-                if (ipLen < 64) {
-                    char ipBuf[64];
-                    for (size_t i = 0; i < ipLen; ++i) ipBuf[i] = proxyEnv[i];
-                    ipBuf[ipLen] = 0;
-                    if (unwrapped.sourceHost == String::fromUTF8(ipBuf)) {
-                        static std::atomic<unsigned> s_proxyDropped { 0 };
-                        unsigned n = s_proxyDropped.fetch_add(1, std::memory_order_relaxed) + 1;
-                        if (n == 1 || (n & (n - 1)) == 0) {
-                            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.98] m_relayConnection recv: DROPPED proxy-sourced frame #%u (gost keepalive/echo from %s:%u, payload=%zu bytes)",
-                                n, unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
-                        }
-                        return;
+        // Use WTF::String operations to avoid raw-pointer unsafe-buffer warnings.
+        {
+            String proxyEnvStr = String::fromLatin1(getenv("DRIFTSTACK_SOCKS5_PROXY"));
+            size_t colonIdx = proxyEnvStr.find(':');
+            if (colonIdx != notFound && colonIdx > 0) {
+                String proxyIp = proxyEnvStr.substring(0, colonIdx);
+                if (unwrapped.sourceHost == proxyIp) {
+                    static std::atomic<unsigned> s_proxyDropped { 0 };
+                    unsigned n = s_proxyDropped.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (n == 1 || (n & (n - 1)) == 0) {
+                        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.98] m_relayConnection recv: DROPPED proxy-sourced frame #%u (gost keepalive/echo from %s:%u, payload=%zu bytes)",
+                            n, unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
                     }
+                    return;
                 }
             }
         }
