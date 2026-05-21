@@ -38,19 +38,23 @@ namespace DriftstackSocks5TCPFramer {
 namespace {
 
 // Per-connection destination + auth state, stashed by interpose before
-// nw_connection_create, claimed by framer's start_handler on first dispatch.
-struct PendingDestination {
-    Lock lock;
-    String destHost WTF_GUARDED_BY_LOCK(lock);
-    uint16_t destPort WTF_GUARDED_BY_LOCK(lock) { 0 };
-    String proxyUser WTF_GUARDED_BY_LOCK(lock);
-    String proxyPass WTF_GUARDED_BY_LOCK(lock);
-    bool armed WTF_GUARDED_BY_LOCK(lock) { false };
+// nw_connection_create, claimed by framer's start_handler. FIFO queue so
+// concurrent connections each get their own destination (race-safe).
+struct PendingEntry {
+    String destHost;
+    uint16_t destPort { 0 };
+    String proxyUser;
+    String proxyPass;
 };
 
-static PendingDestination& pendingDestination()
+struct PendingQueue {
+    Lock lock;
+    Vector<PendingEntry> entries WTF_GUARDED_BY_LOCK(lock);
+};
+
+static PendingQueue& pendingQueue()
 {
-    static NeverDestroyed<PendingDestination> s_state;
+    static NeverDestroyed<PendingQueue> s_state;
     return s_state.get();
 }
 
@@ -74,17 +78,18 @@ struct FramerInstance {
 
 static FramerInstance* claimPendingDestination()
 {
-    auto& pending = pendingDestination();
-    Locker locker { pending.lock };
-    if (!pending.armed)
+    auto& queue = pendingQueue();
+    Locker locker { queue.lock };
+    if (queue.entries.isEmpty())
         return nullptr;
+    // FIFO: framers start in the order their connections were created.
+    auto entry = WTF::move(queue.entries.first());
+    queue.entries.remove(0);
     auto* instance = new FramerInstance;
-    instance->destHost = WTF::move(pending.destHost);
-    instance->destPort = pending.destPort;
-    instance->proxyUser = WTF::move(pending.proxyUser);
-    instance->proxyPass = WTF::move(pending.proxyPass);
-    pending.armed = false;
-    pending.destPort = 0;
+    instance->destHost = WTF::move(entry.destHost);
+    instance->destPort = entry.destPort;
+    instance->proxyUser = WTF::move(entry.proxyUser);
+    instance->proxyPass = WTF::move(entry.proxyPass);
     return instance;
 }
 
@@ -324,13 +329,19 @@ nw_protocol_definition_t getFramerDefinition()
 void setPendingTcpDestination(const String& destHost, uint16_t destPort,
                               const String& proxyUser, const String& proxyPass)
 {
-    auto& pending = pendingDestination();
-    Locker locker { pending.lock };
-    pending.destHost = destHost;
-    pending.destPort = destPort;
-    pending.proxyUser = proxyUser;
-    pending.proxyPass = proxyPass;
-    pending.armed = true;
+    auto& queue = pendingQueue();
+    Locker locker { queue.lock };
+    PendingEntry entry;
+    entry.destHost = destHost;
+    entry.destPort = destPort;
+    entry.proxyUser = proxyUser;
+    entry.proxyPass = proxyPass;
+    queue.entries.append(WTF::move(entry));
+    // Cap queue size to prevent unbounded growth if framer never claims
+    // (e.g., connection cancelled). Conservative cap: 256 entries.
+    if (queue.entries.size() > 256) {
+        queue.entries.remove(0);
+    }
 }
 
 } // namespace DriftstackSocks5TCPFramer
