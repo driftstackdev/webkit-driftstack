@@ -120,6 +120,19 @@ ExceptionOr<Ref<AudioContext>> AudioContext::create(Document& document, AudioCon
     if (!contextOptions.sampleRate && defaultSampleRateForTesting())
         contextOptions.sampleRate = *defaultSampleRateForTesting();
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.48 CLAUDE.md I1 — AudioContext sampleRate canonical lock.
+    // Real iPhone Safari (iOS 18.x + 26.x) returns 48000 from
+    // AudioContext.prototype.sampleRate. Mac hardware sample rate varies
+    // (typically 44100 or 48000 depending on system audio device).
+    // Force 48000 if no explicit override, matching iPhone archetype.
+    // Detection vectors: CreepJS audits AudioContext.sampleRate; vendors
+    // (FingerprintJS Pro etc.) cross-reference sampleRate with WebAudio
+    // analyser output. 48000 is the iPhone canonical value (Phase 2 surface).
+    if (!contextOptions.sampleRate)
+        contextOptions.sampleRate = 48000.0f;
+#endif
+
     if (contextOptions.sampleRate && !isSupportedSampleRate(*contextOptions.sampleRate))
         return Exception { ExceptionCode::NotSupportedError, "sampleRate is not in range"_s };
     
