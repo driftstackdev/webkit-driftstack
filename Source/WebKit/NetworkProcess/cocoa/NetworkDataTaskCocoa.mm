@@ -26,6 +26,10 @@
 #import "config.h"
 #import "NetworkDataTaskCocoa.h"
 
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackNetworkLoader.h"
+#endif
+
 #import "AuthenticationChallengeDisposition.h"
 #import "AuthenticationManager.h"
 #import "DeviceManagementSPI.h"
@@ -685,6 +689,27 @@ void NetworkDataTaskCocoa::resume()
 #endif
         return;
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.131 (Task #104 Path B v2): scaffold integration hook.
+    // When DriftstackNetworkLoader is active for this session, the
+    // request is dispatched via BSD-socket+SOCKS5+TLS+(h3/h2/h1) loader
+    // instead of NSURLSession (which has h3-disable-with-proxy gates).
+    //
+    // Phase 1: isActiveForSession() returns false until the loader's
+    // BSD-socket impl lands. Falls through to NSURLSession resume.
+    if (WebKit::DriftstackNetworkLoader::isActiveForSession()) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.131] NetworkDataTaskCocoa::resume — routing via DriftstackNetworkLoader (BSD-socket SOCKS5 path)");
+        }
+        // Phase 1: not yet wired; placeholder for Day 9+ work
+        // m_driftstackLoader = DriftstackNetworkLoader::create(*this, m_request);
+        // m_driftstackLoader->resume();
+        // return;
+    }
+#endif
 
     [m_task resume];
 }
