@@ -610,6 +610,22 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
         return;
 
 #if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.86 — diagnostic: log first sendTo invocation regardless
+    // of any gating. Distinguishes "sendTo not called at all" from
+    // "sendTo called but redirect-path branch missed". Empirical: this
+    // marker MISSING in browserleaks/webrtc test confirms libwebrtc's
+    // PacketSocketFactory bypass (it uses webrtc::BasicPacketSocketFactory
+    // raw BSD sockets, not our NetworkRTCUDPSocketCocoa IPC-stub class).
+    {
+        static bool loggedFirstSendToOnce = false;
+        if (!loggedFirstSendToOnce) {
+            loggedFirstSendToOnce = true;
+            auto hostStr = remoteAddress.HostAsURIString();
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.86] sendTo: FIRST entry — dest=%s:%u, payload=%zu bytes. (If you see this, libwebrtc IS invoking NetworkRTCUDPSocketCocoa::sendTo; SOCKS5-active check happens next.)",
+                hostStr.c_str(), remoteAddress.port(), data.size());
+        }
+    }
+
     // Wave 29-397 Slice 2.4.b.3: data-plane SOCKS5 redirect. When the
     // bridge is active + relay channel established, the datagram is
     // §7-wrapped and sent through m_relayConnection (single nw_connection
