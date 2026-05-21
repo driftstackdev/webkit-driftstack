@@ -318,23 +318,42 @@ void DriftstackNetworkLoader::resume()
         int socketFd = socks5Client->socketFileDescriptor();
         m_fd = socketFd;
 
-        // Wrap fd in CFStream pair
+#if DRIFTSTACK_HAS_BORINGSSL
+        // Wave 29-499.137 — BoringSSL TLS 1.3 wrap for HTTPS (iPhone-identical fingerprint)
+        SSL* ssl = nullptr;
+        if (isHttps) {
+            ssl = driftstackTLSConnect(socketFd, host.utf8().data());
+            if (!ssl) {
+                auto* clientPtr = m_task.client();
+                if (clientPtr) {
+                    WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                }
+                return;
+            }
+        }
+        bool useBoringSSL = isHttps && ssl;
+#else
+        SSL* ssl = nullptr;
+        bool useBoringSSL = false;
+#endif
+
+        // CFStream fallback only used when BoringSSL is unavailable
         CFReadStreamRef readStream = nullptr;
         CFWriteStreamRef writeStream = nullptr;
-        CFStreamCreatePairWithSocket(kCFAllocatorDefault, socketFd, &readStream, &writeStream);
-        if (!readStream || !writeStream)
-            return;
+        if (!useBoringSSL) {
+            CFStreamCreatePairWithSocket(kCFAllocatorDefault, socketFd, &readStream, &writeStream);
+            if (!readStream || !writeStream)
+                return;
+            CFReadStreamSetProperty(readStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
+            CFWriteStreamSetProperty(writeStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
+        }
 
-        CFReadStreamSetProperty(readStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
-        CFWriteStreamSetProperty(writeStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
-
-        // TLS for HTTPS — Wave 29-499.133 Phase 1.5: explicit TLS 1.3 to
-        // match iPhone Safari fingerprint. Default kCFStreamSocketSecurity
-        // LevelNegotiatedSSL falls back to TLS 1.2 with legacy cipher list.
-        // kTLSProtocol13 forces modern TLS 1.3 with iPhone-identical key
-        // exchanges (X25519MLKEM768 + X25519 + P-256/384/521) and cipher
-        // order (AES_256_GCM, CHACHA20_POLY1305, AES_128_GCM).
-        if (isHttps) {
+        // TLS for HTTPS via CFStream — only used if BoringSSL unavailable
+        // (legacy TLS 1.2 fallback). When BoringSSL active, TLS is already
+        // done on the BSD fd via driftstackTLSConnect (Wave 29-499.137).
+        if (isHttps && !useBoringSSL) {
             NSDictionary* sslSettings = @{
                 (NSString*)kCFStreamSSLLevel: (NSString*)kCFStreamSocketSecurityLevelNegotiatedSSL,
                 (NSString*)kCFStreamSSLPeerName: host.createNSString().get(),
@@ -372,22 +391,22 @@ _Pragma("clang diagnostic pop")
             }
         }
 
-        if (!CFWriteStreamOpen(writeStream) || !CFReadStreamOpen(readStream)) {
-            CFRelease(readStream);
-            CFRelease(writeStream);
-            return;
-        }
-
-        // Wait for write stream open
-        for (int i = 0; i < 100; i++) {
-            if (CFWriteStreamGetStatus(writeStream) == kCFStreamStatusOpen)
-                break;
-            [NSThread sleepForTimeInterval:0.05];
-        }
-        if (CFWriteStreamGetStatus(writeStream) != kCFStreamStatusOpen) {
-            CFRelease(readStream);
-            CFRelease(writeStream);
-            return;
+        if (!useBoringSSL) {
+            if (!CFWriteStreamOpen(writeStream) || !CFReadStreamOpen(readStream)) {
+                CFRelease(readStream);
+                CFRelease(writeStream);
+                return;
+            }
+            for (int i = 0; i < 100; i++) {
+                if (CFWriteStreamGetStatus(writeStream) == kCFStreamStatusOpen)
+                    break;
+                [NSThread sleepForTimeInterval:0.05];
+            }
+            if (CFWriteStreamGetStatus(writeStream) != kCFStreamStatusOpen) {
+                CFRelease(readStream);
+                CFRelease(writeStream);
+                return;
+            }
         }
 
         // Build HTTP/1.1 request
@@ -410,16 +429,51 @@ _Pragma("clang diagnostic pop")
         auto requestStr = rb.toString().utf8();
         NSData* reqData = [NSData dataWithBytes:requestStr.data() length:requestStr.length()];
 
-        CFIndex written = writeAllToCFStream(writeStream, reqData);
-        if (written < 0) {
+        NSData* responseBytes = nil;
+#if DRIFTSTACK_HAS_BORINGSSL
+        if (useBoringSSL) {
+            // Write request via SSL_write
+            const uint8_t* writeBytes = (const uint8_t*)[reqData bytes];
+            NSUInteger writeRemaining = [reqData length];
+            while (writeRemaining > 0) {
+                int n = SSL_write(ssl, writeBytes, static_cast<int>(writeRemaining));
+                if (n <= 0) break;
+                writeBytes += n;
+                writeRemaining -= n;
+            }
+            // Read response via SSL_read
+            NSMutableData* respMutable = [NSMutableData data];
+            uint8_t readBuf[4096];
+            while (true) {
+                int n = SSL_read(ssl, readBuf, sizeof(readBuf));
+                if (n <= 0) {
+                    int err = SSL_get_error(ssl, n);
+                    if (err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SSL || err == SSL_ERROR_SYSCALL)
+                        break;
+                    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                        [NSThread sleepForTimeInterval:0.02];
+                        continue;
+                    }
+                    break;
+                }
+                [respMutable appendBytes:readBuf length:n];
+            }
+            responseBytes = respMutable;
+            SSL_shutdown(ssl);
+            SSL_free(ssl);
+        } else
+#endif
+        {
+            CFIndex written = writeAllToCFStream(writeStream, reqData);
+            if (written < 0) {
+                CFRelease(readStream);
+                CFRelease(writeStream);
+                return;
+            }
+            responseBytes = readAllFromCFStream(readStream);
             CFRelease(readStream);
             CFRelease(writeStream);
-            return;
         }
-
-        NSData* responseBytes = readAllFromCFStream(readStream);
-        CFRelease(readStream);
-        CFRelease(writeStream);
 
         if (!responseBytes || [responseBytes length] == 0)
             return;
