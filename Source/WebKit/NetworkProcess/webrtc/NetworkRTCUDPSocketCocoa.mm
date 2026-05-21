@@ -709,15 +709,32 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
                     }
                     return;
                 }
+                // Wave 29-499.102 — source remap: if the real STUN server IP
+                // has a sentinel registered (.93 outbound resolve populated it),
+                // present the source AS the sentinel so libwebrtc's StunPort
+                // source-validation accepts the response (it checks source
+                // against the request's destination, which is the sentinel).
+                String apparentSourceHost = unwrapped.sourceHost;
+                String sentinel = DriftstackRTC::lookupSentinelForRealIp(unwrapped.sourceHost);
+                if (!sentinel.isEmpty()) {
+                    apparentSourceHost = sentinel;
+                    static bool loggedFirstRemapOnce = false;
+                    if (!loggedFirstRemapOnce) {
+                        loggedFirstRemapOnce = true;
+                        WTFLogAlways("[Wave29-499.102] inbound source REMAP: realIp=%s → sentinel=%s (libwebrtc StunPort source-validation will accept)",
+                            unwrapped.sourceHost.utf8().data(), sentinel.utf8().data());
+                    }
+                }
                 struct in_addr a4 { };
-                if (inet_pton(AF_INET, unwrapped.sourceHost.utf8().data(), &a4) != 1)
+                if (inet_pton(AF_INET, apparentSourceHost.utf8().data(), &a4) != 1)
                     return;
                 webrtc::IPAddress peerIp { a4 };
                 static bool loggedFirstUnwrapOnce = false;
                 if (!loggedFirstUnwrapOnce) {
                     loggedFirstUnwrapOnce = true;
-                    WTFLogAlways("[Wave29-499.99] BSD FIRST unwrapped: source=%s:%u payload=%zu bytes — dispatching SignalReadPacket to libwebrtc",
-                        unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
+                    WTFLogAlways("[Wave29-499.99] BSD FIRST unwrapped: realSource=%s:%u apparentSource=%s payload=%zu bytes — dispatching SignalReadPacket to libwebrtc",
+                        unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort,
+                        apparentSourceHost.utf8().data(), unwrapped.payload.size());
                 }
                 SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket {
                     identifier, unwrapped.payload.span(),

@@ -117,6 +117,13 @@ bool isCustomSocks5Active();
 String allocateSentinelForHostname(const String& hostname);
 String lookupHostnameForSentinel(const String& ipString);
 
+// Wave 29-499.102 — realIp ↔ sentinel reverse mapping. Populated at
+// outbound resolve time; consulted at inbound to remap STUN response
+// source from real STUN server IP back to sentinel, so libwebrtc's
+// StunPort source-validation accepts the response.
+void rememberRealIpForSentinel(const String& realIp, const String& sentinel);
+String lookupSentinelForRealIp(const String& realIp);
+
 } // namespace DriftstackRTC
 
 } // namespace WebKit

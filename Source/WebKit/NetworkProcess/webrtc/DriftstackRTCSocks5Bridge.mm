@@ -61,6 +61,15 @@ struct SentinelMapState {
     Lock lock;
     HashMap<String, String> ipToHostname WTF_GUARDED_BY_LOCK(lock);
     HashMap<String, String> hostnameToIp WTF_GUARDED_BY_LOCK(lock);
+    // Wave 29-499.102 — realIp → sentinel reverse mapping. Populated at
+    // outbound resolve time (when sentinel hostname is resolved to a real
+    // IPv4 via .94 hardcoded STUN map). Consulted at inbound to remap the
+    // source IP of STUN responses from the REAL STUN server IP back to the
+    // sentinel libwebrtc knows — without this, libwebrtc's StunPort
+    // discards responses whose source doesn't match the request's
+    // destination (a security check that defends against off-path STUN
+    // injection attacks).
+    HashMap<String, String> realIpToSentinel WTF_GUARDED_BY_LOCK(lock);
     unsigned nextOctet WTF_GUARDED_BY_LOCK(lock) { 2 };
 };
 
@@ -112,6 +121,33 @@ String lookupHostnameForSentinel(const String& ipString)
 
     auto it = state.ipToHostname.find(ipString);
     if (it == state.ipToHostname.end())
+        return String();
+    return it->value;
+}
+
+// Wave 29-499.102 — store a realIp ↔ sentinel mapping populated at
+// outbound resolve time. Called by endpointFromSocketAddress when the
+// .94 hardcoded STUN map resolves a sentinel-mapped hostname to a real
+// IPv4. The reverse map lets inbound STUN responses be remapped from
+// real STUN server source (e.g., 74.125.250.129) to the sentinel
+// (127.0.0.2) that libwebrtc's StunPort expects.
+void rememberRealIpForSentinel(const String& realIp, const String& sentinel)
+{
+    if (realIp.isEmpty() || sentinel.isEmpty())
+        return;
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+    state.realIpToSentinel.set(realIp, sentinel);
+}
+
+String lookupSentinelForRealIp(const String& realIp)
+{
+    if (realIp.isEmpty())
+        return String();
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+    auto it = state.realIpToSentinel.find(realIp);
+    if (it == state.realIpToSentinel.end())
         return String();
     return it->value;
 }
@@ -360,10 +396,15 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
             String resolvedIp = resolveHostnameToIPv4(hostname);
             if (!resolvedIp.isEmpty()) {
                 endpoint.host = resolvedIp;
+                // Wave 29-499.102 — remember the realIp → sentinel mapping
+                // so inbound STUN responses can be source-remapped from
+                // realIp back to sentinel (libwebrtc StunPort's source-
+                // validation needs the source to match the request's dest).
+                rememberRealIpForSentinel(resolvedIp, ipString);
                 static bool loggedSentinelHitOnce = false;
                 if (!loggedSentinelHitOnce) {
                     loggedSentinelHitOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15/Wave29-499.93] endpointFromSocketAddress: sentinel %s → hostname='%s' → IPv4='%s'. §7 frame uses ATYP=0x01 (gost-compatible).",
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/EG-WK-1.9/Task#15/Wave29-499.93+102] endpointFromSocketAddress: sentinel %s → hostname='%s' → IPv4='%s'. §7 frame uses ATYP=0x01; remembered realIp→sentinel for inbound source remap.",
                         ipString.utf8().data(), hostname.utf8().data(), resolvedIp.utf8().data());
                 }
             } else {
