@@ -304,11 +304,42 @@ static void resolveBridgeSymbols()
     }
 }
 
+// Wave 29-499.90 — thread-local recursion guard. Critical for WebRTC:
+// createRelayConnectionForQuic (in WebKit framework) calls
+// nw_connection_create internally to create the relay nw_connection.
+// DYLD_INTERPOSE rewires that call to driftstack_nw_connection_create
+// → infinite recursion → m_relayConnection never gets created → sendTo
+// hangs holding m_nwConnectionsLock → all subsequent WebRTC sendTos
+// block → ICE candidate gathering times out → no srflx candidate → no
+// WebRTC IP reported.
+//
+// G1 protects the originalNwConnectionCreate function pointer from
+// recursion ONLY when called from inside libDriftstackQuicInterpose.dylib.
+// But createRelayConnectionForQuic is in the WebKit framework, so its
+// `nw_connection_create(...)` call DOES get rewired by DYLD_INTERPOSE.
+//
+// Fix: thread-local int. On entry, if already non-zero → recursive
+// invocation → bypass the bridge, call original directly.
+static thread_local int s_inInterposeDepth = 0;
+
 extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoint, nw_parameters_t parameters)
 {
     resolveOriginalNwConnectionCreate();
     if (!originalNwConnectionCreate)
         return nullptr;
+
+    // Wave 29-499.90 — recursion bypass. If we're already inside the
+    // interpose on this thread, this is a re-entry from
+    // createRelayConnectionForQuic's own nw_connection_create call to
+    // the relay endpoint. Bypass the bridge and call original directly.
+    if (s_inInterposeDepth > 0) {
+        static bool loggedRecursionBypassOnce = false;
+        if (!loggedRecursionBypassOnce) {
+            loggedRecursionBypassOnce = true;
+            NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Wave29-499.90] driftstack_nw_connection_create: FIRST recursive re-entry — bypassing bridge, calling original directly (this is createRelayConnectionForQuic's internal nw_connection_create to the SOCKS5 relay endpoint).");
+        }
+        return originalNwConnectionCreate(endpoint, parameters);
+    }
 
     // Slice 16.6.e: fast-path no-op when SOCKS5 unset at process launch.
     // Avoids per-call dlsym + WebKit bridge symbol resolution overhead for
@@ -345,7 +376,12 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
         NSLog(@"[Driftstack-EG-WK-1.10/Task#16] driftstack_nw_connection_create: FIRST UDP/QUIC interpose match — redirecting to driftstack_quic_createRelayConnection. Slice 16.7.b broader UDP-transport gate ACTIVE.");
     }
 
+    // Wave 29-499.90 — increment recursion-depth so the nw_connection_create
+    // call INSIDE createRelayConnectionForQuic (to the relay endpoint)
+    // detects it's a re-entry and bypasses the bridge.
+    ++s_inInterposeDepth;
     nw_connection_t relayConnection = bridgeCreateRelay(endpoint, parameters);
+    --s_inInterposeDepth;
     if (relayConnection)
         return relayConnection;
 
