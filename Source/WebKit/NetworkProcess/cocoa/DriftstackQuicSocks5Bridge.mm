@@ -12,6 +12,7 @@
 #import "DriftstackQuicSocks5Exports.h"
 #import "DriftstackSocks5Client.h"
 #import "DriftstackSocks5Framing.h"
+#import "DriftstackSocks5TCPFramer.h"
 
 #import "../webrtc/DriftstackRTCSocks5Bridge.h"
 #import <Foundation/Foundation.h>
@@ -643,6 +644,89 @@ RetainPtr<nw_endpoint_t> getRelayEndpoint()
         String::number(channel.relayPort).utf8().data()));
 }
 
+// Wave 29-499.116 (Task #104 Day 2) — TCP SOCKS5 CONNECT relay creation.
+// Replaces nw_proxy_config_create_socksv5 for TCP routing. CFNetwork's
+// nw_connection to "destination" is intercepted; we substitute with a
+// connection to gost + attach DriftstackSocks5TCPFramer that does
+// SOCKS5 GREETING + AUTH + CONNECT to original destination at start,
+// then becomes transparent passthrough.
+RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoint, nw_parameters_t /*originalParameters*/)
+{
+    if (!isCustomSocks5Active())
+        return nullptr;
+
+    // Extract original destination
+    String destHost;
+    uint16_t destPort = 0;
+    if (!endpointToHostPort(originalEndpoint, destHost, destPort)) {
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.116] createTCPRelayConnection: endpointToHostPort failed");
+        return nullptr;
+    }
+
+    // Read proxy host:port + creds from env
+    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+    if (!proxyEnv || !proxyEnv[0])
+        return nullptr;
+    String proxyEnvStr = String::fromUTF8(proxyEnv);
+    size_t colon = proxyEnvStr.find(':');
+    if (colon == notFound || colon == 0 || colon + 1 >= proxyEnvStr.length())
+        return nullptr;
+    String proxyHost = proxyEnvStr.left(colon);
+    int proxyPort = 0;
+    auto portStr = proxyEnvStr.substring(colon + 1);
+    for (unsigned i = 0; i < portStr.length(); ++i) {
+        UChar c = portStr[i];
+        if (c < '0' || c > '9') { proxyPort = 0; break; }
+        proxyPort = proxyPort * 10 + (c - '0');
+    }
+    if (proxyPort == 0)
+        return nullptr;
+
+    const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+    const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+    String proxyUser = (userEnv && userEnv[0]) ? String::fromUTF8(userEnv) : String();
+    String proxyPass = (passEnv && passEnv[0]) ? String::fromUTF8(passEnv) : String();
+
+    // Stash destination + creds for framer to claim on start
+    DriftstackSocks5TCPFramer::setPendingTcpDestination(destHost, destPort, proxyUser, proxyPass);
+
+    // Build TCP nw_parameters with the SOCKS5 framer attached
+    auto tcpParams = adoptNS(nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
+
+    nw_protocol_definition_t framerDef = DriftstackSocks5TCPFramer::getFramerDefinition();
+    if (framerDef) {
+        auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
+        auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(tcpParams.get()));
+        nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+    }
+
+    // Endpoint = gost SOCKS5 proxy
+    auto proxyHostUtf8 = proxyHost.utf8();
+    auto proxyPortStr = String::number(proxyPort).utf8();
+    auto proxyEndpoint = adoptNS(nw_endpoint_create_host(proxyHostUtf8.data(), proxyPortStr.data()));
+    if (!proxyEndpoint)
+        return nullptr;
+
+    auto conn = adoptNS(nw_connection_create(proxyEndpoint.get(), tcpParams.get()));
+    static bool loggedFirstTCPOnce = false;
+    if (conn && !loggedFirstTCPOnce) {
+        loggedFirstTCPOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.116] createTCPRelayConnection: FIRST TCP relay created — proxy=%s:%d → dest=%s:%u (auth user-len=%u). Framer will do SOCKS5 GREETING+AUTH+CONNECT at start.",
+            proxyHost.utf8().data(), proxyPort,
+            destHost.utf8().data(), destPort,
+            (unsigned)proxyUser.length());
+    }
+    return conn;
+}
+
+bool tcpInterposeActive()
+{
+    if (!isCustomSocks5Active())
+        return false;
+    const char* env = getenv("DRIFTSTACK_SOCKS5_TCP_INTERPOSE");
+    return env && env[0] == '1';
+}
+
 } // namespace DriftstackQuic
 
 } // namespace WebKit
@@ -690,6 +774,16 @@ DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseUdpTransport(nw_paramet
 DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)
 {
     return WebKit::DriftstackQuic::createRelayConnectionForQuic(endpoint, parameters).leakRef();
+}
+
+DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createTCPRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters)
+{
+    return WebKit::DriftstackQuic::createTCPRelayConnection(endpoint, parameters).leakRef();
+}
+
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_tcpInterposeActive(void)
+{
+    return WebKit::DriftstackQuic::tcpInterposeActive();
 }
 
 // Wave 29-397 Slice 16.6 (Task #16 EG-WK-1.10): production observability

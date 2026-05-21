@@ -75,6 +75,13 @@ DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createRelayConnection(nw_
 // (the existing SOCKS5 UDP_ASSOCIATE relay).
 DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_parametersUseUdpTransport(nw_parameters_t parameters);
 
+// Wave 29-499.116 (Task #104 Day 2) — TCP relay creation for SOCKS5
+// CONNECT path. Replaces nw_proxy_config_create_socksv5 (Slice 16.6.k)
+// for TCP routing. CFNetwork doesn't see a proxy → h3-disable gate
+// doesn't fire → h3 packets route via existing UDP interpose path.
+DRIFTSTACK_QUIC_EXPORT nw_connection_t driftstack_quic_createTCPRelayConnection(nw_endpoint_t endpoint, nw_parameters_t parameters);
+DRIFTSTACK_QUIC_EXPORT bool driftstack_quic_tcpInterposeActive(void);
+
 // Wave 29-397 Slice 16.6 — production observability counters polled by
 // harness telemetry daemon for dashboard panels.
 DRIFTSTACK_QUIC_EXPORT uint64_t driftstack_quic_counter_wrap_fires(void);
