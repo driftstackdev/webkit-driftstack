@@ -612,17 +612,26 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
 #if PLATFORM(DRIFTSTACK)
     // Wave 29-499.86 — diagnostic: log first sendTo invocation regardless
     // of any gating. Distinguishes "sendTo not called at all" from
-    // "sendTo called but redirect-path branch missed". Empirical: this
-    // marker MISSING in browserleaks/webrtc test confirms libwebrtc's
-    // PacketSocketFactory bypass (it uses webrtc::BasicPacketSocketFactory
-    // raw BSD sockets, not our NetworkRTCUDPSocketCocoa IPC-stub class).
+    // "sendTo called but redirect-path branch missed". Empirical (post-
+    // .86 verify): sendTo IS invoked (libwebrtc routes STUN through
+    // NetworkRTCUDPSocketCocoa correctly).
+    //
+    // Wave 29-499.87 — ALSO log SOCKS5-active state at function entry so
+    // we can distinguish "active=false → fell through to legacy direct
+    // path" from "active=true → reached redirect block".
     {
         static bool loggedFirstSendToOnce = false;
         if (!loggedFirstSendToOnce) {
             loggedFirstSendToOnce = true;
             auto hostStr = remoteAddress.HostAsURIString();
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.86] sendTo: FIRST entry — dest=%s:%u, payload=%zu bytes. (If you see this, libwebrtc IS invoking NetworkRTCUDPSocketCocoa::sendTo; SOCKS5-active check happens next.)",
-                hostStr.c_str(), remoteAddress.port(), data.size());
+            bool socks5Active = DriftstackRTC::isCustomSocks5Active();
+            const char* customSocks5Env = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
+            const char* socks5ProxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.86] sendTo: FIRST entry — dest=%s:%u, payload=%zu bytes, isCustomSocks5Active=%d (CUSTOM_SOCKS5='%s', SOCKS5_PROXY='%s')",
+                hostStr.c_str(), remoteAddress.port(), data.size(),
+                socks5Active ? 1 : 0,
+                customSocks5Env ? customSocks5Env : "(unset)",
+                socks5ProxyEnv ? socks5ProxyEnv : "(unset)");
         }
     }
 
