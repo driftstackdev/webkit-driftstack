@@ -19,11 +19,17 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.135-136 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
+// Wave 29-499.135-138 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
 // (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS). Provides TLS 1.3
 // with iPhone-matched cipher list + ALPN + key shares — bypasses
 // CFStream's legacy TLS 1.2 SecureTransport limitations.
-#if __has_include(<openssl/ssl.h>)
+//
+// Linking: WebKit framework doesn't link libwebrtc.dylib directly
+// (allowable_client restriction). Phase 1.5b BoringSSL TLS is gated
+// behind further pbxproj work to add libwebrtc as a link dependency
+// OR runtime dlsym resolution. Headers compile; link disabled until
+// integration finalized.
+#if 0 && __has_include(<openssl/ssl.h>)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
