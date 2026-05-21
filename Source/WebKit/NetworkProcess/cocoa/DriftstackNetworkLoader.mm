@@ -239,14 +239,14 @@ void DriftstackNetworkLoader::resume()
             // SSLContextRef which we configure with SSLSetProtocolVersionMax/Min.
             CFTypeRef sslCtxRead = CFReadStreamCopyProperty(readStream, kCFStreamPropertySSLContext);
             if (sslCtxRead) {
-                SSLContextRef ssl = (SSLContextRef)sslCtxRead;
+                SSLContextRef ssl = (SSLContextRef)const_cast<void*>(sslCtxRead);
                 SSLSetProtocolVersionMin(ssl, kTLSProtocol13);
                 SSLSetProtocolVersionMax(ssl, kTLSProtocol13);
                 CFRelease(sslCtxRead);
             }
             CFTypeRef sslCtxWrite = CFWriteStreamCopyProperty(writeStream, kCFStreamPropertySSLContext);
             if (sslCtxWrite) {
-                SSLContextRef ssl = (SSLContextRef)sslCtxWrite;
+                SSLContextRef ssl = (SSLContextRef)const_cast<void*>(sslCtxWrite);
                 SSLSetProtocolVersionMin(ssl, kTLSProtocol13);
                 SSLSetProtocolVersionMax(ssl, kTLSProtocol13);
                 CFRelease(sslCtxWrite);
