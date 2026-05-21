@@ -1489,22 +1489,44 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // natively. Assign via configuration.proxyConfigurations
             // (the modern equivalent of connectionProxyDictionary).
             //
-            // Wave 29-499.109 (tested, reverted) — env-gated bypass DRIFTSTACK_
-            // SOCKS5_BYPASS_NSURL_PROXY=1 to skip proxy_config_create_socksv5.
-            // EMPIRICAL: Slice 16.6.k IS the mechanism that makes SOCKS5
-            // routing work in modern Network.framework. Without it, HTTPS
-            // ALSO fails (not just h3). Removing proxy_config breaks
-            // everything. The h3-disable-with-proxy gate is at a deeper
-            // Apple layer than proxy_config_create_socksv5.
-            //
-            // Architecture conclusion: h3 over SOCKS5 requires either
-            // (a) custom QUIC client bypassing CFNetwork (multi-month) or
-            // (b) Phase 2/3 customer-proxy modes via Apple VM + WireGuard
-            //     (network-level tunnel — CFNetwork sees no proxy → h3
-            //     works naturally — planning 133)
-            // For SOCKS5 customer proxy v1.0: h3=OFF is the correct
-            // behavior matching real iPhone+SOCKS5.
-            {
+            // Wave 29-499.111 — test mode: use LEGACY kCFNetworkProxiesSOCKSEnable
+            // instead of modern nw_proxy_config_create_socksv5 to see if
+            // Apple's h3-disable-on-proxy gate is modern-API-only.
+            // DRIFTSTACK_SOCKS5_LEGACY_MODE=1 activates this experimental path.
+            const char* legacyModeEnv = getenv("DRIFTSTACK_SOCKS5_LEGACY_MODE");
+            bool legacyMode = legacyModeEnv && legacyModeEnv[0] == '1';
+            if (legacyMode) {
+                const char* legacyProxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+                if (legacyProxyEnv && legacyProxyEnv[0]) {
+                    String legacyEnvStr = String::fromUTF8(legacyProxyEnv);
+                    size_t colon = legacyEnvStr.find(':');
+                    if (colon != notFound) {
+                        String legacyHost = legacyEnvStr.left(colon);
+                        auto legacyPortStr = legacyEnvStr.substring(colon + 1);
+                        int legacyPort = 0;
+                        bool legacyPortOK = true;
+                        for (unsigned i = 0; i < legacyPortStr.length() && legacyPortOK; ++i) {
+                            UChar c = legacyPortStr[i];
+                            if (c < '0' || c > '9') { legacyPortOK = false; break; }
+                            legacyPort = legacyPort * 10 + (c - '0');
+                        }
+                        if (legacyPortOK && legacyPort > 0) {
+                            NSDictionary* legacyProxy = @{
+                                (NSString*)kCFNetworkProxiesSOCKSEnable: @YES,
+                                (NSString*)kCFNetworkProxiesSOCKSProxy: legacyHost.createNSString().get(),
+                                (NSString*)kCFNetworkProxiesSOCKSPort: @(legacyPort),
+                            };
+                            configuration.get().connectionProxyDictionary = legacyProxy;
+                            static bool loggedLegacyOnce = false;
+                            if (!loggedLegacyOnce) {
+                                loggedLegacyOnce = true;
+                                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k/Wave29-499.111] LEGACY MODE — using kCFNetworkProxiesSOCKSEnable keys instead of nw_proxy_config_create_socksv5. Testing if h3 fires with legacy SOCKS5.");
+                            }
+                        }
+                    }
+                }
+            }
+            if (!legacyMode) {
                 String hostEnvStr;
                 int port = 0;
                 String socks5Host;
