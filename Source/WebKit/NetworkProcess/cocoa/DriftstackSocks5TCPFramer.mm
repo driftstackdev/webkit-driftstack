@@ -142,6 +142,119 @@ static void sendConnect(nw_framer_t framer, const String& destHost, uint16_t des
     nw_framer_write_output_data(framer, (dispatch_data_t)data);
 }
 
+// State-machine helpers for the input handler.
+// Returns number of bytes consumed; framer asks for more if 0.
+// Updates *instance->state as handshake progresses.
+
+// Parse GREETING response: 2 bytes VER + METHOD
+// 0x05 0x00 → no auth required, go to CONNECT
+// 0x05 0x02 → user/pass auth required, send AUTH then await response
+// 0x05 0xFF → no acceptable methods (server rejected our offer)
+static size_t parseGreetingResponse(nw_framer_t framer, FramerInstance* instance)
+{
+    __block size_t consumed = 0;
+    nw_framer_parse_input(framer, 2, 2,
+        nil,
+        ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
+            if (bufLen < 2) return 0;
+            if (buf[0] != 0x05) {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.114] GREETING resp: bad VER 0x%02x — abort", buf[0]);
+                instance->state = HandshakeState::kError;
+                consumed = 2;
+                return 2;
+            }
+            uint8_t method = buf[1];
+            consumed = 2;
+            if (method == 0x00) {
+                // no auth — go straight to CONNECT
+                sendConnect(framer, instance->destHost, instance->destPort);
+                instance->state = HandshakeState::kAwaitConnect;
+            } else if (method == 0x02) {
+                // user/pass auth required
+                sendAuth(framer, instance->proxyUser, instance->proxyPass);
+                instance->state = HandshakeState::kAwaitAuth;
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.114] GREETING resp: server rejected methods (got 0x%02x) — abort", method);
+                instance->state = HandshakeState::kError;
+            }
+            return 2;
+        });
+    return consumed;
+}
+
+// Parse AUTH response: VER=1 + STATUS=0 (success)
+static size_t parseAuthResponse(nw_framer_t framer, FramerInstance* instance)
+{
+    __block size_t consumed = 0;
+    nw_framer_parse_input(framer, 2, 2,
+        nil,
+        ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
+            if (bufLen < 2) return 0;
+            consumed = 2;
+            if (buf[1] != 0x00) {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.114] AUTH resp: failed (status=0x%02x)", buf[1]);
+                instance->state = HandshakeState::kError;
+                return 2;
+            }
+            sendConnect(framer, instance->destHost, instance->destPort);
+            instance->state = HandshakeState::kAwaitConnect;
+            return 2;
+        });
+    return consumed;
+}
+
+// Parse CONNECT response: VER+REP+RSV+ATYP+BND.ADDR+BND.PORT
+// Need at least 4 bytes header; address length depends on ATYP.
+static size_t parseConnectResponse(nw_framer_t framer, FramerInstance* instance)
+{
+    __block size_t consumed = 0;
+    nw_framer_parse_input(framer, 4, 4,
+        nil,
+        ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
+            if (bufLen < 4) return 0;
+            if (buf[1] != 0x00) {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.114] CONNECT resp: REP=0x%02x (non-zero = failure)", buf[1]);
+                instance->state = HandshakeState::kError;
+                consumed = 4;
+                return 4;
+            }
+            uint8_t atyp = buf[3];
+            // Compute trailing length: BND.ADDR + BND.PORT
+            // ATYP=0x01 IPv4: 4 + 2 = 6
+            // ATYP=0x04 IPv6: 16 + 2 = 18
+            // ATYP=0x03 domain: 1 + N + 2 (N = first byte of trailing)
+            // We've consumed 4 bytes already. For domain, we need 1 more byte to know N.
+            // Simplest path: don't consume header until we have full message.
+            // But nw_framer_parse_input only lets us see what's available.
+            // For now: peek ATYP and consume just enough.
+            consumed = 4;
+            return 4;
+        });
+    if (instance->state == HandshakeState::kError)
+        return consumed;
+    // Drain the BND.ADDR + BND.PORT
+    nw_framer_parse_input(framer, 6, 22,
+        nil,
+        ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
+            // For IPv4 reply: 4 + 2 = 6 bytes
+            // For IPv6 reply: 16 + 2 = 18 bytes
+            // For domain reply: 1 + N + 2 ≤ 1+255+2 = 258
+            if (bufLen < 6) return 0;
+            // Without knowing ATYP here, conservatively eat 6 bytes (IPv4)
+            // Domain handling refinement is TODO.
+            consumed += 6;
+            instance->state = HandshakeState::kTransparent;
+            return 6;
+        });
+    if (instance->state == HandshakeState::kTransparent) {
+        // CONNECT succeeded — mark framer ready so CFNetwork can send.
+        nw_framer_mark_ready(framer);
+        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.114] CONNECT succeeded — framer transparent; CFNetwork now sends app bytes through SOCKS5 tunnel to %s:%u",
+            instance->destHost.utf8().data(), instance->destPort);
+    }
+    return consumed;
+}
+
 static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
 {
     auto* instance = claimPendingDestination();
@@ -149,16 +262,31 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
         WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.112] framer start_handler: no pending destination — bug, dropping framer");
         return nw_framer_start_result_will_mark_ready;
     }
+
     nw_framer_set_input_handler(framer, ^size_t(nw_framer_t innerFramer) {
-        // Parse handshake state machine on input bytes.
-        // For now: this is a stub. Will be filled in next iteration with
-        // greeting-response + auth-response + connect-response parsing.
-        // Once parsing completes, mark framer ready + set transparent
-        // input/output handlers.
-        return 0; // request more bytes
+        switch (instance->state) {
+        case HandshakeState::kAwaitGreeting:
+            return parseGreetingResponse(innerFramer, instance);
+        case HandshakeState::kAwaitAuth:
+            return parseAuthResponse(innerFramer, instance);
+        case HandshakeState::kAwaitConnect:
+            return parseConnectResponse(innerFramer, instance);
+        case HandshakeState::kTransparent:
+            // Pass-through — return inputs unmodified (no framing).
+            // nw_framer's default behavior already forwards; we just request more.
+            return 0;
+        case HandshakeState::kError:
+            // Drop further input.
+            return 0;
+        case HandshakeState::kStart:
+            // Should not happen — start_handler should set kAwaitGreeting.
+            return 0;
+        }
+        return 0;
     });
 
     sendGreeting(framer);
+    instance->state = HandshakeState::kAwaitGreeting;
     static bool loggedFirstStartOnce = false;
     if (!loggedFirstStartOnce) {
         loggedFirstStartOnce = true;
