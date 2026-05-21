@@ -1488,7 +1488,24 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // nw_proxy_config_set_username_and_password supports it
             // natively. Assign via configuration.proxyConfigurations
             // (the modern equivalent of connectionProxyDictionary).
-            {
+            //
+            // Wave 29-499.109 — Bypass-test gate. Setting
+            // DRIFTSTACK_SOCKS5_BYPASS_NSURL_PROXY=1 skips this registration
+            // so CFNetwork doesn't know about the proxy → won't drop h3 from
+            // ALPN → h3 attempts go through DYLD interpose → SOCKS5 §7 relay.
+            // Theory: Apple's h3-disable-with-proxy gate triggers at this
+            // proxy_config_create_socksv5 call. Empirical test confirms or
+            // refutes.
+            const char* h3BypassEnv = getenv("DRIFTSTACK_SOCKS5_BYPASS_NSURL_PROXY");
+            bool h3BypassMode = h3BypassEnv && h3BypassEnv[0] == '1';
+            if (h3BypassMode) {
+                static bool loggedBypassOnce = false;
+                if (!loggedBypassOnce) {
+                    loggedBypassOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k/Wave29-499.109] BYPASS MODE — skipping nw_proxy_config_create_socksv5 registration. CFNetwork will see no proxy → h3 not blocked. DYLD interpose handles all routing.");
+                }
+            }
+            if (!h3BypassMode) {
                 String hostEnvStr;
                 int port = 0;
                 String socks5Host;
