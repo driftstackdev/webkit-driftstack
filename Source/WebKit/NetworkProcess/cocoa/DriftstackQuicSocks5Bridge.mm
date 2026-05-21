@@ -16,6 +16,10 @@
 #import "../webrtc/DriftstackRTCSocks5Bridge.h"
 #import <Foundation/Foundation.h>
 #import <Network/Network.h>
+// Wave 29-499.84 — BSD socket headers for IP-form endpoint extraction.
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <atomic>
 #include <stdlib.h>
 #include <wtf/Assertions.h>
@@ -104,21 +108,68 @@ bool endpointToHostPort(nw_endpoint_t endpoint, String& outHost, uint16_t& outPo
     if (!endpoint)
         return false;
     nw_endpoint_type_t type = nw_endpoint_get_type(endpoint);
-    if (type != nw_endpoint_type_host && type != nw_endpoint_type_url)
-        return false; // IP-form endpoint — caller uses Socks5Endpoint with IP literal
-    const char* hostname = nw_endpoint_get_hostname(endpoint);
-    if (!hostname || !hostname[0])
-        return false;
-    outHost = String::fromUTF8(hostname);
-    outPort = nw_endpoint_get_port(endpoint);
 
-    static bool loggedOnce = false;
-    if (!loggedOnce && isCustomSocks5Active()) {
-        loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] endpointToHostPort: FIRST hostname extract — '%s':%u. Slice 16.4/16.4.b call sites pass this to wrapOutgoingQuicPacket for ATYP=0x03 framing.",
-            hostname, static_cast<unsigned>(outPort));
+    if (type == nw_endpoint_type_host || type == nw_endpoint_type_url) {
+        const char* hostname = nw_endpoint_get_hostname(endpoint);
+        if (!hostname || !hostname[0])
+            return false;
+        outHost = String::fromUTF8(hostname);
+        outPort = nw_endpoint_get_port(endpoint);
+
+        static bool loggedHostnameOnce = false;
+        if (!loggedHostnameOnce && isCustomSocks5Active()) {
+            loggedHostnameOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] endpointToHostPort: FIRST hostname extract — '%s':%u. Slice 16.4/16.4.b call sites pass this to wrapOutgoingQuicPacket for ATYP=0x03 framing.",
+                hostname, static_cast<unsigned>(outPort));
+        }
+        return true;
     }
-    return true;
+
+    if (type == nw_endpoint_type_address) {
+        // Wave 29-499.84 — IP-form endpoint handling. CFNetwork resolves
+        // DNS before nw_connection_create, so QUIC + plain-UDP endpoints
+        // arrive as IP literals (nw_endpoint_type_address). Convert
+        // sockaddr to text via inet_ntop; caller wraps as ATYP=0x01
+        // (IPv4) or ATYP=0x04 (IPv6) in §6/§7 framing.
+        //
+        // Pre-fix: returned false → createRelayConnectionForQuic logged
+        // "endpointToHostPort failed for originalEndpoint — §7 wrap will
+        // see empty destination (gost will reject)" → all QUIC + raw UDP
+        // datagrams dropped at proxy. Empirically: HTTP/3 + WebRTC both
+        // failed despite Slice 16.7.b interpose firing correctly.
+        const struct sockaddr* sa = nw_endpoint_get_address(endpoint);
+        if (!sa)
+            return false;
+        char ipBuf[INET6_ADDRSTRLEN] = { };
+        const void* addrPtr = nullptr;
+        uint16_t port = 0;
+        if (sa->sa_family == AF_INET) {
+            const struct sockaddr_in* sin = reinterpret_cast<const struct sockaddr_in*>(sa);
+            addrPtr = &sin->sin_addr;
+            port = ntohs(sin->sin_port);
+        } else if (sa->sa_family == AF_INET6) {
+            const struct sockaddr_in6* sin6 = reinterpret_cast<const struct sockaddr_in6*>(sa);
+            addrPtr = &sin6->sin6_addr;
+            port = ntohs(sin6->sin6_port);
+        } else {
+            return false;
+        }
+        if (!inet_ntop(sa->sa_family, addrPtr, ipBuf, sizeof(ipBuf)))
+            return false;
+        outHost = String::fromUTF8(ipBuf);
+        outPort = port;
+        static bool loggedAddressOnce = false;
+        if (!loggedAddressOnce && isCustomSocks5Active()) {
+            loggedAddressOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16/Wave29-499.84] endpointToHostPort: FIRST IP-form extract — '%s':%u (AF_%s). Wraps as SOCKS5 ATYP=0x%02x — UDP relay can now reach destination.",
+                ipBuf, static_cast<unsigned>(port),
+                sa->sa_family == AF_INET ? "INET" : "INET6",
+                sa->sa_family == AF_INET ? 0x01 : 0x04);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 // Wave 29-397 Slice 16.4.b.4: nw_protocol_stack inspector.
