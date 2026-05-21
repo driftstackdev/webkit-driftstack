@@ -18,6 +18,7 @@
 #import "DriftstackSocks5Client.h"
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
+#import "PrivateRelayed.h"
 #import <CFNetwork/CFNetwork.h>
 #import <WebCore/HTTPStatusCodes.h>
 #import <WebCore/NetworkLoadMetrics.h>
@@ -29,7 +30,9 @@
 #import <wtf/Assertions.h>
 #import <wtf/CompletionHandler.h>
 #import <wtf/RetainPtr.h>
+#import <wtf/text/ParsingUtilities.h>
 #import <wtf/text/StringBuilder.h>
+#import <wtf/text/StringToIntegerConversion.h>
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -142,7 +145,17 @@ void DriftstackNetworkLoader::resume()
         if (colon == notFound)
             return;
         String proxyHostStr = proxyEnvStr.left(colon);
-        int proxyPort = parseIntegerAllowingTrailingJunk<int>(proxyEnvStr.substring(colon + 1)).value_or(0);
+        int proxyPort = 0;
+        {
+            auto portStr = proxyEnvStr.substring(colon + 1);
+            for (unsigned i = 0; i < portStr.length(); ++i) {
+                UChar c = portStr[i];
+                if (c < '0' || c > '9') { proxyPort = 0; break; }
+                proxyPort = proxyPort * 10 + (c - '0');
+            }
+        }
+        if (proxyPort == 0)
+            return;
 
         Socks5Endpoint proxy;
         proxy.host = proxyHostStr;
@@ -188,7 +201,7 @@ void DriftstackNetworkLoader::resume()
             return;
         }
 
-        int socketFd = socks5Client->tcpSocketFD();
+        int socketFd = socks5Client->socketFileDescriptor();
         m_fd = socketFd;
 
         // Wrap fd in CFStream pair
@@ -240,11 +253,11 @@ void DriftstackNetworkLoader::resume()
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);
         rb.append("Host: "_s, host, "\r\n"_s);
         rb.append("Connection: close\r\n"_s);
-        for (auto& [key, value] : httpHeaders) {
-            String lower = key.convertToASCIILowercase();
+        for (auto& header : httpHeaders) {
+            String lower = header.key.convertToASCIILowercase();
             if (lower == "host"_s || lower == "connection"_s)
                 continue;
-            rb.append(key, ": "_s, value, "\r\n"_s);
+            rb.append(header.key, ": "_s, header.value, "\r\n"_s);
         }
         rb.append("\r\n"_s);
         auto requestStr = rb.toString().utf8();
@@ -295,14 +308,15 @@ void DriftstackNetworkLoader::resume()
             response.setHTTPHeaderField(String::fromUTF8([key UTF8String]), String::fromUTF8([val UTF8String]));
         }
 
-        // Dispatch callbacks back to network queue
-        auto bodyBuffer = WebCore::SharedBuffer::create([bodyBytes bytes], [bodyBytes length]);
+        // Dispatch callbacks. Use NSData spans for SharedBuffer.
+        auto bodySpan = unsafeMakeSpan(static_cast<const uint8_t*>([bodyBytes bytes]), static_cast<size_t>([bodyBytes length]));
+        auto bodyBuffer = WebCore::SharedBuffer::create(bodySpan);
         auto* clientPtr = m_task.client();
         if (!clientPtr)
             return;
 
         clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-            [protectedThis, clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+            [clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                 if (action == WebCore::PolicyAction::Use) {
                     clientPtr->didReceiveData(bodyBuffer.get());
                     WebCore::NetworkLoadMetrics metrics;
