@@ -574,8 +574,8 @@ void UDPPort::OnStunBindingRequestSucceeded(
   // duplicate-server guard. The .105 CheckResponse trace confirmed txn ID
   // matched + msgType=0x0101 success. Now confirm OnStunBindingRequestSucceeded
   // fires + reflexive addr is extracted correctly.
-  fprintf(stderr, "[Wave29-499.106] OnStunBindingRequestSucceeded: rtt=%dms server=%s reflected=%s shared=%s sockLocal=%s\n",
-      rtt.ms(), stun_server_addr.ToString().c_str(),
+  fprintf(stderr, "[Wave29-499.106] OnStunBindingRequestSucceeded: rtt=%lldms server=%s reflected=%s shared=%s sockLocal=%s\n",
+      (long long)rtt.ms(), stun_server_addr.ToString().c_str(),
       stun_reflected_addr.ToString().c_str(),
       SharedSocket() ? "YES" : "NO",
       socket_ ? socket_->GetLocalAddress().ToString().c_str() : "(null)");
