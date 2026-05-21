@@ -19,10 +19,14 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.135 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
-// (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS).
+// Wave 29-499.135-136 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
+// (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS). Provides TLS 1.3
+// with iPhone-matched cipher list + ALPN + key shares — bypasses
+// CFStream's legacy TLS 1.2 SecureTransport limitations.
 #if __has_include(<openssl/ssl.h>)
 #include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
 #define DRIFTSTACK_HAS_BORINGSSL 1
 #endif
 #import "NetworkDataTask.h"
@@ -57,6 +61,105 @@ static dispatch_queue_t loaderQueue()
     });
     return queue;
 }
+
+#if DRIFTSTACK_HAS_BORINGSSL
+// Wave 29-499.136 — BoringSSL TLS 1.3 wrap on existing BSD fd.
+// Configures iPhone-Safari-matched cipher list + ALPN + key shares.
+// Returns a connected SSL* on success, nullptr on failure.
+static SSL_CTX* g_driftstackSslCtx = nullptr;
+static dispatch_once_t g_driftstackSslCtxOnce;
+
+static void initDriftstackSslCtx()
+{
+    dispatch_once(&g_driftstackSslCtxOnce, ^{
+        SSL_library_init();
+        SSL_load_error_strings();
+        g_driftstackSslCtx = SSL_CTX_new(TLS_client_method());
+        if (!g_driftstackSslCtx) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_CTX_new failed");
+            return;
+        }
+
+        // TLS 1.3 only (matches iPhone Safari 26.0)
+        SSL_CTX_set_min_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
+        SSL_CTX_set_max_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
+
+        // iPhone Safari 26.0 cipher order:
+        // TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_GCM_SHA256
+        SSL_CTX_set_ciphersuites(g_driftstackSslCtx,
+            "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256");
+
+        // Key shares matching iPhone Safari 26.0:
+        // X25519MLKEM768 (post-quantum hybrid) + X25519 + P-256/384/521
+        SSL_CTX_set1_curves_list(g_driftstackSslCtx,
+            "X25519MLKEM768:X25519:P-256:P-384:P-521");
+
+        // ALPN: h3, h2, http/1.1 — Phase 1 only uses http/1.1 but advertise
+        // all so detection vendors see iPhone-Safari-identical offer
+        static const uint8_t alpn[] = {
+            2, 'h', '3',
+            2, 'h', '2',
+            8, 'h', 't', 't', 'p', '/', '1', '.', '1'
+        };
+        SSL_CTX_set_alpn_protos(g_driftstackSslCtx, alpn, sizeof(alpn));
+
+        // Cert verification: use system root CAs
+        SSL_CTX_set_verify(g_driftstackSslCtx, SSL_VERIFY_PEER, nullptr);
+        SSL_CTX_set_default_verify_paths(g_driftstackSslCtx);
+
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] BoringSSL SSL_CTX initialized: TLS 1.3 + iPhone cipher order + ALPN[h3,h2,h1] + X25519MLKEM768");
+    });
+}
+
+// Returns a connected SSL* on success (caller frees with SSL_free).
+// hostUtf8 is used for SNI + cert validation.
+static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
+{
+    initDriftstackSslCtx();
+    if (!g_driftstackSslCtx)
+        return nullptr;
+
+    SSL* ssl = SSL_new(g_driftstackSslCtx);
+    if (!ssl) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_new failed");
+        return nullptr;
+    }
+
+    // Set SNI for hostname-based cert validation
+    SSL_set_tlsext_host_name(ssl, hostUtf8);
+    SSL_set_verify_hostname(ssl, hostUtf8);
+
+    SSL_set_fd(ssl, fd);
+
+    int rc = SSL_connect(ssl);
+    if (rc != 1) {
+        int err = SSL_get_error(ssl, rc);
+        unsigned long errCode = ERR_get_error();
+        char errBuf[256];
+        ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_connect failed rc=%d err=%d (%s)",
+            rc, err, errBuf);
+        SSL_free(ssl);
+        return nullptr;
+    }
+
+    const uint8_t* alpnSelected = nullptr;
+    unsigned alpnLen = 0;
+    SSL_get0_alpn_selected(ssl, &alpnSelected, &alpnLen);
+    char alpnStr[16] = {0};
+    if (alpnSelected && alpnLen < sizeof(alpnStr)) {
+        memcpy(alpnStr, alpnSelected, alpnLen);
+        alpnStr[alpnLen] = 0;
+    }
+    static bool loggedOnce = false;
+    if (!loggedOnce) {
+        loggedOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] BoringSSL TLS 1.3 handshake OK to '%s' — negotiated ALPN='%s'",
+            hostUtf8, alpnStr);
+    }
+    return ssl;
+}
+#endif // DRIFTSTACK_HAS_BORINGSSL
 
 // Forward declare helper bodies used in resume()
 static CFIndex writeAllToCFStream(CFWriteStreamRef writeStream, NSData* data)
