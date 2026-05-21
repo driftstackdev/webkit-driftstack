@@ -31,6 +31,11 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackRTCSocks5Bridge.h"
 #include <arpa/inet.h>
+// Wave 29-499.99 — raw BSD UDP socket replacement for m_relayConnection
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <wtf/OSObjectPtr.h>
 #endif
 
 #include "LibWebRTCNetworkMessages.h"
@@ -142,6 +147,20 @@ private:
     RetainPtr<nw_connection_t> m_relayConnection WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
     RefPtr<ConnectionStateTracker> m_relayTracker WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
     bool m_relayStarted WTF_GUARDED_BY_LOCK(m_nwConnectionsLock) { false };
+
+    // Wave 29-499.99 — raw BSD UDP socket replacement for m_relayConnection.
+    // Empirical (V-2026-05-21-W29-499.98): Apple's nw_connection_t for UDP
+    // doesn't reliably traverse the SOCKS5 UDP_ASSOCIATE relay — receives
+    // only gost-self-sourced keepalive frames, never real STUN responses.
+    // Python with raw BSD UDP socket on same proxy works perfectly. Switch
+    // to BSD socket here. Lifecycle: socket + dispatch source created in
+    // ensureRelayConnection alongside m_relayConnection; sendTo uses
+    // sendto(); a GCD dispatch_source_t on the socket fd handles inbound
+    // recvfrom + §7-unwrap + SignalReadPacket dispatch.
+    int m_relayBsdSocket WTF_GUARDED_BY_LOCK(m_nwConnectionsLock) { -1 };
+    OSObjectPtr<dispatch_source_t> m_relayBsdReadSource WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
+    String m_relayBndHost; // BND.ADDR — copy out so dispatch handler doesn't need the lock.
+    uint16_t m_relayBndPort { 0 };
 #endif
 };
 
@@ -623,9 +642,94 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection STARTED — bound to relay %s:%u. All outbound UDP datagrams flow through this connection (Slice 2.4.b.3 redirect activates).",
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection STARTED — bound to relay %s:%u.",
             relayHostUtf8.data(), channel.relayPort);
     }
+
+    // Wave 29-499.99 — also set up a raw BSD UDP socket as PARALLEL path.
+    // Per V-2026-05-21-W29-499.98 empirical finding, Apple's nw_connection_t
+    // doesn't reliably traverse SOCKS5 UDP_ASSOCIATE. Python via raw BSD
+    // UDP socket on the same proxy works perfectly. Use BSD socket as the
+    // ACTUAL outbound path going forward; nw_connection_t stays for backwards
+    // compatibility / state tracking only.
+    m_relayBndHost = channel.relayHost;
+    m_relayBndPort = channel.relayPort;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.99] BSD socket() failed errno=%d — falling back to nw_connection_t path", errno);
+    } else {
+        struct sockaddr_in localAddr { };
+        localAddr.sin_family = AF_INET;
+        localAddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        localAddr.sin_port = 0;
+        if (bind(fd, reinterpret_cast<struct sockaddr*>(&localAddr), sizeof(localAddr)) < 0) {
+            WTFLogAlways("[Wave29-499.99] BSD bind() failed errno=%d", errno);
+            close(fd);
+        } else {
+            socklen_t localLen = sizeof(localAddr);
+            getsockname(fd, reinterpret_cast<struct sockaddr*>(&localAddr), &localLen);
+            uint16_t boundPort = ntohs(localAddr.sin_port);
+            m_relayBsdSocket = fd;
+            // Set up GCD dispatch source for inbound on this BSD fd.
+            m_relayBsdReadSource = adoptOSObject(dispatch_source_create(
+                DISPATCH_SOURCE_TYPE_READ, fd, 0, udpSocketQueueSingleton()));
+            int capturedFd = fd;
+            auto identifier = m_identifier;
+            auto ipcConnection = m_connection.copyRef();
+            dispatch_source_set_event_handler(m_relayBsdReadSource.get(), [capturedFd, identifier, ipcConnection]() mutable {
+                uint8_t buf[65536];
+                struct sockaddr_in src { };
+                socklen_t srcLen = sizeof(src);
+                ssize_t n = recvfrom(capturedFd, buf, sizeof(buf), 0,
+                    reinterpret_cast<struct sockaddr*>(&src), &srcLen);
+                if (n <= 0)
+                    return;
+                std::span<const uint8_t> frame { buf, static_cast<size_t>(n) };
+                static std::atomic<unsigned> s_bsdRecvCount { 0 };
+                unsigned thisRecv = s_bsdRecvCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (thisRecv <= 5) {
+                    auto b = [&frame](size_t i) -> unsigned {
+                        return i < frame.size() ? static_cast<unsigned>(frame[i]) : 0;
+                    };
+                    WTFLogAlways("[Wave29-499.99] BSD recvfrom#%u: %zd bytes from %s:%u — first 32 hex: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                        thisRecv, n, inet_ntoa(src.sin_addr), ntohs(src.sin_port),
+                        b(0), b(1), b(2), b(3), b(4), b(5), b(6), b(7),
+                        b(8), b(9), b(10), b(11), b(12), b(13), b(14), b(15),
+                        b(16), b(17), b(18), b(19), b(20), b(21), b(22), b(23),
+                        b(24), b(25), b(26), b(27), b(28), b(29), b(30), b(31));
+                }
+                // §7 unwrap + SignalReadPacket dispatch
+                DriftstackRTC::UnwrappedDatagram unwrapped;
+                DriftstackRTC::BridgeResult r = DriftstackRTC::unwrapIncomingDatagram(frame, unwrapped);
+                if (r != DriftstackRTC::BridgeResult::Success) {
+                    static bool loggedFailOnce = false;
+                    if (!loggedFailOnce) {
+                        loggedFailOnce = true;
+                        WTFLogAlways("[Wave29-499.99] BSD unwrap FAIL result=%d frameSize=%zd", static_cast<int>(r), n);
+                    }
+                    return;
+                }
+                struct in_addr a4 { };
+                if (inet_pton(AF_INET, unwrapped.sourceHost.utf8().data(), &a4) != 1)
+                    return;
+                webrtc::IPAddress peerIp { a4 };
+                static bool loggedFirstUnwrapOnce = false;
+                if (!loggedFirstUnwrapOnce) {
+                    loggedFirstUnwrapOnce = true;
+                    WTFLogAlways("[Wave29-499.99] BSD FIRST unwrapped: source=%s:%u payload=%zu bytes — dispatching SignalReadPacket to libwebrtc",
+                        unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
+                }
+                SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket {
+                    identifier, unwrapped.payload.span(),
+                    RTCNetwork::IPAddress(peerIp), unwrapped.sourcePort,
+                    webrtc::TimeMicros(), WebRTCNetwork::EcnMarking::kNotEct }, 0);
+            });
+            dispatch_resume(m_relayBsdReadSource.get());
+            WTFLogAlways("[Wave29-499.99] BSD UDP socket SET UP: fd=%d localPort=%u target=%s:%u — recv loop armed",
+                fd, boundPort, channel.relayHost.utf8().data(), channel.relayPort);
+        }
+    }
+
     m_relayStarted = true;
     return true;
 }
@@ -772,9 +876,41 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                 static bool loggedRedirectOnce = false;
                 if (!loggedRedirectOnce) {
                     loggedRedirectOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: REDIRECT to m_relayConnection ACTIVE — datagram %zu→%zu bytes via SOCKS5 §7. Per-peer m_nwConnections bypassed.",
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: REDIRECT ACTIVE — datagram %zu→%zu bytes via SOCKS5 §7.",
                         data.size(), framed.size());
                 }
+                // Wave 29-499.99 — prefer BSD socket send over nw_connection_send.
+                // BSD socket avoids the Apple nw_connection UDP-over-SOCKS5
+                // bug that returned only gost keepalive frames on inbound.
+                int bsdFd = -1;
+                String bndHost;
+                uint16_t bndPort = 0;
+                {
+                    Locker locker { m_nwConnectionsLock };
+                    bsdFd = m_relayBsdSocket;
+                    bndHost = m_relayBndHost;
+                    bndPort = m_relayBndPort;
+                }
+                if (bsdFd >= 0 && !bndHost.isEmpty() && bndPort > 0) {
+                    struct sockaddr_in dst { };
+                    dst.sin_family = AF_INET;
+                    dst.sin_port = htons(bndPort);
+                    auto bndHostUtf8 = bndHost.utf8();
+                    inet_pton(AF_INET, bndHostUtf8.data(), &dst.sin_addr);
+                    ssize_t sent = sendto(bsdFd, framed.span().data(), framed.size(), 0,
+                        reinterpret_cast<struct sockaddr*>(&dst), sizeof(dst));
+                    static bool loggedBsdSendOnce = false;
+                    if (!loggedBsdSendOnce) {
+                        loggedBsdSendOnce = true;
+                        WTFLogAlways("[Wave29-499.99] sendTo BSD: sendto fd=%d → %s:%u, %zu bytes → returned %zd (errno=%d if -1)",
+                            bsdFd, bndHostUtf8.data(), bndPort, framed.size(), sent);
+                    }
+                    // Notify libwebrtc that the send completed (immediately).
+                    ipcConnection->send(Messages::LibWebRTCNetwork::SignalSentPacket {
+                        m_identifier, options.packet_id, webrtc::TimeMillis() }, 0);
+                    return;
+                }
+                // Fallback to nw_connection_send (legacy path).
                 Ref<ConnectionStateTracker> trackerRef = relayTracker.releaseNonNull();
                 trackerRef->incrementPendingSendCount();
                 OSObjectPtr framedValue = adoptOSObject(dispatch_data_create(framed.span().data(), framed.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT));
