@@ -9,7 +9,14 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <Foundation/Foundation.h>
+// Wave 29-499.44 — Metal framework for MTLCreateSystemDefaultDevice
+// pre-warm wrapper. Defined as extern "C" at bottom of file; called
+// from FontCacheCoreText.cpp via fwd-decl. Lives here (rather than
+// FontCacheCoreText.cpp) because this .mm is @no-unify in
+// SourcesCocoa.txt so Obj-C++ semantics are preserved at compile.
+#import <Metal/Metal.h>
 #include <wtf/JSONValues.h>
+#include <wtf/Logging.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/WTFString.h>
@@ -274,5 +281,35 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
 }
 
 } // namespace WebCore
+
+// Wave 29-499.44 Task #79 follow-up — Metal device pre-warm.
+// webgl_getParameter probe shows Mac fork first-call 11ms vs iPhone
+// 1.67ms (9ms cold-cache delta). The cost is GraphicsContextGLCocoa's
+// MTLCreateSystemDefaultDevice() on first WebGL context creation
+// (Source/WebCore/platform/graphics/cocoa/GraphicsContextGLCocoa.mm:91).
+// Metal framework caches the device process-globally; the first call
+// pays the init cost, subsequent calls return the cached device.
+//
+// Hooked here (DriftstackArchetypeConfig.mm) rather than
+// FontCacheCoreText.cpp because this .mm is @no-unify (per
+// SourcesCocoa.txt) which preserves Obj-C++ semantics. The earlier
+// Wave 29-499.38 attempt put it directly in FontCacheCoreText.cpp
+// which got bundled into a unified-source compiled as C++, breaking
+// on id<MTLDevice> Obj-C type (reverted in Wave 29-499.40).
+//
+// Exposed as extern "C" so the calling .cpp (FontCacheCoreText.cpp)
+// can declare it without needing Metal headers in its C++-compiled
+// translation unit.
+extern "C" void driftstackMetalPreWarm()
+{
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device) {
+            // Non-ARC bundle: manual release.
+            [device release];
+            WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/MetalWarmup] Metal device (MTLCreateSystemDefaultDevice) pre-warmed via DriftstackArchetypeConfig.mm wrapper — webgl_getParameter 9ms cold-cache outlier eliminated for first WebGL context creation (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
+        }
+    }
+}
 
 #endif // PLATFORM(DRIFTSTACK)

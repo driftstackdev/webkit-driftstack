@@ -364,12 +364,23 @@ static void initializeDriftstackIOSFontMapIfNeeded()
         }
     }
 
-    // Wave 29-499.38 REVERTED — Metal device pre-warm would need a
-    // separate .mm file because FontCacheCoreText.cpp gets bundled into
-    // a unified-source compiled as plain C++ (no Obj-C++ support for
-    // id<MTLDevice>). webgl_getParameter 9ms outlier remains open;
-    // closure path requires a separate file outside the unified-source
-    // bundle. Deferred.
+    // Wave 29-499.44 — Metal device pre-warm via @no-unify wrapper.
+    // The function is defined in DriftstackArchetypeConfig.mm (which is
+    // @no-unify per SourcesCocoa.txt, so its Obj-C++ semantics are
+    // preserved). Calling it from here is safe because the forward
+    // declaration is pure C linkage — no Metal headers leak into this
+    // C++-compiled translation unit.
+    //
+    // History: Wave 29-499.38 attempted to inline the pre-warm in this
+    // file, which broke under unified-source C++ compile mode on
+    // `id<MTLDevice>` Obj-C type (reverted in Wave 29-499.40).
+    {
+        const char* eager = getenv("DRIFTSTACK_EAGER_INIT_ATLAS");
+        if (eager && eager[0] == '1') {
+            extern "C" void driftstackMetalPreWarm();
+            driftstackMetalPreWarm();
+        }
+    }
 
     // Wave 29-499.39 Task #79 follow-up — Latin-text shaper warmup.
     // font_offsetWidth probe shows Mac fork first-call 12ms vs iPhone
