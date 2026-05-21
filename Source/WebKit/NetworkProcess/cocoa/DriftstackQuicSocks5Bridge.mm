@@ -650,7 +650,7 @@ RetainPtr<nw_endpoint_t> getRelayEndpoint()
 // connection to gost + attach DriftstackSocks5TCPFramer that does
 // SOCKS5 GREETING + AUTH + CONNECT to original destination at start,
 // then becomes transparent passthrough.
-RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoint, nw_parameters_t /*originalParameters*/)
+RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoint, nw_parameters_t parameters)
 {
     if (!isCustomSocks5Active())
         return nullptr;
