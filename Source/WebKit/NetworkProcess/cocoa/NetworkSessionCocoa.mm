@@ -1074,8 +1074,9 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
+    // Wave 29-499.79 — replace memset with zero-init to satisfy
+    // -Werror=-Wunsafe-buffer-usage-in-libc-call.
+    struct sockaddr_in addr = { };
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
@@ -1097,15 +1098,21 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     if (greetResp[1] == 0x02) {
         // User/pass auth required
         if (!user || !user[0] || !pass || !pass[0]) { close(sock); return false; }
-        size_t userLen = strlen(user);
-        size_t passLen = strlen(pass);
+        // Wave 29-499.79 — manual length count to satisfy
+        // -Werror=-Wunsafe-buffer-usage-in-libc-call (no strlen, no memcpy).
+        size_t userLen = 0;
+        while (user[userLen] && userLen < 256) ++userLen;
+        size_t passLen = 0;
+        while (pass[passLen] && passLen < 256) ++passLen;
         if (userLen > 255 || passLen > 255) { close(sock); return false; }
         uint8_t authBuf[3 + 255 + 255];
         authBuf[0] = 0x01;
         authBuf[1] = (uint8_t)userLen;
-        memcpy(authBuf + 2, user, userLen);
+        for (size_t i = 0; i < userLen; ++i)
+            authBuf[2 + i] = (uint8_t)user[i];
         authBuf[2 + userLen] = (uint8_t)passLen;
-        memcpy(authBuf + 3 + userLen, pass, passLen);
+        for (size_t i = 0; i < passLen; ++i)
+            authBuf[3 + userLen + i] = (uint8_t)pass[i];
         size_t authLen = 3 + userLen + passLen;
         if ((size_t)send(sock, authBuf, authLen, 0) != authLen) { close(sock); return false; }
         uint8_t authResp[2];
@@ -1142,17 +1149,28 @@ static bool driftstackSocks5UdpSupported()
             WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no DRIFTSTACK_SOCKS5_PROXY set — defaulting to UDP=unsupported (HTTP/3 stays disabled)");
             return;
         }
-        const char* colon = strchr(host, ':');
-        if (!colon) {
+        // Wave 29-499.79 — manual scan to satisfy
+        // -Werror=-Wunsafe-buffer-usage-in-libc-call (no strchr/memcpy/atoi).
+        size_t colonIdx = 0;
+        while (host[colonIdx] && host[colonIdx] != ':')
+            ++colonIdx;
+        if (!host[colonIdx]) {
             WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] DRIFTSTACK_SOCKS5_PROXY missing ':' separator");
             return;
         }
         char hostBuf[256];
-        size_t hostLen = colon - host;
-        if (hostLen >= sizeof(hostBuf)) return;
-        memcpy(hostBuf, host, hostLen);
-        hostBuf[hostLen] = 0;
-        int port = atoi(colon + 1);
+        if (colonIdx >= sizeof(hostBuf)) return;
+        for (size_t i = 0; i < colonIdx; ++i)
+            hostBuf[i] = host[i];
+        hostBuf[colonIdx] = 0;
+        // Parse port digit-by-digit (no atoi).
+        int port = 0;
+        for (size_t i = colonIdx + 1; host[i]; ++i) {
+            if (host[i] < '0' || host[i] > '9') { port = 0; break; }
+            port = port * 10 + (host[i] - '0');
+            if (port > 65535) { port = 0; break; }
+        }
+        if (port == 0) return;
         bool result = driftstackProbeSocks5UdpAssociate(hostBuf, port, user, pass);
         s_supported = result;
         if (result) {
