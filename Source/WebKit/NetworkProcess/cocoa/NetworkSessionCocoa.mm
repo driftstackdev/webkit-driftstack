@@ -1489,44 +1489,13 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // natively. Assign via configuration.proxyConfigurations
             // (the modern equivalent of connectionProxyDictionary).
             //
-            // Wave 29-499.111 — test mode: use LEGACY kCFNetworkProxiesSOCKSEnable
-            // instead of modern nw_proxy_config_create_socksv5 to see if
-            // Apple's h3-disable-on-proxy gate is modern-API-only.
-            // DRIFTSTACK_SOCKS5_LEGACY_MODE=1 activates this experimental path.
-            const char* legacyModeEnv = getenv("DRIFTSTACK_SOCKS5_LEGACY_MODE");
-            bool legacyMode = legacyModeEnv && legacyModeEnv[0] == '1';
-            if (legacyMode) {
-                const char* legacyProxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
-                if (legacyProxyEnv && legacyProxyEnv[0]) {
-                    String legacyEnvStr = String::fromUTF8(legacyProxyEnv);
-                    size_t colon = legacyEnvStr.find(':');
-                    if (colon != notFound) {
-                        String legacyHost = legacyEnvStr.left(colon);
-                        auto legacyPortStr = legacyEnvStr.substring(colon + 1);
-                        int legacyPort = 0;
-                        bool legacyPortOK = true;
-                        for (unsigned i = 0; i < legacyPortStr.length() && legacyPortOK; ++i) {
-                            UChar c = legacyPortStr[i];
-                            if (c < '0' || c > '9') { legacyPortOK = false; break; }
-                            legacyPort = legacyPort * 10 + (c - '0');
-                        }
-                        if (legacyPortOK && legacyPort > 0) {
-                            NSDictionary* legacyProxy = @{
-                                (NSString*)kCFNetworkProxiesSOCKSEnable: @YES,
-                                (NSString*)kCFNetworkProxiesSOCKSProxy: legacyHost.createNSString().get(),
-                                (NSString*)kCFNetworkProxiesSOCKSPort: @(legacyPort),
-                            };
-                            configuration.get().connectionProxyDictionary = legacyProxy;
-                            static bool loggedLegacyOnce = false;
-                            if (!loggedLegacyOnce) {
-                                loggedLegacyOnce = true;
-                                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k/Wave29-499.111] LEGACY MODE — using kCFNetworkProxiesSOCKSEnable keys instead of nw_proxy_config_create_socksv5. Testing if h3 fires with legacy SOCKS5.");
-                            }
-                        }
-                    }
-                }
-            }
-            if (!legacyMode) {
+            // Wave 29-499.111 (tested, reverted) — empirical: legacy
+            // kCFNetworkProxiesSOCKSEnable can't handle auth-required SOCKS5
+            // proxies (no RFC 1929 support in macOS public API). Modern
+            // nw_proxy_config_create_socksv5 supports auth but triggers
+            // Apple's h3-disable gate. Both paths fail for h3-over-auth-
+            // SOCKS5. Real fix is Task #104 — TCP SOCKS5 in DYLD interpose.
+            {
                 String hostEnvStr;
                 int port = 0;
                 String socks5Host;
