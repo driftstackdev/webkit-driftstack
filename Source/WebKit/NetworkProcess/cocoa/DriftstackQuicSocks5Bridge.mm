@@ -700,17 +700,42 @@ RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoi
     // the TCP layer to actually reach gost. After SOCKS5 CONNECT succeeds,
     // framer is transparent → TLS handshake flows through the tunnel to
     // the real destination.
+    // Wave 29-499.125 — proper stack ordering: framer BELOW TLS.
+    // Apple's prepend_application_protocol puts the protocol on TOP (closest
+    // to application). For SOCKS5 we need framer at BOTTOM (closest to TCP),
+    // so it sees raw TCP bytes BEFORE TLS encrypts them.
+    //
+    // Pattern: capture existing app protocols (e.g. TLS), clear them, prepend
+    // framer first (now at bottom), then prepend captured protocols on top.
+    // Result: [TLS, framer] = TLS-on-top, framer-on-bottom (closest to TCP).
     nw_protocol_definition_t framerDef = DriftstackSocks5TCPFramer::getFramerDefinition();
     if (framerDef) {
         auto framerOptions = adoptNS(nw_framer_create_options(framerDef));
         auto stack = adoptNS(nw_parameters_copy_default_protocol_stack(parameters));
         if (stack) {
-            // Prepend our SOCKS5 framer at the TRANSPORT-adjacent layer
-            // (above TCP, below TLS). After framer's SOCKS5 CONNECT
-            // succeeds, it becomes transparent — TLS handshake flows
-            // through the tunnel to destHost (which CFNetwork's existing
-            // TLS options already target via SNI).
+            // Capture existing application protocols (TLS + anything else)
+            NSMutableArray* existingProtocols = [NSMutableArray array];
+            nw_protocol_stack_iterate_application_protocols(stack.get(),
+                ^(nw_protocol_options_t opt) {
+                    if (opt)
+                        [existingProtocols addObject:(__bridge id)opt];
+                });
+            // Clear them
+            nw_protocol_stack_clear_application_protocols(stack.get());
+            // Add framer first → it ends up at bottom
             nw_protocol_stack_prepend_application_protocol(stack.get(), framerOptions.get());
+            // Re-prepend original protocols → they go on top of framer
+            // Iterate in REVERSE so original order is preserved
+            for (NSInteger i = [existingProtocols count] - 1; i >= 0; --i) {
+                nw_protocol_options_t opt = (__bridge nw_protocol_options_t)[existingProtocols objectAtIndex:i];
+                nw_protocol_stack_prepend_application_protocol(stack.get(), opt);
+            }
+            static bool loggedStackOnce = false;
+            if (!loggedStackOnce) {
+                loggedStackOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Task#104/Wave29-499.125] protocol stack: framer inserted BELOW %lu existing app protocols (TLS et al)",
+                    (unsigned long)[existingProtocols count]);
+            }
         }
     }
 
