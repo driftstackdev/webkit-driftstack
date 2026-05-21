@@ -218,6 +218,10 @@ typedef bool (*DriftstackQuicIsActiveFn)(void);
 typedef bool (*DriftstackQuicParamsUseQuicFn)(nw_parameters_t);
 typedef bool (*DriftstackQuicParamsUseUdpFn)(nw_parameters_t);
 typedef nw_connection_t (*DriftstackQuicCreateRelayFn)(nw_endpoint_t, nw_parameters_t);
+// Wave 29-499.117 (Task #104 Day 2) — TCP relay creation + TCP-interpose
+// gate, resolved lazily via dlsym at interpose-time.
+typedef nw_connection_t (*DriftstackQuicCreateTCPRelayFn)(nw_endpoint_t, nw_parameters_t);
+typedef bool (*DriftstackQuicTcpInterposeActiveFn)(void);
 
 // Canonical DYLD_INTERPOSE macro (matches Apple's dyld-interposing.h).
 // Same shape as the ANGLE precedent at
@@ -271,6 +275,9 @@ static DriftstackQuicIsActiveFn bridgeIsActive = nullptr;
 static DriftstackQuicParamsUseQuicFn bridgeParamsUseQuic = nullptr;
 static DriftstackQuicParamsUseUdpFn bridgeParamsUseUdp = nullptr;
 static DriftstackQuicCreateRelayFn bridgeCreateRelay = nullptr;
+// Wave 29-499.117 — TCP path symbols (resolved when WebKit framework loads).
+static DriftstackQuicCreateTCPRelayFn bridgeCreateTCPRelay = nullptr;
+static DriftstackQuicTcpInterposeActiveFn bridgeTcpInterposeActive = nullptr;
 
 static void resolveBridgeSymbols()
 {
@@ -283,6 +290,10 @@ static void resolveBridgeSymbols()
     // to QUIC-only check in that case).
     bridgeParamsUseUdp = reinterpret_cast<DriftstackQuicParamsUseUdpFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_parametersUseUdpTransport"));
     bridgeCreateRelay = reinterpret_cast<DriftstackQuicCreateRelayFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_createRelayConnection"));
+    // Wave 29-499.117 — TCP-path symbols (may be nullptr on older WebKit fork
+    // builds; UDP-only mode remains functional if absent).
+    bridgeCreateTCPRelay = reinterpret_cast<DriftstackQuicCreateTCPRelayFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_createTCPRelayConnection"));
+    bridgeTcpInterposeActive = reinterpret_cast<DriftstackQuicTcpInterposeActiveFn>(dlsym(RTLD_DEFAULT, "driftstack_quic_tcpInterposeActive"));
     if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay) {
         static bool loggedAbsenceOnce = false;
         if (!loggedAbsenceOnce) {
@@ -363,10 +374,33 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     // both QUIC and plain UDP identically since SOCKS5 UDP_ASSOCIATE is
     // payload-agnostic at the relay framing layer.
     bool needsRelay = false;
-    if (bridgeParamsUseUdp && bridgeParamsUseUdp(parameters))
+    bool isUdpOrQuic = false;
+    if (bridgeParamsUseUdp && bridgeParamsUseUdp(parameters)) {
         needsRelay = true;
-    else if (bridgeParamsUseQuic(parameters))
+        isUdpOrQuic = true;
+    } else if (bridgeParamsUseQuic(parameters)) {
         needsRelay = true;
+        isUdpOrQuic = true;
+    }
+    // Wave 29-499.117 (Task #104 Day 2) — TCP interpose path. When the
+    // TCP-interpose gate is active and this is NOT a UDP/QUIC connection,
+    // route through SOCKS5 CONNECT framer (driftstack_quic_createTCPRelayConnection).
+    // CFNetwork doesn't see a proxy via nw_proxy_config → h3-disable gate
+    // doesn't trigger → h3 packets go through the UDP interpose path above.
+    bool tcpInterpose = bridgeTcpInterposeActive && bridgeTcpInterposeActive();
+    if (!isUdpOrQuic && tcpInterpose && bridgeCreateTCPRelay) {
+        static bool loggedTcpOnce = false;
+        if (!loggedTcpOnce) {
+            loggedTcpOnce = true;
+            NSLog(@"[Driftstack-EG-WK-1.10/Task#104/Wave29-499.117] driftstack_nw_connection_create: FIRST TCP interpose match — redirecting to driftstack_quic_createTCPRelayConnection (SOCKS5 framer path).");
+        }
+        ++s_inInterposeDepth;
+        nw_connection_t tcpRelay = bridgeCreateTCPRelay(endpoint, parameters);
+        --s_inInterposeDepth;
+        if (tcpRelay)
+            return tcpRelay;
+        return originalNwConnectionCreate(endpoint, parameters);
+    }
     if (!needsRelay)
         return originalNwConnectionCreate(endpoint, parameters);
 
