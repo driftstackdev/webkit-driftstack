@@ -1614,6 +1614,23 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                                     }
                                 }
                             } else {
+                                // Wave 29-499.107 — explicitly FORCE-ENABLE _allowsHTTP3=YES.
+                                // Apple's CFNetwork may default it to NO when a SOCKS5 proxy
+                                // is configured (proxy-disables-h3 internal gate). Empirical
+                                // post-.106: CFNetwork doesn't attempt h3 despite earlier
+                                // "LEFT ENABLED" assumption. Force explicit @YES to override
+                                // any internal proxy-h3-disable logic.
+                                @try {
+                                    [configuration.get() setValue:@YES forKey:@"_allowsHTTP3"];
+                                    static bool loggedOnceH3Forced = false;
+                                    if (!loggedOnceH3Forced) {
+                                        loggedOnceH3Forced = true;
+                                        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.107] _allowsHTTP3=YES FORCE-APPLIED — overrides Apple's internal proxy-disables-h3 gate so CFNetwork attempts h3 Alt-Svc upgrade; UDP packets route via SOCKS5 §7 relay");
+                                    }
+                                } @catch (NSException *ex) {
+                                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/Wave29-499.107] _allowsHTTP3=YES set FAILED: %s",
+                                        [[ex reason] UTF8String] ?: "unknown");
+                                }
                                 static bool loggedOnceH3Enabled = false;
                                 if (!loggedOnceH3Enabled) {
                                     loggedOnceH3Enabled = true;
