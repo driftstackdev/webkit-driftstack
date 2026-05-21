@@ -1496,20 +1496,23 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             // Apple's h3-disable gate. Both paths fail for h3-over-auth-
             // SOCKS5. Real fix is Task #104 — TCP SOCKS5 in DYLD interpose.
             //
-            // Wave 29-499.118 (Task #104 Day 3): SKIP this entire
-            // proxy_config_create_socksv5 registration when TCP interpose
-            // is active. With DRIFTSTACK_SOCKS5_TCP_INTERPOSE=1, the DYLD
-            // interpose catches BOTH TCP and UDP nw_connection_create →
-            // CFNetwork doesn't see a proxy via nw_proxy_config → h3
-            // ALPN advertised + h3 packets route through the UDP path
-            // of the interpose → working h3 over SOCKS5.
+            // Wave 29-499.118 (Task #104 Day 3): SKIP nw_proxy_config_create_socksv5
+            // when EITHER:
+            //   DRIFTSTACK_SOCKS5_TCP_INTERPOSE=1 (interpose-based routing), OR
+            //   DRIFTSTACK_SOCKS5_FORCE_URLPROTOCOL=1 (.129 Path B: URLProtocol-based)
+            // With proxy_config skipped, CFNetwork doesn't see a proxy → won't
+            // disable h3 ALPN. URLProtocol-based path handles all HTTPS via
+            // CFStream+SOCKS5+TLS at the URL-loading layer; DYLD interpose
+            // catches UDP/QUIC for h3.
             const char* tcpInterposeEnv = getenv("DRIFTSTACK_SOCKS5_TCP_INTERPOSE");
-            bool skipNWProxyConfig = tcpInterposeEnv && tcpInterposeEnv[0] == '1';
+            const char* forceURLProtoEnv = getenv("DRIFTSTACK_SOCKS5_FORCE_URLPROTOCOL");
+            bool skipNWProxyConfig = (tcpInterposeEnv && tcpInterposeEnv[0] == '1')
+                || (forceURLProtoEnv && forceURLProtoEnv[0] == '1');
             if (skipNWProxyConfig) {
                 static bool loggedSkipOnce = false;
                 if (!loggedSkipOnce) {
                     loggedSkipOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k/Wave29-499.118] TCP-INTERPOSE MODE — skipping nw_proxy_config_create_socksv5. CFNetwork won't see proxy → h3 ALPN advertised → h3 attempts route via DYLD interpose SOCKS5 §7 UDP relay.");
+                    WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.6.k/Wave29-499.129] SKIP MODE — nw_proxy_config_create_socksv5 NOT registered. CFNetwork won't see proxy → h3 ALPN advertised. URLProtocol+CFStream handles HTTPS; DYLD interpose catches h3 UDP.");
                 }
             }
             if (!skipNWProxyConfig) {
