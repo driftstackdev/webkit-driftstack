@@ -505,6 +505,29 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
     // frames silently (logged once-per-class) — bad frames must not crash
     // the relay channel.
     processUDPData(RetainPtr<nw_connection_t> { m_relayConnection }, Ref { *m_relayTracker }, 0, [identifier = m_identifier, ipcConnection = m_connection.copyRef()](std::span<const uint8_t> frame, WebRTCNetwork::EcnMarking ecn) {
+        // Wave 29-499.91 — diagnostic hex dump of incoming relay frames
+        // (first 5 receives, first 64 bytes each). The earlier trace showed
+        // unwrap producing source 45.17.110.89:56453 + 4086-byte payload,
+        // which doesn't match RFC 1928 §7 (source should be the STUN
+        // server's IP, not the SOCKS5 relay's own IP). Need raw bytes.
+        {
+            static std::atomic<unsigned> s_recvCount { 0 };
+            unsigned thisRecv = s_recvCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (thisRecv <= 5) {
+                char hexBuf[64 * 3 + 1] = { };
+                size_t hexLen = std::min<size_t>(frame.size(), 64);
+                char* p = hexBuf;
+                for (size_t i = 0; i < hexLen; ++i) {
+                    static const char hex[] = "0123456789abcdef";
+                    *p++ = hex[frame[i] >> 4];
+                    *p++ = hex[frame[i] & 0xf];
+                    *p++ = ' ';
+                }
+                if (p > hexBuf) *(p - 1) = 0;
+                WTFLogAlways("[Wave29-499.91] recv#%u: frameSize=%zu — first %zu hex: %s",
+                    thisRecv, frame.size(), hexLen, hexBuf);
+            }
+        }
         DriftstackRTC::UnwrappedDatagram unwrapped;
         DriftstackRTC::BridgeResult r = DriftstackRTC::unwrapIncomingDatagram(frame, unwrapped);
         if (r != DriftstackRTC::BridgeResult::Success) {
