@@ -30,6 +30,8 @@
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/CString.h>
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
 namespace WebKit {
 namespace DriftstackSocks5TCPFramer {
 
@@ -333,5 +335,7 @@ void setPendingTcpDestination(const String& destHost, uint16_t destPort,
 
 } // namespace DriftstackSocks5TCPFramer
 } // namespace WebKit
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 #endif // PLATFORM(DRIFTSTACK)
