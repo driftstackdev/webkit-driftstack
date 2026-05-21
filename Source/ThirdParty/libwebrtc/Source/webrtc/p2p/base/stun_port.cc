@@ -406,6 +406,27 @@ void UDPPort::OnReadPacket(AsyncPacketSocket* socket,
   RTC_DCHECK(socket == socket_);
   RTC_DCHECK(!packet.source_address().IsUnresolvedIP());
 
+  // Wave 29-499.104 — diagnose UDPPort::OnReadPacket flow + STUN response
+  // path. Logs first 5 packets with source + server_addresses_ membership.
+  {
+    static std::atomic<unsigned> s_count { 0 };
+    unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 5) {
+      bool inServerSet = server_addresses_.find(packet.source_address())
+          != server_addresses_.end();
+      std::string serverList;
+      for (const auto& sa : server_addresses_) {
+        if (!serverList.empty()) serverList += ",";
+        serverList += sa.ToString();
+      }
+      RTC_LOG(LS_ERROR) << "[Wave29-499.104] UDPPort::OnReadPacket #" << n
+          << " src=" << packet.source_address().ToString()
+          << " payloadSize=" << packet.payload().size()
+          << " inServerSet=" << (inServerSet ? "YES" : "NO")
+          << " server_addresses=[" << serverList << "]";
+    }
+  }
+
   // Look for a response from the STUN server.
   // Even if the response doesn't match one of our outstanding requests, we
   // will eat it because it might be a response to a retransmitted packet, and
