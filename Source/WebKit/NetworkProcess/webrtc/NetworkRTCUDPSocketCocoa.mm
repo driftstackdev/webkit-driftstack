@@ -543,6 +543,50 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
             }
             return;
         }
+        // Wave 29-499.98 — filter out gost keepalive frames. gost sends
+        // periodic §7-headers-with-empty-payload from its own egress IP
+        // as keepalives. These confuse libwebrtc which would try to STUN-
+        // parse them. Real STUN responses come from real STUN servers
+        // (74.x for Google, 162.x for Cloudflare). Drop frames whose
+        // source is the SOCKS5 proxy IP itself OR have empty/tiny
+        // payloads (<8 bytes can't be a valid STUN message).
+        if (unwrapped.payload.size() < 8) {
+            static std::atomic<unsigned> s_keepalivesDropped { 0 };
+            unsigned n = s_keepalivesDropped.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1 || (n & (n - 1)) == 0) { // log on 1, 2, 4, 8, 16...
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.98] m_relayConnection recv: DROPPED gost-keepalive #%u (payload=%zu bytes from %s:%u)",
+                    n, unwrapped.payload.size(),
+                    unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort);
+            }
+            return;
+        }
+        // Filter: if source host is the SOCKS5 proxy itself (gost), drop.
+        // Real STUN responses come from real STUN servers, not gost.
+        const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+        if (proxyEnv && proxyEnv[0]) {
+            // Extract IP from "host:port" form.
+            const char* colon = nullptr;
+            for (const char* p = proxyEnv; *p; ++p) {
+                if (*p == ':') { colon = p; break; }
+            }
+            if (colon) {
+                size_t ipLen = colon - proxyEnv;
+                if (ipLen < 64) {
+                    char ipBuf[64];
+                    for (size_t i = 0; i < ipLen; ++i) ipBuf[i] = proxyEnv[i];
+                    ipBuf[ipLen] = 0;
+                    if (unwrapped.sourceHost == String::fromUTF8(ipBuf)) {
+                        static std::atomic<unsigned> s_proxyDropped { 0 };
+                        unsigned n = s_proxyDropped.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (n == 1 || (n & (n - 1)) == 0) {
+                            WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.98] m_relayConnection recv: DROPPED proxy-sourced frame #%u (gost keepalive/echo from %s:%u, payload=%zu bytes)",
+                                n, unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
+                        }
+                        return;
+                    }
+                }
+            }
+        }
         webrtc::IPAddress webrtcIp;
         // Wave 29-499.14 — close IPv6 TODO in WebRTC SOCKS5 §7 unwrap path.
         // ATYP=0x01 (IPv4) is the common case; ATYP=0x04 (IPv6) now handled
