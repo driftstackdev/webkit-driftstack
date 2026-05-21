@@ -105,6 +105,15 @@ BridgeResult unwrapIncomingQuicPacket(std::span<const uint8_t> frame, UnwrappedQ
 // callbacks dispatch unwrapped packets back to libwebrtc / CFNetwork.
 RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEndpoint, nw_parameters_t parameters);
 
+// Wave 29-499.116 (Task #104 Day 2) — TCP variant of relay connection.
+// Creates a TCP nw_connection to the SOCKS5 proxy with the
+// DriftstackSocks5TCPFramer attached. Framer does SOCKS5 GREETING+AUTH+
+// CONNECT to original destination at start, then becomes transparent.
+RetainPtr<nw_connection_t> createTCPRelayConnection(nw_endpoint_t originalEndpoint, nw_parameters_t parameters);
+
+// Wave 29-499.116 — gate (DRIFTSTACK_SOCKS5_TCP_INTERPOSE=1).
+bool tcpInterposeActive();
+
 // Slice 16.5 (WebTransport in-place hook): attach the §7 nw_framer to the
 // caller's existing nw_parameters_t protocol stack + stash original peer
 // destination metadata in the framer-destination registry so the framer's
