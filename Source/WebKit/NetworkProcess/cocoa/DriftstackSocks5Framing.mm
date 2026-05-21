@@ -128,8 +128,14 @@ bool unwrap(std::span<const uint8_t> frame, Endpoint& outSource, Vector<uint8_t>
     } else
         return false;
 
-    uint16_t portNetOrder = (static_cast<uint16_t>(bytes[cursor]) << 8) | bytes[cursor + 1];
-    outSource.port = ntohs(portNetOrder);
+    // Wave 29-499.100 — port byte-order fix. Manual byte-by-byte
+    // construction from network-order bytes already produces the correct
+    // host-order value; calling ntohs() then would double-swap on
+    // little-endian (x86/ARM64). Empirical: bytes [0x4B, 0x66] (=19302
+    // network order) were producing port=26187 (=0x664B = byte-swapped)
+    // → libwebrtc rejected the STUN binding response as source-port
+    // mismatch → no srflx candidate → browserleaks/webrtc showed no IP.
+    outSource.port = (static_cast<uint16_t>(bytes[cursor]) << 8) | bytes[cursor + 1];
     cursor += 2;
 
     if (cursor > len) return false;
