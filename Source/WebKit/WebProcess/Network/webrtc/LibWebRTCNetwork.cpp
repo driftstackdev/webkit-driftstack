@@ -134,6 +134,23 @@ void LibWebRTCNetwork::signalAddressReady(WebCore::LibWebRTCSocketIdentifier ide
 void LibWebRTCNetwork::signalReadPacket(WebCore::LibWebRTCSocketIdentifier identifier, std::span<const uint8_t> data, const RTCNetwork::IPAddress& address, uint16_t port, int64_t timestamp, WebRTCNetwork::EcnMarking ecn)
 {
     ASSERT(!WTF::isMainRunLoop());
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.103 — diagnose libwebrtc receive path. SOCKS5 §7 unwrap
+    // delivers STUN responses correctly at IPC layer (per V-2026-05-21-
+    // W29-499.102); first 5 packets are logged with socket-lookup result
+    // so we know if the identifier mismatch is silently dropping packets.
+    {
+        static std::atomic<unsigned> s_count { 0 };
+        unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 5) {
+            auto socketPtr = m_socketFactory.socket(identifier);
+            WTFLogAlways("[Wave29-499.103/WebContent] signalReadPacket #%u: identifier=%" PRIu64 " socket=%p data=%zu bytes from %s:%u (lookup %s)",
+                n, identifier.toUInt64(), socketPtr.get(), data.size(),
+                address.rtcAddress().ToString().c_str(), port,
+                socketPtr ? "OK" : "FAILED");
+        }
+    }
+#endif
     if (CheckedPtr socket = m_socketFactory.socket(identifier))
         socket->signalReadPacket(data, webrtc::SocketAddress(address.rtcAddress(), port), timestamp, convertToWebRTCEcnMarking(ecn));
 }

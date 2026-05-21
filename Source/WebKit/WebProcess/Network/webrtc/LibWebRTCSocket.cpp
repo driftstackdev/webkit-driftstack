@@ -80,6 +80,20 @@ void LibWebRTCSocket::signalAddressReady(const webrtc::SocketAddress& address)
 
 void LibWebRTCSocket::signalReadPacket(std::span<const uint8_t> data, webrtc::SocketAddress&& address, int64_t timestamp, webrtc::EcnMarking ecn)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.103 — trace at LibWebRTCSocket layer before
+    // NotifyPacketReceived dispatches to libwebrtc subscribers (StunPort,
+    // P2PTransportChannel etc). Confirms libwebrtc IS getting our data.
+    {
+        static std::atomic<unsigned> s_count { 0 };
+        unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 5) {
+            WTFLogAlways("[Wave29-499.103/LibWebRTCSocket] signalReadPacket #%u: %zu bytes from %s:%u, isSuspended=%d state=%d type=%d",
+                n, data.size(), address.ipaddr().ToString().c_str(), address.port(),
+                m_isSuspended ? 1 : 0, (int)m_state, (int)m_type);
+        }
+    }
+#endif
     if (m_isSuspended)
         return;
 
@@ -88,6 +102,15 @@ void LibWebRTCSocket::signalReadPacket(std::span<const uint8_t> data, webrtc::So
     if (timestamp)
         packetTimestamp = webrtc::Timestamp::Micros(timestamp);
     NotifyPacketReceived({ { data.data(), data.size() }, m_remoteAddress, packetTimestamp, ecn });
+#if PLATFORM(DRIFTSTACK)
+    {
+        static bool loggedAfterOnce = false;
+        if (!loggedAfterOnce) {
+            loggedAfterOnce = true;
+            WTFLogAlways("[Wave29-499.103/LibWebRTCSocket] FIRST NotifyPacketReceived returned — libwebrtc subscribers (StunPort etc) now have the packet");
+        }
+    }
+#endif
 }
 
 void LibWebRTCSocket::signalSentPacket(int64_t rtcPacketID, int64_t sendTimeMs)
