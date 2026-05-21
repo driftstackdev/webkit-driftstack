@@ -649,6 +649,15 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
     //     (Slice 2.5.b hard-blocks REQUIRE_PROXY=1 at createUDPSocket
     //     time so this fall-through should be unreachable in that mode).
     if (DriftstackRTC::isCustomSocks5Active()) {
+        // Wave 29-499.88 — unconditional first-call trace through the SOCKS5
+        // redirect block so we know exactly which sub-branch is taken (the
+        // existing loggedXOnce statics gave a misleading silent trace).
+        static std::atomic<unsigned> s_sendToCallCount { 0 };
+        unsigned thisCall = s_sendToCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        bool traceThisCall = (thisCall <= 5);
+        if (traceThisCall)
+            WTFLogAlways("[Wave29-499.88] sendTo call#%u: entered SOCKS5 redirect block", thisCall);
+
         bool relayReady;
         RetainPtr<nw_connection_t> relayConn;
         RefPtr<ConnectionStateTracker> relayTracker;
@@ -660,9 +669,16 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                 relayTracker = m_relayTracker;
             }
         }
+        if (traceThisCall)
+            WTFLogAlways("[Wave29-499.88] sendTo call#%u: ensureRelayConnection returned relayReady=%d, relayConn=%p",
+                thisCall, relayReady ? 1 : 0, relayConn.get());
+
         if (relayReady && relayConn) {
             Vector<uint8_t> framed;
             DriftstackRTC::BridgeResult wr = DriftstackRTC::wrapOutgoingDatagram(remoteAddress, data, framed);
+            if (traceThisCall)
+                WTFLogAlways("[Wave29-499.88] sendTo call#%u: wrapOutgoingDatagram result=%d (Success=0), framedSize=%zu",
+                    thisCall, static_cast<int>(wr), framed.size());
             if (wr == DriftstackRTC::BridgeResult::Success) {
                 static bool loggedRedirectOnce = false;
                 if (!loggedRedirectOnce) {
@@ -680,6 +696,11 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                 }).get());
                 return; // bypass per-peer path
             }
+            // Wave 29-499.88 — wrap-FAIL branch always logs (no static gate)
+            // for the first 5 calls; ensures we don't miss this state.
+            if (traceThisCall)
+                WTFLogAlways("[Wave29-499.88] sendTo call#%u: wrap-FAIL branch — wr=%d, falling through to legacy direct",
+                    thisCall, static_cast<int>(wr));
             static bool loggedWrapFailOnce = false;
             if (!loggedWrapFailOnce) {
                 loggedWrapFailOnce = true;
@@ -687,12 +708,19 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                     static_cast<int>(wr));
             }
         } else {
+            // Wave 29-499.88 — no-relay branch unconditional log
+            if (traceThisCall)
+                WTFLogAlways("[Wave29-499.88] sendTo call#%u: no-relay branch — relayReady=%d relayConn=%p, falling through to legacy direct",
+                    thisCall, relayReady ? 1 : 0, relayConn.get());
             static bool loggedNoRelayOnce = false;
             if (!loggedNoRelayOnce) {
                 loggedNoRelayOnce = true;
                 WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] sendTo: bridge active but m_relayConnection unavailable — falling through to direct nw_connection (LEAK ALLOWED; set DRIFTSTACK_REQUIRE_PROXY=1 to enforce egress lock via createUDPSocket hard-block)");
             }
         }
+        if (traceThisCall)
+            WTFLogAlways("[Wave29-499.88] sendTo call#%u: EXITING SOCKS5 block (will hit legacy direct nw_connection path next)",
+                thisCall);
     }
 #endif
 
