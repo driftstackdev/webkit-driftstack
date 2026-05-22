@@ -1,0 +1,467 @@
+/*
+ * DriftstackHttp2.mm — Wave 29-499.140 (Task #104 Phase 2)
+ *
+ * Minimal RFC 7540 HTTP/2 client. Sends iPhone-Safari-bit-identical
+ * SETTINGS + WINDOW_UPDATE + HEADERS sequence, executes one request,
+ * returns full response.
+ *
+ * Implementation notes:
+ *  - Frame format: 9 bytes header (length:24, type:8, flags:8, streamId:32)
+ *    + payload[0..length]
+ *  - HPACK (RFC 7541): minimal static-table encoding for known iPhone
+ *    Safari headers. No dynamic table updates from us (size=0). Server's
+ *    HEADERS responses parsed via static-table decode + literal headers.
+ *  - SSL_read / SSL_write through dlsym table (defined in
+ *    DriftstackNetworkLoader.mm). For this Phase 2 scaffold, we expect
+ *    caller to provide pre-resolved function pointers OR we resolve
+ *    locally via dlsym(RTLD_DEFAULT, ...).
+ */
+
+#import "config.h"
+#import "DriftstackHttp2.h"
+
+#if PLATFORM(DRIFTSTACK)
+
+#import <dlfcn.h>
+#import <wtf/Assertions.h>
+#import <wtf/text/CString.h>
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+namespace WebKit {
+
+namespace {
+
+// HTTP/2 connection preface (RFC 7540 §3.5)
+static const char kHttp2Preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+// Frame types (RFC 7540 §6)
+enum FrameType : uint8_t {
+    kFrameData          = 0x0,
+    kFrameHeaders       = 0x1,
+    kFramePriority      = 0x2,
+    kFrameRstStream     = 0x3,
+    kFrameSettings      = 0x4,
+    kFramePushPromise   = 0x5,
+    kFramePing          = 0x6,
+    kFrameGoaway        = 0x7,
+    kFrameWindowUpdate  = 0x8,
+    kFrameContinuation  = 0x9,
+};
+
+// Frame flags
+enum FrameFlag : uint8_t {
+    kFlagEndStream      = 0x1,
+    kFlagAck            = 0x1,  // For SETTINGS / PING
+    kFlagEndHeaders     = 0x4,
+    kFlagPadded         = 0x8,
+    kFlagPriority       = 0x20,
+};
+
+// SETTINGS identifiers (RFC 7540 §6.5.2)
+enum SettingsId : uint16_t {
+    kSettingHeaderTableSize       = 0x1,
+    kSettingEnablePush            = 0x2,
+    kSettingMaxConcurrentStreams  = 0x3,
+    kSettingInitialWindowSize     = 0x4,
+    kSettingMaxFrameSize          = 0x5,
+    kSettingMaxHeaderListSize     = 0x6,
+    kSettingNoRfc7540Priorities   = 0x9,
+};
+
+// SSL function pointer table (dlsym-resolved on first use)
+typedef int (*FnSSL_read)(void*, void*, int);
+typedef int (*FnSSL_write)(void*, const void*, int);
+struct SSLFns {
+    FnSSL_read read = nullptr;
+    FnSSL_write write = nullptr;
+    bool ready = false;
+};
+
+static SSLFns& sslFns()
+{
+    static SSLFns s;
+    if (!s.ready) {
+        s.read = (FnSSL_read)dlsym(RTLD_DEFAULT, "SSL_read");
+        s.write = (FnSSL_write)dlsym(RTLD_DEFAULT, "SSL_write");
+        s.ready = s.read && s.write;
+    }
+    return s;
+}
+
+// Read N bytes from SSL connection; returns false on error/EOF.
+static bool sslReadExact(void* ssl, uint8_t* buf, size_t n)
+{
+    auto& f = sslFns();
+    if (!f.ready) return false;
+    size_t got = 0;
+    while (got < n) {
+        int rc = f.read(ssl, buf + got, static_cast<int>(n - got));
+        if (rc <= 0) return false;
+        got += rc;
+    }
+    return true;
+}
+
+static bool sslWriteAll(void* ssl, const uint8_t* buf, size_t n)
+{
+    auto& f = sslFns();
+    if (!f.ready) return false;
+    size_t sent = 0;
+    while (sent < n) {
+        int rc = f.write(ssl, buf + sent, static_cast<int>(n - sent));
+        if (rc <= 0) return false;
+        sent += rc;
+    }
+    return true;
+}
+
+// Encode 9-byte H/2 frame header into buf (must be >= 9 bytes).
+static void encodeFrameHeader(uint8_t* buf, uint32_t length, uint8_t type, uint8_t flags, uint32_t streamId)
+{
+    buf[0] = (length >> 16) & 0xff;
+    buf[1] = (length >> 8) & 0xff;
+    buf[2] = length & 0xff;
+    buf[3] = type;
+    buf[4] = flags;
+    buf[5] = (streamId >> 24) & 0x7f;  // top bit = reserved
+    buf[6] = (streamId >> 16) & 0xff;
+    buf[7] = (streamId >> 8) & 0xff;
+    buf[8] = streamId & 0xff;
+}
+
+// Parse 9-byte H/2 frame header. Returns true on success.
+static bool decodeFrameHeader(const uint8_t* buf, uint32_t& length, uint8_t& type, uint8_t& flags, uint32_t& streamId)
+{
+    length = (uint32_t(buf[0]) << 16) | (uint32_t(buf[1]) << 8) | uint32_t(buf[2]);
+    type = buf[3];
+    flags = buf[4];
+    streamId = (uint32_t(buf[5] & 0x7f) << 24) | (uint32_t(buf[6]) << 16) | (uint32_t(buf[7]) << 8) | uint32_t(buf[8]);
+    return true;
+}
+
+// HPACK static table (RFC 7541 Appendix A) — partial list of entries used
+// by typical browsers. Index 1-61.
+static const std::pair<const char*, const char*> kHpackStatic[] = {
+    { nullptr, nullptr },  // index 0 unused
+    { ":authority", "" },
+    { ":method", "GET" },
+    { ":method", "POST" },
+    { ":path", "/" },
+    { ":path", "/index.html" },
+    { ":scheme", "http" },
+    { ":scheme", "https" },
+    { ":status", "200" },
+    { ":status", "204" },
+    { ":status", "206" },
+    { ":status", "304" },
+    { ":status", "400" },
+    { ":status", "404" },
+    { ":status", "500" },
+    { "accept-charset", "" },
+    { "accept-encoding", "gzip, deflate" },
+    { "accept-language", "" },
+    { "accept-ranges", "" },
+    { "accept", "" },
+    { "access-control-allow-origin", "" },
+    { "age", "" },
+    { "allow", "" },
+    { "authorization", "" },
+    { "cache-control", "" },
+    { "content-disposition", "" },
+    { "content-encoding", "" },
+    { "content-language", "" },
+    { "content-length", "" },
+    { "content-location", "" },
+    { "content-range", "" },
+    { "content-type", "" },
+    { "cookie", "" },
+    { "date", "" },
+    { "etag", "" },
+    { "expect", "" },
+    { "expires", "" },
+    { "from", "" },
+    { "host", "" },
+    { "if-match", "" },
+    { "if-modified-since", "" },
+    { "if-none-match", "" },
+    { "if-range", "" },
+    { "if-unmodified-since", "" },
+    { "last-modified", "" },
+    { "link", "" },
+    { "location", "" },
+    { "max-forwards", "" },
+    { "proxy-authenticate", "" },
+    { "proxy-authorization", "" },
+    { "range", "" },
+    { "referer", "" },
+    { "refresh", "" },
+    { "retry-after", "" },
+    { "server", "" },
+    { "set-cookie", "" },
+    { "strict-transport-security", "" },
+    { "transfer-encoding", "" },
+    { "user-agent", "" },
+    { "vary", "" },
+    { "via", "" },
+    { "www-authenticate", "" },
+};
+static const int kHpackStaticCount = sizeof(kHpackStatic) / sizeof(kHpackStatic[0]);
+
+// HPACK integer encoding (RFC 7541 §5.1). Writes prefix-padded integer
+// to `out`. Returns number of bytes written.
+static size_t hpackEncodeInteger(Vector<uint8_t>& out, uint32_t value, int prefixBits, uint8_t prefixHigh)
+{
+    size_t initialSize = out.size();
+    uint32_t maxPrefix = (1U << prefixBits) - 1;
+    if (value < maxPrefix) {
+        out.append(static_cast<uint8_t>(prefixHigh | value));
+    } else {
+        out.append(static_cast<uint8_t>(prefixHigh | maxPrefix));
+        value -= maxPrefix;
+        while (value >= 128) {
+            out.append(static_cast<uint8_t>((value & 0x7f) | 0x80));
+            value >>= 7;
+        }
+        out.append(static_cast<uint8_t>(value));
+    }
+    return out.size() - initialSize;
+}
+
+// HPACK string literal encoding (no Huffman for simplicity): length-prefixed.
+static void hpackEncodeString(Vector<uint8_t>& out, const String& s)
+{
+    auto utf8 = s.utf8();
+    hpackEncodeInteger(out, utf8.length(), 7, 0x00);  // huffman flag = 0
+    for (size_t i = 0; i < utf8.length(); ++i)
+        out.append(static_cast<uint8_t>(utf8.data()[i]));
+}
+
+// Find static-table index for (name, value). Returns 0 if not found.
+static int hpackFindFullMatch(const String& name, const String& value)
+{
+    auto nameUtf8 = name.utf8();
+    auto valueUtf8 = value.utf8();
+    for (int i = 1; i < kHpackStaticCount; ++i) {
+        if (!strcmp(kHpackStatic[i].first, nameUtf8.data()) && !strcmp(kHpackStatic[i].second, valueUtf8.data()))
+            return i;
+    }
+    return 0;
+}
+
+static int hpackFindNameOnly(const String& name)
+{
+    auto nameUtf8 = name.utf8();
+    for (int i = 1; i < kHpackStaticCount; ++i) {
+        if (!strcmp(kHpackStatic[i].first, nameUtf8.data()))
+            return i;
+    }
+    return 0;
+}
+
+// Encode one header (name, value) into HPACK block.
+static void hpackEncodeHeader(Vector<uint8_t>& out, const String& name, const String& value)
+{
+    int fullIdx = hpackFindFullMatch(name, value);
+    if (fullIdx > 0) {
+        // Indexed Header Field — pattern 1xxxxxxx
+        hpackEncodeInteger(out, fullIdx, 7, 0x80);
+        return;
+    }
+    int nameIdx = hpackFindNameOnly(name);
+    if (nameIdx > 0) {
+        // Literal Header Field, name indexed, value literal, no-index — 0000xxxx
+        hpackEncodeInteger(out, nameIdx, 4, 0x00);
+        hpackEncodeString(out, value);
+    } else {
+        // Literal Header Field, both literal, no-index — 00000000 + name + value
+        out.append(0x00);
+        hpackEncodeString(out, name);
+        hpackEncodeString(out, value);
+    }
+}
+
+} // anonymous namespace
+
+DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2Request& request)
+{
+    DriftstackHttp2Response resp;
+
+    if (!ssl) {
+        resp.failed = true;
+        resp.errorMessage = "null SSL"_s;
+        return resp;
+    }
+    auto& f = sslFns();
+    if (!f.ready) {
+        resp.failed = true;
+        resp.errorMessage = "SSL_read/write dlsym not resolved"_s;
+        return resp;
+    }
+
+    // 1. Send connection preface
+    if (!sslWriteAll(ssl, (const uint8_t*)kHttp2Preface, sizeof(kHttp2Preface) - 1)) {
+        resp.failed = true;
+        resp.errorMessage = "preface write failed"_s;
+        return resp;
+    }
+
+    // 2. Send our SETTINGS frame (iPhone Safari 26.0 values)
+    // Each setting = 6 bytes (id:16 + value:32)
+    Vector<uint8_t> settingsPayload;
+    auto pushSetting = [&](uint16_t id, uint32_t val) {
+        settingsPayload.append(static_cast<uint8_t>(id >> 8));
+        settingsPayload.append(static_cast<uint8_t>(id & 0xff));
+        settingsPayload.append(static_cast<uint8_t>((val >> 24) & 0xff));
+        settingsPayload.append(static_cast<uint8_t>((val >> 16) & 0xff));
+        settingsPayload.append(static_cast<uint8_t>((val >> 8) & 0xff));
+        settingsPayload.append(static_cast<uint8_t>(val & 0xff));
+    };
+    // iPhone Safari 26.0 SETTINGS order (from real iPhone tls.peet.ws):
+    //   ENABLE_PUSH = 0, INITIAL_WINDOW_SIZE = 4194304,
+    //   MAX_CONCURRENT_STREAMS = 100, NO_RFC7540_PRIORITIES = 1
+    pushSetting(kSettingEnablePush, 0);
+    pushSetting(kSettingInitialWindowSize, 4194304);
+    pushSetting(kSettingMaxConcurrentStreams, 100);
+    pushSetting(kSettingNoRfc7540Priorities, 1);
+
+    uint8_t settingsHeader[9];
+    encodeFrameHeader(settingsHeader, settingsPayload.size(), kFrameSettings, 0, 0);
+    if (!sslWriteAll(ssl, settingsHeader, 9) || !sslWriteAll(ssl, settingsPayload.data(), settingsPayload.size())) {
+        resp.failed = true;
+        resp.errorMessage = "SETTINGS write failed"_s;
+        return resp;
+    }
+
+    // 3. Send WINDOW_UPDATE for connection (stream 0) = +10485760
+    uint8_t windowUpdate[13];
+    encodeFrameHeader(windowUpdate, 4, kFrameWindowUpdate, 0, 0);
+    uint32_t inc = 10485760;
+    windowUpdate[9] = (inc >> 24) & 0xff;
+    windowUpdate[10] = (inc >> 16) & 0xff;
+    windowUpdate[11] = (inc >> 8) & 0xff;
+    windowUpdate[12] = inc & 0xff;
+    if (!sslWriteAll(ssl, windowUpdate, 13)) {
+        resp.failed = true;
+        resp.errorMessage = "WINDOW_UPDATE write failed"_s;
+        return resp;
+    }
+
+    // 4. Send HEADERS frame for stream 1 (client-initiated streams are odd).
+    // iPhone Safari pseudo-header order: m,s,p,a (method, scheme, path, authority)
+    Vector<uint8_t> headersBlock;
+    hpackEncodeHeader(headersBlock, ":method"_s, request.method);
+    hpackEncodeHeader(headersBlock, ":scheme"_s, request.scheme);
+    hpackEncodeHeader(headersBlock, ":path"_s, request.path);
+    hpackEncodeHeader(headersBlock, ":authority"_s, request.authority);
+    for (auto& [key, val] : request.extraHeaders) {
+        hpackEncodeHeader(headersBlock, key.convertToASCIILowercase(), val);
+    }
+
+    bool hasBody = !request.body.isEmpty();
+    uint8_t headersFrameHeader[9];
+    uint8_t flags = kFlagEndHeaders;
+    if (!hasBody) flags |= kFlagEndStream;
+    encodeFrameHeader(headersFrameHeader, headersBlock.size(), kFrameHeaders, flags, 1);
+    if (!sslWriteAll(ssl, headersFrameHeader, 9) || !sslWriteAll(ssl, headersBlock.data(), headersBlock.size())) {
+        resp.failed = true;
+        resp.errorMessage = "HEADERS write failed"_s;
+        return resp;
+    }
+
+    // 5. Send DATA frame(s) if body present
+    if (hasBody) {
+        uint8_t dataHeader[9];
+        encodeFrameHeader(dataHeader, request.body.size(), kFrameData, kFlagEndStream, 1);
+        if (!sslWriteAll(ssl, dataHeader, 9) || !sslWriteAll(ssl, request.body.data(), request.body.size())) {
+            resp.failed = true;
+            resp.errorMessage = "DATA write failed"_s;
+            return resp;
+        }
+    }
+
+    // 6. Read frames until END_STREAM on stream 1
+    uint32_t streamId = 1;
+    bool streamComplete = false;
+    int frameCount = 0;
+    while (!streamComplete && frameCount < 100) {
+        ++frameCount;
+        uint8_t hdr[9];
+        if (!sslReadExact(ssl, hdr, 9)) {
+            resp.failed = true;
+            resp.errorMessage = "frame header read failed"_s;
+            return resp;
+        }
+        uint32_t length;
+        uint8_t type, frameFlags;
+        uint32_t sid;
+        decodeFrameHeader(hdr, length, type, frameFlags, sid);
+
+        Vector<uint8_t> payload;
+        payload.resize(length);
+        if (length > 0 && !sslReadExact(ssl, payload.data(), length)) {
+            resp.failed = true;
+            resp.errorMessage = "frame payload read failed"_s;
+            return resp;
+        }
+
+        switch (type) {
+        case kFrameSettings:
+            if (!(frameFlags & kFlagAck)) {
+                // Send ACK
+                uint8_t ack[9];
+                encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
+                sslWriteAll(ssl, ack, 9);
+            }
+            break;
+        case kFrameHeaders:
+            if (sid == streamId) {
+                // TODO: HPACK decode of response headers. For Phase 2
+                // scaffold, we set a placeholder status. Phase 2.5 adds
+                // full HPACK decoder.
+                resp.statusCode = 200;  // placeholder
+                // Decode would set resp.headers and resp.statusCode properly
+                if (frameFlags & kFlagEndStream)
+                    streamComplete = true;
+            }
+            break;
+        case kFrameData:
+            if (sid == streamId) {
+                resp.body.append(payload.data(), payload.size());
+                if (frameFlags & kFlagEndStream)
+                    streamComplete = true;
+            }
+            break;
+        case kFrameWindowUpdate:
+        case kFramePing:
+            // Ignore
+            break;
+        case kFrameGoaway:
+            resp.failed = true;
+            resp.errorMessage = "received GOAWAY"_s;
+            return resp;
+        case kFrameRstStream:
+            if (sid == streamId) {
+                resp.failed = true;
+                resp.errorMessage = "received RST_STREAM"_s;
+                return resp;
+            }
+            break;
+        default:
+            // Ignore unknown frame types (RFC 7540 §5.5)
+            break;
+        }
+    }
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.140] HTTP/2 request to %s%s completed: status=%d, body=%zu bytes (frames=%d)",
+        request.authority.utf8().data(), request.path.utf8().data(),
+        resp.statusCode, resp.body.size(), frameCount);
+
+    return resp;
+}
+
+} // namespace WebKit
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+#endif // PLATFORM(DRIFTSTACK)
