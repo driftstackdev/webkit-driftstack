@@ -103,9 +103,24 @@ static SSLFns& sslFns()
     return s;
 }
 
+// Wave 29-499.193 — thread_local transport override. When set,
+// sslReadExact/sslWriteAll dispatch via transport callbacks instead
+// of SSL_read/SSL_write. Used by driftstackHttp2ExecuteVia for the
+// custom-TLS path (DriftstackTLS13Client) where ssl=nullptr.
+static thread_local const DriftstackHttp2Transport* g_activeTransport = nullptr;
+
 // Read N bytes from SSL connection; returns false on error/EOF.
 static bool sslReadExact(void* ssl, uint8_t* buf, size_t n)
 {
+    if (g_activeTransport && g_activeTransport->readFn) {
+        size_t got = 0;
+        while (got < n) {
+            int rc = g_activeTransport->readFn(g_activeTransport->ctx, buf + got, n - got);
+            if (rc <= 0) return false;
+            got += rc;
+        }
+        return true;
+    }
     auto& f = sslFns();
     if (!f.ready) return false;
     size_t got = 0;
@@ -119,6 +134,15 @@ static bool sslReadExact(void* ssl, uint8_t* buf, size_t n)
 
 static bool sslWriteAll(void* ssl, const uint8_t* buf, size_t n)
 {
+    if (g_activeTransport && g_activeTransport->writeFn) {
+        size_t sent = 0;
+        while (sent < n) {
+            int rc = g_activeTransport->writeFn(g_activeTransport->ctx, buf + sent, n - sent);
+            if (rc <= 0) return false;
+            sent += rc;
+        }
+        return true;
+    }
     auto& f = sslFns();
     if (!f.ready) return false;
     size_t sent = 0;
@@ -487,13 +511,13 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 {
     DriftstackHttp2Response resp;
 
-    if (!ssl) {
+    if (!ssl && !g_activeTransport) {
         resp.failed = true;
-        resp.errorMessage = "null SSL"_s;
+        resp.errorMessage = "null SSL and no transport"_s;
         return resp;
     }
     auto& f = sslFns();
-    if (!f.ready) {
+    if (!g_activeTransport && !f.ready) {
         resp.failed = true;
         resp.errorMessage = "SSL_read/write dlsym not resolved"_s;
         return resp;
@@ -686,6 +710,19 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
         request.authority.utf8().data(), request.path.utf8().data(),
         resp.statusCode, resp.body.size(), frameCount);
 
+    return resp;
+}
+
+// Wave 29-499.193 — transport-based execute (for custom TLS path)
+DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
+                                                  const DriftstackHttp2Request& request)
+{
+    g_activeTransport = &transport;
+    // Call existing Execute with dummy non-null ssl (won't be used —
+    // sslReadExact/sslWriteAll check g_activeTransport first).
+    static uint8_t dummySsl;
+    auto resp = driftstackHttp2Execute(&dummySsl, request);
+    g_activeTransport = nullptr;
     return resp;
 }
 

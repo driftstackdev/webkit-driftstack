@@ -65,6 +65,16 @@ struct DriftstackHttp2Response {
 // response.failed=true and errorMessage describes the issue.
 DriftstackHttp2Response driftstackHttp2Execute(void* boringSSL, const DriftstackHttp2Request& request);
 
+// Wave 29-499.193 — pluggable transport overload. Caller provides
+// read/write callbacks; HTTP/2 runs over LibreSSL OR our DriftstackTLS13Client.
+struct DriftstackHttp2Transport {
+    void* ctx { nullptr };
+    int (*readFn)(void* ctx, uint8_t* buf, size_t n) { nullptr };
+    int (*writeFn)(void* ctx, const uint8_t* buf, size_t n) { nullptr };
+};
+DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
+                                                  const DriftstackHttp2Request& request);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)

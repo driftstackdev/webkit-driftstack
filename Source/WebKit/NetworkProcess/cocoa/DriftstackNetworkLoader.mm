@@ -256,6 +256,10 @@ static bool resolveBoringSSL()
 }
 
 static SSL_CTX* g_driftstackSslCtx = nullptr;
+
+// Wave 29-499.193 — persist DriftstackTLS13Client across handshake → app data.
+// thread_local so multiple concurrent requests don't clobber each other.
+static thread_local std::unique_ptr<DriftstackTLS13Client> g_customTLSClient;
 static dispatch_once_t g_driftstackSslCtxOnce;
 
 static void initDriftstackSslCtx()
@@ -385,19 +389,19 @@ static void initDriftstackSslCtx()
     bool useCustomTLS = customTlsEnv && customTlsEnv[0] == '1';
 
     if (useCustomTLS) {
-        // Wave 29-499.181 — run iPhone-byte-exact TLS 1.3 handshake.
-        // DriftstackTLS13Client owns the full TLS state. For empirical
-        // JA3 capture, we just need ClientHello bytes on the wire — even
-        // if app data fails, tls.peet.ws records JA3 from CH alone.
-        auto client = std::make_unique<DriftstackTLS13Client>();
-        if (client->connect(fd, String::fromUTF8(hostUtf8))) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.181] Custom TLS 1.3 handshake COMPLETE with iPhone-byte-exact ClientHello. Caller should switch to client->read/write for app data — currently falls back to LibreSSL for socket continuation.");
-            // Custom handshake done, but we can't continue with library SSL*
-            // (would conflict). Return nullptr → triggers caller fallback to
-            // LibreSSL path WITH a fresh socket. Best path forward: caller
-            // switches read/write to DriftstackTLS13Client.
+        // Wave 29-499.193 — persist client past handshake so HTTP/2 layer
+        // can route reads/writes through our custom TLS instead of LibreSSL.
+        g_customTLSClient = std::make_unique<DriftstackTLS13Client>();
+        if (g_customTLSClient->connect(fd, String::fromUTF8(hostUtf8))) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS 1.3 handshake COMPLETE. Returning sentinel — caller dispatches via g_customTLSClient transport.");
+            // Return non-null sentinel to skip LibreSSL handshake.
+            // sslReadExact/sslWriteAll in DriftstackHttp2 dispatch via
+            // g_activeTransport which we set in the call site.
+            static uint8_t sentinel = 0xCC;
+            return reinterpret_cast<SSL*>(&sentinel);
         } else {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.181] Custom TLS handshake failed: %s", client->errorMessage().utf8().data());
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", g_customTLSClient->errorMessage().utf8().data());
+            g_customTLSClient.reset();
         }
     }
 
@@ -688,15 +692,32 @@ void DriftstackNetworkLoader::resume()
                 h2req.extraHeaders.append({ lower, header.value });
             }
 
-            auto h2resp = driftstackHttp2Execute(ssl, h2req);
+            // Wave 29-499.193 — route HTTP/2 via custom TLS client if active
+            DriftstackHttp2Response h2resp;
+            if (g_customTLSClient) {
+                DriftstackHttp2Transport transport;
+                transport.ctx = g_customTLSClient.get();
+                transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
+                    return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
+                };
+                transport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
+                    return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
+                };
+                h2resp = driftstackHttp2ExecuteVia(transport, h2req);
+            } else {
+                h2resp = driftstackHttp2Execute(ssl, h2req);
+            }
 
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
-            // SSL_shutdown + SSL_free done by driftstackHttp2Execute? No —
-            // driftstackHttp2Execute does NOT free ssl. We free here.
-            {
+            // Wave 29-499.193 — skip SSL_shutdown/free when our custom TLS
+            // client is active (ssl is a sentinel pointer, not a real SSL*)
+            if (!g_customTLSClient) {
                 auto& f = boringSSLFns();
                 if (f.ssl_shutdown) f.ssl_shutdown(ssl);
                 if (f.ssl_free) f.ssl_free(ssl);
+            } else {
+                // Cleanup custom TLS client
+                g_customTLSClient.reset();
             }
 #endif
 
