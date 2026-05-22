@@ -63,7 +63,7 @@ struct CryptoFns {
                   const uint8_t* data, size_t dataLen,
                   uint8_t* out, unsigned int* outLen) = nullptr;
 
-    // EVP_PKEY for X25519
+    // EVP_PKEY for X25519 (legacy — LibreSSL uses direct X25519_keypair instead)
     void* (*evp_pkey_ctx_new_from_name)(void* libctx, const char* name, const char* props) = nullptr;
     int (*evp_pkey_keygen_init)(void* ctx) = nullptr;
     int (*evp_pkey_keygen)(void* ctx, void** pkey) = nullptr;
@@ -74,6 +74,10 @@ struct CryptoFns {
     void* (*evp_pkey_ctx_new)(void* pkey, void* e) = nullptr;
     int (*evp_pkey_derive_set_peer)(void* ctx, void* peer) = nullptr;
     void (*evp_pkey_free)(void*) = nullptr;
+
+    // Wave 29-499.184 — LibreSSL direct X25519 API (preferred over EVP_PKEY)
+    void (*x25519_keypair)(uint8_t out_public[32], uint8_t out_private[32]) = nullptr;
+    int (*x25519)(uint8_t out_shared[32], const uint8_t private_key[32], const uint8_t peer_public[32]) = nullptr;
 
     // AES-GCM
     const void* (*evp_aes_256_gcm)(void) = nullptr;
@@ -140,6 +144,8 @@ bool driftstackCryptoInit()
         R(evp_pkey_new_raw_public_key, "EVP_PKEY_new_raw_public_key");
         R(evp_pkey_derive_set_peer, "EVP_PKEY_derive_set_peer");
         R(evp_pkey_free, "EVP_PKEY_free");
+        R(x25519_keypair, "X25519_keypair");
+        R(x25519, "X25519");
         R(hmac, "HMAC");
         R(evp_aes_256_gcm, "EVP_aes_256_gcm");
         R(evp_cipher_ctx_new, "EVP_CIPHER_CTX_new");
@@ -308,21 +314,11 @@ bool driftstackX25519GenerateKeypair(Vector<uint8_t>& outPrivate, Vector<uint8_t
 {
     if (!driftstackCryptoInit()) return false;
     auto& f = cryptoFns();
-    void* ctx = f.evp_pkey_ctx_new_id(kEVPPkeyX25519, nullptr);
-    if (!ctx) return false;
-    if (f.evp_pkey_keygen_init(ctx) <= 0) { f.evp_pkey_ctx_free(ctx); return false; }
-    void* pkey = nullptr;
-    if (f.evp_pkey_keygen(ctx, &pkey) <= 0) { f.evp_pkey_ctx_free(ctx); return false; }
-    f.evp_pkey_ctx_free(ctx);
-
-    outPrivate.resize(32); size_t privLen = 32;
-    outPublic.resize(32); size_t pubLen = 32;
-    f.evp_pkey_get_raw_private_key(pkey, outPrivate.mutableSpan().data(), &privLen);
-    f.evp_pkey_get_raw_public_key(pkey, outPublic.mutableSpan().data(), &pubLen);
-    f.evp_pkey_free(pkey);
-    outPrivate.resize(privLen);
-    outPublic.resize(pubLen);
-    return outPrivate.size() == 32 && outPublic.size() == 32;
+    if (!f.x25519_keypair) return false;
+    outPrivate.resize(32);
+    outPublic.resize(32);
+    f.x25519_keypair(outPublic.mutableSpan().data(), outPrivate.mutableSpan().data());
+    return true;
 }
 
 Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
@@ -330,23 +326,10 @@ Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
 {
     if (!driftstackCryptoInit()) return {};
     auto& f = cryptoFns();
-    void* ourKey = f.evp_pkey_new_raw_private_key(kEVPPkeyX25519, nullptr, ourPrivate.span().data(), ourPrivate.size());
-    void* peerKey = f.evp_pkey_new_raw_public_key(kEVPPkeyX25519, nullptr, peerPublic.span().data(), peerPublic.size());
-    if (!ourKey || !peerKey) {
-        if (ourKey) f.evp_pkey_free(ourKey);
-        if (peerKey) f.evp_pkey_free(peerKey);
-        return {};
-    }
-    void* ctx = f.evp_pkey_ctx_new(ourKey, nullptr);
-    f.evp_pkey_derive_init(ctx);
-    f.evp_pkey_derive_set_peer(ctx, peerKey);
+    if (!f.x25519 || ourPrivate.size() != 32 || peerPublic.size() != 32) return {};
     Vector<uint8_t> shared(32);
-    size_t sharedLen = 32;
-    f.evp_pkey_derive(ctx, shared.mutableSpan().data(), &sharedLen);
-    f.evp_pkey_ctx_free(ctx);
-    f.evp_pkey_free(ourKey);
-    f.evp_pkey_free(peerKey);
-    shared.resize(sharedLen);
+    if (f.x25519(shared.mutableSpan().data(), ourPrivate.span().data(), peerPublic.span().data()) != 1)
+        return {};
     return shared;
 }
 
