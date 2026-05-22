@@ -90,6 +90,24 @@ struct CryptoFns {
     void (*x25519_keypair)(uint8_t out_public[32], uint8_t out_private[32]) = nullptr;
     int (*x25519)(uint8_t out_shared[32], const uint8_t private_key[32], const uint8_t peer_public[32]) = nullptr;
 
+    // Wave 29-499.207 — P-256 ECDH via EC_KEY API
+    void* (*ec_key_new_by_curve_name)(int nid) = nullptr;
+    int (*ec_key_generate_key)(void* eckey) = nullptr;
+    const void* (*ec_key_get0_public_key)(const void* eckey) = nullptr;
+    const void* (*ec_key_get0_private_key)(const void* eckey) = nullptr;
+    int (*ec_key_set_public_key)(void* eckey, const void* point) = nullptr;
+    void (*ec_key_free)(void* eckey) = nullptr;
+    const void* (*ec_key_get0_group)(const void* eckey) = nullptr;
+    void* (*ec_point_new)(const void* group) = nullptr;
+    void (*ec_point_free)(void* point) = nullptr;
+    size_t (*ec_point_point2oct)(const void* group, const void* point, int form,
+                                   uint8_t* buf, size_t bufLen, void* bnctx) = nullptr;
+    int (*ec_point_oct2point)(const void* group, void* point, const uint8_t* buf, size_t bufLen, void* bnctx) = nullptr;
+    int (*ecdh_compute_key)(void* out, size_t outlen, const void* peerPoint, void* eckey,
+                             void* (*kdf)(const void*, size_t, void*, size_t*)) = nullptr;
+    int (*bn_bn2bin)(const void* bn, uint8_t* buf) = nullptr;
+    int (*bn_num_bytes)(const void* bn) = nullptr;
+
     // AES-GCM
     const void* (*evp_aes_256_gcm)(void) = nullptr;
     const void* (*evp_aes_128_gcm)(void) = nullptr;
@@ -175,6 +193,20 @@ bool driftstackCryptoInit()
         R(evp_pkey_free, "EVP_PKEY_free");
         R(x25519_keypair, "X25519_keypair");
         R(x25519, "X25519");
+        R(ec_key_new_by_curve_name, "EC_KEY_new_by_curve_name");
+        R(ec_key_generate_key, "EC_KEY_generate_key");
+        R(ec_key_get0_public_key, "EC_KEY_get0_public_key");
+        R(ec_key_get0_private_key, "EC_KEY_get0_private_key");
+        R(ec_key_set_public_key, "EC_KEY_set_public_key");
+        R(ec_key_free, "EC_KEY_free");
+        R(ec_key_get0_group, "EC_KEY_get0_group");
+        R(ec_point_new, "EC_POINT_new");
+        R(ec_point_free, "EC_POINT_free");
+        R(ec_point_point2oct, "EC_POINT_point2oct");
+        R(ec_point_oct2point, "EC_POINT_oct2point");
+        R(ecdh_compute_key, "ECDH_compute_key");
+        R(bn_bn2bin, "BN_bn2bin");
+        R(bn_num_bytes, "BN_num_bytes");
         R(hmac, "HMAC");
         R(hkdf_extract, "HKDF_extract");
         R(hkdf_expand, "HKDF_expand");
@@ -444,6 +476,23 @@ Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
     if (f.x25519(shared.mutableSpan().data(), ourPrivate.span().data(), peerPublic.span().data()) != 1)
         return {};
     return shared;
+}
+
+// Wave 29-499.207 — P-256 ECDH stub for HRR retry. Full implementation
+// requires stateful EC_KEY across Generate/Shared calls — pending
+// dedicated arc with BN_bin2bn + EC_KEY_set_private_key dlsyms.
+//
+// Until then, HRR triggers fail-graceful → caller falls back to default
+// mode (Apple CFNetwork handles HRR natively).
+bool driftstackP256GenerateKeypair(Vector<uint8_t>& /*outPrivate*/, Vector<uint8_t>& /*outPublic*/)
+{
+    return false;  // not yet implemented
+}
+
+Vector<uint8_t> driftstackP256SharedSecret(const Vector<uint8_t>& /*ourPrivate*/,
+                                            const Vector<uint8_t>& /*peerPublic*/)
+{
+    return {};  // not yet implemented
 }
 
 // === AES-256-GCM ===

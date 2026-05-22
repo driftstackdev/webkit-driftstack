@@ -67,6 +67,16 @@ bool driftstackX25519GenerateKeypair(Vector<uint8_t>& outPrivate,
 Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
                                                const Vector<uint8_t>& peerPublic);
 
+// === Wave 29-499.207 — P-256 ECDH (for HRR retry) ===
+// Generate ephemeral P-256 keypair.
+//   outPrivate = 32 bytes (scalar)
+//   outPublic  = 65 bytes (uncompressed: 0x04 + 32X + 32Y, TLS 1.3 format)
+bool driftstackP256GenerateKeypair(Vector<uint8_t>& outPrivate, Vector<uint8_t>& outPublic);
+
+// ECDH(ourPrivate, peerPublic) → 32-byte shared secret (X coordinate)
+Vector<uint8_t> driftstackP256SharedSecret(const Vector<uint8_t>& ourPrivate,
+                                            const Vector<uint8_t>& peerPublic);
+
 // === AES-256-GCM ===
 
 // Encrypt plaintext with 32-byte key + 12-byte nonce. AAD is the record
