@@ -226,7 +226,113 @@ void DriftstackTLS13Client::shutdown()
     // TODO: send close_notify alert
 }
 
-bool DriftstackTLS13Client::readEncryptedHandshakeMessages() { return false; }
+bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
+{
+    // Wave 29-499.178 — after handshake secrets derived, server sends:
+    //   ChangeCipherSpec (legacy, plaintext, just ignore)
+    //   EncryptedExtensions (encrypted with server_hs_key)
+    //   Certificate (encrypted)
+    //   CertificateVerify (encrypted)
+    //   Finished (encrypted) — marks end of server's handshake
+    //
+    // Each is wrapped in a TLS application_data record (type 0x17)
+    // even though contents are handshake. Decrypt via AES-256-GCM
+    // with server_hs_key + per-record nonce.
+
+    bool gotServerFinished = false;
+    while (!gotServerFinished) {
+        uint8_t recType;
+        uint16_t recVer;
+        Vector<uint8_t> recBody;
+        if (!driftstackReadTLSRecord(m_fd, recType, recVer, recBody)) {
+            m_errorMessage = "read encrypted handshake record failed"_s;
+            return false;
+        }
+
+        // ChangeCipherSpec — legacy compat, skip
+        if (recType == 0x14) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Skipping ChangeCipherSpec (legacy compat)");
+            continue;
+        }
+
+        if (recType != 0x17) {
+            m_errorMessage = makeString("Expected encrypted record (0x17), got 0x"_s, hex(recType, 2));
+            return false;
+        }
+
+        // AAD = 5-byte record header
+        Vector<uint8_t> aad;
+        aad.append(recType);
+        aad.append(static_cast<uint8_t>(recVer >> 8));
+        aad.append(static_cast<uint8_t>(recVer & 0xFF));
+        aad.append(static_cast<uint8_t>(recBody.size() >> 8));
+        aad.append(static_cast<uint8_t>(recBody.size() & 0xFF));
+
+        // Per-record nonce: iv XOR seq_num
+        auto nonce = TLS13KeySchedule::recordNonce(m_serverHsKey.iv, m_serverHsKey.seqNum);
+        m_serverHsKey.seqNum++;
+
+        // Decrypt — body includes 16-byte tag at end
+        auto plaintext = driftstackAes256GcmDecrypt(m_serverHsKey.key, nonce, recBody, aad);
+        if (plaintext.isEmpty()) {
+            m_errorMessage = "encrypted handshake record decrypt failed (auth tag)"_s;
+            return false;
+        }
+
+        // Strip trailing record content_type byte (TLS 1.3 inner type)
+        if (plaintext.isEmpty()) continue;
+        uint8_t innerType = plaintext.last();
+        plaintext.removeLast();
+
+        // Trim trailing zero padding (some implementations pad)
+        while (!plaintext.isEmpty() && plaintext.last() == 0)
+            plaintext.removeLast();
+
+        if (innerType != 0x16) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Inner record type 0x%02x (not handshake) — skipping", innerType);
+            continue;
+        }
+
+        // Parse handshake messages from plaintext (may contain multiple)
+        size_t off = 0;
+        while (off + 4 <= plaintext.size()) {
+            uint8_t hsType = plaintext[off];
+            uint32_t hsLen = (static_cast<uint32_t>(plaintext[off + 1]) << 16)
+                | (static_cast<uint32_t>(plaintext[off + 2]) << 8)
+                | plaintext[off + 3];
+            if (off + 4 + hsLen > plaintext.size()) break;
+
+            // Add to transcript before processing each message
+            driftstackUpdateSHA384(m_transcript, plaintext.span().data() + off, 4 + hsLen);
+
+            const char* typeName = "unknown";
+            switch (hsType) {
+                case 0x08: typeName = "EncryptedExtensions"; break;
+                case 0x0b: typeName = "Certificate"; break;
+                case 0x0f: typeName = "CertificateVerify"; break;
+                case 0x14: typeName = "Finished"; break;
+            }
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Handshake message: type=0x%02x (%s) len=%u",
+                hsType, typeName, hsLen);
+
+            if (hsType == 0x14) {  // Finished
+                gotServerFinished = true;
+                // Snapshot transcript AFTER server's Finished — needed for app secret derivation
+                auto transcriptCH_to_serverFinished = driftstackCloneFinalizeSHA384(m_transcript);
+                if (!m_keySchedule.deriveApplicationSecrets(transcriptCH_to_serverFinished)) {
+                    m_errorMessage = "deriveApplicationSecrets failed"_s;
+                    return false;
+                }
+                m_clientAppKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.clientApplicationSecret());
+                m_serverAppKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.serverApplicationSecret());
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Server Finished received; application keys derived");
+            }
+
+            off += 4 + hsLen;
+        }
+    }
+    return true;
+}
 bool DriftstackTLS13Client::sendClientFinished() { return false; }
 int DriftstackTLS13Client::writeApplicationRecord(const uint8_t*, size_t) { return -1; }
 Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord() { return {}; }
