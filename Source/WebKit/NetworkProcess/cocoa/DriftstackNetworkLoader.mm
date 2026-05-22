@@ -141,29 +141,33 @@ static bool resolveBoringSSL()
     auto& f = boringSSLFns();
     if (f.ready) return true;
 
-    // Wave 29-499.150 — CRITICAL FIX: resolve from libwebrtc.dylib HANDLE,
-    // not RTLD_DEFAULT. Empirical .139 showed RTLD_DEFAULT resolves SSL_*
-    // from MIXED libraries (Apple system libs + libwebrtc's bundled
-    // BoringSSL) causing silent ABI mismatch crashes. We need ALL symbols
-    // from the SAME library to ensure ABI consistency.
+    // Wave 29-499.152 — CRITICAL FIX: resolve from Apple's SYSTEM
+    // libboringssl.dylib at /usr/lib/. Empirical via dladdr probe:
+    //   SSL_CTX_new lives in: /usr/lib/libboringssl.dylib
+    //   SSL_set1_host lives in: /usr/lib/libssl.48.dylib (OpenSSL compat)
+    //   SSL_CTX_set1_curves_list: not in either (Apple uses different name)
     //
-    // libwebrtc.dylib is loaded transitively via WebCore.framework.
-    // Resolve handle by trying both relative + absolute paths.
+    // libwebrtc bundles its own BoringSSL but symbols are LOCAL (lowercase
+    // `t`) — not dlsym-resolvable. RTLD_DEFAULT happens to find some in
+    // Apple's system libboringssl but with mixed library sources = ABI
+    // mismatch crashes.
+    //
+    // Use Apple's system libboringssl exclusively for ABI consistency.
     const char* candidates[] = {
-        "libwebrtc.dylib",
-        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
+        "/usr/lib/libboringssl.dylib",
+        "libboringssl.dylib",
         nullptr,
     };
     void* webrtcHandle = nullptr;
     for (int i = 0; candidates[i]; ++i) {
         webrtcHandle = dlopen(candidates[i], RTLD_NOW | RTLD_GLOBAL);
         if (webrtcHandle) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.150] dlopen libwebrtc OK at '%s' handle=%p", candidates[i], webrtcHandle);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.152] dlopen libboringssl OK at '%s' handle=%p", candidates[i], webrtcHandle);
             break;
         }
     }
     if (!webrtcHandle) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.150] libwebrtc dlopen failed");
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.152] libboringssl dlopen failed");
         return false;
     }
 
