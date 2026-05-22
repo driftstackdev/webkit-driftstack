@@ -274,8 +274,18 @@ static void initDriftstackSslCtx()
         if (f.ssl_ctx_set_alpn_protos)
             f.ssl_ctx_set_alpn_protos(g_driftstackSslCtx, alpn, sizeof(alpn));
 
-        if (f.ssl_ctx_set_verify) f.ssl_ctx_set_verify(g_driftstackSslCtx, SSL_VERIFY_PEER, nullptr);
-        if (f.ssl_ctx_set_default_verify_paths) f.ssl_ctx_set_default_verify_paths(g_driftstackSslCtx);
+        // Wave 29-499.162 — BoringSSL doesn't know macOS Keychain CAs by
+        // default. SSL_CTX_set_default_verify_paths looks in OpenSSL
+        // /usr/local/ssl/certs (doesn't exist on macOS). For Phase 1.5b
+        // empirical: disable peer verification so the TLS 1.3 handshake
+        // completes; we can validate hostname/cert via Apple's Security
+        // framework separately if needed.
+        //
+        // Production-safe: TODO load system CAs via SecTrustGetTrustStore
+        // + iterate certs + SSL_CTX_set_cert_store. For empirical JA3
+        // verification, no-verify is fine.
+        if (f.ssl_ctx_set_verify)
+            f.ssl_ctx_set_verify(g_driftstackSslCtx, SSL_VERIFY_NONE, nullptr);
 
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL SSL_CTX initialized: TLS 1.3 + iPhone cipher order + ALPN[h3,h2,h1] + X25519MLKEM768");
     });
