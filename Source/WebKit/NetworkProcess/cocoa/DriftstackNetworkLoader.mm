@@ -547,8 +547,7 @@ void DriftstackNetworkLoader::resume()
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);
 
-            auto bodySpan = unsafeMakeSpan(h2resp.body.data(), h2resp.body.size());
-            auto bodyBuffer = WebCore::SharedBuffer::create(bodySpan);
+            auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
 
             clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                 [clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
