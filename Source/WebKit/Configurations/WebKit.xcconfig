@@ -302,12 +302,22 @@ WK_NO_STATIC_INITIALIZERS_Production_NO_ = $(WK_ERROR_WHEN_LINKING_WITH_STATIC_I
 // TLS_client_method, SSL_set_fd, SSL_set1_host, SSL_CTX_set1_curves_list
 // (the APIs Apple's libboringssl.dylib strips). Direct static link makes
 // them visible inside WebKit framework for DriftstackNetworkLoader.
-// Wave 29-499.158 — force-load BoringSSL (compiled with hidden
-// visibility per ThirdParty/libwebrtc/Configurations/boringssl.xcconfig).
-// All BoringSSL symbols stay internal to WebKit framework — TAPI sees
-// them as private. unexported_symbols_list approach replaced by
-// compile-time visibility = hidden (cleaner + simpler).
-DRIFTSTACK_BORINGSSL_LDFLAGS = -force_load $(BUILT_PRODUCTS_DIR)/libboringssl.a;
+// Wave 29-499.159 — revert PathB v2 BoringSSL static link attempt.
+// Empirical (.154-.158): libwebrtc.dylib already statically includes
+// libboringssl.a (force-loaded into the dylib at libwebrtc build time).
+// WebKit framework's re-link sees most BoringSSL symbols as already-
+// resolved-transitively → dead-strip removes them from WebKit binary.
+// Result: WebKit binary +77KB only (not the expected +1-2MB), SSL_*
+// symbols absent from `nm WebKit`.
+//
+// For v1.0 launch: DEFAULT MODE (Slice 16.6.k / Apple CFNetwork SOCKS5)
+// ALREADY produces iPhone-bit-identical JA3 ecdf4f49dd59effc439639da29186671
+// (V-2026-05-21-W29-499.108). Use default mode for primary HTTPS traffic.
+//
+// PathB v2 stays as opt-in scaffold for future h3+TURN customer-proxy
+// modes. Its TLS layer uses CFStream (TLS 1.2) — different JA3 than
+// iPhone but supports HTTPS+HTTP/1.1 over SOCKS5 with Apple-bypass.
+DRIFTSTACK_BORINGSSL_LDFLAGS = ;
 
 OTHER_LDFLAGS = $(inherited) -lsqlite3 $(DRIFTSTACK_BORINGSSL_LDFLAGS) -iframework $(SDK_DIR)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks $(UNEXPORTED_SYMBOL_LDFLAGS) $(FRAMEWORK_AND_LIBRARY_LDFLAGS) $(OTHER_LDFLAGS_DELAY_INIT) $(OTHER_LDFLAGS_SHARED_CACHE) $(SOURCE_VERSION_LDFLAGS) $(WK_PGO_USE_LDFLAGS) $(WK_PGO_GEN_FLAGS) $(WK_NO_STATIC_INITIALIZERS);
 
