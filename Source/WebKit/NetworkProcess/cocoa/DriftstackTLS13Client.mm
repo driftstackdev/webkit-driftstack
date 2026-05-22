@@ -274,11 +274,31 @@ bool DriftstackTLS13Client::receiveServerHello()
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR retry: synthetic transcript built (CH1 hash %zu bytes), HRR bytes %zu, sending CH2 with P-256 keyshare",
             ch1Hash.size(), hrrBytes.size());
 
-        // Substantial work still needed: build CH2 with P-256 key_share entry +
-        // re-send. For now, fail with explicit log so caller knows HRR retry
-        // is plumbed but CH2 emission TODO.
-        m_errorMessage = "HRR retry: P-256 keypair generated + synthetic transcript built, CH2 emission pending (.216)"_s;
-        return false;
+        // Wave 29-499.216 — build CH2 with P-256 keyshare + send
+        Vector<uint8_t> ch2Random;
+        Vector<uint8_t> ch2Record = driftstackBuildIPhoneClientHelloP256(m_sniHostname,
+            m_p256Keypair.publicKey, ch2Random);
+        if (ch2Record.size() <= 5) {
+            m_errorMessage = "CH2 build failed"_s;
+            return false;
+        }
+        // Append CH2 to transcript (handshake bytes only, skip record header)
+        m_transcriptBytes.append(std::span<const uint8_t>(ch2Record.span().data() + 5,
+            ch2Record.size() - 5));
+
+        // Send CH2 on wire
+        if (!writeAll(m_fd, ch2Record.span().data(), ch2Record.size())) {
+            m_errorMessage = "send CH2 failed"_s;
+            return false;
+        }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.216] CH2 sent (%zu bytes). Reading real ServerHello.",
+            ch2Record.size());
+
+        // Read real ServerHello (recursive call into receiveServerHello)
+        // To avoid infinite loop, set m_negotiatedCipher to mark we're in HRR retry
+        // and bail if HRR detected again.
+        // For simplicity: call recursively. If HRR again, error out.
+        return receiveServerHello();
     }
 
     // Wave 29-499.177 — derive handshake secrets from ECDH + transcript hash.

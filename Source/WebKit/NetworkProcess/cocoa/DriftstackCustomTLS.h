@@ -80,6 +80,13 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     const Vector<uint8_t>& x25519PublicKey,    // 32 bytes (real ECDH pubkey)
     Vector<uint8_t>& outClientRandom);         // 32 bytes (for handshake derivation)
 
+// Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
+// Per RFC 8446 §4.1.2: CH2 mirrors CH1 except key_share + early_data + pre_shared_key.
+// Builder takes a custom key_share group + entry bytes (P-256 = 65 bytes uncompressed pubkey).
+Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
+    const Vector<uint8_t>& p256PublicKey,      // 65 bytes uncompressed
+    Vector<uint8_t>& outClientRandom);
+
 // Phase 1.5e gate (DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1).
 bool driftstackCustomTlsEnabled();
 

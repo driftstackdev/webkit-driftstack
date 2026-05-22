@@ -209,6 +209,20 @@ Vector<uint8_t> makeExtSCT()
     return makeExtension(18, Vector<uint8_t>());
 }
 
+// Wave 29-499.216 — key_share with P-256 only (HRR retry CH2 per RFC 8446)
+Vector<uint8_t> makeExtKeyShareP256(const Vector<uint8_t>& p256PubKey)
+{
+    Vector<uint8_t> list;
+    // P-256 only (no GREASE in HRR retry — per RFC 8446 §4.1.4 ambiguity, most clients
+    // strip GREASE from CH2 keyshare)
+    appendU16(list, 0x0017);  // secp256r1
+    appendU16(list, 0x0041);  // length = 65 (uncompressed P-256 pubkey)
+    list.append(p256PubKey.span());
+    Vector<uint8_t> body;
+    appendVecU16Len(body, list);
+    return makeExtension(51, body);
+}
+
 // key_share (51) — iPhone offers GREASE+empty + X25519MLKEM768+pubkey + X25519+pubkey
 // For .171 scaffold: include GREASE+empty + X25519+pubkey only (skip MLKEM since
 // LibreSSL doesn't have it; iPhone's key_share includes MLKEM which adds bytes).
@@ -356,6 +370,70 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.192] CH_HEX=%s", hex);
     }
 
+    return record;
+}
+
+// Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
+Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
+    const Vector<uint8_t>& p256PublicKey,
+    Vector<uint8_t>& outClientRandom)
+{
+    outClientRandom.resize(32);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
+
+    Vector<uint8_t> sessionId(32);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
+
+    uint16_t greasePrimary = pickGreaseValue();
+    uint16_t greaseSecondary = pickGreaseValue();
+    while (greaseSecondary == greasePrimary)
+        greaseSecondary = pickGreaseValue();
+
+    Vector<uint8_t> ciphers;
+    appendU16(ciphers, greasePrimary);
+    for (size_t i = 1; i < kIPhoneCipherCount; ++i)
+        appendU16(ciphers, kIPhoneCiphers[i]);
+
+    Vector<uint8_t> extensions;
+    extensions.append(makeExtGREASE(greasePrimary).span());
+    extensions.append(makeExtServerName(sni).span());
+    extensions.append(makeExtExtendedMasterSecret().span());
+    extensions.append(makeExtRenegotiationInfo().span());
+    extensions.append(makeExtSupportedGroups().span());
+    extensions.append(makeExtEcPointFormats().span());
+    extensions.append(makeExtALPN().span());
+    extensions.append(makeExtStatusRequest().span());
+    extensions.append(makeExtSignatureAlgorithms().span());
+    extensions.append(makeExtSCT().span());
+    extensions.append(makeExtKeyShareP256(p256PublicKey).span());  // ← P-256 keyshare
+    extensions.append(makeExtPSKKeyExchangeModes().span());
+    extensions.append(makeExtSupportedVersions().span());
+    extensions.append(makeExtCompressCertificate().span());
+    extensions.append(makeExtGREASE(greaseSecondary).span());
+
+    Vector<uint8_t> body;
+    appendU16(body, kTLSVersionTLS12);
+    body.append(outClientRandom.span());
+    appendU8LenBlob(body, sessionId.span().data(), sessionId.size());
+    appendVecU16Len(body, ciphers);
+    body.append(0x01); body.append(0x00);
+    appendVecU16Len(body, extensions);
+
+    Vector<uint8_t> handshake;
+    handshake.append(kTLSHandshakeTypeClientHello);
+    handshake.append(static_cast<uint8_t>((body.size() >> 16) & 0xFF));
+    handshake.append(static_cast<uint8_t>((body.size() >> 8) & 0xFF));
+    handshake.append(static_cast<uint8_t>(body.size() & 0xFF));
+    handshake.append(body.span());
+
+    Vector<uint8_t> record;
+    record.append(kTLSRecordTypeHandshake);
+    appendU16(record, kTLSVersionTLS12);
+    appendU16(record, static_cast<uint16_t>(handshake.size()));
+    record.append(handshake.span());
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.216] CH2 (HRR retry, P-256 keyshare) built: %zu bytes",
+        record.size());
     return record;
 }
 
