@@ -320,6 +320,17 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
         auto nonce = TLS13KeySchedule::recordNonce(m_serverHsKey.iv, m_serverHsKey.seqNum);
         m_serverHsKey.seqNum++;
 
+        // Wave 29-499.189 diagnostic — log encryption inputs
+        static bool firstRec = true;
+        if (firstRec) {
+            firstRec = false;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.189] First enc-record: type=0x%02x ver=0x%04x bodySize=%zu nonce=%02x%02x%02x%02x...%02x%02x%02x%02x aad=%02x%02x%02x%02x%02x body[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x",
+                recType, recVer, recBody.size(),
+                nonce[0], nonce[1], nonce[2], nonce[3], nonce[8], nonce[9], nonce[10], nonce[11],
+                aad[0], aad[1], aad[2], aad[3], aad[4],
+                recBody[0], recBody[1], recBody[2], recBody[3], recBody[4], recBody[5], recBody[6], recBody[7]);
+        }
+
         // Decrypt — body includes 16-byte tag at end (cipher-aware)
         auto plaintext = aesGcmDecrypt(m_negotiatedCipher, m_serverHsKey.key, nonce, recBody, aad);
         if (plaintext.isEmpty()) {
@@ -327,14 +338,13 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
             return false;
         }
 
-        // Strip trailing record content_type byte (TLS 1.3 inner type)
+        // Wave 29-499.189 — RFC 8446 §5.2: plaintext = [data][inner_type][padding zeros]
+        // Strip trailing zero padding FIRST, then read inner_type (last remaining byte).
+        while (!plaintext.isEmpty() && plaintext.last() == 0)
+            plaintext.removeLast();
         if (plaintext.isEmpty()) continue;
         uint8_t innerType = plaintext.last();
         plaintext.removeLast();
-
-        // Trim trailing zero padding (some implementations pad)
-        while (!plaintext.isEmpty() && plaintext.last() == 0)
-            plaintext.removeLast();
 
         if (innerType != 0x16) {
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Inner record type 0x%02x (not handshake) — skipping", innerType);
@@ -505,11 +515,12 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
     auto pt = aesGcmDecrypt(m_negotiatedCipher, m_serverAppKey.key, nonce, body, aad);
     if (pt.isEmpty()) return {};
 
-    // Strip inner content_type byte + zero padding
-    uint8_t innerType = pt.last();
-    pt.removeLast();
+    // Wave 29-499.189 — strip trailing padding FIRST, then inner_type
     while (!pt.isEmpty() && pt.last() == 0)
         pt.removeLast();
+    if (pt.isEmpty()) return {};
+    uint8_t innerType = pt.last();
+    pt.removeLast();
 
     if (innerType == 0x17) {
         return pt;  // application_data
