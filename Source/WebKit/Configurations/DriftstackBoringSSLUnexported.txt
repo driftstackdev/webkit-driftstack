@@ -1,0 +1,70 @@
+# Wave 29-499.157 — hide statically-linked BoringSSL symbols from
+# WebKit framework's exported symbol table. Required because:
+# - libboringssl.a's .o files use OPENSSL_EXPORT (default visibility)
+# - Static link pulls them into WebKit binary
+# - TAPI (Text-based API verification) rejects un-declared exports
+#
+# These symbols are USED INTERNALLY by DriftstackNetworkLoader for
+# iPhone-bit-identical TLS 1.3 fingerprint. External code (apps,
+# Safari, other frameworks) MUST NOT call them — they are
+# implementation detail of our SOCKS5 customer-proxy mode.
+_SSL_*
+_TLS_*
+_DTLS_*
+_BIO_*
+_BN_*
+_ERR_*
+_X509_*
+_ASN1_*
+_AES_*
+_BUF_*
+_EVP_*
+_HMAC_*
+_RSA_*
+_DSA_*
+_DH_*
+_EC_*
+_ECDSA_*
+_ECDH_*
+_RC4_*
+_MD4_*
+_MD5_*
+_SHA*
+_CRYPTO_*
+_OPENSSL_*
+_d2i_*
+_i2d_*
+_PEM_*
+_PKCS*
+_OBJ_*
+_OCSP_*
+_NETSCAPE_*
+_RAND_*
+_CONF_*
+_ENGINE_*
+_UI_*
+_TS_*
+_GENERAL_*
+_OTHERNAME*
+_EDIPARTYNAME*
+_DIST_POINT*
+_ACCESS_DESCRIPTION*
+_AUTHORITY_*
+_BASIC_*
+_POLICY_*
+_NOTICEREF*
+_USERNOTICE*
+_CHACHA20_*
+_CBS_*
+_CBB_*
+_TRUST_*
+_NAME_CONSTRAINTS*
+_PROXY_*
+_NCONF_*
+_X509V3_*
+_v3_*
+_DIST_POINT*
+_POLICYINFO*
+_CRL_*
+_GF2m_*
+_BN_*

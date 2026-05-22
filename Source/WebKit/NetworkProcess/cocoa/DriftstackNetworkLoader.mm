@@ -97,9 +97,15 @@ static dispatch_queue_t loaderQueue()
 }
 
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
-// Wave 29-499.139 — dlsym-resolved BoringSSL function pointers.
-// libwebrtc.dylib must be in process address space first; we dlopen it
-// on first use. WebKit framework can't link libwebrtc directly.
+// Wave 29-499.156 — DIRECT static-linked BoringSSL calls.
+// WebKit.xcconfig adds -lboringssl. Linker resolves SSL_*, ERR_*,
+// TLS_client_method to the libboringssl.a static archive. Symbols
+// stay internal to WebKit binary (hidden visibility via WebKit's
+// default unexported list).
+//
+// Previous Wave 29-499.139 dlsym approach kept here as namespace
+// `boringSSLFns` for fallback compatibility, but actual SSL_*
+// calls below use direct references.
 
 namespace {
 
