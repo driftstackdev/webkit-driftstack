@@ -302,7 +302,11 @@ WK_NO_STATIC_INITIALIZERS_Production_NO_ = $(WK_ERROR_WHEN_LINKING_WITH_STATIC_I
 // TLS_client_method, SSL_set_fd, SSL_set1_host, SSL_CTX_set1_curves_list
 // (the APIs Apple's libboringssl.dylib strips). Direct static link makes
 // them visible inside WebKit framework for DriftstackNetworkLoader.
-DRIFTSTACK_BORINGSSL_LDFLAGS = -lboringssl;
+// Use -force_load to include ALL .o files from libboringssl.a even
+// without direct symbol references. Required because static link
+// otherwise drops unused .o (which is most of BoringSSL until our
+// code calls SSL_* directly).
+DRIFTSTACK_BORINGSSL_LDFLAGS = -force_load $(BUILT_PRODUCTS_DIR)/libboringssl.a;
 
 OTHER_LDFLAGS = $(inherited) -lsqlite3 $(DRIFTSTACK_BORINGSSL_LDFLAGS) -iframework $(SDK_DIR)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks $(UNEXPORTED_SYMBOL_LDFLAGS) $(FRAMEWORK_AND_LIBRARY_LDFLAGS) $(OTHER_LDFLAGS_DELAY_INIT) $(OTHER_LDFLAGS_SHARED_CACHE) $(SOURCE_VERSION_LDFLAGS) $(WK_PGO_USE_LDFLAGS) $(WK_PGO_GEN_FLAGS) $(WK_NO_STATIC_INITIALIZERS);
 
