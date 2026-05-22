@@ -710,6 +710,18 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
         request.authority.utf8().data(), request.path.utf8().data(),
         resp.statusCode, resp.body.size(), frameCount);
 
+    // Wave 29-499.200 — write response body to /tmp for fingerprint verification
+    {
+        char path[256];
+        snprintf(path, sizeof(path), "/tmp/driftstack-h2-resp-%s.txt", request.authority.utf8().data());
+        FILE* fp = fopen(path, "wb");
+        if (fp) {
+            fwrite(resp.body.span().data(), 1, resp.body.size(), fp);
+            fclose(fp);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.200] Response body written to %s (%zu bytes)", path, resp.body.size());
+        }
+    }
+
     return resp;
 }
 
