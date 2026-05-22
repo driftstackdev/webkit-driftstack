@@ -781,11 +781,14 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                 decompressed.resize(actualLen);
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.220] Decompressed %s: %zu → %zu bytes",
                     contentEncoding.utf8().data(), resp.body.size(), actualLen);
-                resp.body = WTFMove(decompressed);
+                resp.body = std::move(decompressed);
                 // Remove content-encoding header so caller doesn't try to decompress again
-                resp.headers.removeAllMatching([](const auto& kv) {
-                    return kv.key.convertToASCIILowercase() == "content-encoding"_s;
-                });
+                Vector<std::pair<String, String>> filtered;
+                for (auto& [k, v] : resp.headers) {
+                    if (k.convertToASCIILowercase() != "content-encoding"_s)
+                        filtered.append({ k, v });
+                }
+                resp.headers = std::move(filtered);
             } else {
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.220] Decompression failed for %s",
                     contentEncoding.utf8().data());
