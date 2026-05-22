@@ -13,7 +13,16 @@ PUBLIC_HEADERS_FOLDER_PATH = $(INSTALL_PATH_PREFIX)$(WK_LIBRARY_INSTALL_PATH)/li
 USE_HEADERMAP = NO;
 GCC_WARN_UNUSED_FUNCTION = NO;
 
-GCC_PREPROCESSOR_DEFINITIONS = OPENSSL_SMALL $(inherited);
+// Wave 29-499.158 — define BORINGSSL_NO_EXPORT to make OPENSSL_EXPORT
+// expand to empty (no default visibility). Combined with
+// -fvisibility=hidden + GCC_SYMBOLS_PRIVATE_EXTERN below, all BoringSSL
+// symbols become INTERNAL to libboringssl.a. When force-loaded into
+// WebKit framework, they're physically present but don't pollute the
+// exported API surface (TAPI accepts).
+GCC_PREPROCESSOR_DEFINITIONS = OPENSSL_SMALL BORINGSSL_NO_EXPORT $(inherited);
+GCC_SYMBOLS_PRIVATE_EXTERN = YES;
+OTHER_CFLAGS = $(inherited) -fvisibility=hidden;
+OTHER_CPLUSPLUSFLAGS = $(inherited) -fvisibility=hidden;
 
 EXCLUDED_SOURCE_FILE_NAMES[arch=arm64*] = *x86_64*-apple.S rsaz-avx2-apple.S;
 EXCLUDED_SOURCE_FILE_NAMES[arch=x86_64*] = *armv8*-apple.S;
