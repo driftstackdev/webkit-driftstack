@@ -406,7 +406,7 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         // ALPN: u16 list_length + u8 proto_len + proto bytes
                         uint8_t protoLen = plaintext[e + 2];
                         if (protoLen > 0 && e + 3 + protoLen <= plaintext.size()) {
-                            m_selectedALPN = String::fromUTF8(reinterpret_cast<const char*>(plaintext.span().data() + e + 3), protoLen);
+                            m_selectedALPN = String::fromUTF8(unsafeMakeSpan(reinterpret_cast<const char*>(plaintext.span().data() + e + 3), protoLen));
                             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.209] EE: negotiated ALPN='%s'", m_selectedALPN.utf8().data());
                         }
                     }
