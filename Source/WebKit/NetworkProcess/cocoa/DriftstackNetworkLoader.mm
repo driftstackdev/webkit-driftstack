@@ -252,14 +252,36 @@ static void initDriftstackSslCtx()
             return;
         }
 
+        // Wave 29-499.165 — iPhone Safari 26 offers TLS 1.2 + TLS 1.3
+        // ciphers in handshake (for backward-compat fallback) even though
+        // it negotiates TLS 1.3. Min = TLS 1.2; max = TLS 1.3 forces
+        // upgrade but advertises the larger cipher list.
         if (f.ssl_ctx_set_min_proto_version)
-            f.ssl_ctx_set_min_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
+            f.ssl_ctx_set_min_proto_version(g_driftstackSslCtx, TLS1_2_VERSION);
         if (f.ssl_ctx_set_max_proto_version)
             f.ssl_ctx_set_max_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
 
+        // iPhone Safari 26 cipher list (from real device tls.peet.ws capture):
+        // TLS 1.3 ciphers + TLS 1.2 ECDHE + RSA ciphers (~20 total).
         if (f.ssl_ctx_set_strict_cipher_list) {
             f.ssl_ctx_set_strict_cipher_list(g_driftstackSslCtx,
-                "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256");
+                "TLS_AES_256_GCM_SHA384:"
+                "TLS_CHACHA20_POLY1305_SHA256:"
+                "TLS_AES_128_GCM_SHA256:"
+                "ECDHE-ECDSA-AES256-GCM-SHA384:"
+                "ECDHE-ECDSA-AES128-GCM-SHA256:"
+                "ECDHE-ECDSA-CHACHA20-POLY1305:"
+                "ECDHE-RSA-AES256-GCM-SHA384:"
+                "ECDHE-RSA-AES128-GCM-SHA256:"
+                "ECDHE-RSA-CHACHA20-POLY1305:"
+                "ECDHE-ECDSA-AES256-SHA:"
+                "ECDHE-ECDSA-AES128-SHA:"
+                "ECDHE-RSA-AES256-SHA:"
+                "ECDHE-RSA-AES128-SHA:"
+                "AES256-GCM-SHA384:"
+                "AES128-GCM-SHA256:"
+                "AES256-SHA:"
+                "AES128-SHA");
         }
         if (f.ssl_ctx_set1_curves_list) {
             f.ssl_ctx_set1_curves_list(g_driftstackSslCtx,
