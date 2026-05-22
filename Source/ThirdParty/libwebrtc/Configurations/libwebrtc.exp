@@ -462,10 +462,5 @@ _MLKEM768_marshal_public_key
 _MLKEM768_public_from_private
 _MLKEM768_private_key_from_seed
 
-# CBB / CBS helpers (often needed alongside MLKEM)
-_CBB_init
-_CBB_cleanup
-_CBB_finish
-_CBS_init
-_CBS_data
-_CBS_len
+# CBB/CBS helpers: CBS_* are static inline in headers (not exported as symbols);
+# skip them. MLKEM_decap takes raw bytes + len, no CBS needed.

@@ -90,6 +90,10 @@ struct CryptoFns {
     void (*x25519_keypair)(uint8_t out_public[32], uint8_t out_private[32]) = nullptr;
     int (*x25519)(uint8_t out_shared[32], const uint8_t private_key[32], const uint8_t peer_public[32]) = nullptr;
 
+    // Wave 29-499.218 — MLKEM768 hybrid key exchange (resolved from libwebrtc.dylib)
+    void (*mlkem768_generate_key)(uint8_t out_pub[1184], uint8_t out_seed[64], void* out_priv) = nullptr;
+    int (*mlkem768_decap)(uint8_t out_shared[32], const uint8_t* ciphertext, size_t ctLen, const void* priv) = nullptr;
+
     // Wave 29-499.207 — P-256 ECDH via EC_KEY API
     void* (*ec_key_new_by_curve_name)(int nid) = nullptr;
     int (*ec_key_generate_key)(void* eckey) = nullptr;
@@ -193,6 +197,21 @@ bool driftstackCryptoInit()
         R(evp_pkey_free, "EVP_PKEY_free");
         R(x25519_keypair, "X25519_keypair");
         R(x25519, "X25519");
+        // Wave 29-499.218 — MLKEM768 from libwebrtc.dylib (re-exported via .217)
+        // Try multiple dlopen paths since libwebrtc is loaded transitively
+        void* webrtcH = dlopen("libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!webrtcH) webrtcH = dlopen("/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (webrtcH) {
+            f.mlkem768_generate_key = reinterpret_cast<decltype(f.mlkem768_generate_key)>(dlsym(webrtcH, "MLKEM768_generate_key"));
+            f.mlkem768_decap = reinterpret_cast<decltype(f.mlkem768_decap)>(dlsym(webrtcH, "MLKEM768_decap"));
+        }
+        // Also try RTLD_DEFAULT (libwebrtc loaded transitively)
+        if (!f.mlkem768_generate_key)
+            f.mlkem768_generate_key = reinterpret_cast<decltype(f.mlkem768_generate_key)>(dlsym(RTLD_DEFAULT, "MLKEM768_generate_key"));
+        if (!f.mlkem768_decap)
+            f.mlkem768_decap = reinterpret_cast<decltype(f.mlkem768_decap)>(dlsym(RTLD_DEFAULT, "MLKEM768_decap"));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.218] MLKEM768 dlsym: gen=%p decap=%p",
+            (void*)f.mlkem768_generate_key, (void*)f.mlkem768_decap);
         R(ec_key_new_by_curve_name, "EC_KEY_new_by_curve_name");
         R(ec_key_generate_key, "EC_KEY_generate_key");
         R(ec_key_get0_public_key, "EC_KEY_get0_public_key");
@@ -475,6 +494,53 @@ Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
     Vector<uint8_t> shared(32);
     if (f.x25519(shared.mutableSpan().data(), ourPrivate.span().data(), peerPublic.span().data()) != 1)
         return {};
+    return shared;
+}
+
+// Wave 29-499.218 — MLKEM768 (PQ hybrid for iPhone Safari 26+ key_share)
+// Private key struct size from BoringSSL header: 512*(3+3+9) + 32+32+32 = 7776 bytes
+constexpr size_t kMLKEM768PrivateKeyBytes = 7776;
+constexpr size_t kMLKEM768PublicKeyBytes = 1184;
+constexpr size_t kMLKEM768CiphertextBytes = 1088;
+constexpr size_t kMLKEMSharedSecretBytes = 32;
+
+MLKEM768Keypair driftstackMLKEM768Generate()
+{
+    MLKEM768Keypair kp;
+    if (!driftstackCryptoInit()) return kp;
+    auto& f = cryptoFns();
+    if (!f.mlkem768_generate_key) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.218] MLKEM768_generate_key not available");
+        return kp;
+    }
+    kp.privateKey = malloc(kMLKEM768PrivateKeyBytes);
+    if (!kp.privateKey) return kp;
+    memset(kp.privateKey, 0, kMLKEM768PrivateKeyBytes);
+
+    kp.publicKey.resize(kMLKEM768PublicKeyBytes);
+    f.mlkem768_generate_key(kp.publicKey.mutableSpan().data(), nullptr, kp.privateKey);
+    kp.ok = true;
+    return kp;
+}
+
+void driftstackMLKEM768Free(MLKEM768Keypair& kp)
+{
+    if (kp.privateKey) {
+        free(kp.privateKey);
+        kp.privateKey = nullptr;
+    }
+    kp.ok = false;
+}
+
+Vector<uint8_t> driftstackMLKEM768Decap(const MLKEM768Keypair& kp, const Vector<uint8_t>& ciphertext)
+{
+    if (!kp.ok || !kp.privateKey || ciphertext.size() != kMLKEM768CiphertextBytes) return {};
+    auto& f = cryptoFns();
+    if (!f.mlkem768_decap) return {};
+    Vector<uint8_t> shared(kMLKEMSharedSecretBytes);
+    int rc = f.mlkem768_decap(shared.mutableSpan().data(), ciphertext.span().data(),
+        ciphertext.size(), kp.privateKey);
+    if (rc != 1) return {};
     return shared;
 }
 

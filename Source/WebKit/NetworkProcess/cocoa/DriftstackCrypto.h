@@ -67,6 +67,23 @@ bool driftstackX25519GenerateKeypair(Vector<uint8_t>& outPrivate,
 Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
                                                const Vector<uint8_t>& peerPublic);
 
+// === Wave 29-499.218 — X25519MLKEM768 hybrid key exchange (TLS 1.3 group 0x11EC) ===
+// iPhone Safari 26+ uses this PQ-hybrid keyshare. Most modern servers require it.
+//
+// MLKEM768 private key is a struct with ~7776 bytes opaque data
+// (per /include/openssl/mlkem.h MLKEM768_private_key). We hold it in
+// a heap-allocated buffer.
+struct MLKEM768Keypair {
+    void* privateKey { nullptr };       // heap-alloc'd MLKEM768_private_key struct
+    Vector<uint8_t> publicKey;          // 1184 bytes (encoded public key)
+    bool ok { false };
+};
+MLKEM768Keypair driftstackMLKEM768Generate();
+void driftstackMLKEM768Free(MLKEM768Keypair&);
+// Decap: server gave us 1088-byte ciphertext, we derive 32-byte shared secret
+Vector<uint8_t> driftstackMLKEM768Decap(const MLKEM768Keypair&,
+                                         const Vector<uint8_t>& ciphertext);
+
 // === Wave 29-499.214 — P-256 ECDH (for HRR retry) ===
 // Generates ephemeral P-256 keypair + holds it. Use ECDH later with peer pub.
 // Returns opaque EC_KEY handle (caller manages lifetime via free).
