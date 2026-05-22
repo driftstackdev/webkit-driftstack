@@ -478,21 +478,62 @@ Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
     return shared;
 }
 
-// Wave 29-499.207 — P-256 ECDH stub for HRR retry. Full implementation
-// requires stateful EC_KEY across Generate/Shared calls — pending
-// dedicated arc with BN_bin2bn + EC_KEY_set_private_key dlsyms.
-//
-// Until then, HRR triggers fail-graceful → caller falls back to default
-// mode (Apple CFNetwork handles HRR natively).
-bool driftstackP256GenerateKeypair(Vector<uint8_t>& /*outPrivate*/, Vector<uint8_t>& /*outPublic*/)
+// Wave 29-499.214 — P-256 ECDH stateful keypair (HRR retry uses it)
+constexpr int kNIDP256 = 415;             // NID_X9_62_prime256v1
+constexpr int kPointConvUncompressed = 4; // POINT_CONVERSION_UNCOMPRESSED
+
+P256Keypair driftstackP256Generate()
 {
-    return false;  // not yet implemented
+    P256Keypair kp;
+    if (!driftstackCryptoInit()) return kp;
+    auto& f = cryptoFns();
+    if (!f.ec_key_new_by_curve_name || !f.ec_key_generate_key) return kp;
+    void* eckey = f.ec_key_new_by_curve_name(kNIDP256);
+    if (!eckey) return kp;
+    if (f.ec_key_generate_key(eckey) != 1) { f.ec_key_free(eckey); return kp; }
+
+    // Export public key: 65 bytes uncompressed (0x04 + 32 X + 32 Y)
+    const void* point = f.ec_key_get0_public_key(eckey);
+    const void* group = f.ec_key_get0_group(eckey);
+    kp.publicKey.resize(65);
+    size_t pubLen = f.ec_point_point2oct(group, point, kPointConvUncompressed,
+        kp.publicKey.mutableSpan().data(), 65, nullptr);
+    if (pubLen != 65) { f.ec_key_free(eckey); return kp; }
+
+    kp.ecKey = eckey;
+    kp.ok = true;
+    return kp;
 }
 
-Vector<uint8_t> driftstackP256SharedSecret(const Vector<uint8_t>& /*ourPrivate*/,
-                                            const Vector<uint8_t>& /*peerPublic*/)
+void driftstackP256Free(P256Keypair& kp)
 {
-    return {};  // not yet implemented
+    auto& f = cryptoFns();
+    if (kp.ecKey && f.ec_key_free) {
+        f.ec_key_free(kp.ecKey);
+        kp.ecKey = nullptr;
+    }
+    kp.ok = false;
+}
+
+Vector<uint8_t> driftstackP256ComputeShared(const P256Keypair& kp, const Vector<uint8_t>& peerPublic)
+{
+    if (!kp.ok || !kp.ecKey || peerPublic.size() != 65 || peerPublic[0] != 0x04)
+        return {};
+    auto& f = cryptoFns();
+    if (!f.ec_point_new || !f.ec_point_oct2point || !f.ecdh_compute_key || !f.ec_key_get0_group)
+        return {};
+    const void* group = f.ec_key_get0_group(kp.ecKey);
+    void* peerPoint = f.ec_point_new(group);
+    if (!peerPoint) return {};
+    if (f.ec_point_oct2point(group, peerPoint, peerPublic.span().data(), peerPublic.size(), nullptr) != 1) {
+        f.ec_point_free(peerPoint);
+        return {};
+    }
+    Vector<uint8_t> shared(32);
+    int rc = f.ecdh_compute_key(shared.mutableSpan().data(), 32, peerPoint, kp.ecKey, nullptr);
+    f.ec_point_free(peerPoint);
+    if (rc != 32) return {};
+    return shared;
 }
 
 // === AES-256-GCM ===

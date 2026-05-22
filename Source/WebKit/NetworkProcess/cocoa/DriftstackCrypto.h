@@ -67,15 +67,19 @@ bool driftstackX25519GenerateKeypair(Vector<uint8_t>& outPrivate,
 Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
                                                const Vector<uint8_t>& peerPublic);
 
-// === Wave 29-499.207 — P-256 ECDH (for HRR retry) ===
-// Generate ephemeral P-256 keypair.
-//   outPrivate = 32 bytes (scalar)
-//   outPublic  = 65 bytes (uncompressed: 0x04 + 32X + 32Y, TLS 1.3 format)
-bool driftstackP256GenerateKeypair(Vector<uint8_t>& outPrivate, Vector<uint8_t>& outPublic);
-
-// ECDH(ourPrivate, peerPublic) → 32-byte shared secret (X coordinate)
-Vector<uint8_t> driftstackP256SharedSecret(const Vector<uint8_t>& ourPrivate,
-                                            const Vector<uint8_t>& peerPublic);
+// === Wave 29-499.214 — P-256 ECDH (for HRR retry) ===
+// Generates ephemeral P-256 keypair + holds it. Use ECDH later with peer pub.
+// Returns opaque EC_KEY handle (caller manages lifetime via free).
+struct P256Keypair {
+    void* ecKey { nullptr };          // EC_KEY* from LibreSSL
+    Vector<uint8_t> publicKey;        // 65 bytes uncompressed
+    bool ok { false };
+};
+P256Keypair driftstackP256Generate();
+void driftstackP256Free(P256Keypair&);
+// Compute ECDH shared secret from our keypair + peer pubkey.
+// peerPublic = 65 bytes uncompressed (0x04 + 32X + 32Y).
+Vector<uint8_t> driftstackP256ComputeShared(const P256Keypair&, const Vector<uint8_t>& peerPublic);
 
 // === AES-256-GCM ===
 
