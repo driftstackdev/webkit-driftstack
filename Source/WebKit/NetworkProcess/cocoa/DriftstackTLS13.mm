@@ -21,7 +21,7 @@ namespace WebKit {
 
 namespace {
 
-constexpr uint8_t kHandshakeTypeServerHello = 0x02;
+[[maybe_unused]] constexpr uint8_t kHandshakeTypeServerHello = 0x02;
 constexpr uint16_t kExtSupportedVersions = 43;
 constexpr uint16_t kExtKeyShare = 51;
 

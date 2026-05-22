@@ -71,7 +71,7 @@ constexpr uint16_t kGreaseValues[] = {
 uint16_t pickGreaseValue()
 {
     uint8_t b;
-    SecRandomCopyBytes(kSecRandomDefault, 1, &b);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 1, &b);
     return kGreaseValues[b & 0x0F];
 }
 
@@ -274,19 +274,19 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
 {
     // Generate client_random (32 bytes)
     outClientRandom.resize(32);
-    SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
 
     // Generate session_id (32 bytes; iPhone uses TLS 1.3 32-byte session_id)
     Vector<uint8_t> sessionId(32);
-    SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
 
     // Generate X25519 ephemeral keypair (placeholder — TODO: actual ECDH via
     // LibreSSL EC_KEY_generate_key or curve25519_donna). For .171 scaffold,
     // emit random 32 bytes as placeholder pubkey.
     outKeyShareX25519Private.resize(32);
-    SecRandomCopyBytes(kSecRandomDefault, 32, outKeyShareX25519Private.mutableSpan().data());
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outKeyShareX25519Private.mutableSpan().data());
     Vector<uint8_t> x25519Pub(32);
-    SecRandomCopyBytes(kSecRandomDefault, 32, x25519Pub.mutableSpan().data());
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, x25519Pub.mutableSpan().data());
 
     // Pick the SAME GREASE value used throughout (iPhone uses one GREASE byte)
     uint16_t greasePrimary = pickGreaseValue();

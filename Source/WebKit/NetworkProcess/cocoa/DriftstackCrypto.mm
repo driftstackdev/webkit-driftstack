@@ -224,7 +224,7 @@ const int kEVPPkeyCtrlHkdfSalt = 0x1001;
 const int kEVPPkeyCtrlHkdfKey = 0x1002;
 const int kEVPPkeyCtrlHkdfInfo = 0x1003;
 const int kEVPPkeyCtrlHkdfMd = 0x1004;
-const int kEVPHkdfExtractAndExpand = 0;
+[[maybe_unused]] const int kEVPHkdfExtractAndExpand = 0;
 const int kEVPHkdfExtractOnly = 1;
 const int kEVPHkdfExpandOnly = 2;
 
