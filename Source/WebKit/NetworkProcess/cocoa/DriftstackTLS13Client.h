@@ -90,6 +90,10 @@ private:
     // Wave 29-499.215 — P-256 keypair for HRR retry path
     P256Keypair m_p256Keypair;
 
+    // Wave 29-499.219 — MLKEM768 keypair for hybrid X25519MLKEM768
+    MLKEM768Keypair m_mlkemKeypair;
+    Vector<uint8_t> m_ourX25519Public;  // 32 bytes (kept alongside private)
+
     // Wave 29-499.195 — read buffer for leftover decrypted bytes between
     // read() calls. TLS record may contain >1 HTTP/2 frames; must not
     // discard bytes that don't fit in caller's maxLen.

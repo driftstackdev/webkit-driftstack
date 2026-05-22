@@ -80,6 +80,13 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     const Vector<uint8_t>& x25519PublicKey,    // 32 bytes (real ECDH pubkey)
     Vector<uint8_t>& outClientRandom);         // 32 bytes (for handshake derivation)
 
+// Wave 29-499.219 — Build CH with X25519MLKEM768 hybrid + X25519 keyshare entries
+// (matches iPhone Safari 26 exactly when MLKEM is available)
+Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
+    const Vector<uint8_t>& mlkemPubKey,    // 1184 bytes MLKEM768 encoded
+    const Vector<uint8_t>& x25519PubKey,   // 32 bytes
+    Vector<uint8_t>& outClientRandom);
+
 // Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
 // Per RFC 8446 §4.1.2: CH2 mirrors CH1 except key_share + early_data + pre_shared_key.
 // Builder takes a custom key_share group + entry bytes (P-256 = 65 bytes uncompressed pubkey).

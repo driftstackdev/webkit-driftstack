@@ -227,6 +227,35 @@ Vector<uint8_t> makeExtKeyShareP256(const Vector<uint8_t>& p256PubKey)
 // For .171 scaffold: include GREASE+empty + X25519+pubkey only (skip MLKEM since
 // LibreSSL doesn't have it; iPhone's key_share includes MLKEM which adds bytes).
 // For perfect match: need MLKEM-768 pubkey generation (768 bytes); deferred.
+// Wave 29-499.219 — X25519MLKEM768 hybrid keyshare entry
+// Format per IETF TLS WG draft-ietf-tls-hybrid-design:
+//   group: 0x11EC (X25519MLKEM768)
+//   key_exchange (1216 bytes): MLKEM768_pubkey (1184) || X25519_pubkey (32)
+//   ORDER: MLKEM first, X25519 second (per draft + iPhone Safari)
+Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const Vector<uint8_t>& x25519PubKey)
+{
+    Vector<uint8_t> list;
+    // GREASE entry (1-byte placeholder for keyshare list slot 0)
+    appendU16(list, pickGreaseValue());
+    appendU16(list, 0x0001);
+    list.append(0x00);
+
+    // X25519MLKEM768 (0x11EC): 1216-byte combined keyshare
+    appendU16(list, 0x11EC);
+    appendU16(list, 0x04C0);  // 1216 bytes
+    list.append(mlkemPubKey.span());  // 1184 bytes first
+    list.append(x25519PubKey.span()); // 32 bytes second
+
+    // X25519 (0x001D): 32-byte keyshare (iPhone offers both)
+    appendU16(list, 0x001D);
+    appendU16(list, 0x0020);
+    list.append(x25519PubKey.span());
+
+    Vector<uint8_t> body;
+    appendVecU16Len(body, list);
+    return makeExtension(51, body);
+}
+
 Vector<uint8_t> makeExtKeyShare(const Vector<uint8_t>& x25519PubKey)
 {
     Vector<uint8_t> list;
@@ -370,6 +399,72 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.192] CH_HEX=%s", hex);
     }
 
+    return record;
+}
+
+// Wave 29-499.219 — CH with X25519MLKEM768 hybrid + X25519 keyshare
+// (iPhone-byte-exact since iPhone Safari 26 sends both entries)
+Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
+    const Vector<uint8_t>& mlkemPubKey,
+    const Vector<uint8_t>& x25519PubKey,
+    Vector<uint8_t>& outClientRandom)
+{
+    outClientRandom.resize(32);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
+    Vector<uint8_t> sessionId(32);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
+
+    uint16_t greasePrimary = pickGreaseValue();
+    uint16_t greaseSecondary = pickGreaseValue();
+    while (greaseSecondary == greasePrimary)
+        greaseSecondary = pickGreaseValue();
+
+    Vector<uint8_t> ciphers;
+    appendU16(ciphers, greasePrimary);
+    for (size_t i = 1; i < kIPhoneCipherCount; ++i)
+        appendU16(ciphers, kIPhoneCiphers[i]);
+
+    Vector<uint8_t> extensions;
+    extensions.append(makeExtGREASE(greasePrimary).span());
+    extensions.append(makeExtServerName(sni).span());
+    extensions.append(makeExtExtendedMasterSecret().span());
+    extensions.append(makeExtRenegotiationInfo().span());
+    extensions.append(makeExtSupportedGroups().span());
+    extensions.append(makeExtEcPointFormats().span());
+    extensions.append(makeExtALPN().span());
+    extensions.append(makeExtStatusRequest().span());
+    extensions.append(makeExtSignatureAlgorithms().span());
+    extensions.append(makeExtSCT().span());
+    // ← HYBRID keyshare: GREASE + X25519MLKEM768 + X25519
+    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey).span());
+    extensions.append(makeExtPSKKeyExchangeModes().span());
+    extensions.append(makeExtSupportedVersions().span());
+    extensions.append(makeExtCompressCertificate().span());
+    extensions.append(makeExtGREASE(greaseSecondary).span());
+
+    Vector<uint8_t> body;
+    appendU16(body, kTLSVersionTLS12);
+    body.append(outClientRandom.span());
+    appendU8LenBlob(body, sessionId.span().data(), sessionId.size());
+    appendVecU16Len(body, ciphers);
+    body.append(0x01); body.append(0x00);
+    appendVecU16Len(body, extensions);
+
+    Vector<uint8_t> handshake;
+    handshake.append(kTLSHandshakeTypeClientHello);
+    handshake.append(static_cast<uint8_t>((body.size() >> 16) & 0xFF));
+    handshake.append(static_cast<uint8_t>((body.size() >> 8) & 0xFF));
+    handshake.append(static_cast<uint8_t>(body.size() & 0xFF));
+    handshake.append(body.span());
+
+    Vector<uint8_t> record;
+    record.append(kTLSRecordTypeHandshake);
+    appendU16(record, kTLSVersionTLS12);
+    appendU16(record, static_cast<uint16_t>(handshake.size()));
+    record.append(handshake.span());
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] iPhone HYBRID ClientHello built: %zu bytes (MLKEM768 1184 + X25519 32 in keyshare)",
+        record.size());
     return record;
 }
 

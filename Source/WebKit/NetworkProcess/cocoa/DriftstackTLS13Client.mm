@@ -48,6 +48,8 @@ DriftstackTLS13Client::DriftstackTLS13Client()
 
 DriftstackTLS13Client::~DriftstackTLS13Client()
 {
+    driftstackMLKEM768Free(m_mlkemKeypair);
+    driftstackP256Free(m_p256Keypair);
 }
 
 // Wave 29-499.186 — cipher-aware transcript helpers
@@ -142,9 +144,21 @@ bool DriftstackTLS13Client::sendClientHello()
         return false;
     }
     m_ourX25519Private = x25519Private;
+    m_ourX25519Public = x25519Pub;
 
-    // Wave 29-499.187 — pass REAL X25519 pubkey to ClientHello builder
-    Vector<uint8_t> chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, x25519Pub, clientRandom);
+    // Wave 29-499.219 — generate MLKEM768 keypair for hybrid X25519MLKEM768 keyshare
+    m_mlkemKeypair = driftstackMLKEM768Generate();
+    Vector<uint8_t> chRecord;
+    if (m_mlkemKeypair.ok && m_mlkemKeypair.publicKey.size() == 1184) {
+        // Hybrid path: send MLKEM768 + X25519 keyshare (matches iPhone Safari 26)
+        chRecord = driftstackBuildIPhoneClientHelloHybrid(m_sniHostname,
+            m_mlkemKeypair.publicKey, x25519Pub, clientRandom);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] Using HYBRID X25519MLKEM768+X25519 keyshare");
+    } else {
+        // Fallback: X25519-only keyshare (less iPhone-exact but works on non-PQ servers)
+        chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, x25519Pub, clientRandom);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] MLKEM768 unavailable, falling back to X25519-only keyshare");
+    }
 
     // Send to socket
     if (!writeAll(m_fd, chRecord.span().data(), chRecord.size())) {
@@ -301,23 +315,47 @@ bool DriftstackTLS13Client::receiveServerHello()
         return receiveServerHello();
     }
 
-    // Wave 29-499.177 — derive handshake secrets from ECDH + transcript hash.
-    // Only X25519 supported in this iteration (key_share group 0x001D).
-    // iPhone offers X25519MLKEM768 first but server typically picks X25519
-    // since most servers don't support MLKEM yet.
-    if (sh.keyShareGroup != 0x001D) {
-        m_errorMessage = makeString("Unsupported key_share group 0x"_s, hex(sh.keyShareGroup, 4));
-        return false;
-    }
-    if (sh.keyShareKey.size() != 32) {
-        m_errorMessage = "X25519 pubkey must be 32 bytes"_s;
-        return false;
-    }
-
-    // ECDH: our_private + server_public → 32-byte shared secret
-    m_ecdhShared = driftstackX25519SharedSecret(m_ourX25519Private, sh.keyShareKey);
-    if (m_ecdhShared.size() != 32) {
-        m_errorMessage = "X25519 ECDH derivation failed"_s;
+    // Wave 29-499.219 — handle X25519MLKEM768 hybrid OR X25519 keyshare
+    if (sh.keyShareGroup == 0x11EC) {
+        // X25519MLKEM768 hybrid: server sent 1120 bytes
+        //   MLKEM768_ciphertext (1088) || X25519_pubkey (32)
+        if (sh.keyShareKey.size() != 1120) {
+            m_errorMessage = makeString("Hybrid keyshare wrong size: expected 1120, got "_s,
+                String::number(sh.keyShareKey.size()));
+            return false;
+        }
+        // MLKEM_decap: extract first 1088 bytes ciphertext
+        Vector<uint8_t> ciphertext;
+        ciphertext.append(std::span<const uint8_t>(sh.keyShareKey.span().data(), 1088));
+        Vector<uint8_t> mlkemShared = driftstackMLKEM768Decap(m_mlkemKeypair, ciphertext);
+        if (mlkemShared.size() != 32) {
+            m_errorMessage = "MLKEM768 decap failed"_s;
+            return false;
+        }
+        // X25519 ECDH with server's X25519 pubkey (last 32 bytes)
+        Vector<uint8_t> serverX25519;
+        serverX25519.append(std::span<const uint8_t>(sh.keyShareKey.span().data() + 1088, 32));
+        Vector<uint8_t> x25519Shared = driftstackX25519SharedSecret(m_ourX25519Private, serverX25519);
+        if (x25519Shared.size() != 32) {
+            m_errorMessage = "Hybrid X25519 ECDH failed"_s;
+            return false;
+        }
+        // Hybrid shared = MLKEM_shared || X25519_shared (64 bytes total)
+        m_ecdhShared.clear();
+        m_ecdhShared.append(mlkemShared.span());
+        m_ecdhShared.append(x25519Shared.span());
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] Hybrid X25519MLKEM768 shared derived: %zu bytes (MLKEM 32 + X25519 32)",
+            m_ecdhShared.size());
+    } else if (sh.keyShareGroup == 0x001D && sh.keyShareKey.size() == 32) {
+        // Plain X25519
+        m_ecdhShared = driftstackX25519SharedSecret(m_ourX25519Private, sh.keyShareKey);
+        if (m_ecdhShared.size() != 32) {
+            m_errorMessage = "X25519 ECDH derivation failed"_s;
+            return false;
+        }
+    } else {
+        m_errorMessage = makeString("Unsupported key_share group 0x"_s, hex(sh.keyShareGroup, 4),
+            " or size "_s, String::number(sh.keyShareKey.size()));
         return false;
     }
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.188] ECDH shared (32B): %02x%02x%02x%02x...%02x%02x | priv=%02x%02x | peer_pub=%02x%02x",
