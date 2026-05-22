@@ -74,6 +74,14 @@ bool driftstackParseServerHello(const uint8_t* data, size_t len, TLS13ServerHell
     // server_random (32 bytes)
     out.serverRandom.resize(32);
     memcpy(out.serverRandom.mutableSpan().data(), data + off, 32);
+    // Wave 29-499.206 — HRR detection: random == SHA256("HelloRetryRequest")
+    static const uint8_t kHelloRetryRequestRandom[32] = {
+        0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
+        0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+        0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+        0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
+    };
+    out.isHelloRetryRequest = (memcmp(data + off, kHelloRetryRequestRandom, 32) == 0);
     off += 32;
 
     // legacy_session_id_echo
@@ -110,8 +118,12 @@ bool driftstackParseServerHello(const uint8_t* data, size_t len, TLS13ServerHell
             if (extLen == 2)
                 out.selectedVersion = static_cast<uint16_t>((data[off] << 8) | data[off + 1]);
         } else if (extType == kExtKeyShare) {
-            // server sends KeyShareEntry: group (u16) + key_exchange (u16-len + bytes)
-            if (extLen >= 4) {
+            // Wave 29-499.206 — In HRR mode, server sends just `group` (2 bytes).
+            // In normal SH, server sends KeyShareEntry: group (u16) + key_exchange (u16-len + bytes).
+            if (out.isHelloRetryRequest) {
+                if (extLen == 2)
+                    out.keyShareGroup = static_cast<uint16_t>((data[off] << 8) | data[off + 1]);
+            } else if (extLen >= 4) {
                 out.keyShareGroup = static_cast<uint16_t>((data[off] << 8) | data[off + 1]);
                 uint16_t kxLen = static_cast<uint16_t>((data[off + 2] << 8) | data[off + 3]);
                 if (4 + kxLen <= extLen) {

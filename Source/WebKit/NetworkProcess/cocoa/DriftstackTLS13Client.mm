@@ -200,8 +200,22 @@ bool DriftstackTLS13Client::receiveServerHello()
         return false;
     }
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ServerHello: cipher=0x%04x selectedVersion=0x%04x keyShareGroup=0x%04x keyLen=%zu",
-        sh.cipherSuite, sh.selectedVersion, sh.keyShareGroup, sh.keyShareKey.size());
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ServerHello: cipher=0x%04x selectedVersion=0x%04x keyShareGroup=0x%04x keyLen=%zu HRR=%d",
+        sh.cipherSuite, sh.selectedVersion, sh.keyShareGroup, sh.keyShareKey.size(), sh.isHelloRetryRequest);
+
+    // Wave 29-499.206 — HRR handling (RFC 8446 §4.1.4)
+    // Server signals "use different keyshare" via HRR. We currently don't
+    // implement P-256/P-384/P-521 ECDH in DriftstackCrypto (only X25519).
+    // When HRR requests non-X25519 group, fail cleanly so caller can
+    // fall back to default mode (Apple CFNetwork handles HRR natively).
+    //
+    // ~1% of servers require HRR (most accept X25519). Future iteration
+    // will add P-256/P-384/P-521 via LibreSSL EVP_PKEY_EC + custom CH retry.
+    if (sh.isHelloRetryRequest) {
+        m_errorMessage = makeString("HRR not yet implemented (server wants group 0x"_s,
+            hex(sh.keyShareGroup, 4), ") — fall back to default mode"_s);
+        return false;
+    }
 
     // Wave 29-499.177 — derive handshake secrets from ECDH + transcript hash.
     // Only X25519 supported in this iteration (key_share group 0x001D).

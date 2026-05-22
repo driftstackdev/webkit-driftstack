@@ -49,6 +49,10 @@ struct TLS13ServerHello {
     uint16_t keyShareGroup { 0 };   // e.g. 0x001D = X25519
     Vector<uint8_t> keyShareKey;    // raw pubkey bytes
     uint16_t selectedVersion { 0 }; // supported_versions extension result
+    // Wave 29-499.206 — HelloRetryRequest detection (RFC 8446 §4.1.4)
+    // Server signals HRR via fixed random value SHA256("HelloRetryRequest").
+    // When isHelloRetryRequest=true, keyShareGroup is the group server WANTS.
+    bool isHelloRetryRequest { false };
 };
 
 // Parse a TLS 1.3 ServerHello from a record's handshake body (after the
