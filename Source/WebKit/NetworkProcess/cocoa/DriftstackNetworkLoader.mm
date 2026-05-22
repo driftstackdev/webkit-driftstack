@@ -115,7 +115,10 @@ typedef const SSL_METHOD* (*FnTLS_client_method)(void);
 typedef int (*FnSSL_CTX_set_min_proto_version)(SSL_CTX*, uint16_t);
 typedef int (*FnSSL_CTX_set_max_proto_version)(SSL_CTX*, uint16_t);
 typedef int (*FnSSL_CTX_set_strict_cipher_list)(SSL_CTX*, const char*);
+typedef int (*FnSSL_CTX_set_cipher_list)(SSL_CTX*, const char*);
 typedef int (*FnSSL_CTX_set1_curves_list)(SSL_CTX*, const char*);
+typedef long (*FnSSL_CTX_ctrl)(SSL_CTX*, int, long, void*);
+typedef long (*FnSSL_ctrl)(SSL*, int, long, void*);
 typedef int (*FnSSL_CTX_set_alpn_protos)(SSL_CTX*, const uint8_t*, unsigned);
 typedef void (*FnSSL_CTX_set_verify)(SSL_CTX*, int, int (*)(int, X509_STORE_CTX*));
 typedef int (*FnSSL_CTX_set_default_verify_paths)(SSL_CTX*);
@@ -140,7 +143,10 @@ struct BoringSSLFns {
     FnSSL_CTX_set_min_proto_version ssl_ctx_set_min_proto_version = nullptr;
     FnSSL_CTX_set_max_proto_version ssl_ctx_set_max_proto_version = nullptr;
     FnSSL_CTX_set_strict_cipher_list ssl_ctx_set_strict_cipher_list = nullptr;
+    FnSSL_CTX_set_cipher_list ssl_ctx_set_cipher_list = nullptr;
     FnSSL_CTX_set1_curves_list ssl_ctx_set1_curves_list = nullptr;
+    FnSSL_CTX_ctrl ssl_ctx_ctrl = nullptr;
+    FnSSL_ctrl ssl_ctrl = nullptr;
     FnSSL_CTX_set_alpn_protos ssl_ctx_set_alpn_protos = nullptr;
     FnSSL_CTX_set_verify ssl_ctx_set_verify = nullptr;
     FnSSL_CTX_set_default_verify_paths ssl_ctx_set_default_verify_paths = nullptr;
@@ -211,7 +217,10 @@ static bool resolveBoringSSL()
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_min_proto_version, "SSL_CTX_set_min_proto_version");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_max_proto_version, "SSL_CTX_set_max_proto_version");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_strict_cipher_list, "SSL_CTX_set_strict_cipher_list");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_cipher_list, "SSL_CTX_set_cipher_list");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set1_curves_list, "SSL_CTX_set1_curves_list");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_ctrl, "SSL_CTX_ctrl");
+    RESOLVE_FROM_WEBRTC(ssl_ctrl, "SSL_ctrl");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_alpn_protos, "SSL_CTX_set_alpn_protos");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_verify, "SSL_CTX_set_verify");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_default_verify_paths, "SSL_CTX_set_default_verify_paths");
@@ -231,12 +240,17 @@ static bool resolveBoringSSL()
     RESOLVE_FROM_WEBRTC(ssl_library_init, "SSL_library_init");
 #undef RESOLVE_FROM_WEBRTC
 
+    // Wave 29-499.167 — Apple LibreSSL 3.3.6 lacks: ssl_set_tlsext_host_name
+    // (use SSL_ctrl SSL_CTRL_SET_TLSEXT_HOSTNAME=55), strict_cipher_list
+    // (use plain SSL_CTX_set_cipher_list), set1_curves_list (use SSL_CTX_ctrl
+    // SSL_CTRL_SET_GROUPS_LIST=92). Required check excludes those — we
+    // fall back to ctrl-codes.
     bool required = f.ssl_ctx_new && f.tls_client_method && f.ssl_new
         && f.ssl_set_fd && f.ssl_connect && f.ssl_read && f.ssl_write
-        && f.ssl_free && f.ssl_set_tlsext_host_name;
+        && f.ssl_free && (f.ssl_set_tlsext_host_name || f.ssl_ctrl);
     f.ready = required;
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL dlsym ready=%d (ctx_new=%p set_curves=%p set_alpn=%p set1_host=%p)",
-        required, f.ssl_ctx_new, f.ssl_ctx_set1_curves_list, f.ssl_ctx_set_alpn_protos, f.ssl_set1_host);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.167] Apple LibreSSL dlsym ready=%d (ctx_new=%p set_cipher_list=%p ssl_ctx_ctrl=%p ssl_ctrl=%p set_alpn=%p)",
+        required, f.ssl_ctx_new, f.ssl_ctx_set_cipher_list, f.ssl_ctx_ctrl, f.ssl_ctrl, f.ssl_ctx_set_alpn_protos);
     return required;
 }
 
@@ -268,10 +282,13 @@ static void initDriftstackSslCtx()
 
         // iPhone Safari 26 cipher list (from real device tls.peet.ws capture):
         // TLS 1.3 ciphers + TLS 1.2 ECDHE + RSA ciphers (~20 total).
-        if (f.ssl_ctx_set_strict_cipher_list) {
-            // Wave 29-499.167 — iPhone Safari 26 exact 20-cipher list (with 3DES)
-            // LibreSSL accepts these names; BoringSSL would reject 3DES.
-            f.ssl_ctx_set_strict_cipher_list(g_driftstackSslCtx,
+        // Wave 29-499.167 — Apple LibreSSL: use SSL_CTX_set_cipher_list
+        // (strict_cipher_list is BoringSSL-only). LibreSSL accepts 3DES.
+        auto setCipherList = f.ssl_ctx_set_strict_cipher_list
+            ? f.ssl_ctx_set_strict_cipher_list
+            : f.ssl_ctx_set_cipher_list;
+        if (setCipherList) {
+            setCipherList(g_driftstackSslCtx,
                 "TLS_AES_256_GCM_SHA384:"
                 "TLS_CHACHA20_POLY1305_SHA256:"
                 "TLS_AES_128_GCM_SHA256:"
@@ -293,9 +310,18 @@ static void initDriftstackSslCtx()
                 "ECDHE-RSA-DES-CBC3-SHA:"
                 "DES-CBC3-SHA");
         }
+        // Wave 29-499.167 — LibreSSL: SSL_CTX_set1_curves_list missing;
+        // use SSL_CTX_ctrl with SSL_CTRL_SET_GROUPS_LIST=92. iPhone
+        // Safari 26 key shares: X25519MLKEM768 + X25519 + P-256/384/521.
+        // LibreSSL 3.3.6 may not have X25519MLKEM768 — fall back to
+        // X25519 + P-256/384/521 (close to iPhone).
         if (f.ssl_ctx_set1_curves_list) {
             f.ssl_ctx_set1_curves_list(g_driftstackSslCtx,
                 "X25519MLKEM768:X25519:P-256:P-384:P-521");
+        } else if (f.ssl_ctx_ctrl) {
+            const int SSL_CTRL_SET_GROUPS_LIST = 92;
+            f.ssl_ctx_ctrl(g_driftstackSslCtx, SSL_CTRL_SET_GROUPS_LIST, 0,
+                (void*)"X25519:P-256:P-384:P-521");
         }
 
         static const uint8_t alpn[] = {
@@ -332,7 +358,15 @@ static void initDriftstackSslCtx()
     SSL* ssl = f.ssl_new(g_driftstackSslCtx);
     if (!ssl) return nullptr;
 
-    f.ssl_set_tlsext_host_name(ssl, hostUtf8);
+    // Wave 29-499.167 — LibreSSL: SSL_set_tlsext_host_name macro missing;
+    // use SSL_ctrl with SSL_CTRL_SET_TLSEXT_HOSTNAME=55, type=0
+    // (TLSEXT_NAMETYPE_host_name).
+    if (f.ssl_set_tlsext_host_name) {
+        f.ssl_set_tlsext_host_name(ssl, hostUtf8);
+    } else if (f.ssl_ctrl) {
+        const int SSL_CTRL_SET_TLSEXT_HOSTNAME = 55;
+        f.ssl_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, 0, (void*)hostUtf8);
+    }
     if (f.ssl_set1_host) f.ssl_set1_host(ssl, hostUtf8);
     f.ssl_set_fd(ssl, fd);
 
