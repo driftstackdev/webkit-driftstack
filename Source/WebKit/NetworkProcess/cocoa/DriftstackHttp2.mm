@@ -710,15 +710,18 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
         request.authority.utf8().data(), request.path.utf8().data(),
         resp.statusCode, resp.body.size(), frameCount);
 
-    // Wave 29-499.200 — write response body to /tmp for fingerprint verification
+    // Wave 29-499.200 — log response body to syslog for fingerprint extraction
+    // (NetworkProcess sandbox blocks /tmp writes; logs go through XPC).
     {
-        char path[256];
-        snprintf(path, sizeof(path), "/tmp/driftstack-h2-resp-%s.txt", request.authority.utf8().data());
-        FILE* fp = fopen(path, "wb");
-        if (fp) {
-            fwrite(resp.body.span().data(), 1, resp.body.size(), fp);
-            fclose(fp);
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.200] Response body written to %s (%zu bytes)", path, resp.body.size());
+        const auto& body = resp.body;
+        for (size_t off = 0; off < body.size(); off += 800) {
+            size_t chunk = std::min(static_cast<size_t>(800), body.size() - off);
+            char buf[820] = {0};
+            for (size_t i = 0; i < chunk && i < sizeof(buf) - 1; ++i) {
+                uint8_t c = body[off + i];
+                buf[i] = (c >= 32 && c < 127) ? c : '_';  // printable + placeholder
+            }
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.200] body[%zu..%zu]=%s", off, off + chunk, buf);
         }
     }
 
