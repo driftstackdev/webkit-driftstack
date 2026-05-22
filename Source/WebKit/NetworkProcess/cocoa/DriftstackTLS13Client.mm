@@ -266,7 +266,7 @@ int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
     if (m_readBuffer.isEmpty()) {
         auto pt = readApplicationRecord();
         if (pt.isEmpty()) return 0;
-        m_readBuffer = WTFMove(pt);
+        m_readBuffer = std::move(pt);
     }
     size_t n = std::min(m_readBuffer.size(), maxLen);
     memcpy(buf, m_readBuffer.span().data(), n);
