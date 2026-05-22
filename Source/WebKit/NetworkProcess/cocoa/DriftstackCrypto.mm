@@ -608,7 +608,7 @@ Vector<uint8_t> driftstackHmacSha256(const Vector<uint8_t>& key, const Vector<ui
 
 namespace {
 
-Vector<uint8_t> aesGcmEncryptImpl(const void* cipher,
+[[maybe_unused]] Vector<uint8_t> aesGcmEncryptImpl(const void* cipher,
                                    const Vector<uint8_t>& key,
                                    const Vector<uint8_t>& nonce,
                                    const Vector<uint8_t>& plaintext,
@@ -635,7 +635,7 @@ Vector<uint8_t> aesGcmEncryptImpl(const void* cipher,
     return output;
 }
 
-Vector<uint8_t> aesGcmDecryptImpl(const void* cipher,
+[[maybe_unused]] Vector<uint8_t> aesGcmDecryptImpl(const void* cipher,
                                    const Vector<uint8_t>& key,
                                    const Vector<uint8_t>& nonce,
                                    const Vector<uint8_t>& ciphertext,
