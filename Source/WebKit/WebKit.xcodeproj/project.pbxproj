@@ -247,6 +247,7 @@
 		07FE63E82ED11D5900D5ED9E /* ClassStructPtr.h in Headers */ = {isa = PBXBuildFile; fileRef = 07FE63E72ED11D5900D5ED9E /* ClassStructPtr.h */; };
 		07FEBC9A2E035A8B004A6D5D /* WKMouseDeviceObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07FEBC992E035950004A6D5D /* WKMouseDeviceObserver.swift */; };
 		0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */ = {isa = PBXBuildFile; fileRef = 086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */; settings = {ATTRIBUTES = (Project, ); }; };
+		93EB25BBB6DB60BAD94DB09A /* DriftstackStun.h in Headers */ = {isa = PBXBuildFile; fileRef = ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		4D00941226EC54CDCB147BAD /* DriftstackTLS13Client.h in Headers */ = {isa = PBXBuildFile; fileRef = C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		0AE523848E823CD1487C986E /* DriftstackTLS13KeySchedule.h in Headers */ = {isa = PBXBuildFile; fileRef = D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		CBB1BEE585D32A7BEBFBDD89 /* DriftstackCrypto.h in Headers */ = {isa = PBXBuildFile; fileRef = F5849FAB6860C0E6333029A6 /* DriftstackCrypto.h */; settings = {ATTRIBUTES = (Project, ); }; };
@@ -1653,6 +1654,7 @@
 		71F62F752D076DEE00B591D2 /* RemoteAnimation.h in Headers */ = {isa = PBXBuildFile; fileRef = 71F62F722D076DEE00B591D2 /* RemoteAnimation.h */; };
 		71FB810B2260627E00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h in Headers */ = {isa = PBXBuildFile; fileRef = 71FB810A2260627A00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h */; };
 		7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */ = {isa = PBXBuildFile; fileRef = 84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */; };
+		A7135D381380C1A482CB2A35 /* DriftstackStun.mm in Sources */ = {isa = PBXBuildFile; fileRef = 836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */; };
 		83087CAE705AC6066DF4EC42 /* DriftstackTLS13Client.mm in Sources */ = {isa = PBXBuildFile; fileRef = 56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */; };
 		2162A02380439E571EAE8383 /* DriftstackTLS13KeySchedule.mm in Sources */ = {isa = PBXBuildFile; fileRef = E0849F192E7CC3E7576360B4 /* DriftstackTLS13KeySchedule.mm */; };
 		C26F13EDDD8BB9E25A440181 /* DriftstackCrypto.mm in Sources */ = {isa = PBXBuildFile; fileRef = 7DC02FCCE3358243DE30D9F8 /* DriftstackCrypto.mm */; };
@@ -3588,6 +3590,7 @@
 		07FEBC992E035950004A6D5D /* WKMouseDeviceObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WKMouseDeviceObserver.swift; sourceTree = "<group>"; };
 		07FEBC9C2E036C6D004A6D5D /* WKMouseDeviceObserver.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = WKMouseDeviceObserver.mm; sourceTree = "<group>"; };
 		086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackSocks5Client.h; sourceTree = "<group>"; };
+		ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackStun.h; sourceTree = "<group>"; };
 		C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackTLS13Client.h; sourceTree = "<group>"; };
 		D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackTLS13KeySchedule.h; sourceTree = "<group>"; };
 		F5849FAB6860C0E6333029A6 /* DriftstackCrypto.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackCrypto.h; sourceTree = "<group>"; };
@@ -7297,6 +7300,7 @@
 		848A33AE294AA847002DD640 /* OSX_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = OSX_Private.modulemap; sourceTree = "<group>"; };
 		849944302943E2550086CDBB /* iOS_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = iOS_Private.modulemap; sourceTree = "<group>"; };
 		84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5Client.mm; sourceTree = "<group>"; };
+		836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackStun.mm; sourceTree = "<group>"; };
 		56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackTLS13Client.mm; sourceTree = "<group>"; };
 		E0849F192E7CC3E7576360B4 /* DriftstackTLS13KeySchedule.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackTLS13KeySchedule.mm; sourceTree = "<group>"; };
 		7DC02FCCE3358243DE30D9F8 /* DriftstackCrypto.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackCrypto.mm; sourceTree = "<group>"; };
@@ -15115,6 +15119,8 @@
 				5C2C6FA727C96FF900CCDA9E /* WKURLSessionTaskDelegate.mm */,
 				086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */,
 				84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */,
+				ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */,
+				836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */,
 				C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */,
 				56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */,
 				D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */,
@@ -19743,6 +19749,7 @@
 				A1D4D23A2B7E82D90008C40E /* XPCEndpointMessages.h in Headers */,
 				BCBECDE816B6416800047A1A /* XPCServiceEntryPoint.h in Headers */,
 				0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */,
+				93EB25BBB6DB60BAD94DB09A /* DriftstackStun.h in Headers */,
 				4D00941226EC54CDCB147BAD /* DriftstackTLS13Client.h in Headers */,
 				0AE523848E823CD1487C986E /* DriftstackTLS13KeySchedule.h in Headers */,
 				CBB1BEE585D32A7BEBFBDD89 /* DriftstackCrypto.h in Headers */,
@@ -22409,6 +22416,7 @@
 				C14D306924B79BE000480387 /* XPCEndpoint.mm in Sources */,
 				C14D306A24B79BE400480387 /* XPCEndpointClient.mm in Sources */,
 				7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */,
+				A7135D381380C1A482CB2A35 /* DriftstackStun.mm in Sources */,
 				83087CAE705AC6066DF4EC42 /* DriftstackTLS13Client.mm in Sources */,
 				2162A02380439E571EAE8383 /* DriftstackTLS13KeySchedule.mm in Sources */,
 				C26F13EDDD8BB9E25A440181 /* DriftstackCrypto.mm in Sources */,
