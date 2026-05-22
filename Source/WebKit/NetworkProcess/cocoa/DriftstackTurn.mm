@@ -11,6 +11,8 @@
 #import "config.h"
 #import "DriftstackTurn.h"
 #import "DriftstackStun.h"
+#import <wtf/HexNumber.h>
+#import <wtf/text/MakeString.h>
 
 #if PLATFORM(DRIFTSTACK)
 
