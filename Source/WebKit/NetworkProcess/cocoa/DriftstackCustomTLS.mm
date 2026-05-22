@@ -185,12 +185,15 @@ Vector<uint8_t> makeExtStatusRequest()
 Vector<uint8_t> makeExtSignatureAlgorithms()
 {
     Vector<uint8_t> list;
+    // Wave 29-499.197 — iPhone sends 10 sigalgs incl 0x080b (rsa_pss_pss_sha384)
+    // tls.peet.ws labels 0x080b as "rsa_pss_rsae_sha384" (same as 0x0805) due to
+    // its mapping table → shows duplicate in human-readable list.
     appendU16(list, 0x0403);  // ecdsa_secp256r1_sha256
     appendU16(list, 0x0804);  // rsa_pss_rsae_sha256
     appendU16(list, 0x0401);  // rsa_pkcs1_sha256
     appendU16(list, 0x0503);  // ecdsa_secp384r1_sha384
-    appendU16(list, 0x0203);  // ecdsa_sha1 (iPhone legacy)
     appendU16(list, 0x0805);  // rsa_pss_rsae_sha384
+    appendU16(list, 0x080b);  // rsa_pss_pss_sha384 (iPhone legacy)
     appendU16(list, 0x0501);  // rsa_pkcs1_sha384
     appendU16(list, 0x0806);  // rsa_pss_rsae_sha512
     appendU16(list, 0x0601);  // rsa_pkcs1_sha512
