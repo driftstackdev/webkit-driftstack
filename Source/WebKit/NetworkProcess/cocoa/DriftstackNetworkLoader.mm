@@ -509,8 +509,9 @@ void DriftstackNetworkLoader::resume()
         }
         bool useBoringSSL = isHttps && ssl;
 
-        // Wave 29-499.141 — detect HTTP/2 from ALPN; dispatch to our
+        // Wave 29-499.163 — detect HTTP/2 from ALPN; dispatch to our
         // custom HTTP/2 client (DriftstackHttp2) when h2 negotiated.
+        // Added explicit logging to trace why dispatch wasn't firing.
         bool useHttp2 = false;
         if (ssl) {
             auto& f = boringSSLFns();
@@ -519,6 +520,15 @@ void DriftstackNetworkLoader::resume()
             if (f.ssl_get0_alpn_selected) f.ssl_get0_alpn_selected(ssl, &alpnSel, &alpnLen);
             if (alpnSel && alpnLen == 2 && alpnSel[0] == 'h' && alpnSel[1] == '2')
                 useHttp2 = true;
+            static bool loggedAlpnOnce = false;
+            if (!loggedAlpnOnce) {
+                loggedAlpnOnce = true;
+                char alpnBuf[16] = {0};
+                if (alpnSel && alpnLen < sizeof(alpnBuf))
+                    memcpy(alpnBuf, alpnSel, alpnLen);
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.163] resume() ALPN check: alpn='%s' len=%u useHttp2=%d ssl_get0=%p",
+                    alpnBuf, alpnLen, useHttp2, (void*)f.ssl_get0_alpn_selected);
+            }
         }
 #else
         void* ssl = nullptr;
