@@ -193,7 +193,7 @@ Vector<uint8_t> makeExtSignatureAlgorithms()
     appendU16(list, 0x0401);  // rsa_pkcs1_sha256
     appendU16(list, 0x0503);  // ecdsa_secp384r1_sha384
     appendU16(list, 0x0805);  // rsa_pss_rsae_sha384
-    appendU16(list, 0x080b);  // rsa_pss_pss_sha384 (iPhone legacy)
+    appendU16(list, 0x0805);  // rsa_pss_rsae_sha384 (iPhone DUPLICATE — Apple TLS stack)
     appendU16(list, 0x0501);  // rsa_pkcs1_sha384
     appendU16(list, 0x0806);  // rsa_pss_rsae_sha512
     appendU16(list, 0x0601);  // rsa_pkcs1_sha512
