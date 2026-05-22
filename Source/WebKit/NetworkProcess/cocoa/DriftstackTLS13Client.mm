@@ -203,17 +203,81 @@ bool DriftstackTLS13Client::receiveServerHello()
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ServerHello: cipher=0x%04x selectedVersion=0x%04x keyShareGroup=0x%04x keyLen=%zu HRR=%d",
         sh.cipherSuite, sh.selectedVersion, sh.keyShareGroup, sh.keyShareKey.size(), sh.isHelloRetryRequest);
 
-    // Wave 29-499.206 — HRR handling (RFC 8446 §4.1.4)
-    // Server signals "use different keyshare" via HRR. We currently don't
-    // implement P-256/P-384/P-521 ECDH in DriftstackCrypto (only X25519).
-    // When HRR requests non-X25519 group, fail cleanly so caller can
-    // fall back to default mode (Apple CFNetwork handles HRR natively).
-    //
-    // ~1% of servers require HRR (most accept X25519). Future iteration
-    // will add P-256/P-384/P-521 via LibreSSL EVP_PKEY_EC + custom CH retry.
+    // Wave 29-499.215 — HRR handling (RFC 8446 §4.1.4) for P-256
     if (sh.isHelloRetryRequest) {
-        m_errorMessage = makeString("HRR not yet implemented (server wants group 0x"_s,
-            hex(sh.keyShareGroup, 4), ") — fall back to default mode"_s);
+        if (sh.keyShareGroup != 0x0017 /*P-256*/) {
+            m_errorMessage = makeString("HRR requested non-P-256 group 0x"_s,
+                hex(sh.keyShareGroup, 4), " (only P-256 supported in HRR retry)"_s);
+            return false;
+        }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR detected (server wants P-256). Retrying ClientHello with P-256 keyshare.");
+
+        // Generate P-256 keypair
+        m_p256Keypair = driftstackP256Generate();
+        if (!m_p256Keypair.ok) {
+            m_errorMessage = "P-256 keypair generation failed"_s;
+            return false;
+        }
+
+        // Per RFC 8446 §4.4.1: HRR transcript = message_hash(CH1) + HRR
+        // Compute Hash(CH1) — m_transcriptBytes currently has CH1 + HRR appended.
+        // Strip HRR (4-byte header + hsLen), get just CH1.
+        // CH1 starts at offset 0 of m_transcriptBytes; ends where SH (HRR) begins.
+        // After receiveServerHello, m_transcriptBytes = CH1 + HRR_handshake_bytes.
+        // We need: synthetic = type(0xFE) + len(3) + Hash(CH1)
+        //          new_transcript = synthetic + HRR + CH2
+        Vector<uint8_t> ch1Bytes = m_transcriptBytes;
+        // HRR was appended at end — find its boundary. CH1 ends at length of CH1 itself.
+        // CH1 length is 4 (header) + 24-bit length. Read from byte 1-3.
+        if (ch1Bytes.size() < 4) {
+            m_errorMessage = "transcript too short for HRR retry"_s;
+            return false;
+        }
+        uint32_t ch1Len = (static_cast<uint32_t>(ch1Bytes[1]) << 16)
+            | (static_cast<uint32_t>(ch1Bytes[2]) << 8)
+            | ch1Bytes[3];
+        size_t ch1TotalBytes = 4 + ch1Len;
+        if (ch1TotalBytes > ch1Bytes.size()) {
+            m_errorMessage = "transcript ch1 length mismatch"_s;
+            return false;
+        }
+        // HRR bytes = remainder after CH1
+        Vector<uint8_t> hrrBytes;
+        hrrBytes.append(std::span<const uint8_t>(ch1Bytes.span().data() + ch1TotalBytes,
+            ch1Bytes.size() - ch1TotalBytes));
+        Vector<uint8_t> ch1Only;
+        ch1Only.append(std::span<const uint8_t>(ch1Bytes.span().data(), ch1TotalBytes));
+
+        // Compute Hash(CH1) using negotiated cipher's hash
+        Vector<uint8_t> ch1Hash;
+        if (sh.cipherSuite == 0x1302)
+            ch1Hash = driftstackSHA384(ch1Only.span().data(), ch1Only.size());
+        else
+            ch1Hash = driftstackSHA256(ch1Only.span().data(), ch1Only.size());
+
+        // Build synthetic message: type(0xFE message_hash) + 3-byte len(hashLen) + hash
+        Vector<uint8_t> synthetic;
+        synthetic.append(0xFE);
+        synthetic.append(0x00);
+        synthetic.append(0x00);
+        synthetic.append(static_cast<uint8_t>(ch1Hash.size()));
+        synthetic.append(ch1Hash.span());
+
+        // Rebuild transcript: synthetic + HRR
+        m_transcriptBytes.clear();
+        m_transcriptBytes.append(synthetic.span());
+        m_transcriptBytes.append(hrrBytes.span());
+
+        // Build new ClientHello with P-256 keyshare (TODO: keep iPhone bytes
+        // exactly, only swap key_share extension. For now use the same builder
+        // but it'll generate fresh GREASE/random — server may accept).
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR retry: synthetic transcript built (CH1 hash %zu bytes), HRR bytes %zu, sending CH2 with P-256 keyshare",
+            ch1Hash.size(), hrrBytes.size());
+
+        // Substantial work still needed: build CH2 with P-256 key_share entry +
+        // re-send. For now, fail with explicit log so caller knows HRR retry
+        // is plumbed but CH2 emission TODO.
+        m_errorMessage = "HRR retry: P-256 keypair generated + synthetic transcript built, CH2 emission pending (.216)"_s;
         return false;
     }
 

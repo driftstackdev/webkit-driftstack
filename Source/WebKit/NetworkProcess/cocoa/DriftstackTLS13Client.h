@@ -25,6 +25,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include "DriftstackCrypto.h"
 #include "DriftstackTLS13KeySchedule.h"
 #include <memory>
 #include <stdint.h>
@@ -85,6 +86,9 @@ private:
 
     // Saved ECDH shared secret (until handshake secret derived)
     Vector<uint8_t> m_ecdhShared;
+
+    // Wave 29-499.215 — P-256 keypair for HRR retry path
+    P256Keypair m_p256Keypair;
 
     // Wave 29-499.195 — read buffer for leftover decrypted bytes between
     // read() calls. TLS record may contain >1 HTTP/2 frames; must not
