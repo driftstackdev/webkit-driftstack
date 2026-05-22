@@ -22,6 +22,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import <compression.h>
 #import <dlfcn.h>
 #import <wtf/Assertions.h>
 #import <wtf/text/CString.h>
@@ -739,6 +740,58 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.140] HTTP/2 request to %s%s completed: status=%d, body=%zu bytes (frames=%d)",
         request.authority.utf8().data(), request.path.utf8().data(),
         resp.statusCode, resp.body.size(), frameCount);
+
+    // Wave 29-499.220 — auto-decompress response body based on content-encoding
+    // WebKit's fast path doesn't auto-decompress; iPhone Safari does it natively.
+    // Use Apple's libcompression for gzip/deflate; brotli also supported.
+    String contentEncoding;
+    for (auto& [k, v] : resp.headers) {
+        if (k.convertToASCIILowercase() == "content-encoding"_s) {
+            contentEncoding = v.convertToASCIILowercase();
+            break;
+        }
+    }
+    if (!contentEncoding.isEmpty() && !resp.body.isEmpty()) {
+        compression_algorithm algo = (compression_algorithm)0;
+        if (contentEncoding == "gzip"_s || contentEncoding == "deflate"_s)
+            algo = COMPRESSION_ZLIB;
+        else if (contentEncoding == "br"_s)
+            algo = COMPRESSION_BROTLI;
+
+        if (algo) {
+            // Allocate generous output buffer (10x input as heuristic)
+            size_t outCapacity = resp.body.size() * 10;
+            if (outCapacity < 64 * 1024) outCapacity = 64 * 1024;
+            Vector<uint8_t> decompressed(outCapacity);
+
+            const uint8_t* src = resp.body.span().data();
+            size_t srcLen = resp.body.size();
+            // For gzip skip 10-byte header + parse format; libcompression
+            // ZLIB expects deflate stream (no gzip wrapper). Handle gzip wrapper:
+            if (contentEncoding == "gzip"_s && srcLen >= 18 && src[0] == 0x1F && src[1] == 0x8B) {
+                src += 10;
+                srcLen -= 10;
+                // Trailing 8 bytes are CRC32 + ISIZE
+                if (srcLen >= 8) srcLen -= 8;
+            }
+
+            size_t actualLen = compression_decode_buffer(decompressed.mutableSpan().data(),
+                outCapacity, src, srcLen, nullptr, algo);
+            if (actualLen > 0) {
+                decompressed.resize(actualLen);
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.220] Decompressed %s: %zu → %zu bytes",
+                    contentEncoding.utf8().data(), resp.body.size(), actualLen);
+                resp.body = WTFMove(decompressed);
+                // Remove content-encoding header so caller doesn't try to decompress again
+                resp.headers.removeAllMatching([](const auto& kv) {
+                    return kv.key.convertToASCIILowercase() == "content-encoding"_s;
+                });
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.220] Decompression failed for %s",
+                    contentEncoding.utf8().data());
+            }
+        }
+    }
 
     // Wave 29-499.200 — log response body to syslog for fingerprint extraction
     // (NetworkProcess sandbox blocks /tmp writes; logs go through XPC).
