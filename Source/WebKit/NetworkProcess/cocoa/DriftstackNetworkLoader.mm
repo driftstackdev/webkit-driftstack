@@ -167,8 +167,16 @@ static bool resolveBoringSSL()
         return false;
     }
 
-#define RESOLVE_FROM_WEBRTC(field, sym) \
-    f.field = reinterpret_cast<decltype(f.field)>(dlsym(webrtcHandle, sym))
+    // Wave 29-499.151 — BoringSSL symbols are LOCAL (lowercase `t` in nm),
+    // not exported from libwebrtc.dylib. dlsym(handle, ...) returns NULL.
+    // But RTLD_DEFAULT may find them via dyld's combined image lookup AFTER
+    // libwebrtc is loaded. Try both: handle first (for ABI consistency),
+    // then RTLD_DEFAULT fallback.
+#define RESOLVE_FROM_WEBRTC(field, sym) do { \
+    f.field = reinterpret_cast<decltype(f.field)>(dlsym(webrtcHandle, sym)); \
+    if (!f.field) \
+        f.field = reinterpret_cast<decltype(f.field)>(dlsym(RTLD_DEFAULT, sym)); \
+} while (0)
     RESOLVE_FROM_WEBRTC(ssl_ctx_new, "SSL_CTX_new");
     RESOLVE_FROM_WEBRTC(tls_client_method, "TLS_client_method");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_min_proto_version, "SSL_CTX_set_min_proto_version");
