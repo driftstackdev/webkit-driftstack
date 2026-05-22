@@ -411,7 +411,7 @@ static String hpackDecodeString(const uint8_t* data, size_t len, size_t& cursor)
     if (cursor + strLen > len) return String();
 
     if (!huffman) {
-        String s = String::fromUTF8(reinterpret_cast<const char*>(data + cursor), strLen);
+        String s = String::fromUTF8(unsafeMakeSpan(reinterpret_cast<const char*>(data + cursor), strLen));
         cursor += strLen;
         return s;
     }
@@ -419,7 +419,7 @@ static String hpackDecodeString(const uint8_t* data, size_t len, size_t& cursor)
     auto decoded = hpackHuffmanDecode(data + cursor, strLen);
     cursor += strLen;
     if (decoded.isEmpty()) return String();
-    return String::fromUTF8(reinterpret_cast<const char*>(decoded.data()), decoded.size());
+    return String::fromUTF8(byteCast<char>(decoded.span()));
 }
 
 // HPACK decode one header field representation. Appends to out.
@@ -513,7 +513,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 
     uint8_t settingsHeader[9];
     encodeFrameHeader(settingsHeader, settingsPayload.size(), kFrameSettings, 0, 0);
-    if (!sslWriteAll(ssl, settingsHeader, 9) || !sslWriteAll(ssl, settingsPayload.data(), settingsPayload.size())) {
+    if (!sslWriteAll(ssl, settingsHeader, 9) || !sslWriteAll(ssl, settingsPayload.span().data(), settingsPayload.size())) {
         resp.failed = true;
         resp.errorMessage = "SETTINGS write failed"_s;
         return resp;
@@ -549,7 +549,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     uint8_t flags = kFlagEndHeaders;
     if (!hasBody) flags |= kFlagEndStream;
     encodeFrameHeader(headersFrameHeader, headersBlock.size(), kFrameHeaders, flags, 1);
-    if (!sslWriteAll(ssl, headersFrameHeader, 9) || !sslWriteAll(ssl, headersBlock.data(), headersBlock.size())) {
+    if (!sslWriteAll(ssl, headersFrameHeader, 9) || !sslWriteAll(ssl, headersBlock.span().data(), headersBlock.size())) {
         resp.failed = true;
         resp.errorMessage = "HEADERS write failed"_s;
         return resp;
@@ -559,7 +559,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     if (hasBody) {
         uint8_t dataHeader[9];
         encodeFrameHeader(dataHeader, request.body.size(), kFrameData, kFlagEndStream, 1);
-        if (!sslWriteAll(ssl, dataHeader, 9) || !sslWriteAll(ssl, request.body.data(), request.body.size())) {
+        if (!sslWriteAll(ssl, dataHeader, 9) || !sslWriteAll(ssl, request.body.span().data(), request.body.size())) {
             resp.failed = true;
             resp.errorMessage = "DATA write failed"_s;
             return resp;
@@ -585,7 +585,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 
         Vector<uint8_t> payload;
         payload.resize(length);
-        if (length > 0 && !sslReadExact(ssl, payload.data(), length)) {
+        if (length > 0 && !sslReadExact(ssl, payload.mutableSpan().data(), length)) {
             resp.failed = true;
             resp.errorMessage = "frame payload read failed"_s;
             return resp;
@@ -617,7 +617,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                 }
                 cursor = payloadStart;
                 while (cursor < payload.size()) {
-                    if (!hpackDecodeOneHeader(payload.data(), payload.size(), cursor, decoded))
+                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
@@ -642,7 +642,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
             break;
         case kFrameData:
             if (sid == streamId) {
-                resp.body.append(payload.data(), payload.size());
+                resp.body.append(payload.span());
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;
             }
