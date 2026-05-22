@@ -26,6 +26,8 @@
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
 
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
 namespace WebKit {
 
 namespace {
@@ -157,5 +159,7 @@ bool driftstackHttp3Enabled()
 }
 
 } // namespace WebKit
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 #endif // PLATFORM(DRIFTSTACK)
