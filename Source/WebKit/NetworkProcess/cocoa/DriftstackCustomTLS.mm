@@ -179,7 +179,9 @@ Vector<uint8_t> makeExtStatusRequest()
     return makeExtension(5, body);
 }
 
-// signature_algorithms (13) — iPhone uses 11 algs (per real capture)
+// Wave 29-499.196 — iPhone Safari 26 signature_algorithms (10 algs)
+// Verified via tls.peet.ws default-mode capture (which is iPhone-bit-identical):
+// includes ecdsa_sha1 (0x0203) at position 5 — Apple legacy compat
 Vector<uint8_t> makeExtSignatureAlgorithms()
 {
     Vector<uint8_t> list;
@@ -187,6 +189,7 @@ Vector<uint8_t> makeExtSignatureAlgorithms()
     appendU16(list, 0x0804);  // rsa_pss_rsae_sha256
     appendU16(list, 0x0401);  // rsa_pkcs1_sha256
     appendU16(list, 0x0503);  // ecdsa_secp384r1_sha384
+    appendU16(list, 0x0203);  // ecdsa_sha1 (iPhone legacy)
     appendU16(list, 0x0805);  // rsa_pss_rsae_sha384
     appendU16(list, 0x0501);  // rsa_pkcs1_sha384
     appendU16(list, 0x0806);  // rsa_pss_rsae_sha512
