@@ -461,6 +461,8 @@ bool DriftstackTLS13Client::sendClientFinished()
 }
 int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t len)
 {
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] writeAppRecord len=%zu cipher=0x%04x clientAppKey.size=%zu seqNum=%llu",
+        len, m_negotiatedCipher, m_clientAppKey.key.size(), (unsigned long long)m_clientAppKey.seqNum);
     // Wave 29-499.180 — encrypt app data with client_app_key (AES-256-GCM).
     // Inner plaintext: data + inner_type 0x17 (application_data).
     Vector<uint8_t> inner;
@@ -488,6 +490,8 @@ int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t le
 
 Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
 {
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] readAppRecord cipher=0x%04x seqNum=%llu",
+        m_negotiatedCipher, (unsigned long long)m_serverAppKey.seqNum);
     // Wave 29-499.180 — decrypt app data with server_app_key.
     uint8_t recType;
     uint16_t recVer;
