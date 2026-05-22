@@ -255,7 +255,7 @@ const int kEVPPkeyCtrlHkdfMd = 0x1004;
 const int kEVPHkdfExtractOnly = 1;
 const int kEVPHkdfExpandOnly = 2;
 
-Vector<uint8_t> hkdfDerive(int mode, const void* md,
+[[maybe_unused]] Vector<uint8_t> hkdfDerive(int mode, const void* md,
                             const Vector<uint8_t>& salt,
                             const Vector<uint8_t>& key,
                             const Vector<uint8_t>& info,
