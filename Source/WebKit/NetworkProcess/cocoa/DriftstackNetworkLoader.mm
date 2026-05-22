@@ -281,7 +281,11 @@ static void initDriftstackSslCtx()
                 "AES256-GCM-SHA384:"
                 "AES128-GCM-SHA256:"
                 "AES256-SHA:"
-                "AES128-SHA");
+                "AES128-SHA:"
+                // 3DES ciphers — iPhone Safari 26 includes for backward compat
+                "ECDHE-ECDSA-DES-CBC3-SHA:"
+                "ECDHE-RSA-DES-CBC3-SHA:"
+                "DES-CBC3-SHA");
         }
         if (f.ssl_ctx_set1_curves_list) {
             f.ssl_ctx_set1_curves_list(g_driftstackSslCtx,
