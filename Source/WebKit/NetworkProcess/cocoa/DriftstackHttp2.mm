@@ -82,9 +82,22 @@ static SSLFns& sslFns()
 {
     static SSLFns s;
     if (!s.ready) {
-        s.read = (FnSSL_read)dlsym(RTLD_DEFAULT, "SSL_read");
-        s.write = (FnSSL_write)dlsym(RTLD_DEFAULT, "SSL_write");
-        s.ready = s.read && s.write;
+        // Wave 29-499.164 — dlsym from libwebrtc.dylib (not RTLD_DEFAULT)
+        // for ABI consistency with DriftstackNetworkLoader's BoringSSL.
+        // SSL* type and SSL_read/write ABI must come from same library.
+        void* h = dlopen("libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!h) h = dlopen("/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (h) {
+            s.read = (FnSSL_read)dlsym(h, "SSL_read");
+            s.write = (FnSSL_write)dlsym(h, "SSL_write");
+            s.ready = s.read && s.write;
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.164] DriftstackHttp2 SSL fns from libwebrtc: read=%p write=%p ready=%d",
+                    (void*)s.read, (void*)s.write, s.ready);
+            }
+        }
     }
     return s;
 }
