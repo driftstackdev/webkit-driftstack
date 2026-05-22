@@ -23,6 +23,7 @@
 
 #import <dlfcn.h>
 #import <stdlib.h>
+#import <sys/socket.h>
 #import <wtf/Assertions.h>
 
 namespace WebKit {
