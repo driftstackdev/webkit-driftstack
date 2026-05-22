@@ -392,6 +392,28 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Handshake message: type=0x%02x (%s) len=%u",
                 hsType, typeName, hsLen);
 
+            // Wave 29-499.209 — parse EncryptedExtensions for ALPN
+            if (hsType == 0x08 && hsLen >= 2) {
+                size_t eeOff = off + 4;
+                uint16_t extsLen = (static_cast<uint16_t>(plaintext[eeOff]) << 8) | plaintext[eeOff + 1];
+                size_t e = eeOff + 2;
+                size_t eEnd = e + extsLen;
+                while (e + 4 <= eEnd && e + 4 <= plaintext.size()) {
+                    uint16_t etype = (static_cast<uint16_t>(plaintext[e]) << 8) | plaintext[e + 1];
+                    uint16_t elen = (static_cast<uint16_t>(plaintext[e + 2]) << 8) | plaintext[e + 3];
+                    e += 4;
+                    if (etype == 16 /*ALPN*/ && elen >= 3) {
+                        // ALPN: u16 list_length + u8 proto_len + proto bytes
+                        uint8_t protoLen = plaintext[e + 2];
+                        if (protoLen > 0 && e + 3 + protoLen <= plaintext.size()) {
+                            m_selectedALPN = String::fromUTF8(reinterpret_cast<const char*>(plaintext.span().data() + e + 3), protoLen);
+                            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.209] EE: negotiated ALPN='%s'", m_selectedALPN.utf8().data());
+                        }
+                    }
+                    e += elen;
+                }
+            }
+
             if (hsType == 0x14) {  // Finished
                 gotServerFinished = true;
                 auto chSFhash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
@@ -553,8 +575,51 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
         m_transcriptBytes.append(pt.span());
         return readApplicationRecord();
     } else if (innerType == 0x15) {
-        // Alert — connection closing
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.180] TLS alert received");
+        // Wave 29-499.208 — parse TLS Alert (RFC 8446 §6)
+        // Alert payload: level(1) + description(1)
+        if (pt.size() >= 2) {
+            uint8_t level = pt[0];
+            uint8_t desc = pt[1];
+            const char* descStr = "unknown";
+            switch (desc) {
+                case 0: descStr = "close_notify"; break;
+                case 10: descStr = "unexpected_message"; break;
+                case 20: descStr = "bad_record_mac"; break;
+                case 22: descStr = "record_overflow"; break;
+                case 40: descStr = "handshake_failure"; break;
+                case 42: descStr = "bad_certificate"; break;
+                case 43: descStr = "unsupported_certificate"; break;
+                case 44: descStr = "certificate_revoked"; break;
+                case 45: descStr = "certificate_expired"; break;
+                case 46: descStr = "certificate_unknown"; break;
+                case 47: descStr = "illegal_parameter"; break;
+                case 48: descStr = "unknown_ca"; break;
+                case 49: descStr = "access_denied"; break;
+                case 50: descStr = "decode_error"; break;
+                case 51: descStr = "decrypt_error"; break;
+                case 70: descStr = "protocol_version"; break;
+                case 71: descStr = "insufficient_security"; break;
+                case 80: descStr = "internal_error"; break;
+                case 86: descStr = "inappropriate_fallback"; break;
+                case 90: descStr = "user_canceled"; break;
+                case 109: descStr = "missing_extension"; break;
+                case 110: descStr = "unsupported_extension"; break;
+                case 112: descStr = "unrecognized_name"; break;
+                case 113: descStr = "bad_certificate_status_response"; break;
+                case 115: descStr = "unknown_psk_identity"; break;
+                case 116: descStr = "certificate_required"; break;
+                case 120: descStr = "no_application_protocol"; break;
+            }
+            const char* levelStr = (level == 1) ? "warning" : (level == 2) ? "fatal" : "?";
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.208] TLS Alert: level=%s(%d) description=%s(%d)",
+                levelStr, level, descStr, desc);
+            if (desc == 0) {
+                // close_notify — graceful, expected at end of stream
+                return {};
+            }
+        } else {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.208] TLS alert (malformed, %zu bytes)", pt.size());
+        }
         return {};
     }
     return {};

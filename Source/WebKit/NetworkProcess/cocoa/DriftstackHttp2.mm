@@ -686,13 +686,43 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
             }
             break;
         case kFrameWindowUpdate:
+            // Ignore — we don't flow-control outbound (small requests fit in window)
+            break;
         case kFramePing:
-            // Ignore
+            // Wave 29-499.210 — respond to PING with PING ACK
+            // (RFC 7540 §6.7: must echo opaque payload, set ACK flag)
+            if (!(frameFlags & kFlagAck) && length == 8) {
+                uint8_t pingResp[9 + 8];
+                encodeFrameHeader(pingResp, 8, kFramePing, kFlagAck, 0);
+                memcpy(pingResp + 9, payload.span().data(), 8);
+                sslWriteAll(ssl, pingResp, sizeof(pingResp));
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.210] PING received + ACK sent");
+            }
             break;
         case kFrameGoaway:
-            resp.failed = true;
-            resp.errorMessage = "received GOAWAY"_s;
-            return resp;
+            // Wave 29-499.211 — GOAWAY (RFC 7540 §6.8)
+            // Server announces graceful shutdown. If our stream_id < last_stream_id,
+            // server will still process us; just absorb our remaining data + close.
+            // Payload: last_stream_id (4) + error_code (4) + debug_data
+            if (length >= 8) {
+                uint32_t lastStreamId = (static_cast<uint32_t>(payload[0]) << 24)
+                    | (static_cast<uint32_t>(payload[1]) << 16)
+                    | (static_cast<uint32_t>(payload[2]) << 8)
+                    | payload[3];
+                uint32_t errorCode = (static_cast<uint32_t>(payload[4]) << 24)
+                    | (static_cast<uint32_t>(payload[5]) << 16)
+                    | (static_cast<uint32_t>(payload[6]) << 8)
+                    | payload[7];
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.211] GOAWAY: lastStreamId=%u errorCode=%u (our stream=%u)",
+                    lastStreamId, errorCode, streamId);
+                if (streamId > lastStreamId) {
+                    resp.failed = true;
+                    resp.errorMessage = "GOAWAY: server won't process our stream"_s;
+                    return resp;
+                }
+                // else: server still processes us; continue reading
+            }
+            break;
         case kFrameRstStream:
             if (sid == streamId) {
                 resp.failed = true;

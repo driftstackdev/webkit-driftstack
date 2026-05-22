@@ -632,10 +632,10 @@ void DriftstackNetworkLoader::resume()
         // Added explicit logging to trace why dispatch wasn't firing.
         bool useHttp2 = false;
         if (g_customTLSClient) {
-            // Wave 29-499.193 — custom TLS path: ALPN already negotiated by client
+            // Wave 29-499.209 — use ACTUAL ALPN parsed from EncryptedExtensions
             useHttp2 = g_customTLSClient->selectedALPN() == "h2"_s;
-            // Force h2 for now until TLS13Client exposes ALPN properly
-            useHttp2 = true;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.209] Custom TLS ALPN='%s' useHttp2=%d",
+                g_customTLSClient->selectedALPN().utf8().data(), useHttp2);
         } else if (ssl) {
             auto& f = boringSSLFns();
             const uint8_t* alpnSel = nullptr;
