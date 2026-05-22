@@ -631,7 +631,12 @@ void DriftstackNetworkLoader::resume()
         // custom HTTP/2 client (DriftstackHttp2) when h2 negotiated.
         // Added explicit logging to trace why dispatch wasn't firing.
         bool useHttp2 = false;
-        if (ssl) {
+        if (g_customTLSClient) {
+            // Wave 29-499.193 — custom TLS path: ALPN already negotiated by client
+            useHttp2 = g_customTLSClient->selectedALPN() == "h2"_s;
+            // Force h2 for now until TLS13Client exposes ALPN properly
+            useHttp2 = true;
+        } else if (ssl) {
             auto& f = boringSSLFns();
             const uint8_t* alpnSel = nullptr;
             unsigned alpnLen = 0;
