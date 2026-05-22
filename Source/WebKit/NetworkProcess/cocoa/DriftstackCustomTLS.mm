@@ -340,6 +340,15 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.171] iPhone ClientHello built: total=%zu bytes (extensions=%zu bytes), 20 ciphers, 13 extensions + 2 GREASE",
         record.size(), extensions.size());
 
+    // Wave 29-499.192 — log full ClientHello hex for JA3 verification
+    {
+        char hex[2048] = {0};
+        size_t off = 0;
+        for (size_t i = 0; i < record.size() && off < sizeof(hex) - 3; ++i)
+            off += snprintf(hex + off, sizeof(hex) - off, "%02x", record[i]);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.192] CH_HEX=%s", hex);
+    }
+
     return record;
 }
 
