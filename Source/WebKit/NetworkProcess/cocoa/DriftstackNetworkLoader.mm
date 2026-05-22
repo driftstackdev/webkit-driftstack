@@ -375,6 +375,21 @@ static void initDriftstackSslCtx()
 
 [[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
 {
+    // Wave 29-499.176 — if DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1, send iPhone-
+    // byte-exact ClientHello via DriftstackTLS13Client BEFORE the library
+    // handshake. This places the iPhone-matched bytes on the wire so
+    // detection vendors (tls.peet.ws) capture iPhone JA3. The library
+    // handshake on the same socket would conflict — close + reconnect.
+    static const char* customTlsEnv = getenv("DRIFTSTACK_PATHB_V2_CUSTOM_TLS");
+    bool useCustomTLS = customTlsEnv && customTlsEnv[0] == '1';
+
+    if (useCustomTLS) {
+        // Custom-TLS path is in active development (.171-.175 scaffolded,
+        // .176-.181 pending). For now: log activation; library handshake
+        // continues as fallback to provide working HTTPS.
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.176] DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1 detected. Custom TLS 1.3 handshake (.176+) not yet wired end-to-end; falling back to LibreSSL handshake.");
+    }
+
     initDriftstackSslCtx();
     if (!g_driftstackSslCtx) return nullptr;
     auto& f = boringSSLFns();

@@ -13,6 +13,8 @@
 #import "DriftstackCustomTLS.h"
 #import "DriftstackTLS13.h"
 #import "DriftstackCrypto.h"
+#import <wtf/text/MakeString.h>
+#import <wtf/HexNumber.h>
 
 #if PLATFORM(DRIFTSTACK)
 
@@ -162,7 +164,48 @@ bool DriftstackTLS13Client::receiveServerHello()
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ServerHello: cipher=0x%04x selectedVersion=0x%04x keyShareGroup=0x%04x keyLen=%zu",
         sh.cipherSuite, sh.selectedVersion, sh.keyShareGroup, sh.keyShareKey.size());
 
-    // For .175: just acknowledge we got the bytes. Key derivation in .176.
+    // Wave 29-499.177 — derive handshake secrets from ECDH + transcript hash.
+    // Only X25519 supported in this iteration (key_share group 0x001D).
+    // iPhone offers X25519MLKEM768 first but server typically picks X25519
+    // since most servers don't support MLKEM yet.
+    if (sh.keyShareGroup != 0x001D) {
+        m_errorMessage = makeString("Unsupported key_share group 0x"_s, hex(sh.keyShareGroup, 4));
+        return false;
+    }
+    if (sh.keyShareKey.size() != 32) {
+        m_errorMessage = "X25519 pubkey must be 32 bytes"_s;
+        return false;
+    }
+
+    // ECDH: our_private + server_public → 32-byte shared secret
+    m_ecdhShared = driftstackX25519SharedSecret(m_ourX25519Private, sh.keyShareKey);
+    if (m_ecdhShared.size() != 32) {
+        m_errorMessage = "X25519 ECDH derivation failed"_s;
+        return false;
+    }
+
+    // Compute transcript hash of CH..SH (snapshot — transcript continues)
+    auto transcriptHash = driftstackCloneFinalizeSHA384(m_transcript);
+    if (transcriptHash.size() != 48) {
+        m_errorMessage = "transcript hash snapshot failed"_s;
+        return false;
+    }
+
+    // Initialize key schedule with ECDH + transcript hash → derive c/s
+    // handshake traffic secrets
+    if (!m_keySchedule.initFromHandshake(m_ecdhShared, transcriptHash)) {
+        m_errorMessage = "key schedule init failed"_s;
+        return false;
+    }
+
+    // Derive AES-256-GCM handshake key+iv from each traffic secret
+    m_clientHsKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.clientHandshakeSecret());
+    m_serverHsKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.serverHandshakeSecret());
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.177] Handshake keys derived: client_key=%zu iv=%zu | server_key=%zu iv=%zu",
+        m_clientHsKey.key.size(), m_clientHsKey.iv.size(),
+        m_serverHsKey.key.size(), m_serverHsKey.iv.size());
+
     return true;
 }
 
