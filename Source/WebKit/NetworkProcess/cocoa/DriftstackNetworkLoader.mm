@@ -141,15 +141,15 @@ static bool resolveBoringSSL()
     auto& f = boringSSLFns();
     if (f.ready) return true;
 
-    // libwebrtc.dylib path inside WebKit framework's containing build dir
-    Dl_info info;
-    if (!dladdr((const void*)&boringSSLFns, &info)) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] dladdr failed");
-        return false;
-    }
-    // Try several possible libwebrtc paths
+    // Wave 29-499.150 — CRITICAL FIX: resolve from libwebrtc.dylib HANDLE,
+    // not RTLD_DEFAULT. Empirical .139 showed RTLD_DEFAULT resolves SSL_*
+    // from MIXED libraries (Apple system libs + libwebrtc's bundled
+    // BoringSSL) causing silent ABI mismatch crashes. We need ALL symbols
+    // from the SAME library to ensure ABI consistency.
+    //
+    // libwebrtc.dylib is loaded transitively via WebCore.framework.
+    // Resolve handle by trying both relative + absolute paths.
     const char* candidates[] = {
-        // Same dir as WebKit.framework's binary (development)
         "libwebrtc.dylib",
         "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
         nullptr,
@@ -158,41 +158,41 @@ static bool resolveBoringSSL()
     for (int i = 0; candidates[i]; ++i) {
         webrtcHandle = dlopen(candidates[i], RTLD_NOW | RTLD_GLOBAL);
         if (webrtcHandle) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] dlopen libwebrtc OK at '%s'", candidates[i]);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.150] dlopen libwebrtc OK at '%s' handle=%p", candidates[i], webrtcHandle);
             break;
         }
     }
     if (!webrtcHandle) {
-        // Try lookup without explicit dlopen — might already be loaded transitively
-        if (!dlsym(RTLD_DEFAULT, "SSL_CTX_new")) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] libwebrtc dlopen failed AND symbol not resolvable");
-            return false;
-        }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.150] libwebrtc dlopen failed");
+        return false;
     }
 
-    f.ssl_ctx_new = (FnSSL_CTX_new)dlsym(RTLD_DEFAULT, "SSL_CTX_new");
-    f.tls_client_method = (FnTLS_client_method)dlsym(RTLD_DEFAULT, "TLS_client_method");
-    f.ssl_ctx_set_min_proto_version = (FnSSL_CTX_set_min_proto_version)dlsym(RTLD_DEFAULT, "SSL_CTX_set_min_proto_version");
-    f.ssl_ctx_set_max_proto_version = (FnSSL_CTX_set_max_proto_version)dlsym(RTLD_DEFAULT, "SSL_CTX_set_max_proto_version");
-    f.ssl_ctx_set_strict_cipher_list = (FnSSL_CTX_set_strict_cipher_list)dlsym(RTLD_DEFAULT, "SSL_CTX_set_strict_cipher_list");
-    f.ssl_ctx_set1_curves_list = (FnSSL_CTX_set1_curves_list)dlsym(RTLD_DEFAULT, "SSL_CTX_set1_curves_list");
-    f.ssl_ctx_set_alpn_protos = (FnSSL_CTX_set_alpn_protos)dlsym(RTLD_DEFAULT, "SSL_CTX_set_alpn_protos");
-    f.ssl_ctx_set_verify = (FnSSL_CTX_set_verify)dlsym(RTLD_DEFAULT, "SSL_CTX_set_verify");
-    f.ssl_ctx_set_default_verify_paths = (FnSSL_CTX_set_default_verify_paths)dlsym(RTLD_DEFAULT, "SSL_CTX_set_default_verify_paths");
-    f.ssl_new = (FnSSL_new)dlsym(RTLD_DEFAULT, "SSL_new");
-    f.ssl_free = (FnSSL_free)dlsym(RTLD_DEFAULT, "SSL_free");
-    f.ssl_set_tlsext_host_name = (FnSSL_set_tlsext_host_name)dlsym(RTLD_DEFAULT, "SSL_set_tlsext_host_name");
-    f.ssl_set1_host = (FnSSL_set1_host)dlsym(RTLD_DEFAULT, "SSL_set1_host");
-    f.ssl_set_fd = (FnSSL_set_fd)dlsym(RTLD_DEFAULT, "SSL_set_fd");
-    f.ssl_connect = (FnSSL_connect)dlsym(RTLD_DEFAULT, "SSL_connect");
-    f.ssl_shutdown = (FnSSL_shutdown)dlsym(RTLD_DEFAULT, "SSL_shutdown");
-    f.ssl_get_error = (FnSSL_get_error)dlsym(RTLD_DEFAULT, "SSL_get_error");
-    f.ssl_read = (FnSSL_read)dlsym(RTLD_DEFAULT, "SSL_read");
-    f.ssl_write = (FnSSL_write)dlsym(RTLD_DEFAULT, "SSL_write");
-    f.ssl_get0_alpn_selected = (FnSSL_get0_alpn_selected)dlsym(RTLD_DEFAULT, "SSL_get0_alpn_selected");
-    f.err_get_error = (FnERR_get_error)dlsym(RTLD_DEFAULT, "ERR_get_error");
-    f.err_error_string_n = (FnERR_error_string_n)dlsym(RTLD_DEFAULT, "ERR_error_string_n");
-    f.ssl_library_init = (FnSSL_library_init)dlsym(RTLD_DEFAULT, "SSL_library_init");
+#define RESOLVE_FROM_WEBRTC(field, sym) \
+    f.field = reinterpret_cast<decltype(f.field)>(dlsym(webrtcHandle, sym))
+    RESOLVE_FROM_WEBRTC(ssl_ctx_new, "SSL_CTX_new");
+    RESOLVE_FROM_WEBRTC(tls_client_method, "TLS_client_method");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_min_proto_version, "SSL_CTX_set_min_proto_version");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_max_proto_version, "SSL_CTX_set_max_proto_version");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_strict_cipher_list, "SSL_CTX_set_strict_cipher_list");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set1_curves_list, "SSL_CTX_set1_curves_list");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_alpn_protos, "SSL_CTX_set_alpn_protos");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_verify, "SSL_CTX_set_verify");
+    RESOLVE_FROM_WEBRTC(ssl_ctx_set_default_verify_paths, "SSL_CTX_set_default_verify_paths");
+    RESOLVE_FROM_WEBRTC(ssl_new, "SSL_new");
+    RESOLVE_FROM_WEBRTC(ssl_free, "SSL_free");
+    RESOLVE_FROM_WEBRTC(ssl_set_tlsext_host_name, "SSL_set_tlsext_host_name");
+    RESOLVE_FROM_WEBRTC(ssl_set1_host, "SSL_set1_host");
+    RESOLVE_FROM_WEBRTC(ssl_set_fd, "SSL_set_fd");
+    RESOLVE_FROM_WEBRTC(ssl_connect, "SSL_connect");
+    RESOLVE_FROM_WEBRTC(ssl_shutdown, "SSL_shutdown");
+    RESOLVE_FROM_WEBRTC(ssl_get_error, "SSL_get_error");
+    RESOLVE_FROM_WEBRTC(ssl_read, "SSL_read");
+    RESOLVE_FROM_WEBRTC(ssl_write, "SSL_write");
+    RESOLVE_FROM_WEBRTC(ssl_get0_alpn_selected, "SSL_get0_alpn_selected");
+    RESOLVE_FROM_WEBRTC(err_get_error, "ERR_get_error");
+    RESOLVE_FROM_WEBRTC(err_error_string_n, "ERR_error_string_n");
+    RESOLVE_FROM_WEBRTC(ssl_library_init, "SSL_library_init");
+#undef RESOLVE_FROM_WEBRTC
 
     bool required = f.ssl_ctx_new && f.tls_client_method && f.ssl_new
         && f.ssl_set_fd && f.ssl_connect && f.ssl_read && f.ssl_write
