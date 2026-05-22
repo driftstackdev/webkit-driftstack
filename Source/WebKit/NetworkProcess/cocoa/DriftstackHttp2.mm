@@ -717,6 +717,8 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
                                                   const DriftstackHttp2Request& request)
 {
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] driftstackHttp2ExecuteVia: transport.ctx=%p readFn=%p writeFn=%p",
+        transport.ctx, (void*)transport.readFn, (void*)transport.writeFn);
     g_activeTransport = &transport;
     // Call existing Execute with dummy non-null ssl (won't be used —
     // sslReadExact/sslWriteAll check g_activeTransport first).
