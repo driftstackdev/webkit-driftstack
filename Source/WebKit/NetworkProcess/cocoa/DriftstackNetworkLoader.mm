@@ -706,23 +706,42 @@ void DriftstackNetworkLoader::resume()
             }
 
             (void)haveUA;
-            // Wave 29-499.202 — iPhone Safari 26.0 EXACT header order (per real-iPhone capture):
-            //   accept, sec-fetch-site, sec-fetch-dest, accept-encoding,
-            //   sec-fetch-mode, USER-AGENT (here), priority, accept-language
+            // Wave 29-499.203 — PROFILE-DRIVEN HTTP/2 headers
             //
-            // SKIP all WebKit-added extras — emit ONLY iPhone headers for
-            // bit-identical match (271 bytes, JA4H matches).
+            // ⚠️ TODO(profiles): These values are CURRENTLY placeholder
+            // defaults for empirical bit-identical match against iPhone 17 /
+            // iOS 18.7 / Safari 26.4 on en-US locale. PRODUCTION must read
+            // them from the per-session archetype profile (YAML config):
+            //   - User-Agent: iphone17_ios18_7_safari26_4 vs iphone16pro_*
+            //     vs other archetypes
+            //   - Accept-Language: en-US vs en-GB vs ja-JP per customer locale
+            //   - Sec-Fetch-*: depend on referrer + navigation type
+            //   - Accept: same across iPhone but check varies by site type
+            //   - Priority: u=0,i for top-level documents, u=1,i for fonts, etc.
+            //
+            // Once profile system wires up (Phase 2 archetype YAML per file 105):
+            //   auto profile = currentArchetype();
+            //   profile.userAgent, profile.acceptLanguage, etc.
             String webkitUA;
+            String webkitAccept;
+            String webkitAcceptLang;
             for (auto& header : httpHeaders) {
-                if (header.key.convertToASCIILowercase() == "user-agent"_s) {
-                    webkitUA = header.value;
-                    break;
-                }
+                String lower = header.key.convertToASCIILowercase();
+                if (lower == "user-agent"_s) webkitUA = header.value;
+                else if (lower == "accept"_s) webkitAccept = header.value;
+                else if (lower == "accept-language"_s) webkitAcceptLang = header.value;
             }
+            // Fallback to launch-archetype iphone17_ios18_7_safari26_4 defaults
+            // ONLY when profile/WebKit hasn't set them
             if (webkitUA.isEmpty())
                 webkitUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
+            if (webkitAccept.isEmpty())
+                webkitAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s;
+            if (webkitAcceptLang.isEmpty())
+                webkitAcceptLang = "en-US,en;q=0.9"_s;
 
-            h2req.extraHeaders.append({ "accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s });
+            // iPhone Safari 26.0 EXACT header order (verified via tls.peet.ws)
+            h2req.extraHeaders.append({ "accept"_s, webkitAccept });
             h2req.extraHeaders.append({ "sec-fetch-site"_s, "none"_s });
             h2req.extraHeaders.append({ "sec-fetch-dest"_s, "document"_s });
             h2req.extraHeaders.append({ "accept-encoding"_s, "gzip, deflate, br"_s });
@@ -730,9 +749,6 @@ void DriftstackNetworkLoader::resume()
             h2req.extraHeaders.append({ "user-agent"_s, webkitUA });
             h2req.extraHeaders.append({ "priority"_s, "u=0, i"_s });
             h2req.extraHeaders.append({ "accept-language"_s, "en-US,en;q=0.9"_s });
-
-            // No more headers — match iPhone exactly. Cookies appended below
-            // when applicable (h2req.cookies populated by earlier block).
 
             // Wave 29-499.193 — route HTTP/2 via custom TLS client if active
             DriftstackHttp2Response h2resp;
