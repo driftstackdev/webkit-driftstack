@@ -101,7 +101,7 @@ CryptoFns& cryptoFns()
 }
 
 // Wave 29-499.183 — LibreSSL X25519 NID is 950 (verified via OBJ_txt2nid)
-const int kEVPPkeyX25519 = 950;
+[[maybe_unused]] const int kEVPPkeyX25519 = 950;
 const int kEVPPkeyHKDF = 1036;    // NID_hkdf
 const int kEVPCtrlAEADSetIvLen = 0x9;
 const int kEVPCtrlAEADGetTag = 0x10;
