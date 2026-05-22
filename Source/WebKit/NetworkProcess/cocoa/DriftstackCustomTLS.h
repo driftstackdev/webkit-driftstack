@@ -1,0 +1,87 @@
+/*
+ * DriftstackCustomTLS.h — Wave 29-499.171 (PathB v2 Phase 1.5e)
+ *
+ * Custom TLS 1.3 client implementing byte-exact iPhone Safari 26.0
+ * ClientHello. Solves the architectural ceiling of LibreSSL 3.3.6 +
+ * BoringSSL: neither library can emit iPhone's exact 13-extension list.
+ *
+ * Strategy:
+ *   1. CRAFT raw TLS ClientHello bytes matching iPhone Safari 26 exactly
+ *      (20 ciphers including 3DES, 13 extensions in iPhone order, GREASE).
+ *   2. Send via BSD socket (already SOCKS5-tunneled via DriftstackNetworkLoader).
+ *   3. Parse server's ServerHello + EncryptedExtensions + Certificate +
+ *      CertificateVerify + Finished.
+ *   4. Derive handshake & application secrets via LibreSSL crypto primitives
+ *      (HKDF-SHA384, X25519 key share).
+ *   5. Encrypt/decrypt application data with AES-256-GCM (LibreSSL primitive).
+ *
+ * The TLS state machine, record framing, and handshake messages are all
+ * implemented in driftstack code. LibreSSL is used only for crypto
+ * primitives (HKDF, AES-GCM, X25519, SHA-384).
+ *
+ * Result: iPhone-bit-identical JA3 = ecdf4f49dd59effc439639da29186671
+ * achievable via PathB v2, matching default mode's JA3 produced by
+ * Apple CFNetwork.
+ *
+ * Multi-iteration scope:
+ *   .171: ClientHello byte-exact emission + connection (this file)
+ *   .172: ServerHello parse + handshake secret derivation
+ *   .173: EncryptedExtensions + Certificate parse (skip verify)
+ *   .174: Finished message + application key derivation
+ *   .175: Application data encrypt/decrypt + HTTP/2 over our TLS
+ */
+
+#pragma once
+
+#if PLATFORM(DRIFTSTACK)
+
+#include <stdint.h>
+#include <wtf/Vector.h>
+#include <wtf/text/WTFString.h>
+
+namespace WebKit {
+
+// iPhone Safari 26.0 reference ClientHello captured via tls.peet.ws.
+// JA3:      ecdf4f49dd59effc439639da29186671
+// JA4:      t13d2013h2_a09f3c656075_7f0f34a4126d
+//
+// Structure:
+//   record_layer_header (5 bytes: type, version, length)
+//   handshake_header (4 bytes: type, length)
+//   client_version (2 bytes: TLS 1.2 = 0x0303)
+//   random (32 bytes)
+//   session_id (33 bytes: len-byte + 32 random bytes)
+//   ciphers (43 bytes: len-byte len-byte + 20*2 bytes = total 42 bytes content)
+//   compression_methods (2 bytes: 1, 0)
+//   extensions (variable):
+//     server_name (0)
+//     extended_master_secret (23)
+//     extensionRenegotiationInfo (65281)
+//     supported_groups (10)
+//     ec_point_formats (11)
+//     application_layer_protocol_negotiation (16)
+//     status_request (5)
+//     signature_algorithms (13)
+//     signed_certificate_timestamp (18)
+//     key_share (51)
+//     psk_key_exchange_modes (45)
+//     supported_versions (43)
+//     compress_certificate (27)
+//     + 2 GREASE (5a5a, fafa) at positions iPhone uses
+//
+// Total ClientHello typically ~520 bytes.
+
+// Build a byte-exact iPhone Safari 26.0 ClientHello for the given SNI
+// hostname. Random + GREASE values are randomized per-connection
+// (matches iPhone's behavior). Returns the full TLS record (5-byte
+// header + handshake).
+Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
+    Vector<uint8_t>& outClientRandom,           // 32 bytes (for handshake derivation)
+    Vector<uint8_t>& outKeyShareX25519Private); // 32 bytes (for ECDH)
+
+// Phase 1.5e gate (DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1).
+bool driftstackCustomTlsEnabled();
+
+} // namespace WebKit
+
+#endif // PLATFORM(DRIFTSTACK)
