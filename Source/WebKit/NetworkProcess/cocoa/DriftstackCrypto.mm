@@ -109,14 +109,14 @@ bool driftstackCryptoInit()
     static dispatch_once_t once;
     auto& f = cryptoFns();
     dispatch_once(&once, ^{
-        void* hCrypto = dlopen("/usr/lib/libcrypto.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+        // Wave 29-499.182 — Apple ships libssl.48.dylib only; crypto API
+        // is bundled inside libssl. No separate libcrypto.48 exists.
         void* hSsl = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
-        if (!hCrypto || !hSsl) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.173] dlopen failed (crypto=%p ssl=%p)", hCrypto, hSsl);
+        if (!hSsl) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.182] dlopen libssl.48 failed");
             return;
         }
-
-        void* h = hCrypto;
+        void* h = hSsl;
 #define R(field, name) f.field = reinterpret_cast<decltype(f.field)>(dlsym(h, name))
         R(evp_sha384, "EVP_sha384");
         R(evp_md_ctx_new, "EVP_MD_CTX_new");
