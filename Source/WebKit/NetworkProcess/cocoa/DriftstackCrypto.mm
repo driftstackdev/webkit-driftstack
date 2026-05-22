@@ -63,6 +63,17 @@ struct CryptoFns {
                   const uint8_t* data, size_t dataLen,
                   uint8_t* out, unsigned int* outLen) = nullptr;
 
+    // Wave 29-499.185 — LibreSSL direct HKDF (much simpler than EVP_PKEY)
+    int (*hkdf_extract)(uint8_t* out, size_t* outLen, const void* md,
+                        const uint8_t* secret, size_t secretLen,
+                        const uint8_t* salt, size_t saltLen) = nullptr;
+    int (*hkdf_expand)(uint8_t* out, size_t outLen, const void* md,
+                       const uint8_t* prk, size_t prkLen,
+                       const uint8_t* info, size_t infoLen) = nullptr;
+
+    // SHA-256 (in addition to SHA-384) — server may pick TLS_AES_128_GCM_SHA256
+    const void* (*evp_sha256)(void) = nullptr;
+
     // EVP_PKEY for X25519 (legacy — LibreSSL uses direct X25519_keypair instead)
     void* (*evp_pkey_ctx_new_from_name)(void* libctx, const char* name, const char* props) = nullptr;
     int (*evp_pkey_keygen_init)(void* ctx) = nullptr;
@@ -147,6 +158,9 @@ bool driftstackCryptoInit()
         R(x25519_keypair, "X25519_keypair");
         R(x25519, "X25519");
         R(hmac, "HMAC");
+        R(hkdf_extract, "HKDF_extract");
+        R(hkdf_expand, "HKDF_expand");
+        R(evp_sha256, "EVP_sha256");
         R(evp_aes_256_gcm, "EVP_aes_256_gcm");
         R(evp_cipher_ctx_new, "EVP_CIPHER_CTX_new");
         R(evp_cipher_ctx_free, "EVP_CIPHER_CTX_free");
@@ -277,7 +291,16 @@ Vector<uint8_t> driftstackHkdfExtractSha384(const Vector<uint8_t>& salt,
                                             const Vector<uint8_t>& ikm)
 {
     if (!driftstackCryptoInit()) return {};
-    return hkdfDerive(kEVPHkdfExtractOnly, cryptoFns().evp_sha384(), salt, ikm, {}, 48);
+    auto& f = cryptoFns();
+    if (!f.hkdf_extract) return {};
+    Vector<uint8_t> out(48);
+    size_t outLen = 48;
+    if (f.hkdf_extract(out.mutableSpan().data(), &outLen, f.evp_sha384(),
+                       ikm.span().data(), ikm.size(),
+                       salt.span().data(), salt.size()) != 1)
+        return {};
+    out.resize(outLen);
+    return out;
 }
 
 Vector<uint8_t> driftstackHkdfExpandLabelSha384(const Vector<uint8_t>& secret,
@@ -286,8 +309,9 @@ Vector<uint8_t> driftstackHkdfExpandLabelSha384(const Vector<uint8_t>& secret,
                                                  size_t outLen)
 {
     if (!driftstackCryptoInit()) return {};
-    // Build HkdfLabel per RFC 8446 §7.1:
-    //   u16 length, opaque label<7..255> ("tls13 " + label), opaque context<0..255>
+    auto& f = cryptoFns();
+    if (!f.hkdf_expand) return {};
+    // Build HkdfLabel per RFC 8446 §7.1
     Vector<uint8_t> hkdfLabel;
     hkdfLabel.append(static_cast<uint8_t>(outLen >> 8));
     hkdfLabel.append(static_cast<uint8_t>(outLen & 0xFF));
@@ -298,7 +322,13 @@ Vector<uint8_t> driftstackHkdfExpandLabelSha384(const Vector<uint8_t>& secret,
     hkdfLabel.append(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(label), strlen(label)));
     hkdfLabel.append(static_cast<uint8_t>(context.size()));
     hkdfLabel.append(context.span());
-    return hkdfDerive(kEVPHkdfExpandOnly, cryptoFns().evp_sha384(), {}, secret, hkdfLabel, outLen);
+
+    Vector<uint8_t> out(outLen);
+    if (f.hkdf_expand(out.mutableSpan().data(), outLen, f.evp_sha384(),
+                      secret.span().data(), secret.size(),
+                      hkdfLabel.span().data(), hkdfLabel.size()) != 1)
+        return {};
+    return out;
 }
 
 Vector<uint8_t> driftstackDeriveSecretSha384(const Vector<uint8_t>& secret,
