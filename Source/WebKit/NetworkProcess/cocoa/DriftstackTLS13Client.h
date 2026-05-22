@@ -64,8 +64,10 @@ private:
     String m_selectedALPN;
     String m_errorMessage;
 
-    // Transcript hash state (SHA-384 running)
-    SHA384Ctx* m_transcript { nullptr };
+    // Wave 29-499.186 — cipher-aware transcript: accumulate ALL handshake
+    // bytes; compute hash on demand using the negotiated cipher's digest.
+    uint16_t m_negotiatedCipher { 0 };
+    Vector<uint8_t> m_transcriptBytes;
 
     // Key schedule
     TLS13KeySchedule m_keySchedule;

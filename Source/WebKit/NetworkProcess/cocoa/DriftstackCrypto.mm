@@ -92,6 +92,7 @@ struct CryptoFns {
 
     // AES-GCM
     const void* (*evp_aes_256_gcm)(void) = nullptr;
+    const void* (*evp_aes_128_gcm)(void) = nullptr;
     void* (*evp_cipher_ctx_new)(void) = nullptr;
     void (*evp_cipher_ctx_free)(void*) = nullptr;
     int (*evp_encryptinit_ex)(void* ctx, const void* cipher, void* e, const uint8_t* key, const uint8_t* iv) = nullptr;
@@ -162,6 +163,7 @@ bool driftstackCryptoInit()
         R(hkdf_expand, "HKDF_expand");
         R(evp_sha256, "EVP_sha256");
         R(evp_aes_256_gcm, "EVP_aes_256_gcm");
+        R(evp_aes_128_gcm, "EVP_aes_128_gcm");
         R(evp_cipher_ctx_new, "EVP_CIPHER_CTX_new");
         R(evp_cipher_ctx_free, "EVP_CIPHER_CTX_free");
         R(evp_encryptinit_ex, "EVP_EncryptInit_ex");
@@ -447,6 +449,197 @@ Vector<uint8_t> driftstackHmacSha384(const Vector<uint8_t>& key, const Vector<ui
            out.mutableSpan().data(), &outLen);
     out.resize(outLen);
     return out;
+}
+
+// === Wave 29-499.186 — SHA-256 + AES-128-GCM variants for cipher 0x1301 ===
+
+SHA256Ctx* driftstackCreateSHA256Ctx()
+{
+    if (!driftstackCryptoInit()) return nullptr;
+    auto& f = cryptoFns();
+    void* ctx = f.evp_md_ctx_new();
+    if (ctx)
+        f.evp_digestinit_ex(ctx, f.evp_sha256(), nullptr);
+    return reinterpret_cast<SHA256Ctx*>(ctx);
+}
+
+void driftstackUpdateSHA256(SHA256Ctx* ctx, const uint8_t* data, size_t len)
+{
+    if (!ctx) return;
+    cryptoFns().evp_digestupdate(reinterpret_cast<void*>(ctx), data, len);
+}
+
+Vector<uint8_t> driftstackFinalizeSHA256(SHA256Ctx* ctx)
+{
+    Vector<uint8_t> out(32);
+    if (!ctx) return out;
+    unsigned int outLen = 32;
+    cryptoFns().evp_digestfinal_ex(reinterpret_cast<void*>(ctx), out.mutableSpan().data(), &outLen);
+    cryptoFns().evp_md_ctx_free(reinterpret_cast<void*>(ctx));
+    out.resize(outLen);
+    return out;
+}
+
+Vector<uint8_t> driftstackCloneFinalizeSHA256(SHA256Ctx* ctx)
+{
+    Vector<uint8_t> out(32);
+    if (!ctx) return out;
+    auto& f = cryptoFns();
+    void* tmp = f.evp_md_ctx_new();
+    if (!tmp) return out;
+    if (f.evp_md_ctx_copy_ex)
+        f.evp_md_ctx_copy_ex(tmp, reinterpret_cast<const void*>(ctx));
+    unsigned int outLen = 32;
+    f.evp_digestfinal_ex(tmp, out.mutableSpan().data(), &outLen);
+    f.evp_md_ctx_free(tmp);
+    out.resize(outLen);
+    return out;
+}
+
+void driftstackFreeSHA256Ctx(SHA256Ctx* ctx)
+{
+    if (ctx)
+        cryptoFns().evp_md_ctx_free(reinterpret_cast<void*>(ctx));
+}
+
+Vector<uint8_t> driftstackSHA256(const uint8_t* data, size_t len)
+{
+    auto* ctx = driftstackCreateSHA256Ctx();
+    if (!ctx) return {};
+    driftstackUpdateSHA256(ctx, data, len);
+    return driftstackFinalizeSHA256(ctx);
+}
+
+Vector<uint8_t> driftstackHkdfExtractSha256(const Vector<uint8_t>& salt,
+                                            const Vector<uint8_t>& ikm)
+{
+    if (!driftstackCryptoInit()) return {};
+    auto& f = cryptoFns();
+    if (!f.hkdf_extract) return {};
+    Vector<uint8_t> out(32);
+    size_t outLen = 32;
+    if (f.hkdf_extract(out.mutableSpan().data(), &outLen, f.evp_sha256(),
+                       ikm.span().data(), ikm.size(),
+                       salt.span().data(), salt.size()) != 1)
+        return {};
+    out.resize(outLen);
+    return out;
+}
+
+Vector<uint8_t> driftstackHkdfExpandLabelSha256(const Vector<uint8_t>& secret,
+                                                 const char* label,
+                                                 const Vector<uint8_t>& context,
+                                                 size_t outLen)
+{
+    if (!driftstackCryptoInit()) return {};
+    auto& f = cryptoFns();
+    if (!f.hkdf_expand) return {};
+    Vector<uint8_t> hkdfLabel;
+    hkdfLabel.append(static_cast<uint8_t>(outLen >> 8));
+    hkdfLabel.append(static_cast<uint8_t>(outLen & 0xFF));
+    const char* prefix = "tls13 ";
+    size_t fullLabelLen = strlen(prefix) + strlen(label);
+    hkdfLabel.append(static_cast<uint8_t>(fullLabelLen));
+    hkdfLabel.append(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(prefix), strlen(prefix)));
+    hkdfLabel.append(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(label), strlen(label)));
+    hkdfLabel.append(static_cast<uint8_t>(context.size()));
+    hkdfLabel.append(context.span());
+
+    Vector<uint8_t> out(outLen);
+    if (f.hkdf_expand(out.mutableSpan().data(), outLen, f.evp_sha256(),
+                      secret.span().data(), secret.size(),
+                      hkdfLabel.span().data(), hkdfLabel.size()) != 1)
+        return {};
+    return out;
+}
+
+Vector<uint8_t> driftstackHmacSha256(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
+{
+    if (!driftstackCryptoInit()) return {};
+    auto& f = cryptoFns();
+    if (!f.hmac || !f.evp_sha256) return {};
+    Vector<uint8_t> out(32);
+    unsigned int outLen = 32;
+    f.hmac(f.evp_sha256(), key.span().data(), static_cast<int>(key.size()),
+           data.span().data(), data.size(),
+           out.mutableSpan().data(), &outLen);
+    out.resize(outLen);
+    return out;
+}
+
+namespace {
+Vector<uint8_t> aesGcmEncryptImpl(const void* cipher,
+                                   const Vector<uint8_t>& key,
+                                   const Vector<uint8_t>& nonce,
+                                   const Vector<uint8_t>& plaintext,
+                                   const Vector<uint8_t>& aad)
+{
+    if (!driftstackCryptoInit() || !cipher) return {};
+    auto& f = cryptoFns();
+    void* ctx = f.evp_cipher_ctx_new();
+    if (!ctx) return {};
+    f.evp_encryptinit_ex(ctx, cipher, nullptr, nullptr, nullptr);
+    f.evp_cipher_ctx_ctrl(ctx, kEVPCtrlAEADSetIvLen, static_cast<int>(nonce.size()), nullptr);
+    f.evp_encryptinit_ex(ctx, nullptr, nullptr, key.span().data(), nonce.span().data());
+    int len = 0;
+    if (aad.size())
+        f.evp_encryptupdate(ctx, nullptr, &len, aad.span().data(), static_cast<int>(aad.size()));
+    Vector<uint8_t> output(plaintext.size() + 16);
+    int outLen = 0;
+    f.evp_encryptupdate(ctx, output.mutableSpan().data(), &outLen, plaintext.span().data(), static_cast<int>(plaintext.size()));
+    int finalLen = 0;
+    f.evp_encryptfinal_ex(ctx, output.mutableSpan().data() + outLen, &finalLen);
+    f.evp_cipher_ctx_ctrl(ctx, kEVPCtrlAEADGetTag, 16, output.mutableSpan().data() + outLen + finalLen);
+    f.evp_cipher_ctx_free(ctx);
+    output.resize(outLen + finalLen + 16);
+    return output;
+}
+
+Vector<uint8_t> aesGcmDecryptImpl(const void* cipher,
+                                   const Vector<uint8_t>& key,
+                                   const Vector<uint8_t>& nonce,
+                                   const Vector<uint8_t>& ciphertext,
+                                   const Vector<uint8_t>& aad)
+{
+    if (!driftstackCryptoInit() || !cipher || ciphertext.size() < 16) return {};
+    auto& f = cryptoFns();
+    void* ctx = f.evp_cipher_ctx_new();
+    if (!ctx) return {};
+    size_t ctLen = ciphertext.size() - 16;
+    const uint8_t* tag = ciphertext.span().data() + ctLen;
+    f.evp_decryptinit_ex(ctx, cipher, nullptr, nullptr, nullptr);
+    f.evp_cipher_ctx_ctrl(ctx, kEVPCtrlAEADSetIvLen, static_cast<int>(nonce.size()), nullptr);
+    f.evp_decryptinit_ex(ctx, nullptr, nullptr, key.span().data(), nonce.span().data());
+    int len = 0;
+    if (aad.size())
+        f.evp_decryptupdate(ctx, nullptr, &len, aad.span().data(), static_cast<int>(aad.size()));
+    Vector<uint8_t> output(ctLen);
+    int outLen = 0;
+    f.evp_decryptupdate(ctx, output.mutableSpan().data(), &outLen, ciphertext.span().data(), static_cast<int>(ctLen));
+    f.evp_cipher_ctx_ctrl(ctx, kEVPCtrlAEADSetTag, 16, const_cast<uint8_t*>(tag));
+    int finalLen = 0;
+    int rc = f.evp_decryptfinal_ex(ctx, output.mutableSpan().data() + outLen, &finalLen);
+    f.evp_cipher_ctx_free(ctx);
+    if (rc <= 0) return {};
+    output.resize(outLen + finalLen);
+    return output;
+}
+} // namespace
+
+Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
+                                            const Vector<uint8_t>& nonce,
+                                            const Vector<uint8_t>& plaintext,
+                                            const Vector<uint8_t>& aad)
+{
+    return aesGcmEncryptImpl(cryptoFns().evp_aes_128_gcm(), key, nonce, plaintext, aad);
+}
+
+Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
+                                            const Vector<uint8_t>& nonce,
+                                            const Vector<uint8_t>& ciphertext,
+                                            const Vector<uint8_t>& aad)
+{
+    return aesGcmDecryptImpl(cryptoFns().evp_aes_128_gcm(), key, nonce, ciphertext, aad);
 }
 
 } // namespace WebKit

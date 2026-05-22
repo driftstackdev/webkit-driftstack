@@ -88,6 +88,41 @@ Vector<uint8_t> driftstackAes256GcmDecrypt(const Vector<uint8_t>& key,
 Vector<uint8_t> driftstackHmacSha384(const Vector<uint8_t>& key,
                                       const Vector<uint8_t>& data);
 
+// === Cipher-aware variants (Wave 29-499.186) ===
+// hashAlg: 256 or 384 (SHA-256 or SHA-384, picks digest based on cipher).
+// keySize: 16 (AES-128) or 32 (AES-256), based on cipher.
+
+// SHA-256 streaming
+struct SHA256Ctx;
+SHA256Ctx* driftstackCreateSHA256Ctx();
+void driftstackUpdateSHA256(SHA256Ctx*, const uint8_t* data, size_t len);
+Vector<uint8_t> driftstackFinalizeSHA256(SHA256Ctx*);
+Vector<uint8_t> driftstackCloneFinalizeSHA256(SHA256Ctx*);
+void driftstackFreeSHA256Ctx(SHA256Ctx*);
+Vector<uint8_t> driftstackSHA256(const uint8_t* data, size_t len);
+
+// HKDF-SHA256
+Vector<uint8_t> driftstackHkdfExtractSha256(const Vector<uint8_t>& salt,
+                                            const Vector<uint8_t>& ikm);
+Vector<uint8_t> driftstackHkdfExpandLabelSha256(const Vector<uint8_t>& secret,
+                                                 const char* label,
+                                                 const Vector<uint8_t>& context,
+                                                 size_t outLen);
+
+// HMAC-SHA256
+Vector<uint8_t> driftstackHmacSha256(const Vector<uint8_t>& key,
+                                      const Vector<uint8_t>& data);
+
+// AES-128-GCM (uses same EVP_aes_128_gcm)
+Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
+                                            const Vector<uint8_t>& nonce,
+                                            const Vector<uint8_t>& plaintext,
+                                            const Vector<uint8_t>& aad);
+Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
+                                            const Vector<uint8_t>& nonce,
+                                            const Vector<uint8_t>& ciphertext,
+                                            const Vector<uint8_t>& aad);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)

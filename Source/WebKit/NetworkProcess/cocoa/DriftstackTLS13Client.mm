@@ -44,14 +44,50 @@ bool writeAll(int fd, const uint8_t* buf, size_t n)
 
 DriftstackTLS13Client::DriftstackTLS13Client()
 {
-    m_transcript = driftstackCreateSHA384Ctx();
 }
 
 DriftstackTLS13Client::~DriftstackTLS13Client()
 {
-    if (m_transcript)
-        driftstackFreeSHA384Ctx(m_transcript);
 }
+
+// Wave 29-499.186 — cipher-aware transcript helpers
+namespace {
+Vector<uint8_t> transcriptHash(uint16_t cipher, const Vector<uint8_t>& bytes)
+{
+    if (cipher == 0x1302)
+        return driftstackSHA384(bytes.span().data(), bytes.size());
+    return driftstackSHA256(bytes.span().data(), bytes.size());
+}
+Vector<uint8_t> hkdfExpandLabel(uint16_t cipher, const Vector<uint8_t>& secret,
+                                  const char* label, const Vector<uint8_t>& context, size_t outLen)
+{
+    if (cipher == 0x1302)
+        return driftstackHkdfExpandLabelSha384(secret, label, context, outLen);
+    return driftstackHkdfExpandLabelSha256(secret, label, context, outLen);
+}
+Vector<uint8_t> hmac(uint16_t cipher, const Vector<uint8_t>& key, const Vector<uint8_t>& data)
+{
+    if (cipher == 0x1302)
+        return driftstackHmacSha384(key, data);
+    return driftstackHmacSha256(key, data);
+}
+Vector<uint8_t> aesGcmEncrypt(uint16_t cipher, const Vector<uint8_t>& key,
+                               const Vector<uint8_t>& nonce, const Vector<uint8_t>& pt,
+                               const Vector<uint8_t>& aad)
+{
+    if (cipher == 0x1302)
+        return driftstackAes256GcmEncrypt(key, nonce, pt, aad);
+    return driftstackAes128GcmEncrypt(key, nonce, pt, aad);
+}
+Vector<uint8_t> aesGcmDecrypt(uint16_t cipher, const Vector<uint8_t>& key,
+                               const Vector<uint8_t>& nonce, const Vector<uint8_t>& ct,
+                               const Vector<uint8_t>& aad)
+{
+    if (cipher == 0x1302)
+        return driftstackAes256GcmDecrypt(key, nonce, ct, aad);
+    return driftstackAes128GcmDecrypt(key, nonce, ct, aad);
+}
+} // namespace
 
 bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
 {
@@ -120,10 +156,9 @@ bool DriftstackTLS13Client::sendClientHello()
         return false;
     }
 
-    // Update transcript hash with the handshake bytes (NOT the record header).
-    // ClientHello handshake = chRecord[5..] (skip 5-byte record header).
+    // Save handshake bytes (skip 5-byte record header) for transcript hash
     if (chRecord.size() > 5)
-        driftstackUpdateSHA384(m_transcript, chRecord.span().data() + 5, chRecord.size() - 5);
+        m_transcriptBytes.append(std::span<const uint8_t>(chRecord.span().data() + 5, chRecord.size() - 5));
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] Sent iPhone-byte-exact ClientHello (%zu bytes); SNI=%s; transcript updated",
         chRecord.size(), m_sniHostname.utf8().data());
@@ -159,8 +194,8 @@ bool DriftstackTLS13Client::receiveServerHello()
         return false;
     }
 
-    // Update transcript with ServerHello handshake bytes
-    driftstackUpdateSHA384(m_transcript, body.span().data(), 4 + hsLen);
+    // Append ServerHello handshake bytes to transcript
+    m_transcriptBytes.append(std::span<const uint8_t>(body.span().data(), 4 + hsLen));
 
     // Parse ServerHello body (after 4-byte handshake header)
     TLS13ServerHello sh;
@@ -192,25 +227,21 @@ bool DriftstackTLS13Client::receiveServerHello()
         return false;
     }
 
-    // Compute transcript hash of CH..SH (snapshot — transcript continues)
-    auto transcriptHash = driftstackCloneFinalizeSHA384(m_transcript);
-    if (transcriptHash.size() != 48) {
-        m_errorMessage = "transcript hash snapshot failed"_s;
-        return false;
-    }
+    // Wave 29-499.186: cipher-aware key schedule
+    m_negotiatedCipher = sh.cipherSuite;
+    m_keySchedule.setCipherSuite(m_negotiatedCipher);
 
-    // Initialize key schedule with ECDH + transcript hash → derive c/s
-    // handshake traffic secrets
-    if (!m_keySchedule.initFromHandshake(m_ecdhShared, transcriptHash)) {
+    auto chSHHash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+    if (!m_keySchedule.initFromHandshake(m_ecdhShared, chSHHash)) {
         m_errorMessage = "key schedule init failed"_s;
         return false;
     }
 
-    // Derive AES-256-GCM handshake key+iv from each traffic secret
-    m_clientHsKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.clientHandshakeSecret());
-    m_serverHsKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.serverHandshakeSecret());
+    m_clientHsKey = m_keySchedule.deriveTrafficKey(m_keySchedule.clientHandshakeSecret());
+    m_serverHsKey = m_keySchedule.deriveTrafficKey(m_keySchedule.serverHandshakeSecret());
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.177] Handshake keys derived: client_key=%zu iv=%zu | server_key=%zu iv=%zu",
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] Handshake keys derived (cipher=0x%04x): client_key=%zu iv=%zu | server_key=%zu iv=%zu",
+        m_negotiatedCipher,
         m_clientHsKey.key.size(), m_clientHsKey.iv.size(),
         m_serverHsKey.key.size(), m_serverHsKey.iv.size());
 
@@ -282,8 +313,8 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
         auto nonce = TLS13KeySchedule::recordNonce(m_serverHsKey.iv, m_serverHsKey.seqNum);
         m_serverHsKey.seqNum++;
 
-        // Decrypt — body includes 16-byte tag at end
-        auto plaintext = driftstackAes256GcmDecrypt(m_serverHsKey.key, nonce, recBody, aad);
+        // Decrypt — body includes 16-byte tag at end (cipher-aware)
+        auto plaintext = aesGcmDecrypt(m_negotiatedCipher, m_serverHsKey.key, nonce, recBody, aad);
         if (plaintext.isEmpty()) {
             m_errorMessage = "encrypted handshake record decrypt failed (auth tag)"_s;
             return false;
@@ -312,8 +343,8 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                 | plaintext[off + 3];
             if (off + 4 + hsLen > plaintext.size()) break;
 
-            // Add to transcript before processing each message
-            driftstackUpdateSHA384(m_transcript, plaintext.span().data() + off, 4 + hsLen);
+            // Append to transcript before processing each message
+            m_transcriptBytes.append(std::span<const uint8_t>(plaintext.span().data() + off, 4 + hsLen));
 
             const char* typeName = "unknown";
             switch (hsType) {
@@ -327,15 +358,14 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
 
             if (hsType == 0x14) {  // Finished
                 gotServerFinished = true;
-                // Snapshot transcript AFTER server's Finished — needed for app secret derivation
-                auto transcriptCH_to_serverFinished = driftstackCloneFinalizeSHA384(m_transcript);
-                if (!m_keySchedule.deriveApplicationSecrets(transcriptCH_to_serverFinished)) {
+                auto chSFhash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+                if (!m_keySchedule.deriveApplicationSecrets(chSFhash)) {
                     m_errorMessage = "deriveApplicationSecrets failed"_s;
                     return false;
                 }
-                m_clientAppKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.clientApplicationSecret());
-                m_serverAppKey = TLS13KeySchedule::deriveTrafficKey(m_keySchedule.serverApplicationSecret());
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Server Finished received; application keys derived");
+                m_clientAppKey = m_keySchedule.deriveTrafficKey(m_keySchedule.clientApplicationSecret());
+                m_serverAppKey = m_keySchedule.deriveTrafficKey(m_keySchedule.serverApplicationSecret());
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] Server Finished received; application keys derived");
             }
 
             off += 4 + hsLen;
@@ -351,16 +381,16 @@ bool DriftstackTLS13Client::sendClientFinished()
     //
     // Wrap in handshake message (type 0x14) + plaintext record_type 0x16,
     // then encrypt with client_hs_key in record_type 0x17.
-    auto finishedKey = driftstackHkdfExpandLabelSha384(
-        m_keySchedule.clientHandshakeSecret(), "finished", {}, 48);
-    if (finishedKey.size() != 48) {
+    auto finishedKey = hkdfExpandLabel(m_negotiatedCipher,
+        m_keySchedule.clientHandshakeSecret(), "finished", {}, m_keySchedule.hashLen());
+    if (finishedKey.size() != m_keySchedule.hashLen()) {
         m_errorMessage = "finished_key derivation failed"_s;
         return false;
     }
 
-    auto transcriptHash = driftstackCloneFinalizeSHA384(m_transcript);
-    auto verifyData = driftstackHmacSha384(finishedKey, transcriptHash);
-    if (verifyData.size() != 48) {
+    auto thash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+    auto verifyData = hmac(m_negotiatedCipher, finishedKey, thash);
+    if (verifyData.size() != m_keySchedule.hashLen()) {
         m_errorMessage = "verify_data HMAC failed"_s;
         return false;
     }
@@ -390,7 +420,7 @@ bool DriftstackTLS13Client::sendClientFinished()
     // Encrypt with client handshake key
     auto nonce = TLS13KeySchedule::recordNonce(m_clientHsKey.iv, m_clientHsKey.seqNum);
     m_clientHsKey.seqNum++;
-    auto ciphertext = driftstackAes256GcmEncrypt(m_clientHsKey.key, nonce, innerPlaintext, aad);
+    auto ciphertext = aesGcmEncrypt(m_negotiatedCipher, m_clientHsKey.key, nonce, innerPlaintext, aad);
     if (ciphertext.size() != encLen) {
         m_errorMessage = "Client Finished encrypt failed"_s;
         return false;
@@ -406,8 +436,8 @@ bool DriftstackTLS13Client::sendClientFinished()
         return false;
     }
 
-    // Add hsMsg to transcript (matters for any post-handshake messages)
-    driftstackUpdateSHA384(m_transcript, hsMsg.span().data(), hsMsg.size());
+    // Append hsMsg to transcript
+    m_transcriptBytes.append(hsMsg.span());
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] Client Finished sent (%zu bytes encrypted)", record.size());
     return true;
@@ -429,7 +459,7 @@ int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t le
 
     auto nonce = TLS13KeySchedule::recordNonce(m_clientAppKey.iv, m_clientAppKey.seqNum);
     m_clientAppKey.seqNum++;
-    auto ct = driftstackAes256GcmEncrypt(m_clientAppKey.key, nonce, inner, aad);
+    auto ct = aesGcmEncrypt(m_negotiatedCipher, m_clientAppKey.key, nonce, inner, aad);
     if (ct.size() != encLen) return -1;
 
     Vector<uint8_t> record;
@@ -465,7 +495,7 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
     auto nonce = TLS13KeySchedule::recordNonce(m_serverAppKey.iv, m_serverAppKey.seqNum);
     m_serverAppKey.seqNum++;
 
-    auto pt = driftstackAes256GcmDecrypt(m_serverAppKey.key, nonce, body, aad);
+    auto pt = aesGcmDecrypt(m_negotiatedCipher, m_serverAppKey.key, nonce, body, aad);
     if (pt.isEmpty()) return {};
 
     // Strip inner content_type byte + zero padding
@@ -477,10 +507,9 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
     if (innerType == 0x17) {
         return pt;  // application_data
     } else if (innerType == 0x16) {
-        // Post-handshake message (NewSessionTicket, KeyUpdate). Skip but
-        // update transcript hash.
-        driftstackUpdateSHA384(m_transcript, pt.span().data(), pt.size());
-        // Recurse to read next real app data record
+        // Post-handshake message (NewSessionTicket, KeyUpdate). Append to
+        // transcript and recurse to read next real app data record.
+        m_transcriptBytes.append(pt.span());
         return readApplicationRecord();
     } else if (innerType == 0x15) {
         // Alert — connection closing

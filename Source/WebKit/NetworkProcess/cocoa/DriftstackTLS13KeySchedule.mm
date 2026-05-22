@@ -19,86 +19,112 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 namespace WebKit {
 
 namespace {
-// SHA-384 hash of empty string (used in derive-secret with empty messages).
-// Computed once at startup.
-Vector<uint8_t> emptyHashSha384()
+
+// Cipher-aware HKDF dispatchers
+Vector<uint8_t> hkdfExtract(uint16_t cipher, const Vector<uint8_t>& salt, const Vector<uint8_t>& ikm)
 {
-    return driftstackSHA384(nullptr, 0);
+    if (cipher == 0x1302)  // SHA-384
+        return driftstackHkdfExtractSha384(salt, ikm);
+    return driftstackHkdfExtractSha256(salt, ikm);
 }
+
+Vector<uint8_t> hkdfExpandLabel(uint16_t cipher, const Vector<uint8_t>& secret,
+                                  const char* label, const Vector<uint8_t>& context, size_t outLen)
+{
+    if (cipher == 0x1302)
+        return driftstackHkdfExpandLabelSha384(secret, label, context, outLen);
+    return driftstackHkdfExpandLabelSha256(secret, label, context, outLen);
+}
+
+Vector<uint8_t> deriveSecret(uint16_t cipher, const Vector<uint8_t>& secret,
+                              const char* label, const Vector<uint8_t>& transcriptHash, size_t hashLen)
+{
+    return hkdfExpandLabel(cipher, secret, label, transcriptHash, hashLen);
+}
+
+Vector<uint8_t> emptyHash(uint16_t cipher)
+{
+    if (cipher == 0x1302)
+        return driftstackSHA384(nullptr, 0);
+    return driftstackSHA256(nullptr, 0);
+}
+
 } // namespace
+
+void TLS13KeySchedule::setCipherSuite(uint16_t cipher)
+{
+    m_cipherSuite = cipher;
+    // 0x1302 = TLS_AES_256_GCM_SHA384, 0x1301 = TLS_AES_128_GCM_SHA256, 0x1303 = CHACHA
+    if (cipher == 0x1302) {
+        m_hashLen = 48;
+        m_keyLen = 32;
+    } else {
+        // 0x1301 + 0x1303 use SHA-256; AES-128 = 16 bytes, ChaCha20 = 32 bytes
+        m_hashLen = 32;
+        m_keyLen = (cipher == 0x1303) ? 32 : 16;
+    }
+}
 
 bool TLS13KeySchedule::initFromHandshake(const Vector<uint8_t>& ecdhShared,
                                           const Vector<uint8_t>& transcriptHashCHtoSH)
 {
-    // Step 1: early_secret = HKDF-Extract(salt=zeros, IKM=zeros) — no PSK
-    Vector<uint8_t> zeros(48);
-    memset(zeros.mutableSpan().data(), 0, 48);
-    Vector<uint8_t> zeroSalt(48);
-    memset(zeroSalt.mutableSpan().data(), 0, 48);
-    m_earlySecret = driftstackHkdfExtractSha384(zeroSalt, zeros);
-    if (m_earlySecret.size() != 48) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] early_secret derivation failed");
+    // Cipher-aware (Wave 29-499.186): hashLen is 32 (SHA-256) or 48 (SHA-384).
+    Vector<uint8_t> zeros(m_hashLen);
+    memset(zeros.mutableSpan().data(), 0, m_hashLen);
+    Vector<uint8_t> zeroSalt(m_hashLen);
+    memset(zeroSalt.mutableSpan().data(), 0, m_hashLen);
+    m_earlySecret = hkdfExtract(m_cipherSuite, zeroSalt, zeros);
+    if (m_earlySecret.size() != m_hashLen) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] early_secret derivation failed (cipher=0x%04x hashLen=%zu)", m_cipherSuite, m_hashLen);
         return false;
     }
 
-    // Step 2 (PSK derivation skipped — not using PSK)
-
-    // Step 3: handshake_secret = HKDF-Extract(salt=derive(early,"derived",empty_hash),
-    //                                          IKM=ECDH)
-    auto emptyHash = emptyHashSha384();
-    auto hsSalt = driftstackDeriveSecretSha384(m_earlySecret, "derived", emptyHash);
-    m_handshakeSecret = driftstackHkdfExtractSha384(hsSalt, ecdhShared);
-    if (m_handshakeSecret.size() != 48) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] handshake_secret derivation failed");
+    auto eh = emptyHash(m_cipherSuite);
+    auto hsSalt = deriveSecret(m_cipherSuite, m_earlySecret, "derived", eh, m_hashLen);
+    m_handshakeSecret = hkdfExtract(m_cipherSuite, hsSalt, ecdhShared);
+    if (m_handshakeSecret.size() != m_hashLen) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] handshake_secret derivation failed");
         return false;
     }
 
-    // Step 4: client/server handshake traffic secrets
-    m_clientHsSecret = driftstackDeriveSecretSha384(m_handshakeSecret, "c hs traffic", transcriptHashCHtoSH);
-    m_serverHsSecret = driftstackDeriveSecretSha384(m_handshakeSecret, "s hs traffic", transcriptHashCHtoSH);
-    if (m_clientHsSecret.size() != 48 || m_serverHsSecret.size() != 48) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] handshake traffic secrets failed");
+    m_clientHsSecret = deriveSecret(m_cipherSuite, m_handshakeSecret, "c hs traffic", transcriptHashCHtoSH, m_hashLen);
+    m_serverHsSecret = deriveSecret(m_cipherSuite, m_handshakeSecret, "s hs traffic", transcriptHashCHtoSH, m_hashLen);
+    if (m_clientHsSecret.size() != m_hashLen || m_serverHsSecret.size() != m_hashLen) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] handshake traffic secrets failed");
         return false;
     }
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] Handshake secrets derived OK (client/server)");
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] Handshake secrets derived OK (cipher=0x%04x hashLen=%zu keyLen=%zu)", m_cipherSuite, m_hashLen, m_keyLen);
     return true;
 }
 
 bool TLS13KeySchedule::deriveApplicationSecrets(const Vector<uint8_t>& transcriptHashCHtoServerFinished)
 {
-    // Step 5: master_secret = HKDF-Extract(salt=derive(handshake,"derived",empty),
-    //                                       IKM=zeros)
-    auto emptyHash = emptyHashSha384();
-    auto msSalt = driftstackDeriveSecretSha384(m_handshakeSecret, "derived", emptyHash);
-    Vector<uint8_t> zeros(48);
-    memset(zeros.mutableSpan().data(), 0, 48);
-    m_masterSecret = driftstackHkdfExtractSha384(msSalt, zeros);
-    if (m_masterSecret.size() != 48) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] master_secret derivation failed");
+    auto eh = emptyHash(m_cipherSuite);
+    auto msSalt = deriveSecret(m_cipherSuite, m_handshakeSecret, "derived", eh, m_hashLen);
+    Vector<uint8_t> zeros(m_hashLen);
+    memset(zeros.mutableSpan().data(), 0, m_hashLen);
+    m_masterSecret = hkdfExtract(m_cipherSuite, msSalt, zeros);
+    if (m_masterSecret.size() != m_hashLen) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] master_secret derivation failed");
         return false;
     }
 
-    // Step 6: client/server application traffic secrets
-    m_clientAppSecret = driftstackDeriveSecretSha384(m_masterSecret, "c ap traffic", transcriptHashCHtoServerFinished);
-    m_serverAppSecret = driftstackDeriveSecretSha384(m_masterSecret, "s ap traffic", transcriptHashCHtoServerFinished);
-    if (m_clientAppSecret.size() != 48 || m_serverAppSecret.size() != 48) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] app traffic secrets failed");
+    m_clientAppSecret = deriveSecret(m_cipherSuite, m_masterSecret, "c ap traffic", transcriptHashCHtoServerFinished, m_hashLen);
+    m_serverAppSecret = deriveSecret(m_cipherSuite, m_masterSecret, "s ap traffic", transcriptHashCHtoServerFinished, m_hashLen);
+    if (m_clientAppSecret.size() != m_hashLen || m_serverAppSecret.size() != m_hashLen) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] app traffic secrets failed");
         return false;
     }
-
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] Application secrets derived OK");
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.186] Application secrets derived OK");
     return true;
 }
 
-TLS13TrafficKey TLS13KeySchedule::deriveTrafficKey(const Vector<uint8_t>& trafficSecret)
+TLS13TrafficKey TLS13KeySchedule::deriveTrafficKey(const Vector<uint8_t>& trafficSecret) const
 {
     TLS13TrafficKey out;
-    // For AES-256-GCM:
-    //   key = HKDF-Expand-Label(secret, "key", "", 32)
-    //   iv  = HKDF-Expand-Label(secret, "iv",  "", 12)
-    out.key = driftstackHkdfExpandLabelSha384(trafficSecret, "key", {}, 32);
-    out.iv = driftstackHkdfExpandLabelSha384(trafficSecret, "iv", {}, 12);
+    out.key = hkdfExpandLabel(m_cipherSuite, trafficSecret, "key", {}, m_keyLen);
+    out.iv = hkdfExpandLabel(m_cipherSuite, trafficSecret, "iv", {}, 12);
     out.seqNum = 0;
     return out;
 }

@@ -42,6 +42,15 @@ struct TLS13TrafficKey {
 
 class TLS13KeySchedule {
 public:
+    // Wave 29-499.186 — cipher-aware: pass negotiated cipher suite so
+    // schedule uses SHA-256 or SHA-384 hash + corresponding AEAD key length.
+    void setCipherSuite(uint16_t cipher);
+
+    uint16_t cipherSuite() const { return m_cipherSuite; }
+    size_t hashLen() const { return m_hashLen; }
+    size_t keyLen() const { return m_keyLen; }
+    size_t ivLen() const { return 12; }  // AES-GCM IV always 12
+
     // Initialize the schedule with the ECDH shared secret + transcript hash
     // of ClientHello..ServerHello. Returns handshake-stage secrets.
     bool initFromHandshake(const Vector<uint8_t>& ecdhShared,
@@ -57,20 +66,24 @@ public:
     const Vector<uint8_t>& clientApplicationSecret() const { return m_clientAppSecret; }
     const Vector<uint8_t>& serverApplicationSecret() const { return m_serverAppSecret; }
 
-    // Derive traffic key+iv from a traffic secret for AES-256-GCM.
-    static TLS13TrafficKey deriveTrafficKey(const Vector<uint8_t>& trafficSecret);
+    // Derive traffic key+iv from a traffic secret (uses configured cipher).
+    TLS13TrafficKey deriveTrafficKey(const Vector<uint8_t>& trafficSecret) const;
 
     // Construct a per-record nonce: iv XOR (sequence_number padded to 12 bytes).
     static Vector<uint8_t> recordNonce(const Vector<uint8_t>& iv, uint64_t seqNum);
 
 private:
-    Vector<uint8_t> m_earlySecret;       // 48 bytes
-    Vector<uint8_t> m_handshakeSecret;   // 48 bytes
-    Vector<uint8_t> m_masterSecret;      // 48 bytes
-    Vector<uint8_t> m_clientHsSecret;    // 48 bytes
-    Vector<uint8_t> m_serverHsSecret;    // 48 bytes
-    Vector<uint8_t> m_clientAppSecret;   // 48 bytes
-    Vector<uint8_t> m_serverAppSecret;   // 48 bytes
+    uint16_t m_cipherSuite { 0x1302 };  // default TLS_AES_256_GCM_SHA384
+    size_t m_hashLen { 48 };  // SHA-384
+    size_t m_keyLen { 32 };  // AES-256
+
+    Vector<uint8_t> m_earlySecret;
+    Vector<uint8_t> m_handshakeSecret;
+    Vector<uint8_t> m_masterSecret;
+    Vector<uint8_t> m_clientHsSecret;
+    Vector<uint8_t> m_serverHsSecret;
+    Vector<uint8_t> m_clientAppSecret;
+    Vector<uint8_t> m_serverAppSecret;
 };
 
 } // namespace WebKit
