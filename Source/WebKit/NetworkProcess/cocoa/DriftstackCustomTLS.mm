@@ -257,12 +257,13 @@ Vector<uint8_t> makeExtSupportedVersions()
     return makeExtension(43, list);
 }
 
-// compress_certificate (27) — RFC 8879. iPhone: [brotli=0x0002]
+// compress_certificate (27) — RFC 8879. iPhone: [zlib=0x0001]
+// Wave 29-499.199 — verified via default-mode peetprint capture: iPhone sends 1 (zlib), not 2 (brotli)
 Vector<uint8_t> makeExtCompressCertificate()
 {
     Vector<uint8_t> body;
     body.append(0x02);  // len = 2 (one algo entry)
-    appendU16(body, 0x0002);  // brotli
+    appendU16(body, 0x0001);  // zlib (iPhone)
     return makeExtension(27, body);
 }
 
