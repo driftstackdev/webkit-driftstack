@@ -499,7 +499,8 @@ void DriftstackNetworkLoader::resume()
                 h2req.path = makeString(h2req.path, '?', url.query());
             // Wave 29-499.146 — cookie injection for h2 path
             {
-                NSURL* nsURL = url.createNSURL().bridgingAutorelease();
+                auto nsURLPtr = url.createNSURL();
+            NSURL* nsURL = nsURLPtr.get();
                 if (nsURL) {
                     NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
                     NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
@@ -643,7 +644,8 @@ _Pragma("clang diagnostic pop")
         // explicit lookup is required.
         String cookieHeader;
         {
-            NSURL* nsURL = url.createNSURL().bridgingAutorelease();
+            auto nsURLPtr = url.createNSURL();
+            NSURL* nsURL = nsURLPtr.get();
             if (nsURL) {
                 NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
                 NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
