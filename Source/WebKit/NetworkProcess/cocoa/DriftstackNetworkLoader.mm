@@ -20,23 +20,40 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.135-139 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
-// (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS). Provides TLS 1.3
-// with iPhone-matched cipher list + ALPN + key shares — bypasses
-// CFStream's legacy TLS 1.2 SecureTransport limitations.
+// Wave 29-499.135-152 (paused — see V-log) — BoringSSL via DRIFTSTACK_
+// BORINGSSL_HEADER_PATH for TLS 1.3 with iPhone-matched cipher list +
+// ALPN + key shares — bypasses CFStream's TLS 1.2 limitations.
 //
-// Linking strategy: WebKit framework doesn't link libwebrtc.dylib
-// directly (allowable_client restriction). Use dlsym at runtime to
-// resolve BoringSSL symbols from libwebrtc.dylib which is loaded
-// transitively via WebCore.framework. Empirical (.139 probe): all
-// required SSL_* symbols resolve via RTLD_DEFAULT after libwebrtc
-// is in the process address space.
+// EMPIRICAL FINDINGS (Wave 29-499.139→.152):
+// - libwebrtc.dylib's bundled BoringSSL has LOCAL symbols (lowercase
+//   `t` in nm) — not dlsym-resolvable. dlsym(handle, "SSL_*") = NULL.
+// - Apple's /usr/lib/libboringssl.dylib exposes SOME but not ALL APIs:
+//   * SSL_CTX_new ✓ but TLS_client_method ✗ (Apple strips method funcs)
+//   * SSL_set_fd ✗ — must use SSL_set_bio + BIO_new + BIO_set_fd
+//   * SSL_set1_host ✗ — only in libssl.48.dylib (OpenSSL compat)
+//   * SSL_CTX_set_strict_cipher_list ✗
+//   * SSL_CTX_set1_curves_list ✗ — Apple uses different API
+//   * SSL_CTX_new(NULL) returns NULL — needs valid method
+//
+// Without exposed method functions, can't create SSL_CTX from Apple's
+// libboringssl. Phase 1.5b iPhone-bit-identical TLS requires:
+// (A) Bundle custom BoringSSL build with WebKit fork distribution, OR
+// (B) Patch libwebrtc.dylib to re-export BoringSSL symbols, OR
+// (C) Custom build of WebKit fork that statically links BoringSSL .o
+//     files from libwebrtc source tree into WebKit framework's DriftstackNetworkLoader.o
+//
+// For Phase 1.5b v1.0: revert to CFStream TLS 1.2 (which works end-to-end
+// for HTTPS but produces JA3 ≠ iPhone). Phase 1.5c (next dedicated arc)
+// implements one of options A/B/C above.
 #include <dlfcn.h>
+// BoringSSL header inclusion remains for future Phase 1.5c work.
 #if __has_include(<openssl/ssl.h>)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
-#define DRIFTSTACK_HAS_BORINGSSL 1
+// Wave 29-499.153 — DISABLE BoringSSL TLS path until Phase 1.5c. CFStream
+// TLS 1.2 path is the active production code for Phase 1.5b v1.0.
+// #define DRIFTSTACK_HAS_BORINGSSL 1
 #endif
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"
