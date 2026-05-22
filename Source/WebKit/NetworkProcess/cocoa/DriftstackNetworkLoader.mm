@@ -172,21 +172,14 @@ static bool resolveBoringSSL()
     auto& f = boringSSLFns();
     if (f.ready) return true;
 
-    // Wave 29-499.152 — CRITICAL FIX: resolve from Apple's SYSTEM
-    // libboringssl.dylib at /usr/lib/. Empirical via dladdr probe:
-    //   SSL_CTX_new lives in: /usr/lib/libboringssl.dylib
-    //   SSL_set1_host lives in: /usr/lib/libssl.48.dylib (OpenSSL compat)
-    //   SSL_CTX_set1_curves_list: not in either (Apple uses different name)
-    //
-    // libwebrtc bundles its own BoringSSL but symbols are LOCAL (lowercase
-    // `t`) — not dlsym-resolvable. RTLD_DEFAULT happens to find some in
-    // Apple's system libboringssl but with mixed library sources = ABI
-    // mismatch crashes.
-    //
-    // Use Apple's system libboringssl exclusively for ABI consistency.
+    // Wave 29-499.161 — CRITICAL FIX (post-Wave29-499.160 export):
+    // libwebrtc.dylib now re-exports 23 SSL_*/ERR_*/TLS_client_method
+    // via libwebrtc.exp + WEBRTC_LDFLAGS -force_load libboringssl.a.
+    // All symbols come from libwebrtc's own statically-linked BoringSSL =
+    // ABI consistent. Resolve via libwebrtc.dylib handle exclusively.
     const char* candidates[] = {
-        "/usr/lib/libboringssl.dylib",
-        "libboringssl.dylib",
+        "libwebrtc.dylib",
+        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
         nullptr,
     };
     void* webrtcHandle = nullptr;
@@ -202,16 +195,12 @@ static bool resolveBoringSSL()
         return false;
     }
 
-    // Wave 29-499.151 — BoringSSL symbols are LOCAL (lowercase `t` in nm),
-    // not exported from libwebrtc.dylib. dlsym(handle, ...) returns NULL.
-    // But RTLD_DEFAULT may find them via dyld's combined image lookup AFTER
-    // libwebrtc is loaded. Try both: handle first (for ABI consistency),
-    // then RTLD_DEFAULT fallback.
-#define RESOLVE_FROM_WEBRTC(field, sym) do { \
-    f.field = reinterpret_cast<decltype(f.field)>(dlsym(webrtcHandle, sym)); \
-    if (!f.field) \
-        f.field = reinterpret_cast<decltype(f.field)>(dlsym(RTLD_DEFAULT, sym)); \
-} while (0)
+    // Wave 29-499.161 — handle-ONLY resolution (no RTLD_DEFAULT fallback).
+    // After .160 .exp re-exports, all 23 SSL_* symbols are in libwebrtc.dylib.
+    // RTLD_DEFAULT fallback would mix Apple's libboringssl + libssl.48
+    // symbols with libwebrtc's BoringSSL → ABI mismatch crash.
+#define RESOLVE_FROM_WEBRTC(field, sym) \
+    f.field = reinterpret_cast<decltype(f.field)>(dlsym(webrtcHandle, sym))
     RESOLVE_FROM_WEBRTC(ssl_ctx_new, "SSL_CTX_new");
     RESOLVE_FROM_WEBRTC(tls_client_method, "TLS_client_method");
     RESOLVE_FROM_WEBRTC(ssl_ctx_set_min_proto_version, "SSL_CTX_set_min_proto_version");
