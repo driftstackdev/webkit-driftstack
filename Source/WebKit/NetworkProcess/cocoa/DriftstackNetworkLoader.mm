@@ -497,10 +497,24 @@ void DriftstackNetworkLoader::resume()
             if (h2req.path.isEmpty()) h2req.path = "/"_s;
             if (!url.query().isEmpty())
                 h2req.path = makeString(h2req.path, '?', url.query());
+            // Wave 29-499.146 — cookie injection for h2 path
+            {
+                NSURL* nsURL = url.createNSURL().bridgingAutorelease();
+                if (nsURL) {
+                    NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+                    NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
+                    if (cookies.count > 0) {
+                        NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
+                        NSString* cookie = fields[@"Cookie"];
+                        if (cookie)
+                            h2req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
+                    }
+                }
+            }
             for (auto& header : httpHeaders) {
                 String lower = header.key.convertToASCIILowercase();
                 if (lower == "host"_s || lower == "connection"_s
-                    || lower.startsWith(':'))
+                    || lower == "cookie"_s || lower.startsWith(':'))
                     continue;
                 h2req.extraHeaders.append({ lower, header.value });
             }
@@ -623,13 +637,33 @@ _Pragma("clang diagnostic pop")
         if (!url.query().isEmpty())
             pathStr = makeString(pathStr, '?', url.query());
 
+        // Wave 29-499.146 — Phase 4 cookies: query shared NSHTTPCookieStorage
+        // for cookies matching destination URL, inject Cookie header.
+        // For PathB v2 we bypass NSURLSession's auto-cookie path entirely;
+        // explicit lookup is required.
+        String cookieHeader;
+        {
+            NSURL* nsURL = url.createNSURL().bridgingAutorelease();
+            if (nsURL) {
+                NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+                NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
+                if (cookies.count > 0) {
+                    NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
+                    NSString* cookie = fields[@"Cookie"];
+                    if (cookie) cookieHeader = String::fromUTF8([cookie UTF8String]);
+                }
+            }
+        }
+
         StringBuilder rb;
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);
         rb.append("Host: "_s, host, "\r\n"_s);
         rb.append("Connection: close\r\n"_s);
+        if (!cookieHeader.isEmpty())
+            rb.append("Cookie: "_s, cookieHeader, "\r\n"_s);
         for (auto& header : httpHeaders) {
             String lower = header.key.convertToASCIILowercase();
-            if (lower == "host"_s || lower == "connection"_s)
+            if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s)
                 continue;
             rb.append(header.key, ": "_s, header.value, "\r\n"_s);
         }
