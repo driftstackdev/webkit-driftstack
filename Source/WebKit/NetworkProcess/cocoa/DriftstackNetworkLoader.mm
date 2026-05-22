@@ -258,8 +258,8 @@ static bool resolveBoringSSL()
 static SSL_CTX* g_driftstackSslCtx = nullptr;
 
 // Wave 29-499.193 — persist DriftstackTLS13Client across handshake → app data.
-// thread_local so multiple concurrent requests don't clobber each other.
-static thread_local std::unique_ptr<DriftstackTLS13Client> g_customTLSClient;
+// Use raw pointer to avoid exit-time destructor warning.
+static thread_local DriftstackTLS13Client* g_customTLSClient = nullptr;
 static dispatch_once_t g_driftstackSslCtxOnce;
 
 static void initDriftstackSslCtx()
@@ -391,17 +391,15 @@ static void initDriftstackSslCtx()
     if (useCustomTLS) {
         // Wave 29-499.193 — persist client past handshake so HTTP/2 layer
         // can route reads/writes through our custom TLS instead of LibreSSL.
-        g_customTLSClient = std::make_unique<DriftstackTLS13Client>();
+        g_customTLSClient = new DriftstackTLS13Client();
         if (g_customTLSClient->connect(fd, String::fromUTF8(hostUtf8))) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS 1.3 handshake COMPLETE. Returning sentinel — caller dispatches via g_customTLSClient transport.");
-            // Return non-null sentinel to skip LibreSSL handshake.
-            // sslReadExact/sslWriteAll in DriftstackHttp2 dispatch via
-            // g_activeTransport which we set in the call site.
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS 1.3 handshake COMPLETE. Returning sentinel.");
             static uint8_t sentinel = 0xCC;
             return reinterpret_cast<SSL*>(&sentinel);
         } else {
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", g_customTLSClient->errorMessage().utf8().data());
-            g_customTLSClient.reset();
+            delete g_customTLSClient;
+            g_customTLSClient = nullptr;
         }
     }
 
@@ -696,7 +694,7 @@ void DriftstackNetworkLoader::resume()
             DriftstackHttp2Response h2resp;
             if (g_customTLSClient) {
                 DriftstackHttp2Transport transport;
-                transport.ctx = g_customTLSClient.get();
+                transport.ctx = g_customTLSClient;
                 transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
                     return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
                 };
@@ -716,8 +714,8 @@ void DriftstackNetworkLoader::resume()
                 if (f.ssl_shutdown) f.ssl_shutdown(ssl);
                 if (f.ssl_free) f.ssl_free(ssl);
             } else {
-                // Cleanup custom TLS client
-                g_customTLSClient.reset();
+                delete g_customTLSClient;
+                g_customTLSClient = nullptr;
             }
 #endif
 
