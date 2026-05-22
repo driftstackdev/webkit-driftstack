@@ -422,3 +422,31 @@ __ZNK6webrtc7Network5CloneEv
 __ZN6webrtc10ColorSpaceC1ENS0_9PrimaryIDENS0_10TransferIDENS0_8MatrixIDENS0_7RangeIDE
 __ZN6webrtc10ColorSpaceC1EOS0_
 __ZN6webrtc10ColorSpaceaSERKS0_
+
+# Wave 29-499.160 — re-export BoringSSL symbols for Driftstack PathB v2
+# TLS 1.3 customer-proxy mode. These symbols are statically linked into
+# libwebrtc.dylib via -force_load libboringssl.a; re-export so WebKit
+# framework's DriftstackNetworkLoader can call them via dlsym.
+_SSL_CTX_new
+_TLS_client_method
+_SSL_CTX_set_min_proto_version
+_SSL_CTX_set_max_proto_version
+_SSL_CTX_set_strict_cipher_list
+_SSL_CTX_set1_curves_list
+_SSL_CTX_set_alpn_protos
+_SSL_CTX_set_verify
+_SSL_CTX_set_default_verify_paths
+_SSL_new
+_SSL_free
+_SSL_set_tlsext_host_name
+_SSL_set1_host
+_SSL_set_fd
+_SSL_connect
+_SSL_shutdown
+_SSL_get_error
+_SSL_read
+_SSL_write
+_SSL_get0_alpn_selected
+_ERR_get_error
+_ERR_error_string_n
+_SSL_library_init
