@@ -222,6 +222,11 @@ bool DriftstackTLS13Client::receiveServerHello()
         m_errorMessage = "X25519 ECDH derivation failed"_s;
         return false;
     }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.188] ECDH shared (32B): %02x%02x%02x%02x...%02x%02x | priv=%02x%02x | peer_pub=%02x%02x",
+        m_ecdhShared[0], m_ecdhShared[1], m_ecdhShared[2], m_ecdhShared[3],
+        m_ecdhShared[30], m_ecdhShared[31],
+        m_ourX25519Private[0], m_ourX25519Private[1],
+        sh.keyShareKey[0], sh.keyShareKey[1]);
 
     // Wave 29-499.186: cipher-aware key schedule
     m_negotiatedCipher = sh.cipherSuite;
@@ -240,6 +245,12 @@ bool DriftstackTLS13Client::receiveServerHello()
         m_negotiatedCipher,
         m_clientHsKey.key.size(), m_clientHsKey.iv.size(),
         m_serverHsKey.key.size(), m_serverHsKey.iv.size());
+    if (m_serverHsKey.key.size() >= 4)
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.188] server_hs key=%02x%02x%02x%02x iv=%02x%02x%02x%02x transcriptBytes.len=%zu transcriptHash=%02x%02x%02x%02x",
+            m_serverHsKey.key[0], m_serverHsKey.key[1], m_serverHsKey.key[2], m_serverHsKey.key[3],
+            m_serverHsKey.iv[0], m_serverHsKey.iv[1], m_serverHsKey.iv[2], m_serverHsKey.iv[3],
+            m_transcriptBytes.size(),
+            chSHHash[0], chSHHash[1], chSHHash[2], chSHHash[3]);
 
     return true;
 }
