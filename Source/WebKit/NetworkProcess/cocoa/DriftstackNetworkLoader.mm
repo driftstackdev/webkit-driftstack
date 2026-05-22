@@ -20,9 +20,18 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.135-152 (paused — see V-log) — BoringSSL via DRIFTSTACK_
-// BORINGSSL_HEADER_PATH for TLS 1.3 with iPhone-matched cipher list +
-// ALPN + key shares — bypasses CFStream's TLS 1.2 limitations.
+// Wave 29-499.154 — STATIC LINK libwebrtc's libboringssl.a into WebKit
+// framework via OTHER_LDFLAGS += -lboringssl in WebKit.xcconfig. All 560
+// SSL_* symbols visible directly — no dlsym tricks needed. Direct C
+// calls to TLS_client_method, SSL_set_fd, SSL_set1_host,
+// SSL_CTX_set1_curves_list (the APIs Apple's system libboringssl strips).
+//
+// Provides iPhone-bit-identical TLS 1.3 fingerprint:
+//   - X25519MLKEM768 + X25519 + P-256/384/521 key shares
+//   - iPhone cipher order
+//   - ALPN: h3, h2, http/1.1
+//
+// HISTORICAL — earlier Wave 29-499.135-152 (paused — see V-log) tried —
 //
 // EMPIRICAL FINDINGS (Wave 29-499.139→.152):
 // - libwebrtc.dylib's bundled BoringSSL has LOCAL symbols (lowercase
@@ -46,14 +55,13 @@
 // for HTTPS but produces JA3 ≠ iPhone). Phase 1.5c (next dedicated arc)
 // implements one of options A/B/C above.
 #include <dlfcn.h>
-// BoringSSL header inclusion remains for future Phase 1.5c work.
+// Wave 29-499.154 — RE-ENABLE BoringSSL via static link. Symbols come from
+// libboringssl.a linked into WebKit framework.
 #if __has_include(<openssl/ssl.h>)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
-// Wave 29-499.153 — DISABLE BoringSSL TLS path until Phase 1.5c. CFStream
-// TLS 1.2 path is the active production code for Phase 1.5b v1.0.
-// #define DRIFTSTACK_HAS_BORINGSSL 1
+#define DRIFTSTACK_HAS_BORINGSSL 1
 #endif
 #import "NetworkDataTask.h"
 #import "NetworkDataTaskCocoa.h"

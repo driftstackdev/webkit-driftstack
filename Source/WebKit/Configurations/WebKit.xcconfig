@@ -297,7 +297,14 @@ WK_NO_STATIC_INITIALIZERS_Release_NO_ = $(WK_ERROR_WHEN_LINKING_WITH_STATIC_INIT
 WK_NO_STATIC_INITIALIZERS_Production__ = $(WK_ERROR_WHEN_LINKING_WITH_STATIC_INITIALIZERS);
 WK_NO_STATIC_INITIALIZERS_Production_NO_ = $(WK_ERROR_WHEN_LINKING_WITH_STATIC_INITIALIZERS);
 
-OTHER_LDFLAGS = $(inherited) -lsqlite3 -iframework $(SDK_DIR)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks $(UNEXPORTED_SYMBOL_LDFLAGS) $(FRAMEWORK_AND_LIBRARY_LDFLAGS) $(OTHER_LDFLAGS_DELAY_INIT) $(OTHER_LDFLAGS_SHARED_CACHE) $(SOURCE_VERSION_LDFLAGS) $(WK_PGO_USE_LDFLAGS) $(WK_PGO_GEN_FLAGS) $(WK_NO_STATIC_INITIALIZERS);
+// Wave 29-499.154 — link libboringssl.a statically into WebKit framework.
+// libwebrtc's BoringSSL static archive has 560 SSL_* exports including
+// TLS_client_method, SSL_set_fd, SSL_set1_host, SSL_CTX_set1_curves_list
+// (the APIs Apple's libboringssl.dylib strips). Direct static link makes
+// them visible inside WebKit framework for DriftstackNetworkLoader.
+DRIFTSTACK_BORINGSSL_LDFLAGS = -lboringssl;
+
+OTHER_LDFLAGS = $(inherited) -lsqlite3 $(DRIFTSTACK_BORINGSSL_LDFLAGS) -iframework $(SDK_DIR)$(SYSTEM_LIBRARY_DIR)/PrivateFrameworks $(UNEXPORTED_SYMBOL_LDFLAGS) $(FRAMEWORK_AND_LIBRARY_LDFLAGS) $(OTHER_LDFLAGS_DELAY_INIT) $(OTHER_LDFLAGS_SHARED_CACHE) $(SOURCE_VERSION_LDFLAGS) $(WK_PGO_USE_LDFLAGS) $(WK_PGO_GEN_FLAGS) $(WK_NO_STATIC_INITIALIZERS);
 
 OTHER_LDFLAGS_DELAY_INIT[sdk=iphone*] = -Wl,-delay_framework,CoreTelephony;
 OTHER_LDFLAGS_DELAY_INIT[sdk=appletv*] = ;
