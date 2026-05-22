@@ -84,6 +84,10 @@ Vector<uint8_t> driftstackAes256GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& ciphertext,
                                             const Vector<uint8_t>& aad);
 
+// === HMAC-SHA384 (for Finished message) ===
+Vector<uint8_t> driftstackHmacSha384(const Vector<uint8_t>& key,
+                                      const Vector<uint8_t>& data);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)

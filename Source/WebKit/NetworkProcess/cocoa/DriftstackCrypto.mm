@@ -58,6 +58,11 @@ struct CryptoFns {
                 const uint8_t* info, size_t infoLen,
                 uint8_t* out, size_t outLen) = nullptr;
 
+    // HMAC
+    void* (*hmac)(const void* md, const uint8_t* key, int keyLen,
+                  const uint8_t* data, size_t dataLen,
+                  uint8_t* out, unsigned int* outLen) = nullptr;
+
     // EVP_PKEY for X25519
     void* (*evp_pkey_ctx_new_from_name)(void* libctx, const char* name, const char* props) = nullptr;
     int (*evp_pkey_keygen_init)(void* ctx) = nullptr;
@@ -134,6 +139,7 @@ bool driftstackCryptoInit()
         R(evp_pkey_new_raw_public_key, "EVP_PKEY_new_raw_public_key");
         R(evp_pkey_derive_set_peer, "EVP_PKEY_derive_set_peer");
         R(evp_pkey_free, "EVP_PKEY_free");
+        R(hmac, "HMAC");
         R(evp_aes_256_gcm, "EVP_aes_256_gcm");
         R(evp_cipher_ctx_new, "EVP_CIPHER_CTX_new");
         R(evp_cipher_ctx_free, "EVP_CIPHER_CTX_free");
@@ -411,6 +417,22 @@ Vector<uint8_t> driftstackAes256GcmDecrypt(const Vector<uint8_t>& key,
     }
     output.resize(outLen + finalLen);
     return output;
+}
+
+// === HMAC-SHA384 ===
+
+Vector<uint8_t> driftstackHmacSha384(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
+{
+    if (!driftstackCryptoInit()) return {};
+    auto& f = cryptoFns();
+    if (!f.hmac || !f.evp_sha384) return {};
+    Vector<uint8_t> out(48);
+    unsigned int outLen = 48;
+    f.hmac(f.evp_sha384(), key.span().data(), static_cast<int>(key.size()),
+           data.span().data(), data.size(),
+           out.mutableSpan().data(), &outLen);
+    out.resize(outLen);
+    return out;
 }
 
 } // namespace WebKit

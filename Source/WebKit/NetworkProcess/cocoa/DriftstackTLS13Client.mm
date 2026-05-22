@@ -76,15 +76,23 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
         return false;
     }
 
-    // After ServerHello, JA3 is determined on the wire.
-    // tls.peet.ws / detection vendors have captured the iPhone-byte-exact
-    // ClientHello and computed JA3.
-    //
-    // For .175 iteration: return true here so caller can verify JA3 via
-    // out-of-band capture. Full handshake (encrypted extensions, cert,
-    // finished, app data) wired in .176+.
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ClientHello + ServerHello complete; JA3 should match iPhone Safari 26.0. Next iteration: encrypted handshake messages + Finished.");
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ClientHello + ServerHello complete; JA3 should match iPhone Safari 26.0.");
 
+    // Wave 29-499.179 — full handshake completion:
+    //   Step 3: Read + decrypt encrypted handshake messages (.178)
+    //   Step 4: Send Client Finished (.179)
+    //   Step 5: Mark connection established, ready for app data (.180+)
+    if (!readEncryptedHandshakeMessages()) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] readEncryptedHandshakeMessages failed: %s", m_errorMessage.utf8().data());
+        return false;
+    }
+
+    if (!sendClientFinished()) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] sendClientFinished failed: %s", m_errorMessage.utf8().data());
+        return false;
+    }
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] TLS 1.3 handshake COMPLETE — iPhone-byte-exact ClientHello + full handshake + app keys ready");
     return true;
 }
 
@@ -333,7 +341,75 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
     }
     return true;
 }
-bool DriftstackTLS13Client::sendClientFinished() { return false; }
+bool DriftstackTLS13Client::sendClientFinished()
+{
+    // Wave 29-499.179 — Client Finished:
+    //   finished_key = HKDF-Expand-Label(client_hs_secret, "finished", "", 48)
+    //   verify_data  = HMAC-SHA384(finished_key, transcript_hash(CH..server_Finished))
+    //
+    // Wrap in handshake message (type 0x14) + plaintext record_type 0x16,
+    // then encrypt with client_hs_key in record_type 0x17.
+    auto finishedKey = driftstackHkdfExpandLabelSha384(
+        m_keySchedule.clientHandshakeSecret(), "finished", {}, 48);
+    if (finishedKey.size() != 48) {
+        m_errorMessage = "finished_key derivation failed"_s;
+        return false;
+    }
+
+    auto transcriptHash = driftstackCloneFinalizeSHA384(m_transcript);
+    auto verifyData = driftstackHmacSha384(finishedKey, transcriptHash);
+    if (verifyData.size() != 48) {
+        m_errorMessage = "verify_data HMAC failed"_s;
+        return false;
+    }
+
+    // Handshake message: type (0x14) + length (3) + verify_data
+    Vector<uint8_t> hsMsg;
+    hsMsg.append(0x14);
+    hsMsg.append(0x00);
+    hsMsg.append(0x00);
+    hsMsg.append(static_cast<uint8_t>(verifyData.size()));
+    hsMsg.append(verifyData.span());
+
+    // Inner plaintext: hsMsg + content_type (0x16)
+    Vector<uint8_t> innerPlaintext = hsMsg;
+    innerPlaintext.append(0x16);
+
+    // AAD = 5-byte record header for the encrypted output. We need to know
+    // ciphertext size first (= plaintext size + 16-byte tag).
+    Vector<uint8_t> aad;
+    aad.append(0x17);  // application_data
+    aad.append(0x03);
+    aad.append(0x03);
+    size_t encLen = innerPlaintext.size() + 16;
+    aad.append(static_cast<uint8_t>(encLen >> 8));
+    aad.append(static_cast<uint8_t>(encLen & 0xFF));
+
+    // Encrypt with client handshake key
+    auto nonce = TLS13KeySchedule::recordNonce(m_clientHsKey.iv, m_clientHsKey.seqNum);
+    m_clientHsKey.seqNum++;
+    auto ciphertext = driftstackAes256GcmEncrypt(m_clientHsKey.key, nonce, innerPlaintext, aad);
+    if (ciphertext.size() != encLen) {
+        m_errorMessage = "Client Finished encrypt failed"_s;
+        return false;
+    }
+
+    // Build record: header + ciphertext
+    Vector<uint8_t> record;
+    record.append(aad.span());
+    record.append(ciphertext.span());
+
+    if (!writeAll(m_fd, record.span().data(), record.size())) {
+        m_errorMessage = "write Client Finished failed"_s;
+        return false;
+    }
+
+    // Add hsMsg to transcript (matters for any post-handshake messages)
+    driftstackUpdateSHA384(m_transcript, hsMsg.span().data(), hsMsg.size());
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] Client Finished sent (%zu bytes encrypted)", record.size());
+    return true;
+}
 int DriftstackTLS13Client::writeApplicationRecord(const uint8_t*, size_t) { return -1; }
 Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord() { return {}; }
 
