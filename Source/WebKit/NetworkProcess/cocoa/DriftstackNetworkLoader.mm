@@ -664,6 +664,7 @@ void DriftstackNetworkLoader::resume()
         // DriftstackHttp2 (iPhone-matched SETTINGS + WINDOW_UPDATE +
         // HEADERS HPACK). Otherwise fall through to HTTP/1.1 path.
         if (useHttp2) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] Entering HTTP/2 dispatch path (custom_tls=%d ssl=%p)", g_customTLSClient ? 1 : 0, ssl);
             DriftstackHttp2Request h2req;
             h2req.method = httpMethod;
             h2req.scheme = "https"_s;
