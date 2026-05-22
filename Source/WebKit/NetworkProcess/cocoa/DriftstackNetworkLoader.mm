@@ -19,17 +19,19 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
-// Wave 29-499.135-138 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
+// Wave 29-499.135-139 — BoringSSL via DRIFTSTACK_BORINGSSL_HEADER_PATH
 // (added to BaseTarget.xcconfig HEADER_SEARCH_PATHS). Provides TLS 1.3
 // with iPhone-matched cipher list + ALPN + key shares — bypasses
 // CFStream's legacy TLS 1.2 SecureTransport limitations.
 //
-// Linking: WebKit framework doesn't link libwebrtc.dylib directly
-// (allowable_client restriction). Phase 1.5b BoringSSL TLS is gated
-// behind further pbxproj work to add libwebrtc as a link dependency
-// OR runtime dlsym resolution. Headers compile; link disabled until
-// integration finalized.
-#if 0 && __has_include(<openssl/ssl.h>)
+// Linking strategy: WebKit framework doesn't link libwebrtc.dylib
+// directly (allowable_client restriction). Use dlsym at runtime to
+// resolve BoringSSL symbols from libwebrtc.dylib which is loaded
+// transitively via WebCore.framework. Empirical (.139 probe): all
+// required SSL_* symbols resolve via RTLD_DEFAULT after libwebrtc
+// is in the process address space.
+#include <dlfcn.h>
+#if __has_include(<openssl/ssl.h>)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509.h>
@@ -69,103 +71,226 @@ static dispatch_queue_t loaderQueue()
 }
 
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
-// Wave 29-499.136 — BoringSSL TLS 1.3 wrap on existing BSD fd.
-// Configures iPhone-Safari-matched cipher list + ALPN + key shares.
-// Returns a connected SSL* on success, nullptr on failure.
+// Wave 29-499.139 — dlsym-resolved BoringSSL function pointers.
+// libwebrtc.dylib must be in process address space first; we dlopen it
+// on first use. WebKit framework can't link libwebrtc directly.
+
+namespace {
+
+// Function pointer typedefs (mirror BoringSSL header signatures)
+typedef SSL_CTX* (*FnSSL_CTX_new)(const SSL_METHOD*);
+typedef const SSL_METHOD* (*FnTLS_client_method)(void);
+typedef int (*FnSSL_CTX_set_min_proto_version)(SSL_CTX*, uint16_t);
+typedef int (*FnSSL_CTX_set_max_proto_version)(SSL_CTX*, uint16_t);
+typedef int (*FnSSL_CTX_set_strict_cipher_list)(SSL_CTX*, const char*);
+typedef int (*FnSSL_CTX_set1_curves_list)(SSL_CTX*, const char*);
+typedef int (*FnSSL_CTX_set_alpn_protos)(SSL_CTX*, const uint8_t*, unsigned);
+typedef void (*FnSSL_CTX_set_verify)(SSL_CTX*, int, int (*)(int, X509_STORE_CTX*));
+typedef int (*FnSSL_CTX_set_default_verify_paths)(SSL_CTX*);
+typedef SSL* (*FnSSL_new)(SSL_CTX*);
+typedef void (*FnSSL_free)(SSL*);
+typedef int (*FnSSL_set_tlsext_host_name)(SSL*, const char*);
+typedef int (*FnSSL_set1_host)(SSL*, const char*);
+typedef int (*FnSSL_set_fd)(SSL*, int);
+typedef int (*FnSSL_connect)(SSL*);
+typedef int (*FnSSL_shutdown)(SSL*);
+typedef int (*FnSSL_get_error)(const SSL*, int);
+typedef int (*FnSSL_read)(SSL*, void*, int);
+typedef int (*FnSSL_write)(SSL*, const void*, int);
+typedef void (*FnSSL_get0_alpn_selected)(const SSL*, const uint8_t**, unsigned*);
+typedef unsigned long (*FnERR_get_error)(void);
+typedef void (*FnERR_error_string_n)(unsigned long, char*, size_t);
+typedef int (*FnSSL_library_init)(void);
+
+struct BoringSSLFns {
+    FnSSL_CTX_new ssl_ctx_new = nullptr;
+    FnTLS_client_method tls_client_method = nullptr;
+    FnSSL_CTX_set_min_proto_version ssl_ctx_set_min_proto_version = nullptr;
+    FnSSL_CTX_set_max_proto_version ssl_ctx_set_max_proto_version = nullptr;
+    FnSSL_CTX_set_strict_cipher_list ssl_ctx_set_strict_cipher_list = nullptr;
+    FnSSL_CTX_set1_curves_list ssl_ctx_set1_curves_list = nullptr;
+    FnSSL_CTX_set_alpn_protos ssl_ctx_set_alpn_protos = nullptr;
+    FnSSL_CTX_set_verify ssl_ctx_set_verify = nullptr;
+    FnSSL_CTX_set_default_verify_paths ssl_ctx_set_default_verify_paths = nullptr;
+    FnSSL_new ssl_new = nullptr;
+    FnSSL_free ssl_free = nullptr;
+    FnSSL_set_tlsext_host_name ssl_set_tlsext_host_name = nullptr;
+    FnSSL_set1_host ssl_set1_host = nullptr;
+    FnSSL_set_fd ssl_set_fd = nullptr;
+    FnSSL_connect ssl_connect = nullptr;
+    FnSSL_shutdown ssl_shutdown = nullptr;
+    FnSSL_get_error ssl_get_error = nullptr;
+    FnSSL_read ssl_read = nullptr;
+    FnSSL_write ssl_write = nullptr;
+    FnSSL_get0_alpn_selected ssl_get0_alpn_selected = nullptr;
+    FnERR_get_error err_get_error = nullptr;
+    FnERR_error_string_n err_error_string_n = nullptr;
+    FnSSL_library_init ssl_library_init = nullptr;
+    bool ready = false;
+};
+
+static BoringSSLFns& boringSSLFns()
+{
+    static BoringSSLFns s;
+    return s;
+}
+
+static bool resolveBoringSSL()
+{
+    auto& f = boringSSLFns();
+    if (f.ready) return true;
+
+    // libwebrtc.dylib path inside WebKit framework's containing build dir
+    Dl_info info;
+    if (!dladdr((const void*)&boringSSLFns, &info)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] dladdr failed");
+        return false;
+    }
+    // Try several possible libwebrtc paths
+    const char* candidates[] = {
+        // Same dir as WebKit.framework's binary (development)
+        "libwebrtc.dylib",
+        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
+        nullptr,
+    };
+    void* webrtcHandle = nullptr;
+    for (int i = 0; candidates[i]; ++i) {
+        webrtcHandle = dlopen(candidates[i], RTLD_NOW | RTLD_GLOBAL);
+        if (webrtcHandle) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] dlopen libwebrtc OK at '%s'", candidates[i]);
+            break;
+        }
+    }
+    if (!webrtcHandle) {
+        // Try lookup without explicit dlopen — might already be loaded transitively
+        if (!dlsym(RTLD_DEFAULT, "SSL_CTX_new")) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] libwebrtc dlopen failed AND symbol not resolvable");
+            return false;
+        }
+    }
+
+    f.ssl_ctx_new = (FnSSL_CTX_new)dlsym(RTLD_DEFAULT, "SSL_CTX_new");
+    f.tls_client_method = (FnTLS_client_method)dlsym(RTLD_DEFAULT, "TLS_client_method");
+    f.ssl_ctx_set_min_proto_version = (FnSSL_CTX_set_min_proto_version)dlsym(RTLD_DEFAULT, "SSL_CTX_set_min_proto_version");
+    f.ssl_ctx_set_max_proto_version = (FnSSL_CTX_set_max_proto_version)dlsym(RTLD_DEFAULT, "SSL_CTX_set_max_proto_version");
+    f.ssl_ctx_set_strict_cipher_list = (FnSSL_CTX_set_strict_cipher_list)dlsym(RTLD_DEFAULT, "SSL_CTX_set_strict_cipher_list");
+    f.ssl_ctx_set1_curves_list = (FnSSL_CTX_set1_curves_list)dlsym(RTLD_DEFAULT, "SSL_CTX_set1_curves_list");
+    f.ssl_ctx_set_alpn_protos = (FnSSL_CTX_set_alpn_protos)dlsym(RTLD_DEFAULT, "SSL_CTX_set_alpn_protos");
+    f.ssl_ctx_set_verify = (FnSSL_CTX_set_verify)dlsym(RTLD_DEFAULT, "SSL_CTX_set_verify");
+    f.ssl_ctx_set_default_verify_paths = (FnSSL_CTX_set_default_verify_paths)dlsym(RTLD_DEFAULT, "SSL_CTX_set_default_verify_paths");
+    f.ssl_new = (FnSSL_new)dlsym(RTLD_DEFAULT, "SSL_new");
+    f.ssl_free = (FnSSL_free)dlsym(RTLD_DEFAULT, "SSL_free");
+    f.ssl_set_tlsext_host_name = (FnSSL_set_tlsext_host_name)dlsym(RTLD_DEFAULT, "SSL_set_tlsext_host_name");
+    f.ssl_set1_host = (FnSSL_set1_host)dlsym(RTLD_DEFAULT, "SSL_set1_host");
+    f.ssl_set_fd = (FnSSL_set_fd)dlsym(RTLD_DEFAULT, "SSL_set_fd");
+    f.ssl_connect = (FnSSL_connect)dlsym(RTLD_DEFAULT, "SSL_connect");
+    f.ssl_shutdown = (FnSSL_shutdown)dlsym(RTLD_DEFAULT, "SSL_shutdown");
+    f.ssl_get_error = (FnSSL_get_error)dlsym(RTLD_DEFAULT, "SSL_get_error");
+    f.ssl_read = (FnSSL_read)dlsym(RTLD_DEFAULT, "SSL_read");
+    f.ssl_write = (FnSSL_write)dlsym(RTLD_DEFAULT, "SSL_write");
+    f.ssl_get0_alpn_selected = (FnSSL_get0_alpn_selected)dlsym(RTLD_DEFAULT, "SSL_get0_alpn_selected");
+    f.err_get_error = (FnERR_get_error)dlsym(RTLD_DEFAULT, "ERR_get_error");
+    f.err_error_string_n = (FnERR_error_string_n)dlsym(RTLD_DEFAULT, "ERR_error_string_n");
+    f.ssl_library_init = (FnSSL_library_init)dlsym(RTLD_DEFAULT, "SSL_library_init");
+
+    bool required = f.ssl_ctx_new && f.tls_client_method && f.ssl_new
+        && f.ssl_set_fd && f.ssl_connect && f.ssl_read && f.ssl_write
+        && f.ssl_free && f.ssl_set_tlsext_host_name;
+    f.ready = required;
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL dlsym ready=%d (ctx_new=%p set_curves=%p set_alpn=%p set1_host=%p)",
+        required, f.ssl_ctx_new, f.ssl_ctx_set1_curves_list, f.ssl_ctx_set_alpn_protos, f.ssl_set1_host);
+    return required;
+}
+
 static SSL_CTX* g_driftstackSslCtx = nullptr;
 static dispatch_once_t g_driftstackSslCtxOnce;
 
 static void initDriftstackSslCtx()
 {
     dispatch_once(&g_driftstackSslCtxOnce, ^{
-        SSL_library_init();
-        SSL_load_error_strings();
-        g_driftstackSslCtx = SSL_CTX_new(TLS_client_method());
+        if (!resolveBoringSSL())
+            return;
+        auto& f = boringSSLFns();
+        if (f.ssl_library_init) f.ssl_library_init();
+
+        g_driftstackSslCtx = f.ssl_ctx_new(f.tls_client_method());
         if (!g_driftstackSslCtx) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_CTX_new failed");
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] SSL_CTX_new failed");
             return;
         }
 
-        // TLS 1.3 only (matches iPhone Safari 26.0)
-        SSL_CTX_set_min_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
-        SSL_CTX_set_max_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
+        if (f.ssl_ctx_set_min_proto_version)
+            f.ssl_ctx_set_min_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
+        if (f.ssl_ctx_set_max_proto_version)
+            f.ssl_ctx_set_max_proto_version(g_driftstackSslCtx, TLS1_3_VERSION);
 
-        // iPhone Safari 26.0 TLS 1.3 cipher order:
-        // BoringSSL's TLS 1.3 cipher suites are fixed by the library; using
-        // strict cipher list configures TLS 1.2 ciphers if any are negotiated.
-        SSL_CTX_set_strict_cipher_list(g_driftstackSslCtx,
-            "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256");
+        if (f.ssl_ctx_set_strict_cipher_list) {
+            f.ssl_ctx_set_strict_cipher_list(g_driftstackSslCtx,
+                "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256");
+        }
+        if (f.ssl_ctx_set1_curves_list) {
+            f.ssl_ctx_set1_curves_list(g_driftstackSslCtx,
+                "X25519MLKEM768:X25519:P-256:P-384:P-521");
+        }
 
-        // Key shares matching iPhone Safari 26.0:
-        // X25519MLKEM768 (post-quantum hybrid) + X25519 + P-256/384/521
-        SSL_CTX_set1_curves_list(g_driftstackSslCtx,
-            "X25519MLKEM768:X25519:P-256:P-384:P-521");
-
-        // ALPN: h3, h2, http/1.1 — Phase 1 only uses http/1.1 but advertise
-        // all so detection vendors see iPhone-Safari-identical offer
         static const uint8_t alpn[] = {
             2, 'h', '3',
             2, 'h', '2',
             8, 'h', 't', 't', 'p', '/', '1', '.', '1'
         };
-        SSL_CTX_set_alpn_protos(g_driftstackSslCtx, alpn, sizeof(alpn));
+        if (f.ssl_ctx_set_alpn_protos)
+            f.ssl_ctx_set_alpn_protos(g_driftstackSslCtx, alpn, sizeof(alpn));
 
-        // Cert verification: use system root CAs
-        SSL_CTX_set_verify(g_driftstackSslCtx, SSL_VERIFY_PEER, nullptr);
-        SSL_CTX_set_default_verify_paths(g_driftstackSslCtx);
+        if (f.ssl_ctx_set_verify) f.ssl_ctx_set_verify(g_driftstackSslCtx, SSL_VERIFY_PEER, nullptr);
+        if (f.ssl_ctx_set_default_verify_paths) f.ssl_ctx_set_default_verify_paths(g_driftstackSslCtx);
 
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] BoringSSL SSL_CTX initialized: TLS 1.3 + iPhone cipher order + ALPN[h3,h2,h1] + X25519MLKEM768");
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL SSL_CTX initialized: TLS 1.3 + iPhone cipher order + ALPN[h3,h2,h1] + X25519MLKEM768");
     });
 }
 
-// Returns a connected SSL* on success (caller frees with SSL_free).
-// hostUtf8 is used for SNI + cert validation.
 [[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
 {
     initDriftstackSslCtx();
-    if (!g_driftstackSslCtx)
-        return nullptr;
+    if (!g_driftstackSslCtx) return nullptr;
+    auto& f = boringSSLFns();
 
-    SSL* ssl = SSL_new(g_driftstackSslCtx);
-    if (!ssl) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_new failed");
-        return nullptr;
-    }
+    SSL* ssl = f.ssl_new(g_driftstackSslCtx);
+    if (!ssl) return nullptr;
 
-    // Set SNI for hostname-based cert validation
-    SSL_set_tlsext_host_name(ssl, hostUtf8);
-    SSL_set1_host(ssl, hostUtf8);
+    f.ssl_set_tlsext_host_name(ssl, hostUtf8);
+    if (f.ssl_set1_host) f.ssl_set1_host(ssl, hostUtf8);
+    f.ssl_set_fd(ssl, fd);
 
-    SSL_set_fd(ssl, fd);
-
-    int rc = SSL_connect(ssl);
+    int rc = f.ssl_connect(ssl);
     if (rc != 1) {
-        int err = SSL_get_error(ssl, rc);
-        unsigned long errCode = ERR_get_error();
-        char errBuf[256];
-        ERR_error_string_n(errCode, errBuf, sizeof(errBuf));
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] SSL_connect failed rc=%d err=%d (%s)",
+        int err = f.ssl_get_error ? f.ssl_get_error(ssl, rc) : -1;
+        unsigned long errCode = f.err_get_error ? f.err_get_error() : 0;
+        char errBuf[256] = {0};
+        if (f.err_error_string_n) f.err_error_string_n(errCode, errBuf, sizeof(errBuf));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] SSL_connect failed rc=%d err=%d (%s)",
             rc, err, errBuf);
-        SSL_free(ssl);
+        f.ssl_free(ssl);
         return nullptr;
     }
 
     const uint8_t* alpnSelected = nullptr;
     unsigned alpnLen = 0;
-    SSL_get0_alpn_selected(ssl, &alpnSelected, &alpnLen);
+    if (f.ssl_get0_alpn_selected) f.ssl_get0_alpn_selected(ssl, &alpnSelected, &alpnLen);
     char alpnStr[16] = {0};
     if (alpnSelected && alpnLen < sizeof(alpnStr)) {
         memcpy(alpnStr, alpnSelected, alpnLen);
-        alpnStr[alpnLen] = 0;
     }
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.136] BoringSSL TLS 1.3 handshake OK to '%s' — negotiated ALPN='%s'",
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL TLS 1.3 handshake OK to '%s' — negotiated ALPN='%s'",
             hostUtf8, alpnStr);
     }
     return ssl;
 }
+
+} // namespace
+
 #endif // DRIFTSTACK_HAS_BORINGSSL
 
 // Forward declare helper bodies used in resume()
@@ -439,22 +564,21 @@ _Pragma("clang diagnostic pop")
         NSData* responseBytes = nil;
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
         if (useBoringSSL) {
-            // Write request via SSL_write
+            auto& f = boringSSLFns();
             const uint8_t* writeBytes = (const uint8_t*)[reqData bytes];
             NSUInteger writeRemaining = [reqData length];
             while (writeRemaining > 0) {
-                int n = SSL_write(ssl, writeBytes, static_cast<int>(writeRemaining));
+                int n = f.ssl_write(ssl, writeBytes, static_cast<int>(writeRemaining));
                 if (n <= 0) break;
                 writeBytes += n;
                 writeRemaining -= n;
             }
-            // Read response via SSL_read
             NSMutableData* respMutable = [NSMutableData data];
             uint8_t readBuf[4096];
             while (true) {
-                int n = SSL_read(ssl, readBuf, sizeof(readBuf));
+                int n = f.ssl_read(ssl, readBuf, sizeof(readBuf));
                 if (n <= 0) {
-                    int err = SSL_get_error(ssl, n);
+                    int err = f.ssl_get_error ? f.ssl_get_error(ssl, n) : 0;
                     if (err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SSL || err == SSL_ERROR_SYSCALL)
                         break;
                     if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
@@ -466,8 +590,8 @@ _Pragma("clang diagnostic pop")
                 [respMutable appendBytes:readBuf length:n];
             }
             responseBytes = respMutable;
-            SSL_shutdown(ssl);
-            SSL_free(ssl);
+            if (f.ssl_shutdown) f.ssl_shutdown(ssl);
+            f.ssl_free(ssl);
         } else
 #endif
         {
