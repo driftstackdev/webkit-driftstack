@@ -201,7 +201,7 @@ bool driftstackParseStun(const uint8_t* data, size_t len, StunMessage& out)
         attr.type = attrType;
         attr.value.resize(attrLen);
         memcpy(attr.value.mutableSpan().data(), data + off, attrLen);
-        out.attributes.append(WTFMove(attr));
+        out.attributes.append(std::move(attr));
         off += attrLen;
         while (off < end && off % 4 != 0) off++;
     }
