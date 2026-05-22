@@ -269,8 +269,8 @@ Vector<uint8_t> makeExtGREASE(uint16_t greaseValue)
 } // anonymous namespace
 
 Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
-    Vector<uint8_t>& outClientRandom,
-    Vector<uint8_t>& outKeyShareX25519Private)
+    const Vector<uint8_t>& x25519PublicKey,
+    Vector<uint8_t>& outClientRandom)
 {
     // Generate client_random (32 bytes)
     outClientRandom.resize(32);
@@ -280,13 +280,8 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     Vector<uint8_t> sessionId(32);
     (void)SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
 
-    // Generate X25519 ephemeral keypair (placeholder — TODO: actual ECDH via
-    // LibreSSL EC_KEY_generate_key or curve25519_donna). For .171 scaffold,
-    // emit random 32 bytes as placeholder pubkey.
-    outKeyShareX25519Private.resize(32);
-    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outKeyShareX25519Private.mutableSpan().data());
-    Vector<uint8_t> x25519Pub(32);
-    (void)SecRandomCopyBytes(kSecRandomDefault, 32, x25519Pub.mutableSpan().data());
+    // Wave 29-499.187 — use caller-provided REAL X25519 public key
+    Vector<uint8_t> x25519Pub = x25519PublicKey;
 
     // Pick the SAME GREASE value used throughout (iPhone uses one GREASE byte)
     uint16_t greasePrimary = pickGreaseValue();

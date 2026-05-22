@@ -136,8 +136,6 @@ bool DriftstackTLS13Client::sendClientHello()
 {
     Vector<uint8_t> clientRandom;
     Vector<uint8_t> x25519Private;
-
-    // Generate REAL X25519 keypair (replaces .171 random placeholder)
     Vector<uint8_t> x25519Pub;
     if (!driftstackX25519GenerateKeypair(x25519Private, x25519Pub)) {
         m_errorMessage = "X25519 keypair gen failed"_s;
@@ -145,10 +143,8 @@ bool DriftstackTLS13Client::sendClientHello()
     }
     m_ourX25519Private = x25519Private;
 
-    // Build ClientHello bytes with iPhone-byte-exact structure.
-    // Note: this builds with a placeholder pubkey; need to fix to use our
-    // real pubkey. .171 scaffold uses random — .175 uses real keypair.
-    Vector<uint8_t> chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, clientRandom, x25519Private);
+    // Wave 29-499.187 — pass REAL X25519 pubkey to ClientHello builder
+    Vector<uint8_t> chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, x25519Pub, clientRandom);
 
     // Send to socket
     if (!writeAll(m_fd, chRecord.span().data(), chRecord.size())) {

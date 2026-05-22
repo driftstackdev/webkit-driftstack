@@ -73,11 +73,12 @@ namespace WebKit {
 
 // Build a byte-exact iPhone Safari 26.0 ClientHello for the given SNI
 // hostname. Random + GREASE values are randomized per-connection
-// (matches iPhone's behavior). Returns the full TLS record (5-byte
-// header + handshake).
+// (matches iPhone's behavior).
+// Wave 29-499.187 — caller now provides the REAL X25519 public key for
+// key_share so ECDH produces matching shared secret with server.
 Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
-    Vector<uint8_t>& outClientRandom,           // 32 bytes (for handshake derivation)
-    Vector<uint8_t>& outKeyShareX25519Private); // 32 bytes (for ECDH)
+    const Vector<uint8_t>& x25519PublicKey,    // 32 bytes (real ECDH pubkey)
+    Vector<uint8_t>& outClientRandom);         // 32 bytes (for handshake derivation)
 
 // Phase 1.5e gate (DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1).
 bool driftstackCustomTlsEnabled();
