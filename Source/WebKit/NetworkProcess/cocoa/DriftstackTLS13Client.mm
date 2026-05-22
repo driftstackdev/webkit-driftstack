@@ -262,10 +262,15 @@ int DriftstackTLS13Client::write(const uint8_t* data, size_t len)
 
 int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
 {
-    auto pt = readApplicationRecord();
-    if (pt.isEmpty()) return 0;
-    size_t n = std::min(pt.size(), maxLen);
-    memcpy(buf, pt.span().data(), n);
+    // Wave 29-499.195 — drain buffer first; only read new record when empty
+    if (m_readBuffer.isEmpty()) {
+        auto pt = readApplicationRecord();
+        if (pt.isEmpty()) return 0;
+        m_readBuffer = WTFMove(pt);
+    }
+    size_t n = std::min(m_readBuffer.size(), maxLen);
+    memcpy(buf, m_readBuffer.span().data(), n);
+    m_readBuffer.removeAt(0, n);
     return static_cast<int>(n);
 }
 

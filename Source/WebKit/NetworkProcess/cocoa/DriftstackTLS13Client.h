@@ -86,6 +86,11 @@ private:
     // Saved ECDH shared secret (until handshake secret derived)
     Vector<uint8_t> m_ecdhShared;
 
+    // Wave 29-499.195 — read buffer for leftover decrypted bytes between
+    // read() calls. TLS record may contain >1 HTTP/2 frames; must not
+    // discard bytes that don't fit in caller's maxLen.
+    Vector<uint8_t> m_readBuffer;
+
     // Internal helpers
     bool sendClientHello();
     bool receiveServerHello();
