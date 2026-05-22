@@ -16,6 +16,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import "AuthenticationManager.h"
+#import "DriftstackHttp2.h"
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 
@@ -465,11 +466,86 @@ void DriftstackNetworkLoader::resume()
             }
         }
         bool useBoringSSL = isHttps && ssl;
+
+        // Wave 29-499.141 — detect HTTP/2 from ALPN; dispatch to our
+        // custom HTTP/2 client (DriftstackHttp2) when h2 negotiated.
+        bool useHttp2 = false;
+        if (ssl) {
+            auto& f = boringSSLFns();
+            const uint8_t* alpnSel = nullptr;
+            unsigned alpnLen = 0;
+            if (f.ssl_get0_alpn_selected) f.ssl_get0_alpn_selected(ssl, &alpnSel, &alpnLen);
+            if (alpnSel && alpnLen == 2 && alpnSel[0] == 'h' && alpnSel[1] == '2')
+                useHttp2 = true;
+        }
 #else
         void* ssl = nullptr;
         bool useBoringSSL = false;
+        bool useHttp2 = false;
         (void)ssl;
 #endif
+
+        // Wave 29-499.141 — if ALPN selected h2, dispatch via
+        // DriftstackHttp2 (iPhone-matched SETTINGS + WINDOW_UPDATE +
+        // HEADERS HPACK). Otherwise fall through to HTTP/1.1 path.
+        if (useHttp2) {
+            DriftstackHttp2Request h2req;
+            h2req.method = httpMethod;
+            h2req.scheme = "https"_s;
+            h2req.authority = host;
+            h2req.path = url.path().toString();
+            if (h2req.path.isEmpty()) h2req.path = "/"_s;
+            if (!url.query().isEmpty())
+                h2req.path = makeString(h2req.path, '?', url.query());
+            for (auto& header : httpHeaders) {
+                String lower = header.key.convertToASCIILowercase();
+                if (lower == "host"_s || lower == "connection"_s
+                    || lower.startsWith(':'))
+                    continue;
+                h2req.extraHeaders.append({ lower, header.value });
+            }
+
+            auto h2resp = driftstackHttp2Execute(ssl, h2req);
+
+#if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
+            // SSL_shutdown + SSL_free done by driftstackHttp2Execute? No —
+            // driftstackHttp2Execute does NOT free ssl. We free here.
+            {
+                auto& f = boringSSLFns();
+                if (f.ssl_shutdown) f.ssl_shutdown(ssl);
+                if (f.ssl_free) f.ssl_free(ssl);
+            }
+#endif
+
+            auto* clientPtr = m_task.client();
+            if (!clientPtr) return;
+
+            if (h2resp.failed) {
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), h2resp.errorMessage, WebCore::ResourceError::Type::General);
+                WebCore::NetworkLoadMetrics metrics;
+                clientPtr->didCompleteWithError(error, metrics);
+                return;
+            }
+
+            WebCore::ResourceResponse response { URL(m_request.url()), String("text/html"_s), -1, String("UTF-8"_s) };
+            response.setHTTPStatusCode(h2resp.statusCode);
+            for (auto& [k, v] : h2resp.headers)
+                response.setHTTPHeaderField(k, v);
+
+            auto bodySpan = unsafeMakeSpan(h2resp.body.data(), h2resp.body.size());
+            auto bodyBuffer = WebCore::SharedBuffer::create(bodySpan);
+
+            clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                [clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                    if (action == WebCore::PolicyAction::Use) {
+                        clientPtr->didReceiveData(bodyBuffer.get());
+                        WebCore::NetworkLoadMetrics metrics;
+                        clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                    }
+                });
+            return;
+        }
+
 
         // CFStream fallback only used when BoringSSL is unavailable
         CFReadStreamRef readStream = nullptr;
