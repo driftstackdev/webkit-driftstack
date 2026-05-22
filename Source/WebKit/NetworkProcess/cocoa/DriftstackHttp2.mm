@@ -82,11 +82,12 @@ static SSLFns& sslFns()
 {
     static SSLFns s;
     if (!s.ready) {
-        // Wave 29-499.164 — dlsym from libwebrtc.dylib (not RTLD_DEFAULT)
-        // for ABI consistency with DriftstackNetworkLoader's BoringSSL.
-        // SSL* type and SSL_read/write ABI must come from same library.
-        void* h = dlopen("libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
-        if (!h) h = dlopen("/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        // Wave 29-499.167 — dlsym from Apple's /usr/lib/libssl.48.dylib
+        // (LibreSSL 3.3.6 — iPhone-compatible TLS with 3DES support).
+        // SSL* type and read/write ABI come from same library as
+        // DriftstackNetworkLoader's TLS handshake.
+        void* h = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!h) h = dlopen("libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
         if (h) {
             s.read = (FnSSL_read)dlsym(h, "SSL_read");
             s.write = (FnSSL_write)dlsym(h, "SSL_write");

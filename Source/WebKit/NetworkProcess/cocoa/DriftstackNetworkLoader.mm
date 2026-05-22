@@ -172,21 +172,26 @@ static bool resolveBoringSSL()
     auto& f = boringSSLFns();
     if (f.ready) return true;
 
-    // Wave 29-499.161 — CRITICAL FIX (post-Wave29-499.160 export):
-    // libwebrtc.dylib now re-exports 23 SSL_*/ERR_*/TLS_client_method
-    // via libwebrtc.exp + WEBRTC_LDFLAGS -force_load libboringssl.a.
-    // All symbols come from libwebrtc's own statically-linked BoringSSL =
-    // ABI consistent. Resolve via libwebrtc.dylib handle exclusively.
+    // Wave 29-499.167 — BREAKTHROUGH: switch to Apple's /usr/lib/libssl.48.dylib
+    // (LibreSSL 3.3.6 — Apple's own TLS lib with 3DES kept for backward compat).
+    // BoringSSL removed 3DES; iPhone Safari 26 INCLUDES 3DES in 20-cipher offer.
+    // LibreSSL via Apple = same TLS engine as iPhone Safari's underlying lib.
+    //
+    // Empirical confirmed:
+    // - TLS_method() supported
+    // - SSL_CTX_set_cipher_list("DES-CBC3-SHA:...") rc=1 (3DES accepted!)
+    // - SSL_CTX_set_min_proto_version(TLS1_3_VERSION) rc=1
+    // - 23 of 26 needed APIs directly available (3 missing use SSL_ctrl)
     const char* candidates[] = {
-        "libwebrtc.dylib",
-        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
+        "/usr/lib/libssl.48.dylib",
+        "libssl.48.dylib",
         nullptr,
     };
     void* webrtcHandle = nullptr;
     for (int i = 0; candidates[i]; ++i) {
         webrtcHandle = dlopen(candidates[i], RTLD_NOW | RTLD_GLOBAL);
         if (webrtcHandle) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.152] dlopen libboringssl OK at '%s' handle=%p", candidates[i], webrtcHandle);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.167] dlopen Apple LibreSSL OK at '%s' handle=%p", candidates[i], webrtcHandle);
             break;
         }
     }
@@ -264,6 +269,8 @@ static void initDriftstackSslCtx()
         // iPhone Safari 26 cipher list (from real device tls.peet.ws capture):
         // TLS 1.3 ciphers + TLS 1.2 ECDHE + RSA ciphers (~20 total).
         if (f.ssl_ctx_set_strict_cipher_list) {
+            // Wave 29-499.167 — iPhone Safari 26 exact 20-cipher list (with 3DES)
+            // LibreSSL accepts these names; BoringSSL would reject 3DES.
             f.ssl_ctx_set_strict_cipher_list(g_driftstackSslCtx,
                 "TLS_AES_256_GCM_SHA384:"
                 "TLS_CHACHA20_POLY1305_SHA256:"
@@ -282,7 +289,6 @@ static void initDriftstackSslCtx()
                 "AES128-GCM-SHA256:"
                 "AES256-SHA:"
                 "AES128-SHA:"
-                // 3DES ciphers — iPhone Safari 26 includes for backward compat
                 "ECDHE-ECDSA-DES-CBC3-SHA:"
                 "ECDHE-RSA-DES-CBC3-SHA:"
                 "DES-CBC3-SHA");
