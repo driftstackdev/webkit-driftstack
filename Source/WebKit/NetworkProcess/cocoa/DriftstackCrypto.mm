@@ -272,6 +272,68 @@ Vector<uint8_t> driftstackSHA384(const uint8_t* data, size_t len)
 // === HKDF-SHA384 (LibreSSL via EVP_PKEY_HKDF) ===
 
 namespace {
+
+// Wave 29-499.190 — AEAD-based encrypt/decrypt (LibreSSL/BoringSSL API).
+// Defined HERE (early) because used by both 256-GCM and 128-GCM wrappers.
+Vector<uint8_t> aeadEncrypt(const void* aead,
+                             const Vector<uint8_t>& key,
+                             const Vector<uint8_t>& nonce,
+                             const Vector<uint8_t>& plaintext,
+                             const Vector<uint8_t>& aad)
+{
+    if (!driftstackCryptoInit() || !aead) return {};
+    auto& f = cryptoFns();
+    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_seal || !f.evp_aead_ctx_free)
+        return {};
+    void* ctx = f.evp_aead_ctx_new();
+    if (!ctx) return {};
+    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
+        f.evp_aead_ctx_free(ctx);
+        return {};
+    }
+    Vector<uint8_t> out(plaintext.size() + 16);
+    size_t outLen = 0;
+    int rc = f.evp_aead_ctx_seal(ctx, out.mutableSpan().data(), &outLen, out.size(),
+        nonce.span().data(), nonce.size(),
+        plaintext.span().data(), plaintext.size(),
+        aad.span().data(), aad.size());
+    f.evp_aead_ctx_free(ctx);
+    if (rc != 1) return {};
+    out.resize(outLen);
+    return out;
+}
+
+Vector<uint8_t> aeadDecrypt(const void* aead,
+                             const Vector<uint8_t>& key,
+                             const Vector<uint8_t>& nonce,
+                             const Vector<uint8_t>& ciphertext,
+                             const Vector<uint8_t>& aad)
+{
+    if (!driftstackCryptoInit() || !aead || ciphertext.size() < 16) return {};
+    auto& f = cryptoFns();
+    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_open || !f.evp_aead_ctx_free)
+        return {};
+    void* ctx = f.evp_aead_ctx_new();
+    if (!ctx) return {};
+    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
+        f.evp_aead_ctx_free(ctx);
+        return {};
+    }
+    Vector<uint8_t> out(ciphertext.size());
+    size_t outLen = 0;
+    int rc = f.evp_aead_ctx_open(ctx, out.mutableSpan().data(), &outLen, out.size(),
+        nonce.span().data(), nonce.size(),
+        ciphertext.span().data(), ciphertext.size(),
+        aad.span().data(), aad.size());
+    f.evp_aead_ctx_free(ctx);
+    if (rc != 1) return {};
+    out.resize(outLen);
+    return out;
+}
+
+} // anonymous namespace early-defs
+
+namespace {
 const int kEVPPkeyOpDerive = (1 << 10);
 const int kEVPPkeyCtrlHkdfMode = 0x1000;
 const int kEVPPkeyCtrlHkdfSalt = 0x1001;
@@ -545,63 +607,6 @@ Vector<uint8_t> driftstackHmacSha256(const Vector<uint8_t>& key, const Vector<ui
 }
 
 namespace {
-
-// Wave 29-499.190 — AEAD-based encrypt/decrypt (LibreSSL/BoringSSL API)
-Vector<uint8_t> aeadEncrypt(const void* aead,
-                             const Vector<uint8_t>& key,
-                             const Vector<uint8_t>& nonce,
-                             const Vector<uint8_t>& plaintext,
-                             const Vector<uint8_t>& aad)
-{
-    if (!driftstackCryptoInit() || !aead) return {};
-    auto& f = cryptoFns();
-    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_seal || !f.evp_aead_ctx_free)
-        return {};
-    void* ctx = f.evp_aead_ctx_new();
-    if (!ctx) return {};
-    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
-        f.evp_aead_ctx_free(ctx);
-        return {};
-    }
-    Vector<uint8_t> out(plaintext.size() + 16);
-    size_t outLen = 0;
-    int rc = f.evp_aead_ctx_seal(ctx, out.mutableSpan().data(), &outLen, out.size(),
-        nonce.span().data(), nonce.size(),
-        plaintext.span().data(), plaintext.size(),
-        aad.span().data(), aad.size());
-    f.evp_aead_ctx_free(ctx);
-    if (rc != 1) return {};
-    out.resize(outLen);
-    return out;
-}
-
-Vector<uint8_t> aeadDecrypt(const void* aead,
-                             const Vector<uint8_t>& key,
-                             const Vector<uint8_t>& nonce,
-                             const Vector<uint8_t>& ciphertext,
-                             const Vector<uint8_t>& aad)
-{
-    if (!driftstackCryptoInit() || !aead || ciphertext.size() < 16) return {};
-    auto& f = cryptoFns();
-    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_open || !f.evp_aead_ctx_free)
-        return {};
-    void* ctx = f.evp_aead_ctx_new();
-    if (!ctx) return {};
-    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
-        f.evp_aead_ctx_free(ctx);
-        return {};
-    }
-    Vector<uint8_t> out(ciphertext.size());
-    size_t outLen = 0;
-    int rc = f.evp_aead_ctx_open(ctx, out.mutableSpan().data(), &outLen, out.size(),
-        nonce.span().data(), nonce.size(),
-        ciphertext.span().data(), ciphertext.size(),
-        aad.span().data(), aad.size());
-    f.evp_aead_ctx_free(ctx);
-    if (rc != 1) return {};
-    out.resize(outLen);
-    return out;
-}
 
 Vector<uint8_t> aesGcmEncryptImpl(const void* cipher,
                                    const Vector<uint8_t>& key,
