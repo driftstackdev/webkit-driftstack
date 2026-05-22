@@ -283,21 +283,19 @@ Vector<uint8_t> aeadEncrypt(const void* aead,
 {
     if (!driftstackCryptoInit() || !aead) return {};
     auto& f = cryptoFns();
-    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_seal || !f.evp_aead_ctx_free)
+    if (!f.evp_aead_ctx_init || !f.evp_aead_ctx_seal || !f.evp_aead_ctx_cleanup) return {};
+    // Wave 29-499.191 — LibreSSL EVP_AEAD_CTX is caller-allocated.
+    // EVP_AEAD_CTX_new doesn't exist; use stack buffer.
+    uint8_t ctxBuf[1024];
+    if (f.evp_aead_ctx_init(ctxBuf, aead, key.span().data(), key.size(), 16, nullptr) != 1)
         return {};
-    void* ctx = f.evp_aead_ctx_new();
-    if (!ctx) return {};
-    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
-        f.evp_aead_ctx_free(ctx);
-        return {};
-    }
     Vector<uint8_t> out(plaintext.size() + 16);
     size_t outLen = 0;
-    int rc = f.evp_aead_ctx_seal(ctx, out.mutableSpan().data(), &outLen, out.size(),
+    int rc = f.evp_aead_ctx_seal(ctxBuf, out.mutableSpan().data(), &outLen, out.size(),
         nonce.span().data(), nonce.size(),
         plaintext.span().data(), plaintext.size(),
         aad.span().data(), aad.size());
-    f.evp_aead_ctx_free(ctx);
+    f.evp_aead_ctx_cleanup(ctxBuf);
     if (rc != 1) return {};
     out.resize(outLen);
     return out;
@@ -311,21 +309,17 @@ Vector<uint8_t> aeadDecrypt(const void* aead,
 {
     if (!driftstackCryptoInit() || !aead || ciphertext.size() < 16) return {};
     auto& f = cryptoFns();
-    if (!f.evp_aead_ctx_new || !f.evp_aead_ctx_init || !f.evp_aead_ctx_open || !f.evp_aead_ctx_free)
+    if (!f.evp_aead_ctx_init || !f.evp_aead_ctx_open || !f.evp_aead_ctx_cleanup) return {};
+    uint8_t ctxBuf[1024];
+    if (f.evp_aead_ctx_init(ctxBuf, aead, key.span().data(), key.size(), 16, nullptr) != 1)
         return {};
-    void* ctx = f.evp_aead_ctx_new();
-    if (!ctx) return {};
-    if (f.evp_aead_ctx_init(ctx, aead, key.span().data(), key.size(), 16, nullptr) != 1) {
-        f.evp_aead_ctx_free(ctx);
-        return {};
-    }
     Vector<uint8_t> out(ciphertext.size());
     size_t outLen = 0;
-    int rc = f.evp_aead_ctx_open(ctx, out.mutableSpan().data(), &outLen, out.size(),
+    int rc = f.evp_aead_ctx_open(ctxBuf, out.mutableSpan().data(), &outLen, out.size(),
         nonce.span().data(), nonce.size(),
         ciphertext.span().data(), ciphertext.size(),
         aad.span().data(), aad.size());
-    f.evp_aead_ctx_free(ctx);
+    f.evp_aead_ctx_cleanup(ctxBuf);
     if (rc != 1) return {};
     out.resize(outLen);
     return out;
