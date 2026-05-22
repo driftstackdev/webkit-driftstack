@@ -217,16 +217,18 @@ bool DriftstackTLS13Client::receiveServerHello()
     return true;
 }
 
-int DriftstackTLS13Client::write(const uint8_t* /*data*/, size_t /*len*/)
+int DriftstackTLS13Client::write(const uint8_t* data, size_t len)
 {
-    m_errorMessage = "Phase 1.5e application data encrypt not yet implemented (.179)"_s;
-    return -1;
+    return writeApplicationRecord(data, len);
 }
 
-int DriftstackTLS13Client::read(uint8_t* /*buf*/, size_t /*maxLen*/)
+int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
 {
-    m_errorMessage = "Phase 1.5e application data decrypt not yet implemented (.179)"_s;
-    return -1;
+    auto pt = readApplicationRecord();
+    if (pt.isEmpty()) return 0;
+    size_t n = std::min(pt.size(), maxLen);
+    memcpy(buf, pt.span().data(), n);
+    return static_cast<int>(n);
 }
 
 void DriftstackTLS13Client::shutdown()
@@ -410,8 +412,83 @@ bool DriftstackTLS13Client::sendClientFinished()
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] Client Finished sent (%zu bytes encrypted)", record.size());
     return true;
 }
-int DriftstackTLS13Client::writeApplicationRecord(const uint8_t*, size_t) { return -1; }
-Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord() { return {}; }
+int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t len)
+{
+    // Wave 29-499.180 — encrypt app data with client_app_key (AES-256-GCM).
+    // Inner plaintext: data + inner_type 0x17 (application_data).
+    Vector<uint8_t> inner;
+    inner.append(std::span<const uint8_t>(data, len));
+    inner.append(0x17);  // inner content_type
+
+    size_t encLen = inner.size() + 16;
+    Vector<uint8_t> aad;
+    aad.append(0x17);
+    aad.append(0x03); aad.append(0x03);
+    aad.append(static_cast<uint8_t>(encLen >> 8));
+    aad.append(static_cast<uint8_t>(encLen & 0xFF));
+
+    auto nonce = TLS13KeySchedule::recordNonce(m_clientAppKey.iv, m_clientAppKey.seqNum);
+    m_clientAppKey.seqNum++;
+    auto ct = driftstackAes256GcmEncrypt(m_clientAppKey.key, nonce, inner, aad);
+    if (ct.size() != encLen) return -1;
+
+    Vector<uint8_t> record;
+    record.append(aad.span());
+    record.append(ct.span());
+    if (!writeAll(m_fd, record.span().data(), record.size())) return -1;
+    return static_cast<int>(len);
+}
+
+Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
+{
+    // Wave 29-499.180 — decrypt app data with server_app_key.
+    uint8_t recType;
+    uint16_t recVer;
+    Vector<uint8_t> body;
+    if (!driftstackReadTLSRecord(m_fd, recType, recVer, body))
+        return {};
+
+    // Session tickets (post-handshake NewSessionTicket records) come as 0x17
+    // too — TLS 1.3 wraps them in application_data. Skip if inner_type=0x16.
+    if (recType != 0x17) {
+        // Could be alert (0x15) or change_cipher_spec (0x14)
+        return {};
+    }
+
+    Vector<uint8_t> aad;
+    aad.append(recType);
+    aad.append(static_cast<uint8_t>(recVer >> 8));
+    aad.append(static_cast<uint8_t>(recVer & 0xFF));
+    aad.append(static_cast<uint8_t>(body.size() >> 8));
+    aad.append(static_cast<uint8_t>(body.size() & 0xFF));
+
+    auto nonce = TLS13KeySchedule::recordNonce(m_serverAppKey.iv, m_serverAppKey.seqNum);
+    m_serverAppKey.seqNum++;
+
+    auto pt = driftstackAes256GcmDecrypt(m_serverAppKey.key, nonce, body, aad);
+    if (pt.isEmpty()) return {};
+
+    // Strip inner content_type byte + zero padding
+    uint8_t innerType = pt.last();
+    pt.removeLast();
+    while (!pt.isEmpty() && pt.last() == 0)
+        pt.removeLast();
+
+    if (innerType == 0x17) {
+        return pt;  // application_data
+    } else if (innerType == 0x16) {
+        // Post-handshake message (NewSessionTicket, KeyUpdate). Skip but
+        // update transcript hash.
+        driftstackUpdateSHA384(m_transcript, pt.span().data(), pt.size());
+        // Recurse to read next real app data record
+        return readApplicationRecord();
+    } else if (innerType == 0x15) {
+        // Alert — connection closing
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.180] TLS alert received");
+        return {};
+    }
+    return {};
+}
 
 } // namespace WebKit
 
