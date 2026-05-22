@@ -31,8 +31,10 @@ bool TLS13KeySchedule::initFromHandshake(const Vector<uint8_t>& ecdhShared,
                                           const Vector<uint8_t>& transcriptHashCHtoSH)
 {
     // Step 1: early_secret = HKDF-Extract(salt=zeros, IKM=zeros) — no PSK
-    Vector<uint8_t> zeros(48, 0);
-    Vector<uint8_t> zeroSalt(48, 0);
+    Vector<uint8_t> zeros(48);
+    memset(zeros.mutableSpan().data(), 0, 48);
+    Vector<uint8_t> zeroSalt(48);
+    memset(zeroSalt.mutableSpan().data(), 0, 48);
     m_earlySecret = driftstackHkdfExtractSha384(zeroSalt, zeros);
     if (m_earlySecret.size() != 48) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] early_secret derivation failed");
@@ -69,7 +71,8 @@ bool TLS13KeySchedule::deriveApplicationSecrets(const Vector<uint8_t>& transcrip
     //                                       IKM=zeros)
     auto emptyHash = emptyHashSha384();
     auto msSalt = driftstackDeriveSecretSha384(m_handshakeSecret, "derived", emptyHash);
-    Vector<uint8_t> zeros(48, 0);
+    Vector<uint8_t> zeros(48);
+    memset(zeros.mutableSpan().data(), 0, 48);
     m_masterSecret = driftstackHkdfExtractSha384(msSalt, zeros);
     if (m_masterSecret.size() != 48) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.174] master_secret derivation failed");
