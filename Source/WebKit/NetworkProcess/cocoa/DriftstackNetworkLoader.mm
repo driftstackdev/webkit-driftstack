@@ -341,21 +341,19 @@ static void initDriftstackSslCtx()
         // SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE = 65; TLSEXT_STATUSTYPE_ocsp = 1
         //   to add status_request extension
         if (f.ssl_ctx_ctrl) {
-            const int SSL_CTRL_OPTIONS = 32;
-            const int SSL_CTRL_CLEAR_OPTIONS = 77;
-            const int SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE = 65;
-            const long SSL_OP_NO_TICKET = 0x00004000L;
-            const long SSL_OP_NO_EXTENDED_MASTER_SECRET = 0x00000010L;
+            // ctl-codes (avoid #define conflicts with openssl/ssl.h)
+            constexpr int kCtrlOptions = 32;
+            constexpr int kCtrlClearOptions = 77;
+            constexpr int kCtrlSetTLSExtStatusType = 65;
+            constexpr long kOpNoTicket = 0x00004000L;
+            constexpr long kOpNoExtendedMasterSecret = 0x00000010L;
 
-            // Disable session ticket (iPhone Safari doesn't send it; we have
-            // it by LibreSSL default).
-            f.ssl_ctx_ctrl(g_driftstackSslCtx, SSL_CTRL_OPTIONS, SSL_OP_NO_TICKET, nullptr);
-
-            // Ensure extended_master_secret is ENABLED (clear the NO option).
-            f.ssl_ctx_ctrl(g_driftstackSslCtx, SSL_CTRL_CLEAR_OPTIONS, SSL_OP_NO_EXTENDED_MASTER_SECRET, nullptr);
-
-            // Enable status_request (OCSP) extension at CTX level.
-            f.ssl_ctx_ctrl(g_driftstackSslCtx, SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE, 1 /*ocsp*/, nullptr);
+            // Disable session ticket (iPhone Safari doesn't send it)
+            f.ssl_ctx_ctrl(g_driftstackSslCtx, kCtrlOptions, kOpNoTicket, nullptr);
+            // Ensure extended_master_secret enabled
+            f.ssl_ctx_ctrl(g_driftstackSslCtx, kCtrlClearOptions, kOpNoExtendedMasterSecret, nullptr);
+            // Add status_request (OCSP) extension
+            f.ssl_ctx_ctrl(g_driftstackSslCtx, kCtrlSetTLSExtStatusType, 1 /*ocsp*/, nullptr);
         }
 
         // Wave 29-499.162 — BoringSSL doesn't know macOS Keychain CAs by
