@@ -688,11 +688,51 @@ void DriftstackNetworkLoader::resume()
                     }
                 }
             }
+            // Wave 29-499.201 — iPhone Safari 26.0 EXACT HTTP/2 header order
+            // (verified via tls.peet.ws default-mode capture).
+            // Order matters for JA4H + Akamai pseudo-header order.
+            //
+            // Pseudo: :method, :scheme, :path, :authority (already in h2req)
+            // Real headers in iPhone order:
+            //   accept, sec-fetch-site, sec-fetch-dest, accept-encoding,
+            //   sec-fetch-mode, user-agent, priority, accept-language
+            //
+            // We OVERRIDE WebKit's defaults to match iPhone exactly.
+            bool haveUA = false;
+            for (auto& header : httpHeaders) {
+                String lower = header.key.convertToASCIILowercase();
+                if (lower == "user-agent"_s)
+                    haveUA = true;
+            }
+
+            // Add iPhone-exact headers in iPhone-exact order (only for
+            // top-level document requests; subresource requests may differ)
+            h2req.extraHeaders.append({ "accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s });
+            h2req.extraHeaders.append({ "sec-fetch-site"_s, "none"_s });
+            h2req.extraHeaders.append({ "sec-fetch-dest"_s, "document"_s });
+            h2req.extraHeaders.append({ "accept-encoding"_s, "gzip, deflate, br"_s });
+            h2req.extraHeaders.append({ "sec-fetch-mode"_s, "navigate"_s });
+            if (!haveUA) {
+                h2req.extraHeaders.append({ "user-agent"_s,
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s });
+            }
+            h2req.extraHeaders.append({ "priority"_s, "u=0, i"_s });
+            h2req.extraHeaders.append({ "accept-language"_s, "en-US,en;q=0.9"_s });
+
+            // Forward WebKit's UA if it set one, after iPhone headers
             for (auto& header : httpHeaders) {
                 String lower = header.key.convertToASCIILowercase();
                 if (lower == "host"_s || lower == "connection"_s
-                    || lower == "cookie"_s || lower.startsWith(':'))
+                    || lower == "cookie"_s || lower.startsWith(':')
+                    || lower == "accept"_s || lower == "accept-encoding"_s
+                    || lower == "accept-language"_s || lower == "sec-fetch-site"_s
+                    || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
+                    || lower == "priority"_s)
                     continue;
+                if (lower == "user-agent"_s) {
+                    h2req.extraHeaders.append({ lower, header.value });
+                    continue;
+                }
                 h2req.extraHeaders.append({ lower, header.value });
             }
 
