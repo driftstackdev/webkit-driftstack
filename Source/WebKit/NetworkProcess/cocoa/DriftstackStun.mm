@@ -262,7 +262,11 @@ Vector<uint8_t> driftstackLongTermKey(const String& username, const String& real
     in.append(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(p.data()), p.length()));
 
     Vector<uint8_t> out(16);
+    // RFC 5389 requires MD5 specifically for long-term credential key derivation.
+    // CC_MD5 is deprecated by Apple but the STUN protocol specifies MD5 — must use.
+    IGNORE_WARNINGS_BEGIN("deprecated-declarations")
     CC_MD5(in.span().data(), static_cast<CC_LONG>(in.size()), out.mutableSpan().data());
+    IGNORE_WARNINGS_END
     return out;
 }
 
