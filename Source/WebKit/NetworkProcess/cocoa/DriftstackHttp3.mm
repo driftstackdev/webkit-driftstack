@@ -1559,7 +1559,26 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
             static bool loggedFirstSendOnce = false;
             if (!loggedFirstSendOnce) {
                 loggedFirstSendOnce = true;
-                WTFLogAlways("[Wave29-499.255] FIRST QUIC sendto: pkt=%zd framed=%zu sent=%zd errno=%d peer=1.1.1.1:443 via relay",
+                // Wave 29-499.257 — hex dump first 64 bytes of pre-§7 QUIC
+                // packet to inspect Initial packet structure:
+                //   byte 0:    long header flags (0xC0=fixed+long, +0x00=initial, +0x03=PN len-1)
+                //   bytes 1-4: version (0x00000001 for QUIC v1)
+                //   byte 5:    dcid length (8)
+                //   bytes 6-13: dcid
+                //   byte 14:   scid length (8)
+                //   bytes 15-22: scid
+                //   byte 23+: varint token len, token, varint length, packet number, encrypted payload
+                auto b = [&](size_t i) -> unsigned { return i < static_cast<size_t>(n) ? pkt[i] : 0; };
+                WTFLogAlways("[Wave29-499.257] FIRST 64 bytes of QUIC Initial pkt (pre-§7): %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                    b(0), b(1), b(2), b(3), b(4), b(5), b(6), b(7),
+                    b(8), b(9), b(10), b(11), b(12), b(13), b(14), b(15),
+                    b(16), b(17), b(18), b(19), b(20), b(21), b(22), b(23),
+                    b(24), b(25), b(26), b(27), b(28), b(29), b(30), b(31),
+                    b(32), b(33), b(34), b(35), b(36), b(37), b(38), b(39),
+                    b(40), b(41), b(42), b(43), b(44), b(45), b(46), b(47),
+                    b(48), b(49), b(50), b(51), b(52), b(53), b(54), b(55),
+                    b(56), b(57), b(58), b(59), b(60), b(61), b(62), b(63));
+                WTFLogAlways("[Wave29-499.255] FIRST QUIC sendto: pkt=%zd framed=%zu sent=%zd errno=%d peer=cloudflare-quic.com:443 via relay",
                     n, framed.size(), s, s < 0 ? errno : 0);
             }
         }
