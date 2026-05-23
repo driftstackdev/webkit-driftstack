@@ -634,26 +634,78 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
 // TODO Wave 29-499.231: wire to driftstackAESGCMEncrypt / Decrypt helpers
 // (similar to DriftstackCrypto's existing TLS 1.3 path; reuse the same
 // EVP_AEAD_CTX construction).
-[[maybe_unused]] static int driftstackNgtcp2Encrypt(uint8_t* /*dest*/,
+// Wave 29-499.231 — AEAD callbacks wired to DriftstackCrypto's existing
+// LibreSSL EVP_AEAD helpers (the same ones powering PathB v2 TLS 1.3 record
+// encryption per Waves .190-.219). ngtcp2 passes an opaque
+// ngtcp2_crypto_aead_ctx whose native_handle we populate with our own
+// DriftstackQuicAeadCtx { key, key_len, is_aes256, is_chacha20 } at
+// install-key time (Wave .232 will wire the install path).
+struct DriftstackQuicAeadCtx {
+    Vector<uint8_t> key;
+    bool isAes256 { false };       // 0x1302 (32-byte key)
+    bool isChacha20 { false };     // 0x1303 (32-byte key)
+};
+
+[[maybe_unused]] static int driftstackNgtcp2Encrypt(uint8_t* dest,
     const ngtcp2_crypto_aead* /*aead*/,
-    const ngtcp2_crypto_aead_ctx* /*aead_ctx*/,
-    const uint8_t* /*plaintext*/, size_t /*plaintextlen*/,
-    const uint8_t* /*nonce*/, size_t /*noncelen*/,
-    const uint8_t* /*aad*/, size_t /*aadlen*/)
+    const ngtcp2_crypto_aead_ctx* aead_ctx,
+    const uint8_t* plaintext, size_t plaintextlen,
+    const uint8_t* nonce, size_t noncelen,
+    const uint8_t* aad, size_t aadlen)
 {
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] Encrypt stub — Wave .231 will wire LibreSSL EVP_AEAD");
-    return -1;
+    if (!aead_ctx || !aead_ctx->native_handle)
+        return -1;
+    auto* ctx = static_cast<DriftstackQuicAeadCtx*>(aead_ctx->native_handle);
+
+    Vector<uint8_t> nonceVec(noncelen);
+    memcpy(nonceVec.mutableSpan().data(), nonce, noncelen);
+    Vector<uint8_t> ptVec(plaintextlen);
+    if (plaintextlen) memcpy(ptVec.mutableSpan().data(), plaintext, plaintextlen);
+    Vector<uint8_t> aadVec(aadlen);
+    if (aadlen) memcpy(aadVec.mutableSpan().data(), aad, aadlen);
+
+    Vector<uint8_t> result;
+    if (ctx->isAes256)
+        result = WebKit::driftstackAes256GcmEncrypt(ctx->key, nonceVec, ptVec, aadVec);
+    else
+        result = WebKit::driftstackAes128GcmEncrypt(ctx->key, nonceVec, ptVec, aadVec);
+    // ChaCha20-Poly1305 (0x1303): TODO Wave .232 - LibreSSL has it via
+    // EVP_aead_chacha20_poly1305; needs same dlsym wrapping.
+
+    if (result.size() != plaintextlen + 16) // GCM tag is 16 bytes
+        return -1;
+    memcpy(dest, result.span().data(), result.size());
+    return 0;
 }
 
-[[maybe_unused]] static int driftstackNgtcp2Decrypt(uint8_t* /*dest*/,
+[[maybe_unused]] static int driftstackNgtcp2Decrypt(uint8_t* dest,
     const ngtcp2_crypto_aead* /*aead*/,
-    const ngtcp2_crypto_aead_ctx* /*aead_ctx*/,
-    const uint8_t* /*ciphertext*/, size_t /*ciphertextlen*/,
-    const uint8_t* /*nonce*/, size_t /*noncelen*/,
-    const uint8_t* /*aad*/, size_t /*aadlen*/)
+    const ngtcp2_crypto_aead_ctx* aead_ctx,
+    const uint8_t* ciphertext, size_t ciphertextlen,
+    const uint8_t* nonce, size_t noncelen,
+    const uint8_t* aad, size_t aadlen)
 {
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] Decrypt stub — Wave .231 will wire LibreSSL EVP_AEAD");
-    return -1;
+    if (!aead_ctx || !aead_ctx->native_handle)
+        return -1;
+    auto* ctx = static_cast<DriftstackQuicAeadCtx*>(aead_ctx->native_handle);
+
+    Vector<uint8_t> nonceVec(noncelen);
+    memcpy(nonceVec.mutableSpan().data(), nonce, noncelen);
+    Vector<uint8_t> ctVec(ciphertextlen);
+    if (ciphertextlen) memcpy(ctVec.mutableSpan().data(), ciphertext, ciphertextlen);
+    Vector<uint8_t> aadVec(aadlen);
+    if (aadlen) memcpy(aadVec.mutableSpan().data(), aad, aadlen);
+
+    Vector<uint8_t> result;
+    if (ctx->isAes256)
+        result = WebKit::driftstackAes256GcmDecrypt(ctx->key, nonceVec, ctVec, aadVec);
+    else
+        result = WebKit::driftstackAes128GcmDecrypt(ctx->key, nonceVec, ctVec, aadVec);
+
+    if (result.isEmpty())
+        return -1;  // AEAD verification failed
+    memcpy(dest, result.span().data(), result.size());
+    return 0;
 }
 
 // hp_mask: header protection per RFC 9001 §5.4. Applied to QUIC packet
