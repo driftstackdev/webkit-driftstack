@@ -1504,7 +1504,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     local.sin_port = htons(boundPort);
     struct sockaddr_in peer { };
     peer.sin_family = AF_INET;
-    peer.sin_addr.s_addr = htonl(0x01010101);  // 1.1.1.1 Cloudflare anycast
+    peer.sin_addr.s_addr = htonl(0xA29F8760);  // 162.159.135.96 cloudflare-quic.com (Wave .256)
     peer.sin_port = htons(443);
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
@@ -1533,7 +1533,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // Each iteration: SSL_do_handshake → write_pkt → §7 wrap → sendto relay,
     // recvfrom (with timeout) → §7 unwrap → read_pkt. Repeat until
     // qc->handshakeCompleted or 5s wall-clock budget exhausted.
-    Socks5Framing::Endpoint peerEp { "1.1.1.1"_s, 443 };
+    Socks5Framing::Endpoint peerEp { "cloudflare-quic.com"_s, 443 };  // Wave .256
     constexpr int kMaxIterations = 20;
     constexpr int kPerRecvTimeoutMs = 250;
     int iters = 0;
@@ -1643,7 +1643,7 @@ bool driftstackHttp3Enabled()
             DriftstackHttp3Request req;
             req.method = "GET"_s;
             req.scheme = "https"_s;
-            req.authority = "1.1.1.1:443"_s;
+            req.authority = "cloudflare-quic.com:443"_s;  // Wave .256: proper SNI
             req.path = "/"_s;
             DriftstackHttp3Response resp = driftstackHttp3Execute(nullptr, req);
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.240] H3 smoke test RESULT: failed=%d errorMessage='%s' status=%d body_bytes=%zu",
