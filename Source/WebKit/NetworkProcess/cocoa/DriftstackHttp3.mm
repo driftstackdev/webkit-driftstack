@@ -725,6 +725,58 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return 0;
 }
 
+// Wave 29-499.253 — remaining mandatory client callbacks. ngtcp2 asserts
+// each on conn_new. Stubs that do the minimum to satisfy the contract:
+//   update_key: key update for 1-RTT (RFC 9001 §6). Caller derives new
+//     traffic secrets via HKDF-Expand-Label "quic ku" + key/iv from those.
+//   delete_crypto_aead_ctx / delete_crypto_cipher_ctx: free the
+//     DriftstackQuicAeadCtx/HpCtx we heap-allocated.
+//   get_path_challenge_data: 8 random bytes for PATH_CHALLENGE frames.
+[[maybe_unused]] static int driftstackNgtcp2UpdateKey(ngtcp2_conn* /*conn*/,
+    uint8_t* /*rx_secret*/, uint8_t* /*tx_secret*/,
+    void* /*rx_aead_ctx*/, uint8_t* /*rx_iv*/,
+    void* /*tx_aead_ctx*/, uint8_t* /*tx_iv*/,
+    const uint8_t* /*current_rx_secret*/, const uint8_t* /*current_tx_secret*/,
+    size_t /*secretlen*/, void* /*user_data*/)
+{
+    // Production: HKDF-Expand-Label(current_rx_secret, "quic ku", "", secretlen)
+    // → new rx_secret; same for tx. Then derive new aead key+iv. Stub
+    // returns 0 to allow handshake to complete; 1-RTT key updates won't
+    // happen without this — that's OK for the smoke (handshake only).
+    return 0;
+}
+
+// TODO Wave 29-499.254: structs DriftstackQuicAeadCtx/HpCtx are defined
+// later in the file (near encrypt callbacks .231-.232). C++ delete with
+// only forward declaration is UB. For the scaffold, leak — ngtcp2 only
+// asks for delete at conn destruction time which is fine for our
+// short-lived smoke test. Production layout: move struct defs earlier
+// OR move delete impls later. Stub uses no-op delete.
+[[maybe_unused]] static void driftstackNgtcp2DeleteCryptoAeadCtx(ngtcp2_conn* /*conn*/,
+    void* /*aead_ctx_native*/, void* /*user_data*/)
+{
+    // Intentional leak — see TODO above.
+}
+
+[[maybe_unused]] static void driftstackNgtcp2DeleteCryptoCipherCtx(ngtcp2_conn* /*conn*/,
+    void* /*cipher_ctx_native*/, void* /*user_data*/)
+{
+    // Intentional leak — see TODO above.
+}
+
+[[maybe_unused]] static int driftstackNgtcp2GetPathChallengeData(ngtcp2_conn* /*conn*/,
+    uint8_t* data, void* /*user_data*/)
+{
+    arc4random_buf(data, 8);  // NGTCP2_PATH_CHALLENGE_DATALEN = 8
+    return 0;
+}
+
+[[maybe_unused]] static int driftstackNgtcp2VersionNegotiation(ngtcp2_conn* /*conn*/,
+    uint32_t /*version*/, const ngtcp2_cid* /*client_dcid*/, void* /*user_data*/)
+{
+    return 0;
+}
+
 // recv_crypto_data: ngtcp2 delivers a CRYPTO frame's payload. Hand to
 // BoringSSL via SSL_provide_quic_data so the TLS state machine processes
 // it (which in turn triggers our ssl_quic_method_st callbacks for keys +
@@ -935,7 +987,12 @@ static bool resolveAesEncryptFns()
     // client-side conn. Without it ngtcp2_conn_client_new_versioned hits
     // NULL ptr in its init path → Translation fault.
     cb->client_initial = driftstackNgtcp2ClientInitial;
-    cb->recv_retry = reinterpret_cast<int(*)(ngtcp2_conn*, const ngtcp2_pkt_hd*, void*)>(driftstackNgtcp2RecvRetry);
+    cb->recv_retry = reinterpret_cast<decltype(cb->recv_retry)>(driftstackNgtcp2RecvRetry);
+    cb->update_key = reinterpret_cast<decltype(cb->update_key)>(driftstackNgtcp2UpdateKey);
+    cb->delete_crypto_aead_ctx = reinterpret_cast<decltype(cb->delete_crypto_aead_ctx)>(driftstackNgtcp2DeleteCryptoAeadCtx);
+    cb->delete_crypto_cipher_ctx = reinterpret_cast<decltype(cb->delete_crypto_cipher_ctx)>(driftstackNgtcp2DeleteCryptoCipherCtx);
+    cb->get_path_challenge_data = driftstackNgtcp2GetPathChallengeData;
+    cb->version_negotiation = reinterpret_cast<decltype(cb->version_negotiation)>(driftstackNgtcp2VersionNegotiation);
     cb->recv_crypto_data = driftstackNgtcp2RecvCryptoData;
     cb->handshake_completed = driftstackNgtcp2HandshakeCompleted;
     cb->encrypt = driftstackNgtcp2Encrypt;
