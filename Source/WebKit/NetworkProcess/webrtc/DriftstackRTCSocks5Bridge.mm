@@ -70,6 +70,15 @@ struct SentinelMapState {
     // destination (a security check that defends against off-path STUN
     // injection attacks).
     HashMap<String, String> realIpToSentinel WTF_GUARDED_BY_LOCK(lock);
+    // Wave 29-499.221 — pending sentinels indexed by destination port for
+    // hostname-fallback flows (e.g., Twilio anycast hostnames not in the
+    // .94 hardcoded map). When endpointFromSocketAddress falls back to
+    // ATYP=0x03 domain form, the response will arrive from gost-resolved
+    // real IP we can't predict. Record (sentinel, dstPort) at sendTo, then
+    // on first recv from any IP with matching srcPort, learn realIp →
+    // sentinel and apply Wave 29-499.102 remap. Without this Twilio TURN
+    // responses are rejected by libwebrtc StunPort source-validation.
+    HashMap<uint16_t, Vector<String>> pendingSentinelsByPort WTF_GUARDED_BY_LOCK(lock);
     unsigned nextOctet WTF_GUARDED_BY_LOCK(lock) { 2 };
 };
 
@@ -150,6 +159,56 @@ String lookupSentinelForRealIp(const String& realIp)
     if (it == state.realIpToSentinel.end())
         return String();
     return it->value;
+}
+
+// Wave 29-499.221 — record a pending sentinel waiting for a response on
+// the given destination port. Called when endpointFromSocketAddress falls
+// back to hostname-form (resolveHostnameToIPv4 returned empty).
+void recordPendingSentinelForPort(const String& sentinel, uint16_t port)
+{
+    if (sentinel.isEmpty() || port == 0)
+        return;
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+    auto& vec = state.pendingSentinelsByPort.add(port, Vector<String> { }).iterator->value;
+    // De-duplicate: skip if sentinel already pending on this port.
+    for (const auto& s : vec) {
+        if (s == sentinel)
+            return;
+    }
+    vec.append(sentinel);
+}
+
+// Wave 29-499.221 — on first inbound packet from an unknown real IP,
+// look up any pending sentinel with matching source port (= our dstPort)
+// and learn the realIp → sentinel mapping. Returns the sentinel (now also
+// stored in realIpToSentinel for future recvs), or empty if no pending
+// match. Intended for the hostname-fallback path where we couldn't
+// predict the real IP at sendTo time.
+String learnRealIpFromPendingPort(const String& realIp, uint16_t srcPort)
+{
+    if (realIp.isEmpty() || srcPort == 0)
+        return String();
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+
+    // Skip if we already know this realIp.
+    if (state.realIpToSentinel.contains(realIp))
+        return state.realIpToSentinel.get(realIp);
+
+    auto portIt = state.pendingSentinelsByPort.find(srcPort);
+    if (portIt == state.pendingSentinelsByPort.end() || portIt->value.isEmpty())
+        return String();
+
+    // Pop the first pending sentinel for this port (FIFO order matches
+    // typical STUN/ICE one-shot binding flow). If multiple sentinels are
+    // pending for the same port, subsequent recvs will bind to subsequent
+    // sentinels — best-effort heuristic; works perfectly for the common
+    // single-server case and acceptably for multi-server ICE candidate
+    // gathering where each server response will bind to a sentinel.
+    String sentinel = portIt->value.takeFirst();
+    state.realIpToSentinel.set(realIp, sentinel);
+    return sentinel;
 }
 
 // Wave 29-397 Slice 2.2: shared relay client + cached channel. Per RFC 1928
@@ -421,8 +480,19 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
                         ipString.utf8().data(), hostname.utf8().data(), resolvedIp.utf8().data());
                 }
             } else {
-                // Fall back to domain form if resolution fails.
+                // Fall back to domain form if resolution fails (e.g.,
+                // Twilio anycast hostnames intentionally removed from the
+                // hardcoded map per .110-revert). The proxy will resolve
+                // server-side; we record (sentinel, port) so first recv
+                // from the proxy-resolved real IP binds back to sentinel.
                 endpoint.host = hostname;
+                recordPendingSentinelForPort(ipString, address.port());
+                static bool loggedFirstFallbackOnce = false;
+                if (!loggedFirstFallbackOnce) {
+                    loggedFirstFallbackOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.221] endpointFromSocketAddress: hostname-fallback path — sentinel %s + hostname='%s' recorded as pending on port=%u; first response from any IP on that port will bind back to sentinel.",
+                        ipString.utf8().data(), hostname.utf8().data(), address.port());
+                }
             }
         } else {
             endpoint.host = ipString;

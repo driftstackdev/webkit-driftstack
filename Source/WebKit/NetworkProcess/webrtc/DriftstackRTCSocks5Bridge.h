@@ -124,6 +124,15 @@ String lookupHostnameForSentinel(const String& ipString);
 void rememberRealIpForSentinel(const String& realIp, const String& sentinel);
 String lookupSentinelForRealIp(const String& realIp);
 
+// Wave 29-499.221 — hostname-fallback path support for Twilio (and other
+// anycast hostnames not in the hardcoded .94 STUN map). recordPendingSentinel-
+// ForPort is called at outbound when ATYP=0x03 hostname-form is used (because
+// resolveHostnameToIPv4 returned empty). learnRealIpFromPendingPort is called
+// at inbound on packets from unknown real IPs; if any pending sentinel matches
+// the source port (= our dstPort) it binds and returns the sentinel.
+void recordPendingSentinelForPort(const String& sentinel, uint16_t port);
+String learnRealIpFromPendingPort(const String& realIp, uint16_t srcPort);
+
 } // namespace DriftstackRTC
 
 } // namespace WebKit

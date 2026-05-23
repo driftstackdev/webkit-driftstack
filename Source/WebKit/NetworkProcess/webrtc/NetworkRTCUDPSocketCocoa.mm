@@ -628,13 +628,32 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
             }
             return;
         }
+        // Wave 29-499.102 + .221 — apply sentinel remap (direct map first,
+        // then hostname-fallback learn-on-first-recv).
+        webrtc::IPAddress remappedIp = webrtcIp;
+        String apparentSourceHost = unwrapped.sourceHost;
+        String sentinel = DriftstackRTC::lookupSentinelForRealIp(unwrapped.sourceHost);
+        if (sentinel.isEmpty())
+            sentinel = DriftstackRTC::learnRealIpFromPendingPort(unwrapped.sourceHost, unwrapped.sourcePort);
+        if (!sentinel.isEmpty()) {
+            apparentSourceHost = sentinel;
+            struct in_addr sentinelAddr { };
+            if (inet_pton(AF_INET, sentinel.utf8().data(), &sentinelAddr) == 1)
+                remappedIp = webrtc::IPAddress { sentinelAddr };
+            static bool loggedFirstNwRemapOnce = false;
+            if (!loggedFirstNwRemapOnce) {
+                loggedFirstNwRemapOnce = true;
+                WTFLogAlways("[Wave29-499.102+221/nw_connection] inbound source REMAP: realIp=%s → sentinel=%s",
+                    unwrapped.sourceHost.utf8().data(), sentinel.utf8().data());
+            }
+        }
         static bool loggedRecvOnce = false;
         if (!loggedRecvOnce) {
             loggedRecvOnce = true;
             WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection recv: FIRST unwrapped datagram from %s:%u (%zu payload bytes). Dispatching SignalReadPacket to libwebrtc.",
-                unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
+                apparentSourceHost.utf8().data(), unwrapped.sourcePort, unwrapped.payload.size());
         }
-        SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket { identifier, unwrapped.payload.span(), RTCNetwork::IPAddress(webrtcIp), unwrapped.sourcePort, webrtc::TimeMicros(), ecn }, 0);
+        SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket { identifier, unwrapped.payload.span(), RTCNetwork::IPAddress(remappedIp), unwrapped.sourcePort, webrtc::TimeMicros(), ecn }, 0);
     });
 
     nw_connection_start(m_relayConnection.get());
@@ -716,6 +735,21 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
                 // against the request's destination, which is the sentinel).
                 String apparentSourceHost = unwrapped.sourceHost;
                 String sentinel = DriftstackRTC::lookupSentinelForRealIp(unwrapped.sourceHost);
+                if (sentinel.isEmpty()) {
+                    // Wave 29-499.221 — hostname-fallback learn: try to bind
+                    // by matching source port to a pending sentinel recorded
+                    // at outbound time (Twilio anycast + other hostnames not
+                    // in the .94 hardcoded map).
+                    sentinel = DriftstackRTC::learnRealIpFromPendingPort(unwrapped.sourceHost, unwrapped.sourcePort);
+                    if (!sentinel.isEmpty()) {
+                        static bool loggedFirstLearnOnce = false;
+                        if (!loggedFirstLearnOnce) {
+                            loggedFirstLearnOnce = true;
+                            WTFLogAlways("[Wave29-499.221] inbound LEARN: realIp=%s:%u → sentinel=%s (bound from pending-by-port at recv; hostname-fallback flow)",
+                                unwrapped.sourceHost.utf8().data(), unwrapped.sourcePort, sentinel.utf8().data());
+                        }
+                    }
+                }
                 if (!sentinel.isEmpty()) {
                     apparentSourceHost = sentinel;
                     static bool loggedFirstRemapOnce = false;
