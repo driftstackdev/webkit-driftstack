@@ -329,12 +329,14 @@ BridgeResult establishRelayChannel(RelayChannel& out)
     out.relayHost = state.channel.relayHost;
     out.relayPort = state.channel.relayPort;
 
-    // Wave 29-499.247 — fire smoke via dispatch_async to avoid mutex
-    // re-entry deadlock. driftstackHttp3Execute calls establishRelayChannel
-    // again internally; if we fire synchronously here we still hold
-    // state.lock when the recursive call tries to acquire it → deadlock.
+    // Wave 29-499.248 — smoke disabled by default; .247 empirical crash
+    // in ngtcp2_conn_client_new_versioned (Translation fault @ garbage PC)
+    // indicates ngtcp2_callbacks ABI issue. Production traffic stays on
+    // PathB v2 h2 fallback (returns failed from driftstackHttp3Execute).
+    // To re-enable for investigation: DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE=1.
     static bool firedOnce = false;
-    if (!firedOnce) {
+    const char* forceSmoke = getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE");
+    if (!firedOnce && forceSmoke && forceSmoke[0] == '1') {
         firedOnce = true;
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             ::driftstackHttp3FireSmoke();
