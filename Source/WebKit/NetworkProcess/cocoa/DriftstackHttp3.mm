@@ -255,6 +255,17 @@ static bool resolveBoringSslQuic()
         f.ready, reinterpret_cast<void*>(f.SSL_set_quic_method),
         reinterpret_cast<void*>(f.SSL_provide_quic_data),
         reinterpret_cast<void*>(f.SSL_process_quic_post_handshake));
+    // Wave 29-499.245b — per-symbol diagnostic for libwebrtc dlsym.
+    WTFLogAlways("[Wave29-499.245b] BoringSslQuicFns: SSL_get_ex_data=%p SSL_set_ex_data=%p SSL_get_ex_new_index=%p SSL_CIPHER_get_protocol_id=%p SSL_CIPHER_get_name=%p SSL_CTX_new=%p SSL_CTX_free=%p min_pv=%p max_pv=%p set_alpn=%p TLS_client_method=%p SSL_new=%p SSL_free=%p set_sni=%p do_handshake=%p set_connect=%p get_error=%p",
+        (void*)f.SSL_get_ex_data, (void*)f.SSL_set_ex_data,
+        (void*)f.SSL_get_ex_new_index, (void*)f.SSL_CIPHER_get_protocol_id,
+        (void*)f.SSL_CIPHER_get_name, (void*)f.SSL_CTX_new,
+        (void*)f.SSL_CTX_free, (void*)f.SSL_CTX_set_min_proto_version,
+        (void*)f.SSL_CTX_set_max_proto_version, (void*)f.SSL_CTX_set_alpn_protos,
+        (void*)f.TLS_client_method, (void*)f.SSL_new,
+        (void*)f.SSL_free, (void*)f.SSL_set_tlsext_host_name,
+        (void*)f.SSL_do_handshake, (void*)f.SSL_set_connect_state,
+        (void*)f.SSL_get_error);
     return f.ready;
 }
 
@@ -1279,15 +1290,19 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     }
     // TLS 1.3 only (RFC 9001 §4.2 requirement for QUIC).
     constexpr int TLS1_3_VERSION = 0x0304;
+    WTFLogAlways("[Wave29-499.246] before SSL_CTX_set_min_proto_version");
     bsf.SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
+    WTFLogAlways("[Wave29-499.246] before SSL_CTX_set_max_proto_version");
     bsf.SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION);
 
     // ALPN "h3" — single 2-byte protocol per RFC 7301 wire format
     // (length-prefixed: 0x02 'h' '3').
     static const uint8_t alpnH3[] = { 0x02, 'h', '3' };
+    WTFLogAlways("[Wave29-499.246] before SSL_CTX_set_alpn_protos");
     bsf.SSL_CTX_set_alpn_protos(ctx, alpnH3, sizeof(alpnH3));
-
+    WTFLogAlways("[Wave29-499.246] before SSL_new");
     void* ssl = bsf.SSL_new(ctx);
+    WTFLogAlways("[Wave29-499.246] SSL_new returned ssl=%p", ssl);
     if (!ssl) {
         bsf.SSL_CTX_free(ctx);
         resp.failed = true;

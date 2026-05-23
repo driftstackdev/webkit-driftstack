@@ -505,6 +505,7 @@ _SSL_do_handshake
 _SSL_set_connect_state
 _SSL_CTX_set_max_proto_version
 _SSL_get_error
+_SSL_CTX_free
 
 # CBB/CBS helpers: CBS_* are static inline in headers (not exported as symbols);
 # skip them. MLKEM_decap takes raw bytes + len, no CBS needed.
