@@ -206,7 +206,8 @@ String learnRealIpFromPendingPort(const String& realIp, uint16_t srcPort)
     // sentinels — best-effort heuristic; works perfectly for the common
     // single-server case and acceptably for multi-server ICE candidate
     // gathering where each server response will bind to a sentinel.
-    String sentinel = portIt->value.takeFirst();
+    String sentinel = portIt->value.first();
+    portIt->value.removeAt(0);
     state.realIpToSentinel.set(realIp, sentinel);
     return sentinel;
 }

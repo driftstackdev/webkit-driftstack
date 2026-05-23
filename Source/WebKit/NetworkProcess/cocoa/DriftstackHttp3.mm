@@ -1421,6 +1421,22 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     return resp;
 }
 
+// Wave 29-499.240 — C-linkage smoke trigger callable from
+// DriftstackQuicInterposeMain.mm at first nw_connection_create (which
+// is when WebKit framework loaded + Driftstack symbols visible). Avoids
+// the -no_inits linker restriction that blocked the static-constructor
+// approach in .240b. Double-gated (DRIFTSTACK_PATHB_V2_H3=1 +
+// DRIFTSTACK_PATHB_V2_H3_SMOKE=1) so production traffic is unaffected.
+extern "C" void driftstackHttp3FireSmoke(void);
+extern "C" void driftstackHttp3FireSmoke()
+{
+    const char* h3 = getenv("DRIFTSTACK_PATHB_V2_H3");
+    const char* sm = getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE");
+    if (!h3 || h3[0] != '1' || !sm || sm[0] != '1')
+        return;
+    WebKit::driftstackHttp3Enabled();
+}
+
 bool driftstackHttp3Enabled()
 {
     const char* env = getenv("DRIFTSTACK_PATHB_V2_H3");
