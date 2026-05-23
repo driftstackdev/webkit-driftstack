@@ -1556,6 +1556,12 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
             ssize_t s = sendto(udpFd, framed.span().data(), framed.size(), 0,
                 reinterpret_cast<struct sockaddr*>(&relaySa), sizeof(relaySa));
             if (s > 0) ++packetsSent;
+            static bool loggedFirstSendOnce = false;
+            if (!loggedFirstSendOnce) {
+                loggedFirstSendOnce = true;
+                WTFLogAlways("[Wave29-499.255] FIRST QUIC sendto: pkt=%zd framed=%zu sent=%zd errno=%d peer=1.1.1.1:443 via relay",
+                    n, framed.size(), s, s < 0 ? errno : 0);
+            }
         }
 
         // Wait for inbound with a short per-iteration timeout.
@@ -1573,6 +1579,12 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
             reinterpret_cast<struct sockaddr*>(&from), &fromLen);
         if (r <= 0) continue;
         ++packetsReceived;
+        static bool loggedFirstRecvOnce = false;
+        if (!loggedFirstRecvOnce) {
+            loggedFirstRecvOnce = true;
+            WTFLogAlways("[Wave29-499.255] FIRST QUIC recvfrom: %zd bytes from %s:%u",
+                r, inet_ntoa(from.sin_addr), ntohs(from.sin_port));
+        }
 
         Socks5Framing::Endpoint src;
         Vector<uint8_t> payload;
