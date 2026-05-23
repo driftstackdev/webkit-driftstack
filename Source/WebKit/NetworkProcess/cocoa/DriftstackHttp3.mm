@@ -245,10 +245,14 @@ static bool resolveNgtcp2()
     auto& f = ngtcp2Fns();
     if (f.ready) return true;
 
-    // Try multiple candidate paths
+    // Try multiple candidate paths. NetworkProcess sandbox + SIP strip
+    // DYLD_LIBRARY_PATH; absolute paths to WebKitBuild/Release work because
+    // that's where WebKit framework loads from at runtime, and dyld
+    // permits dlopen from sibling locations of the loaded framework.
     const char* candidates[] = {
         "libngtcp2.dylib",
-        "/opt/homebrew/lib/libngtcp2.dylib",  // dev install via Homebrew
+        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libngtcp2.dylib",  // dev: rewritten @rpath dylib next to WebKit framework
+        "/opt/homebrew/lib/libngtcp2.dylib",  // dev install via Homebrew (sandbox often blocks)
         "@executable_path/../Frameworks/libngtcp2.dylib",  // future bundled
         nullptr,
     };
@@ -265,7 +269,9 @@ static bool resolveNgtcp2()
         return false;
     }
 
-#define RESOLVE(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(RTLD_DEFAULT, sym))
+// Wave 29-499.244 — use the dlopen handle directly (RTLD_DEFAULT fails in
+// NetworkProcess sandbox even though RTLD_GLOBAL is set on dlopen).
+#define RESOLVE(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(handle, sym))
     RESOLVE(settings_default_versioned, "ngtcp2_settings_default_versioned");
     RESOLVE(transport_params_default_versioned, "ngtcp2_transport_params_default_versioned");
     RESOLVE(conn_client_new_versioned, "ngtcp2_conn_client_new_versioned");
@@ -286,7 +292,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_install_rx_key, "ngtcp2_conn_install_rx_key");
     RESOLVE(conn_install_tx_key, "ngtcp2_conn_install_tx_key");
     RESOLVE(conn_submit_crypto_data, "ngtcp2_conn_submit_crypto_data");
-    RESOLVE(conn_handshake_completed, "ngtcp2_conn_handshake_completed");
+    RESOLVE(conn_handshake_completed, "ngtcp2_conn_get_handshake_completed");
 #undef RESOLVE
 
     bool required = f.settings_default_versioned && f.transport_params_default_versioned
@@ -301,6 +307,18 @@ static bool resolveNgtcp2()
         && f.conn_handshake_completed;
     f.ready = required;
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.147] ngtcp2 dlsym ready=%d", required);
+    // Wave 29-499.244b — detailed per-symbol diagnostic to identify what's missing.
+    WTFLogAlways("[Wave29-499.244b] ngtcp2 sym resolve: settings_default_v=%p tp_default_v=%p conn_client_new_v=%p conn_del=%p open_bidi=%p get_expiry=%p handle_expiry=%p addr_init=%p cid_init=%p ccerr=%p read_pkt_v=%p write_pkt_v=%p writev_stream_v=%p install_initial_key=%p install_rx_hs_key=%p install_tx_hs_key=%p install_rx_key=%p install_tx_key=%p submit_crypto=%p handshake_completed=%p",
+        (void*)f.settings_default_versioned, (void*)f.transport_params_default_versioned,
+        (void*)f.conn_client_new_versioned, (void*)f.conn_del,
+        (void*)f.conn_open_bidi_stream, (void*)f.conn_get_expiry,
+        (void*)f.conn_handle_expiry, (void*)f.addr_init,
+        (void*)f.cid_init, (void*)f.ccerr_default,
+        (void*)f.conn_read_pkt_versioned, (void*)f.conn_write_pkt_versioned,
+        (void*)f.conn_writev_stream_versioned, (void*)f.conn_install_initial_key,
+        (void*)f.conn_install_rx_handshake_key, (void*)f.conn_install_tx_handshake_key,
+        (void*)f.conn_install_rx_key, (void*)f.conn_install_tx_key,
+        (void*)f.conn_submit_crypto_data, (void*)f.conn_handshake_completed);
     return required;
 }
 
