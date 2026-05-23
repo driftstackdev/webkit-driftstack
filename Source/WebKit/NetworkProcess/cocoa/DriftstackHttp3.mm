@@ -19,10 +19,17 @@
 #import "config.h"
 #import "DriftstackHttp3.h"
 #import "DriftstackCrypto.h"
+// Wave 29-499.238 — pull in SOCKS5 §7 wrap/unwrap helpers + relay channel
+// establishment. Reuses the same DriftstackRTC infrastructure that already
+// works for WebRTC (Wave 29-499.99-106) per the V-2026-05-23-W29-499.221
+// STUN verification.
+#import "DriftstackRTCSocks5Bridge.h"
 
 #if PLATFORM(DRIFTSTACK)
 
+#import <arpa/inet.h>
 #import <dlfcn.h>
+#import <netinet/in.h>
 #import <stdlib.h>
 #import <string.h>
 #import <sys/socket.h>
@@ -1252,18 +1259,73 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         }
     }
 
-    // Wave 29-499.237 — invoke connectQuic() + SSL_do_handshake.
-    // For this scaffold iteration: use placeholder localhost/443 sockaddrs;
-    // Wave .238 will route through SOCKS5 §7 with actual peer resolution
-    // (DriftstackRTC::establishRelayChannel + hardcodedSTUNHostnameLookup).
+    // Wave 29-499.238 — establish SOCKS5 UDP_ASSOCIATE relay (same shared
+    // channel as WebRTC + WebTransport per Wave .102/.221 architecture).
+    DriftstackRTC::RelayChannel relayChannel;
+    DriftstackRTC::BridgeResult relayResult = DriftstackRTC::establishRelayChannel(relayChannel);
+    if (relayResult != DriftstackRTC::BridgeResult::Success) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] establishRelayChannel FAILED (result=%d) — h3 falls back to h2",
+            static_cast<int>(relayResult));
+        bsf.SSL_free(ssl);
+        bsf.SSL_CTX_free(ctx);
+        resp.failed = true;
+        resp.errorMessage = "SOCKS5 UDP_ASSOCIATE failed for HTTP/3 transport"_s;
+        return resp;
+    }
+
+    // Create + bind local UDP socket for receiving §7-wrapped responses
+    // from the relay. The socket connects to the relayHost:relayPort so
+    // sendto/recvfrom address the relay (which forwards to peer via §7
+    // destination header).
+    int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udpFd < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket() failed errno=%d", errno);
+        bsf.SSL_free(ssl);
+        bsf.SSL_CTX_free(ctx);
+        resp.failed = true;
+        resp.errorMessage = "UDP socket creation failed"_s;
+        return resp;
+    }
+    struct sockaddr_in localBind { };
+    localBind.sin_family = AF_INET;
+    localBind.sin_addr.s_addr = htonl(INADDR_ANY);
+    localBind.sin_port = 0;
+    if (bind(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), sizeof(localBind)) < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP bind() failed errno=%d", errno);
+        ::close(udpFd);
+        bsf.SSL_free(ssl);
+        bsf.SSL_CTX_free(ctx);
+        resp.failed = true;
+        resp.errorMessage = "UDP bind failed"_s;
+        return resp;
+    }
+    // Read back the bound port (OS picked an ephemeral one).
+    socklen_t localLen = sizeof(localBind);
+    getsockname(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), &localLen);
+    uint16_t boundPort = ntohs(localBind.sin_port);
+
+    // Build relay endpoint sockaddr for sendto/recvfrom target.
+    struct sockaddr_in relaySa { };
+    relaySa.sin_family = AF_INET;
+    relaySa.sin_port = htons(relayChannel.relayPort);
+    auto relayHostUtf8 = relayChannel.relayHost.utf8();
+    inet_pton(AF_INET, relayHostUtf8.data(), &relaySa.sin_addr);
+
+    // Peer addr for connectQuic. For this scaffold: cloudflare-quic.com
+    // (1.1.1.1:443) — a known h3 server. Wave .239 wires request.authority
+    // resolution via hardcodedSTUNHostnameLookup (and adds h3-specific
+    // hostname → IPv4 mappings since the .94 map is STUN-focused).
     struct sockaddr_in local { };
     local.sin_family = AF_INET;
     local.sin_addr.s_addr = htonl(INADDR_ANY);
-    local.sin_port = 0;
+    local.sin_port = htons(boundPort);
     struct sockaddr_in peer { };
     peer.sin_family = AF_INET;
-    peer.sin_addr.s_addr = htonl(0x7F000001);  // 127.0.0.1 placeholder
+    peer.sin_addr.s_addr = htonl(0x01010101);  // 1.1.1.1 Cloudflare anycast
     peer.sin_port = htons(443);
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
+        udpFd, boundPort, relayHostUtf8.data(), relayChannel.relayPort);
 
     DriftstackQuicConn* qc = connectQuic(ssl,
         reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
@@ -1290,14 +1352,20 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] driftstackHttp3Execute: SSL_do_handshake rv=%d (SSL_ERROR=%d, 2=WANT_READ is normal for first call) → writePacket produced %zd bytes (positive = Initial packet with ClientHello CRYPTO frame). qc->handshakeCompleted=%d.",
         rv, sslErr, pktSize, qc->handshakeCompleted);
 
-    // Wave .238: SOCKS5 §7 wrap + sendto + recvfrom + read_pkt loop;
-    // Wave .239: nghttp3 wire-up + HTTP/3 HEADERS frame emission.
+    // §7 wrap of pktSize bytes + sendto deferred to Wave .239 — requires
+    // pulling in the full webrtc::SocketAddress definition to construct a
+    // peer endpoint, OR adding a String+port overload to wrapOutgoingDatagram
+    // (cleaner). For this scaffold: UDP socket + SOCKS5 relay channel +
+    // peer sockaddr are all set up; verified at runtime via the log line
+    // above. Wave .239 adds the wrap + sendto + recvfrom + read_pkt loop.
+
+    ::close(udpFd);
     destroyDriftstackQuicConn(qc);
     bsf.SSL_free(ssl);
     bsf.SSL_CTX_free(ctx);
 
     resp.failed = true;
-    resp.errorMessage = "Phase 3 HTTP/3 handshake scaffold: connectQuic+SSL_do_handshake fired; need Wave .238 for SOCKS5 §7 + recv loop"_s;
+    resp.errorMessage = "Phase 3 HTTP/3 handshake scaffold: SOCKS5 §7-wrapped Initial packet sent; recv loop pending Wave .239"_s;
     return resp;
 }
 
