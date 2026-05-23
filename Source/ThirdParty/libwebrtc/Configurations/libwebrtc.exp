@@ -462,5 +462,21 @@ _MLKEM768_marshal_public_key
 _MLKEM768_public_from_private
 _MLKEM768_private_key_from_seed
 
+# Wave 29-499.222 — QUIC handshake API re-exports for HTTP/3 client.
+# Apple LibreSSL libssl.48 lacks SSL_set_quic_method; libwebrtc's BoringSSL
+# compiles these into ssl_lib.o (verified via nm $WebKit/.../ssl_lib.o:
+# T _SSL_set_quic_method, T _SSL_provide_quic_data) but they were hidden
+# from the dylib's external surface. Re-exporting unlocks PathB v2 QUIC.
+_SSL_set_quic_method
+_SSL_provide_quic_data
+_SSL_CTX_set_quic_method
+_SSL_process_quic_post_handshake
+_SSL_set_quic_use_legacy_codepoint
+_SSL_set_quic_transport_params
+_SSL_get_peer_quic_transport_params
+_SSL_quic_max_handshake_flight_len
+_SSL_quic_read_level
+_SSL_quic_write_level
+
 # CBB/CBS helpers: CBS_* are static inline in headers (not exported as symbols);
 # skip them. MLKEM_decap takes raw bytes + len, no CBS needed.
