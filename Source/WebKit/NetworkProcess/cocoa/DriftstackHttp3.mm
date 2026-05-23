@@ -566,6 +566,126 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return tp;
 }
 
+// Wave 29-499.230 — ngtcp2_callbacks stubs. RFC 9000 §17.4 / ngtcp2 API:
+// these are invoked by ngtcp2 during conn lifecycle. Mandatory for client:
+//   recv_crypto_data, encrypt, decrypt, hp_mask, rand, get_new_connection_id.
+// Optional but useful: handshake_completed, recv_stream_data, update_key,
+// acked_stream_data_offset, stream_open, stream_close.
+//
+// Each callback receives ngtcp2_conn* + a user_data pointer (we register
+// DriftstackQuicConn* there in conn_client_new_versioned). The user_data
+// recovery is symmetric to the SSL_get_ex_data pattern in Wave 29-499.224
+// but for ngtcp2's own user_data slot.
+
+// recv_crypto_data: ngtcp2 delivers a CRYPTO frame's payload. Hand to
+// BoringSSL via SSL_provide_quic_data so the TLS state machine processes
+// it (which in turn triggers our ssl_quic_method_st callbacks for keys +
+// outbound handshake data).
+[[maybe_unused]] static int driftstackNgtcp2RecvCryptoData(ngtcp2_conn* /*conn*/,
+    ngtcp2_encryption_level level, uint64_t /*offset*/,
+    const uint8_t* data, size_t datalen, void* user_data)
+{
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
+    if (!qc || !qc->ssl) return -1;
+    auto& f = boringSslQuicFns();
+    ssl_encryption_level_t sslLevel = static_cast<ssl_encryption_level_t>(level);
+    int rv = f.SSL_provide_quic_data(qc->ssl, sslLevel, data, datalen);
+    if (rv != 1) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] RecvCryptoData: SSL_provide_quic_data FAILED level=%d datalen=%zu rv=%d",
+            static_cast<int>(level), datalen, rv);
+        return -1;
+    }
+    return 0;
+}
+
+// rand: ngtcp2 needs random bytes for CIDs + retry tokens. Use arc4random_buf
+// which is cryptographically secure on macOS (libsystem-provided).
+[[maybe_unused]] static void driftstackNgtcp2Rand(uint8_t* dest, size_t destlen,
+    const ngtcp2_rand_ctx* /*rand_ctx*/)
+{
+    arc4random_buf(dest, destlen);
+}
+
+// get_new_connection_id: generate fresh CID with stateless reset token.
+// Called when ngtcp2 wants to issue a new connection ID.
+[[maybe_unused]] static int driftstackNgtcp2GetNewConnectionId(ngtcp2_conn* /*conn*/,
+    ngtcp2_cid* cid, uint8_t* token, size_t cidlen, void* /*user_data*/)
+{
+    arc4random_buf(cid->data, cidlen);
+    cid->datalen = cidlen;
+    arc4random_buf(token, NGTCP2_STATELESS_RESET_TOKENLEN);
+    return 0;
+}
+
+// handshake_completed: optional, but useful for state tracking.
+[[maybe_unused]] static int driftstackNgtcp2HandshakeCompleted(ngtcp2_conn* /*conn*/, void* user_data)
+{
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
+    if (qc) qc->handshakeCompleted = true;
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] QUIC handshake COMPLETED (BoringSSL TLS 1.3 over ngtcp2 reached 1-RTT keys)");
+    return 0;
+}
+
+// encrypt / decrypt: per-packet AEAD per RFC 9001 §5.3. Each QUIC packet's
+// payload is AEAD-protected with key/iv installed via Wave 29-499.225.
+// ngtcp2 calls these with (key, nonce, plaintext, aad). We use LibreSSL's
+// EVP_AEAD (already wired in DriftstackCrypto.mm for TLS 1.3 record layer).
+//
+// TODO Wave 29-499.231: wire to driftstackAESGCMEncrypt / Decrypt helpers
+// (similar to DriftstackCrypto's existing TLS 1.3 path; reuse the same
+// EVP_AEAD_CTX construction).
+[[maybe_unused]] static int driftstackNgtcp2Encrypt(uint8_t* /*dest*/,
+    const ngtcp2_crypto_aead* /*aead*/,
+    const ngtcp2_crypto_aead_ctx* /*aead_ctx*/,
+    const uint8_t* /*plaintext*/, size_t /*plaintextlen*/,
+    const uint8_t* /*nonce*/, size_t /*noncelen*/,
+    const uint8_t* /*aad*/, size_t /*aadlen*/)
+{
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] Encrypt stub — Wave .231 will wire LibreSSL EVP_AEAD");
+    return -1;
+}
+
+[[maybe_unused]] static int driftstackNgtcp2Decrypt(uint8_t* /*dest*/,
+    const ngtcp2_crypto_aead* /*aead*/,
+    const ngtcp2_crypto_aead_ctx* /*aead_ctx*/,
+    const uint8_t* /*ciphertext*/, size_t /*ciphertextlen*/,
+    const uint8_t* /*nonce*/, size_t /*noncelen*/,
+    const uint8_t* /*aad*/, size_t /*aadlen*/)
+{
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] Decrypt stub — Wave .231 will wire LibreSSL EVP_AEAD");
+    return -1;
+}
+
+// hp_mask: header protection per RFC 9001 §5.4. Applied to QUIC packet
+// header to obscure packet number length + first bits. Algorithm depends
+// on AEAD: AES-128-GCM → AES-128-ECB; AES-256-GCM → AES-256-ECB;
+// CHACHA20-POLY1305 → ChaCha20.
+//
+// TODO Wave 29-499.231: wire to LibreSSL EVP_CIPHER (AES-ECB) helpers.
+[[maybe_unused]] static int driftstackNgtcp2HpMask(uint8_t* /*dest*/,
+    const ngtcp2_crypto_cipher* /*hp*/,
+    const ngtcp2_crypto_cipher_ctx* /*hp_ctx*/,
+    const uint8_t* /*sample*/)
+{
+    return -1;
+}
+
+[[maybe_unused]] static void initDriftstackNgtcp2Callbacks(ngtcp2_callbacks* cb)
+{
+    memset(cb, 0, sizeof(*cb));
+    cb->recv_crypto_data = driftstackNgtcp2RecvCryptoData;
+    cb->handshake_completed = driftstackNgtcp2HandshakeCompleted;
+    cb->encrypt = driftstackNgtcp2Encrypt;
+    cb->decrypt = driftstackNgtcp2Decrypt;
+    cb->hp_mask = driftstackNgtcp2HpMask;
+    cb->rand = driftstackNgtcp2Rand;
+    cb->get_new_connection_id = driftstackNgtcp2GetNewConnectionId;
+    // recv_stream_data, acked_stream_data_offset, stream_open, stream_close,
+    // update_key, recv_version_negotiation, recv_token, send_token,
+    // remove_connection_id, path_validation: optional callbacks added on
+    // demand in subsequent waves (.231+).
+}
+
 // Wave 29-499.229 — iPhone-matched ngtcp2_settings + ngtcp2_transport_params
 // initializers. Uses real ngtcp2_settings_default + ngtcp2_transport_params_default
 // (dlsym'd at runtime) to zero-init structs to library-recommended baseline,
