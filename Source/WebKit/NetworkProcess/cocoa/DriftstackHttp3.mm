@@ -92,12 +92,15 @@ struct Ngtcp2Fns {
     // protection. ngtcp2 handles the QUIC transport (RFC 9000); BoringSSL
     // handles the TLS handshake messages exchanged via crypto frames
     // (RFC 9001). The dlsym-resolved symbols below let us drive both.
-    ssize_t (*conn_read_pkt_versioned)(ngtcp2_conn*, const ngtcp2_path*,
-        const ngtcp2_pkt_info*, const uint8_t*, size_t, ngtcp2_tstamp) = nullptr;
-    ssize_t (*conn_write_pkt_versioned)(ngtcp2_conn*, ngtcp2_path*,
-        ngtcp2_pkt_info*, uint8_t*, size_t, ngtcp2_tstamp) = nullptr;
-    ssize_t (*conn_writev_stream_versioned)(ngtcp2_conn*, ngtcp2_path*,
-        ngtcp2_pkt_info*, uint8_t*, size_t, int64_t*, uint32_t, int64_t,
+    // Wave 29-499.254 — corrected signatures with pkt_info_version arg.
+    // Real signature inserts int pkt_info_version between path and pi.
+    // writev_stream also uses ngtcp2_ssize* (signed) not int64_t* for pdatalen.
+    ngtcp2_ssize (*conn_read_pkt_versioned)(ngtcp2_conn*, const ngtcp2_path*,
+        int, const ngtcp2_pkt_info*, const uint8_t*, size_t, ngtcp2_tstamp) = nullptr;
+    ngtcp2_ssize (*conn_write_pkt_versioned)(ngtcp2_conn*, ngtcp2_path*,
+        int, ngtcp2_pkt_info*, uint8_t*, size_t, ngtcp2_tstamp) = nullptr;
+    ngtcp2_ssize (*conn_writev_stream_versioned)(ngtcp2_conn*, ngtcp2_path*,
+        int, ngtcp2_pkt_info*, uint8_t*, size_t, ngtcp2_ssize*, uint32_t, int64_t,
         const ngtcp2_vec*, size_t, ngtcp2_tstamp) = nullptr;
     // Wave 29-499.234 — install_initial_key signature matches real ngtcp2.h.
     // The handshake / 1-RTT install_*_key keep void* signatures for now;
@@ -1264,8 +1267,8 @@ static bool resolveAesEncryptFns()
     // Use writev_stream with stream_id=-1 + datav=NULL for handshake-only
     // packets (no application data yet). After handshake completes, use
     // stream_id=0 + nghttp3-produced datav for HTTP/3 request emission.
-    ssize_t n = nf.conn_writev_stream_versioned(qc->conn, /*path=*/nullptr,
-        &pi, buf, buflen, /*pdatalen=*/nullptr,
+    ngtcp2_ssize n = nf.conn_writev_stream_versioned(qc->conn, /*path=*/nullptr,
+        NGTCP2_PKT_INFO_VERSION, &pi, buf, buflen, /*pdatalen=*/nullptr,
         /*flags=*/0, /*stream_id=*/-1,
         /*datav=*/nullptr, /*datavcnt=*/0,
         driftstackQuicTimestampNow());
@@ -1288,7 +1291,7 @@ static bool resolveAesEncryptFns()
     nf.addr_init(&path.remote, peerAddr, peerAddrLen);
     ngtcp2_pkt_info pi { };
     return static_cast<int>(nf.conn_read_pkt_versioned(qc->conn, &path,
-        &pi, buf, buflen, driftstackQuicTimestampNow()));
+        NGTCP2_PKT_INFO_VERSION, &pi, buf, buflen, driftstackQuicTimestampNow()));
 }
 
 // Sketch of caller-side event loop (Wave .236 will wire this into
@@ -1520,18 +1523,11 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         return resp;
     }
 
-    // Kick TLS state machine forward. BoringSSL invokes our quic_method
-    // callbacks (set_*_secret, add_handshake_data) which install keys +
-    // submit ClientHello CRYPTO frame to ngtcp2. Then we ask ngtcp2 to
-    // produce the wire packet via writePacket.
-    int rv = bsf.SSL_do_handshake(ssl);
-    int sslErr = bsf.SSL_get_error(ssl, rv);
-
-    uint8_t pktBuf[1500];
-    ssize_t pktSize = driftstackQuicWritePacket(qc, pktBuf, sizeof(pktBuf));
-
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] driftstackHttp3Execute: SSL_do_handshake rv=%d (SSL_ERROR=%d, 2=WANT_READ is normal for first call) → writePacket produced %zd bytes (positive = Initial packet with ClientHello CRYPTO frame). qc->handshakeCompleted=%d.",
-        rv, sslErr, pktSize, qc->handshakeCompleted);
+    // Wave 29-499.254 — removed standalone SSL_do_handshake + writePacket
+    // (was for .237 scaffold verification; consumed the ClientHello before
+    // the event loop could §7-wrap+sendto it, leading to packetsSent=0).
+    // Event loop below does the full SSL_do_handshake + writePacket + §7
+    // wrap + sendto inside iter 1.
 
     // Wave 29-499.239 — handshake event loop.
     // Each iteration: SSL_do_handshake → write_pkt → §7 wrap → sendto relay,
