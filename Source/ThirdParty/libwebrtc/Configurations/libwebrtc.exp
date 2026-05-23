@@ -488,5 +488,14 @@ _SSL_CTX_get_ex_data
 _SSL_CTX_set_ex_data
 _SSL_CTX_get_ex_new_index
 
+# Wave 29-499.225 — SSL_CIPHER introspection so QUIC key derivation
+# callbacks can pick the right AEAD key length / hash. SSL_CIPHER is
+# passed by BoringSSL's set_*_secret callbacks; SSL_CIPHER_get_protocol_id
+# returns the wire ID (0x1301=AES-128-GCM-SHA256, 0x1302=AES-256-GCM-SHA384,
+# 0x1303=CHACHA20-POLY1305-SHA256) which uniquely determines AEAD + hash.
+_SSL_CIPHER_get_id
+_SSL_CIPHER_get_protocol_id
+_SSL_CIPHER_get_name
+
 # CBB/CBS helpers: CBS_* are static inline in headers (not exported as symbols);
 # skip them. MLKEM_decap takes raw bytes + len, no CBS needed.

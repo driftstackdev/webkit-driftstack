@@ -18,11 +18,13 @@
 
 #import "config.h"
 #import "DriftstackHttp3.h"
+#import "DriftstackCrypto.h"
 
 #if PLATFORM(DRIFTSTACK)
 
 #import <dlfcn.h>
 #import <stdlib.h>
+#import <string.h>
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
 
@@ -131,6 +133,12 @@ struct BoringSslQuicFns {
     int (*SSL_set_ex_data)(void* ssl, int idx, void* arg) = nullptr;
     int (*SSL_get_ex_new_index)(long argl, void* argp, void* new_func,
         void* dup_func, void* free_func) = nullptr;
+    // Wave 29-499.225 — SSL_CIPHER introspection for QUIC key length
+    // selection per cipher: 0x1301 AES-128-GCM-SHA256 → key=16, hp=16, hash=SHA256;
+    // 0x1302 AES-256-GCM-SHA384 → key=32, hp=32, hash=SHA384;
+    // 0x1303 CHACHA20-POLY1305-SHA256 → key=32, hp=32, hash=SHA256.
+    uint16_t (*SSL_CIPHER_get_protocol_id)(const void* cipher) = nullptr;
+    const char* (*SSL_CIPHER_get_name)(const void* cipher) = nullptr;
     bool ready = false;
 };
 
@@ -157,6 +165,8 @@ static bool resolveBoringSslQuic()
     RESOLVE_BQ(SSL_get_ex_data, "SSL_get_ex_data");
     RESOLVE_BQ(SSL_set_ex_data, "SSL_set_ex_data");
     RESOLVE_BQ(SSL_get_ex_new_index, "SSL_get_ex_new_index");
+    RESOLVE_BQ(SSL_CIPHER_get_protocol_id, "SSL_CIPHER_get_protocol_id");
+    RESOLVE_BQ(SSL_CIPHER_get_name, "SSL_CIPHER_get_name");
 #undef RESOLVE_BQ
     f.ready = f.SSL_set_quic_method && f.SSL_provide_quic_data
         && f.SSL_process_quic_post_handshake
@@ -268,6 +278,76 @@ struct DriftstackQuicConn {
     return static_cast<DriftstackQuicConn*>(f.SSL_get_ex_data(ssl, quicConnExDataIndex()));
 }
 
+// Wave 29-499.225 — RFC 9001 §5.1 QUIC key derivation. Each TLS level
+// secret (Initial/Handshake/1-RTT) derives three pieces of keying material:
+//   key = HKDF-Expand-Label(secret, "quic key", "", key_len)
+//   iv  = HKDF-Expand-Label(secret, "quic iv",  "", 12)
+//   hp  = HKDF-Expand-Label(secret, "quic hp",  "", key_len)
+//
+// Cipher-aware lengths (per RFC 9001 §5.2 + RFC 8446):
+//   AES-128-GCM-SHA256  (0x1301): key=16, hp=16, hash=SHA-256, secret_len=32
+//   AES-256-GCM-SHA384  (0x1302): key=32, hp=32, hash=SHA-384, secret_len=48
+//   CHACHA20-POLY1305   (0x1303): key=32, hp=32, hash=SHA-256, secret_len=32
+//
+// QUIC Initial uses AES-128-GCM-SHA256 always (RFC 9001 §5.2). Handshake
+// + 1-RTT use the negotiated cipher.
+struct QuicAeadParams {
+    size_t keyLen { 0 };
+    size_t hpLen { 0 };
+    bool useSha384 { false };  // false = SHA-256, true = SHA-384
+    bool valid { false };
+};
+
+static QuicAeadParams aeadParamsForCipher(const void* cipher, size_t secret_len)
+{
+    QuicAeadParams p;
+    auto& f = boringSslQuicFns();
+    if (cipher && f.SSL_CIPHER_get_protocol_id) {
+        uint16_t id = f.SSL_CIPHER_get_protocol_id(cipher);
+        switch (id) {
+        case 0x1301: p.keyLen = 16; p.hpLen = 16; p.useSha384 = false; p.valid = true; break;
+        case 0x1302: p.keyLen = 32; p.hpLen = 32; p.useSha384 = true;  p.valid = true; break;
+        case 0x1303: p.keyLen = 32; p.hpLen = 32; p.useSha384 = false; p.valid = true; break;
+        }
+    }
+    // Fallback: if cipher pointer is null (some BoringSSL paths) infer from
+    // secret_len. secret_len=48 → SHA-384 → AES-256-GCM (key=32); else assume
+    // AES-128-GCM (Initial level always; most common 1-RTT cipher).
+    if (!p.valid) {
+        if (secret_len == 48) {
+            p.keyLen = 32; p.hpLen = 32; p.useSha384 = true; p.valid = true;
+        } else if (secret_len == 32) {
+            p.keyLen = 16; p.hpLen = 16; p.useSha384 = false; p.valid = true;
+        }
+    }
+    return p;
+}
+
+static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
+    const void* cipher,
+    Vector<uint8_t>& outKey, Vector<uint8_t>& outIV, Vector<uint8_t>& outHp)
+{
+    auto params = aeadParamsForCipher(cipher, secret_len);
+    if (!params.valid) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] deriveQuicKeyMaterial: unsupported cipher / secret_len=%zu (must be 32 or 48)", secret_len);
+        return false;
+    }
+    Vector<uint8_t> secretVec(secret_len);
+    memcpy(secretVec.mutableSpan().data(), secret, secret_len);
+    Vector<uint8_t> emptyCtx;
+    if (params.useSha384) {
+        outKey = WebKit::driftstackHkdfExpandLabelSha384(secretVec, "quic key", emptyCtx, params.keyLen);
+        outIV  = WebKit::driftstackHkdfExpandLabelSha384(secretVec, "quic iv",  emptyCtx, 12);
+        outHp  = WebKit::driftstackHkdfExpandLabelSha384(secretVec, "quic hp",  emptyCtx, params.hpLen);
+    } else {
+        outKey = WebKit::driftstackHkdfExpandLabelSha256(secretVec, "quic key", emptyCtx, params.keyLen);
+        outIV  = WebKit::driftstackHkdfExpandLabelSha256(secretVec, "quic iv",  emptyCtx, 12);
+        outHp  = WebKit::driftstackHkdfExpandLabelSha256(secretVec, "quic hp",  emptyCtx, params.hpLen);
+    }
+    bool ok = !outKey.isEmpty() && outIV.size() == 12 && !outHp.isEmpty();
+    return ok;
+}
+
 // Wave 29-499.224 — ssl_quic_method_st callbacks (5 total per BoringSSL ABI).
 // These bridge BoringSSL's TLS state machine to ngtcp2's QUIC packet protection.
 //
@@ -279,35 +359,80 @@ struct DriftstackQuicConn {
 // install them in ngtcp2 so it can encrypt/decrypt packets at that level.
 
 [[maybe_unused]] static int driftstackQuicSetReadSecret(void* ssl, ssl_encryption_level_t level,
-    const void* /*cipher*/, const uint8_t* secret, size_t secret_len)
+    const void* cipher, const uint8_t* secret, size_t secret_len)
 {
     DriftstackQuicConn* qc = quicConnFromSsl(ssl);
-    if (!qc) return 0;
+    if (!qc || !qc->conn) return 0;
     if (level < 4) {
         qc->rxSecret[level].resize(secret_len);
         memcpy(qc->rxSecret[level].mutableSpan().data(), secret, secret_len);
     }
-    // TODO(Wave29-499.225): derive AEAD key+iv+hp via HKDF-Expand-Label
-    // (labels: "quic key", "quic iv", "quic hp"), then call
-    // ngtcp2_conn_install_rx_*_key matching the level.
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicSetReadSecret level=%d secret_len=%zu (key derivation TODO Wave .225)",
-        static_cast<int>(level), secret_len);
-    return 1;
+    Vector<uint8_t> key, iv, hp;
+    if (!deriveQuicKeyMaterial(secret, secret_len, cipher, key, iv, hp)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetReadSecret: key derivation FAILED level=%d", static_cast<int>(level));
+        return 0;
+    }
+    auto& nf = ngtcp2Fns();
+    int rv = -1;
+    switch (level) {
+    case ssl_encryption_handshake:
+        rv = nf.conn_install_rx_handshake_key(qc->conn,
+            key.span().data(), iv.span().data(), hp.span().data(), key.size());
+        break;
+    case ssl_encryption_application:
+        rv = nf.conn_install_rx_key(qc->conn,
+            secret, secret_len,
+            key.span().data(), iv.span().data(), key.size());
+        break;
+    case ssl_encryption_initial:
+    case ssl_encryption_early_data:
+    default:
+        // Initial keys are installed via ngtcp2_conn_install_initial_key
+        // separately (during conn setup, before any TLS messages). 0-RTT
+        // is post-launch scope.
+        rv = 0;
+        break;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetReadSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu install_rv=%d",
+        static_cast<int>(level), secret_len, key.size(), hp.size(), rv);
+    return rv == 0 ? 1 : 0;
 }
 
 [[maybe_unused]] static int driftstackQuicSetWriteSecret(void* ssl, ssl_encryption_level_t level,
-    const void* /*cipher*/, const uint8_t* secret, size_t secret_len)
+    const void* cipher, const uint8_t* secret, size_t secret_len)
 {
     DriftstackQuicConn* qc = quicConnFromSsl(ssl);
-    if (!qc) return 0;
+    if (!qc || !qc->conn) return 0;
     if (level < 4) {
         qc->txSecret[level].resize(secret_len);
         memcpy(qc->txSecret[level].mutableSpan().data(), secret, secret_len);
     }
-    // TODO(Wave29-499.225): analogous tx key install.
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicSetWriteSecret level=%d secret_len=%zu (key derivation TODO Wave .225)",
-        static_cast<int>(level), secret_len);
-    return 1;
+    Vector<uint8_t> key, iv, hp;
+    if (!deriveQuicKeyMaterial(secret, secret_len, cipher, key, iv, hp)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetWriteSecret: key derivation FAILED level=%d", static_cast<int>(level));
+        return 0;
+    }
+    auto& nf = ngtcp2Fns();
+    int rv = -1;
+    switch (level) {
+    case ssl_encryption_handshake:
+        rv = nf.conn_install_tx_handshake_key(qc->conn,
+            key.span().data(), iv.span().data(), hp.span().data(), key.size());
+        break;
+    case ssl_encryption_application:
+        rv = nf.conn_install_tx_key(qc->conn,
+            secret, secret_len,
+            key.span().data(), iv.span().data(), key.size());
+        break;
+    case ssl_encryption_initial:
+    case ssl_encryption_early_data:
+    default:
+        rv = 0;
+        break;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetWriteSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu install_rv=%d",
+        static_cast<int>(level), secret_len, key.size(), hp.size(), rv);
+    return rv == 0 ? 1 : 0;
 }
 
 [[maybe_unused]] static int driftstackQuicAddHandshakeData(void* ssl, ssl_encryption_level_t level,
