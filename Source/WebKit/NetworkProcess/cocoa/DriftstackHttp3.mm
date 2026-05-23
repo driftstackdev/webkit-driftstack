@@ -970,14 +970,13 @@ static bool resolveAesEncryptFns()
     params->max_ack_delay = 25 * NGTCP2_MILLISECONDS;
     params->disable_active_migration = 1;  // presence flag
     params->active_connection_id_limit = 4;
-    // initial_source_connection_id is part of ngtcp2_transport_params as a
-    // ngtcp2_cid sub-struct with datalen + data[].
-    if (!initialScid.empty()) {
-        size_t copyLen = std::min(initialScid.size(), static_cast<size_t>(NGTCP2_MAX_CIDLEN));
-        params->initial_scid.datalen = copyLen;
-        memcpy(params->initial_scid.data, initialScid.data(), copyLen);
-        params->initial_scid_present = 1;
-    }
+    // Wave 29-499.251 — initial_source_connection_id is SERVER-only per
+    // ngtcp2 assertion (ngtcp2_conn.c:1215 "!params->initial_scid_present").
+    // Client must NOT set it; the server learns the client's scid from the
+    // Initial packet header field. Leaving these fields zeroed satisfies the
+    // assertion + matches RFC 9000 §18.2 (initial_source_connection_id is
+    // a server-set transport_param).
+    (void)initialScid;  // mark used (parameter kept for API stability)
 }
 
 [[maybe_unused]] static const ssl_quic_method_st& driftstackQuicMethod()
