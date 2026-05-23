@@ -412,7 +412,12 @@ void UDPPort::OnReadPacket(AsyncPacketSocket* socket,
   {
     static std::atomic<unsigned> s_count { 0 };
     unsigned n = s_count.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n <= 5) {
+    // Wave 29-499.221b — relaxed gate: log first 50 + every 25th thereafter,
+    // and ALWAYS log packets >100 bytes (TURN ALLOCATE responses run ~96-200
+    // bytes; binding responses are 68-100). Enables protocol-state visibility
+    // for the TURN flow after .221 unblocked STUN binding.
+    bool largeOrInteresting = packet.payload().size() > 100;
+    if (n <= 50 || (n % 25 == 0) || largeOrInteresting) {
       bool inServerSet = server_addresses_.find(packet.source_address())
           != server_addresses_.end();
       std::string serverList;
@@ -420,9 +425,28 @@ void UDPPort::OnReadPacket(AsyncPacketSocket* socket,
         if (!serverList.empty()) serverList += ",";
         serverList += sa.ToString();
       }
-      fprintf(stderr, "[Wave29-499.104] UDPPort::OnReadPacket #%u src=%s payloadSize=%zu inServerSet=%s server_addresses=[%s]\n",
+      // Peek STUN type for protocol-state visibility (first 2 bytes).
+      uint16_t stunType = 0;
+      if (packet.payload().size() >= 2) {
+        const uint8_t* p = packet.payload().data();
+        stunType = (static_cast<uint16_t>(p[0]) << 8) | p[1];
+      }
+      const char* typeLabel = "??";
+      switch (stunType) {
+        case 0x0101: typeLabel = "BINDING_RESP"; break;
+        case 0x0111: typeLabel = "BINDING_ERR"; break;
+        case 0x0103: typeLabel = "ALLOCATE_RESP"; break;
+        case 0x0113: typeLabel = "ALLOCATE_ERR(401-challenge?)"; break;
+        case 0x0107: typeLabel = "CREATE_PERM_RESP"; break;
+        case 0x0117: typeLabel = "CREATE_PERM_ERR"; break;
+        case 0x0109: typeLabel = "CHANNEL_BIND_RESP"; break;
+        case 0x0119: typeLabel = "CHANNEL_BIND_ERR"; break;
+        case 0x0017: typeLabel = "DATA_INDICATION"; break;
+        case 0x0006: typeLabel = "SEND_INDICATION"; break;
+      }
+      fprintf(stderr, "[Wave29-499.104+221b] UDPPort::OnReadPacket #%u src=%s payloadSize=%zu stunType=0x%04x(%s) inServerSet=%s server_addresses=[%s]\n",
           n, packet.source_address().ToString().c_str(),
-          packet.payload().size(),
+          packet.payload().size(), stunType, typeLabel,
           inServerSet ? "YES" : "NO",
           serverList.c_str());
       fflush(stderr);
