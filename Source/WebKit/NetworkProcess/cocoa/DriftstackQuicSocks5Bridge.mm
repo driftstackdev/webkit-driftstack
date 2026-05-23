@@ -519,11 +519,32 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
         return nullptr;
     }
 
-    // Build nw_parameters for the relay-bound connection (UDP only, no QUIC
-    // layer — we want raw UDP to the relay endpoint; the original QUIC
-    // params describe what CFNetwork wants to do, but the wire layer to the
-    // proxy is plain UDP).
-    auto relayParams = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
+    // Wave 29-499.227 — preserve CFNetwork's QUIC protocol layer.
+    //
+    // PRIOR BUG (Slice 16.4.b.6 / Wave 29-499.143 era): the relay-bound
+    // connection used a FRESH `nw_parameters_create_secure_udp(DISABLE_PROTOCOL)`
+    // which STRIPPED CFNetwork's QUIC protocol from the stack. CFNetwork's
+    // QUIC engine then had no protocol layer to operate against (Apple's
+    // CFNetwork uses `nw_protocol_quic` provided by Network.framework — it
+    // expects the QUIC layer present on the nw_connection's stack). Without
+    // it, CFNetwork's QUIC initiator fails silently and HTTP/3 falls back
+    // to h2 — explaining the absent QUIC traffic on http3check.net etc.
+    //
+    // FIX: copy the ORIGINAL parameters (preserving the QUIC layer that
+    // CFNetwork configured), then PREPEND our §7 framer at the application
+    // protocol layer so it sits BETWEEN QUIC and UDP. Stack becomes:
+    //   QUIC packets [CFNetwork QUIC layer]
+    //      ↓ ↑
+    //   §7-framed payload [our DriftstackSocks5Framer]
+    //      ↓ ↑
+    //   UDP datagrams to relay endpoint [transport]
+    //
+    // CFNetwork's QUIC sees a normal UDP transport; doesn't know packets
+    // are §7-wrapped on the wire. Relay sees clean §7 framing, unwraps,
+    // forwards to actual peer. Peer sees raw QUIC, replies. Server
+    // §7-wraps response. Wire → unwrap → CFNetwork QUIC layer reads it.
+    auto relayParams = parameters ? adoptNS(nw_parameters_copy(parameters))
+                                  : adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
 
     // Wave 29-397 Slice 16.4.b.6.b Phase B: attach §7 framer to the relay
     // connection's protocol stack. The framer's output handler §7-wraps
