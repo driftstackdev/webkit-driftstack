@@ -28,6 +28,16 @@
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
 
+// Wave 29-499.228 — ngtcp2 header inclusion. Provides real struct layouts
+// for ngtcp2_settings, ngtcp2_transport_params, ngtcp2_cid, ngtcp2_callbacks,
+// etc. The functions are still dlsym-resolved at runtime (Wave 29-499.147)
+// to avoid hard link dependency on libngtcp2.dylib at WebKit load time —
+// HTTP/3 path is opt-in via DRIFTSTACK_PATHB_V2_H3=1.
+// Header guards prevent re-declaration conflicts with the existing forward
+// declarations in Ngtcp2Fns below.
+#define DRIFTSTACK_HAS_NGTCP2_HEADERS 1
+#include <ngtcp2/ngtcp2.h>
+
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
 namespace WebKit {
@@ -39,17 +49,8 @@ namespace {
 // /opt/homebrew/lib/libngtcp2.dylib (development) or bundled location
 // (production — Phase 3.x packaging work).
 
-typedef struct ngtcp2_conn ngtcp2_conn;
-typedef struct ngtcp2_settings ngtcp2_settings;
-typedef struct ngtcp2_transport_params ngtcp2_transport_params;
-typedef struct ngtcp2_callbacks ngtcp2_callbacks;
-typedef struct ngtcp2_cid ngtcp2_cid;
-typedef struct ngtcp2_path ngtcp2_path;
-typedef struct ngtcp2_pkt_info ngtcp2_pkt_info;
-typedef struct ngtcp2_vec ngtcp2_vec;
-typedef struct ngtcp2_addr ngtcp2_addr;
-typedef struct ngtcp2_ccerr ngtcp2_ccerr;
-typedef int64_t ngtcp2_tstamp;
+// Wave 29-499.228 — types now come from <ngtcp2/ngtcp2.h>. Forward decls
+// removed (replaced by real struct definitions from the header).
 
 struct Ngtcp2Fns {
     void (*settings_default)(ngtcp2_settings*) = nullptr;
