@@ -1424,7 +1424,30 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
 bool driftstackHttp3Enabled()
 {
     const char* env = getenv("DRIFTSTACK_PATHB_V2_H3");
-    return env && env[0] == '1';
+    bool enabled = env && env[0] == '1';
+
+    // Wave 29-499.240 — one-shot smoke test of the QUIC stack scaffolded
+    // across .222-.239 when DRIFTSTACK_PATHB_V2_H3_SMOKE=1. Drives
+    // driftstackHttp3Execute against 1.1.1.1:443 (Cloudflare h3) through
+    // the SOCKS5 §7 relay, logs every step. Fires once per process.
+    if (enabled) {
+        static bool didSmoke = false;
+        const char* smokeEnv = getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE");
+        if (!didSmoke && smokeEnv && smokeEnv[0] == '1') {
+            didSmoke = true;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.240] H3 smoke test: invoking driftstackHttp3Execute against 1.1.1.1:443");
+            DriftstackHttp3Request req;
+            req.method = "GET"_s;
+            req.scheme = "https"_s;
+            req.authority = "1.1.1.1:443"_s;
+            req.path = "/"_s;
+            DriftstackHttp3Response resp = driftstackHttp3Execute(nullptr, req);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.240] H3 smoke test RESULT: failed=%d errorMessage='%s' status=%d body_bytes=%zu",
+                resp.failed, resp.errorMessage.utf8().data(),
+                resp.statusCode, resp.body.size());
+        }
+    }
+    return enabled;
 }
 
 } // namespace WebKit
