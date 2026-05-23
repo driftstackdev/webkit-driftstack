@@ -61,8 +61,12 @@ namespace {
 // removed (replaced by real struct definitions from the header).
 
 struct Ngtcp2Fns {
-    void (*settings_default)(ngtcp2_settings*) = nullptr;
-    void (*transport_params_default)(ngtcp2_transport_params*) = nullptr;
+    // Wave 29-499.243 — versioned symbol signatures matching ngtcp2 1.22 ABI.
+    // Headers wrap these in macros that prepend a version int; we resolve
+    // the raw _versioned symbol via dlsym and pass NGTCP2_SETTINGS_VERSION /
+    // NGTCP2_TRANSPORT_PARAMS_VERSION explicitly.
+    void (*settings_default_versioned)(int version, ngtcp2_settings*) = nullptr;
+    void (*transport_params_default_versioned)(int version, ngtcp2_transport_params*) = nullptr;
     int (*conn_client_new_versioned)(ngtcp2_conn**, const ngtcp2_cid*, const ngtcp2_cid*,
         const ngtcp2_path*, uint32_t, int, const ngtcp2_callbacks*,
         const ngtcp2_settings*, const ngtcp2_transport_params*, void*, void*) = nullptr;
@@ -262,8 +266,8 @@ static bool resolveNgtcp2()
     }
 
 #define RESOLVE(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(RTLD_DEFAULT, sym))
-    RESOLVE(settings_default, "ngtcp2_settings_default");
-    RESOLVE(transport_params_default, "ngtcp2_transport_params_default");
+    RESOLVE(settings_default_versioned, "ngtcp2_settings_default_versioned");
+    RESOLVE(transport_params_default_versioned, "ngtcp2_transport_params_default_versioned");
     RESOLVE(conn_client_new_versioned, "ngtcp2_conn_client_new_versioned");
     RESOLVE(conn_del, "ngtcp2_conn_del");
     RESOLVE(conn_open_bidi_stream, "ngtcp2_conn_open_bidi_stream");
@@ -285,7 +289,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_handshake_completed, "ngtcp2_conn_handshake_completed");
 #undef RESOLVE
 
-    bool required = f.settings_default && f.transport_params_default
+    bool required = f.settings_default_versioned && f.transport_params_default_versioned
         && f.conn_client_new_versioned && f.conn_del && f.conn_open_bidi_stream
         && f.conn_get_expiry && f.conn_handle_expiry
         && f.addr_init && f.cid_init && f.ccerr_default
@@ -859,7 +863,7 @@ static bool resolveAesEncryptFns()
 [[maybe_unused]] static void initIphoneNgtcp2Settings(ngtcp2_settings* settings, ngtcp2_tstamp initialTs)
 {
     auto& f = ngtcp2Fns();
-    f.settings_default(settings);
+    f.settings_default_versioned(NGTCP2_SETTINGS_VERSION, settings);
     settings->initial_ts = initialTs;
     // Defaults are otherwise reasonable; iPhone-specific overrides go here
     // (e.g., congestion control algorithm) after pcap capture per Wave .227.
@@ -869,7 +873,7 @@ static bool resolveAesEncryptFns()
     std::span<const uint8_t> initialScid)
 {
     auto& f = ngtcp2Fns();
-    f.transport_params_default(params);
+    f.transport_params_default_versioned(NGTCP2_TRANSPORT_PARAMS_VERSION, params);
     // Override to match values targeted in Wave 29-499.226's wire-format builder.
     params->max_idle_timeout = 30ULL * NGTCP2_SECONDS;
     params->max_udp_payload_size = 1452;
