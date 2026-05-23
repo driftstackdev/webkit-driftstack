@@ -518,6 +518,9 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_V770_MASK_TINT", getenv("DRIFTSTACK_V770_MASK_TINT") },
             { "DRIFTSTACK_V790L_MULTI_SUB", getenv("DRIFTSTACK_V790L_MULTI_SUB") },
             { "DRIFTSTACK_V790L_N1_SUB", getenv("DRIFTSTACK_V790L_N1_SUB") },
+            // Wave 29-499.242 — PathB v2 HTTP/3 + smoke test gates.
+            { "DRIFTSTACK_PATHB_V2_H3", getenv("DRIFTSTACK_PATHB_V2_H3") },
+            { "DRIFTSTACK_PATHB_V2_H3_SMOKE", getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
