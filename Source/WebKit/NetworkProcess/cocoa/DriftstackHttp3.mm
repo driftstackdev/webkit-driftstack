@@ -695,6 +695,23 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
 // recovery is symmetric to the SSL_get_ex_data pattern in Wave 29-499.224
 // but for ngtcp2's own user_data slot.
 
+// client_initial: invoked when ngtcp2_conn_client_new_versioned finishes
+// initial setup. Client must call ngtcp2_conn_submit_crypto_data with
+// the first CRYPTO frame (ClientHello) — but we drive TLS via
+// SSL_do_handshake from driftstackHttp3Execute which fires our
+// add_handshake_data quic_method callback → ngtcp2_conn_submit_crypto_data.
+// So this callback returns 0 immediately; the actual ClientHello flows
+// through the BoringSSL → ssl_quic_method bridge.
+[[maybe_unused]] static int driftstackNgtcp2ClientInitial(ngtcp2_conn* /*conn*/, void* /*user_data*/)
+{
+    static bool loggedOnce = false;
+    if (!loggedOnce) {
+        loggedOnce = true;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.249] client_initial callback fired — BoringSSL TLS path drives ClientHello via add_handshake_data");
+    }
+    return 0;
+}
+
 // recv_crypto_data: ngtcp2 delivers a CRYPTO frame's payload. Hand to
 // BoringSSL via SSL_provide_quic_data so the TLS state machine processes
 // it (which in turn triggers our ssl_quic_method_st callbacks for keys +
@@ -901,6 +918,10 @@ static bool resolveAesEncryptFns()
 [[maybe_unused]] static void initDriftstackNgtcp2Callbacks(ngtcp2_callbacks* cb)
 {
     memset(cb, 0, sizeof(*cb));
+    // Wave 29-499.249 — client_initial is MANDATORY per ngtcp2 docs for
+    // client-side conn. Without it ngtcp2_conn_client_new_versioned hits
+    // NULL ptr in its init path → Translation fault.
+    cb->client_initial = driftstackNgtcp2ClientInitial;
     cb->recv_crypto_data = driftstackNgtcp2RecvCryptoData;
     cb->handshake_completed = driftstackNgtcp2HandshakeCompleted;
     cb->encrypt = driftstackNgtcp2Encrypt;
