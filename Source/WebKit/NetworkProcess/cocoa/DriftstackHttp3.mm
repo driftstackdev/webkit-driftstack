@@ -196,7 +196,31 @@ static bool resolveBoringSslQuic()
 {
     auto& f = boringSslQuicFns();
     if (f.ready) return true;
-#define RESOLVE_BQ(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(RTLD_DEFAULT, sym))
+    // Wave 29-499.245 — dlopen libwebrtc explicitly + use that specific
+    // handle for all SSL_* dlsym. Without this RTLD_DEFAULT may return
+    // Apple LibreSSL's SSL_CTX_new (different ABI from BoringSSL's
+    // TLS_client_method) causing silent crash inside SSL_CTX_new.
+    static void* libwebrtcHandle = nullptr;
+    if (!libwebrtcHandle) {
+        const char* libwebrtcCandidates[] = {
+            "libwebrtc.dylib",
+            "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
+            "@executable_path/../Frameworks/libwebrtc.dylib",
+            nullptr,
+        };
+        for (int i = 0; libwebrtcCandidates[i]; ++i) {
+            libwebrtcHandle = dlopen(libwebrtcCandidates[i], RTLD_NOW | RTLD_GLOBAL);
+            if (libwebrtcHandle) {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.245] dlopen libwebrtc OK at '%s' handle=%p", libwebrtcCandidates[i], libwebrtcHandle);
+                break;
+            }
+        }
+        if (!libwebrtcHandle) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.245] dlopen libwebrtc FAILED — BoringSSL QUIC unavailable");
+            return false;
+        }
+    }
+#define RESOLVE_BQ(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(libwebrtcHandle, sym))
     RESOLVE_BQ(SSL_set_quic_method, "SSL_set_quic_method");
     RESOLVE_BQ(SSL_provide_quic_data, "SSL_provide_quic_data");
     RESOLVE_BQ(SSL_process_quic_post_handshake, "SSL_process_quic_post_handshake");
@@ -1243,7 +1267,11 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // this iteration verifies the SSL bring-up + first conn_write_pkt
     // returns a valid Initial packet.
     auto& bsf = boringSslQuicFns();
-    void* ctx = bsf.SSL_CTX_new(bsf.TLS_client_method());
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.244c] Calling TLS_client_method()...");
+    const void* method = bsf.TLS_client_method();
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.244c] TLS_client_method()=%p — calling SSL_CTX_new...", method);
+    void* ctx = bsf.SSL_CTX_new(method);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.244c] SSL_CTX_new returned ctx=%p", ctx);
     if (!ctx) {
         resp.failed = true;
         resp.errorMessage = "SSL_CTX_new returned nullptr"_s;
