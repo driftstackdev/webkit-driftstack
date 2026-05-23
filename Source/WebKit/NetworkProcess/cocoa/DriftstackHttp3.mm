@@ -67,9 +67,18 @@ struct Ngtcp2Fns {
     // NGTCP2_TRANSPORT_PARAMS_VERSION explicitly.
     void (*settings_default_versioned)(int version, ngtcp2_settings*) = nullptr;
     void (*transport_params_default_versioned)(int version, ngtcp2_transport_params*) = nullptr;
+    // Wave 29-499.247e — corrected signature per ngtcp2.h:
+    // (pconn, dcid, scid, path, client_chosen_version,
+    //  callbacks_version, callbacks,
+    //  settings_version, settings,
+    //  transport_params_version, params,
+    //  mem, user_data) — 13 args
     int (*conn_client_new_versioned)(ngtcp2_conn**, const ngtcp2_cid*, const ngtcp2_cid*,
-        const ngtcp2_path*, uint32_t, int, const ngtcp2_callbacks*,
-        const ngtcp2_settings*, const ngtcp2_transport_params*, void*, void*) = nullptr;
+        const ngtcp2_path*, uint32_t,
+        int, const ngtcp2_callbacks*,
+        int, const ngtcp2_settings*,
+        int, const ngtcp2_transport_params*,
+        const void*, void*) = nullptr;
     void (*conn_del)(ngtcp2_conn*) = nullptr;
     int (*conn_open_bidi_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;
     ngtcp2_tstamp (*conn_get_expiry)(ngtcp2_conn*) = nullptr;
@@ -996,20 +1005,29 @@ static bool resolveAesEncryptFns()
 
     auto* qc = new DriftstackQuicConn { };
     qc->ssl = ssl;
+    WTFLogAlways("[Wave29-499.247c] connectQuic entered; before cid_init");
 
     // 1. Allocate dcid (8-20 random bytes per RFC 9000 §17.2) + scid (8 random
     //    bytes is customary client choice; Apple Safari uses 8).
+    // Wave 29-499.247d — generate random bytes FIRST then pass to cid_init
+    // (passing nullptr+datalen=8 caused cid_init to memcpy from NULL → crash).
+    uint8_t dcidBytes[8], scidBytes[8];
+    arc4random_buf(dcidBytes, 8);
+    arc4random_buf(scidBytes, 8);
     ngtcp2_cid dcid { }, scid { };
-    nf.cid_init(&dcid, nullptr, 8); arc4random_buf(dcid.data, 8); dcid.datalen = 8;
-    nf.cid_init(&scid, nullptr, 8); arc4random_buf(scid.data, 8); scid.datalen = 8;
+    nf.cid_init(&dcid, dcidBytes, 8);
+    nf.cid_init(&scid, scidBytes, 8);
+    WTFLogAlways("[Wave29-499.247c] cid_init done (dcid.datalen=%zu scid.datalen=%zu)", dcid.datalen, scid.datalen);
 
     // 2. Initialize settings + transport_params via .229 helpers.
     ngtcp2_settings settings { };
     initIphoneNgtcp2Settings(&settings, /*initialTs=*/0);
+    WTFLogAlways("[Wave29-499.247c] settings init done");
 
     ngtcp2_transport_params tp { };
     std::span<const uint8_t> scidSpan = unsafeMakeSpan(scid.data, scid.datalen);
     initIphoneNgtcp2TransportParams(&tp, scidSpan);
+    WTFLogAlways("[Wave29-499.247c] transport_params init done");
 
     // 3. Populate callbacks via .230-.232.
     ngtcp2_callbacks cb { };
@@ -1022,9 +1040,14 @@ static bool resolveAesEncryptFns()
 
     // 5. Allocate the conn. QUIC v1 (RFC 9000) version constant is provided
     // by ngtcp2.h (NGTCP2_PROTO_VER_V1 = 0x00000001U).
+    WTFLogAlways("[Wave29-499.247c] before conn_client_new_versioned");
     int rv = nf.conn_client_new_versioned(&qc->conn, &dcid, &scid, &path,
-        NGTCP2_PROTO_VER_V1, /*client_chosen_version_flags=*/0,
-        &cb, &settings, &tp, nullptr, /*user_data=*/qc);
+        NGTCP2_PROTO_VER_V1,
+        NGTCP2_CALLBACKS_VERSION, &cb,
+        NGTCP2_SETTINGS_VERSION, &settings,
+        NGTCP2_TRANSPORT_PARAMS_VERSION, &tp,
+        nullptr, /*user_data=*/qc);
+    WTFLogAlways("[Wave29-499.247c] conn_client_new_versioned returned rv=%d conn=%p", rv, qc->conn);
     if (rv != 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] conn_client_new_versioned FAILED rv=%d", rv);
         destroyDriftstackQuicConn(qc);
@@ -1393,6 +1416,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
         udpFd, boundPort, relayHostUtf8.data(), relayChannel.relayPort);
 
+    WTFLogAlways("[Wave29-499.247] before connectQuic call");
     DriftstackQuicConn* qc = connectQuic(ssl,
         reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
         reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer));

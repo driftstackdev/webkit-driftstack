@@ -329,14 +329,16 @@ BridgeResult establishRelayChannel(RelayChannel& out)
     out.relayHost = state.channel.relayHost;
     out.relayPort = state.channel.relayPort;
 
-    // Wave 29-499.241 — H3 smoke test hook (same-binary direct call).
-    // Both DriftstackRTCSocks5Bridge.mm + DriftstackHttp3.mm live in WebKit
-    // framework, so the C-linkage symbol resolves at link-time without
-    // dlsym. Forward decl at file scope (kDriftstackHttp3FireSmoke below).
+    // Wave 29-499.247 — fire smoke via dispatch_async to avoid mutex
+    // re-entry deadlock. driftstackHttp3Execute calls establishRelayChannel
+    // again internally; if we fire synchronously here we still hold
+    // state.lock when the recursive call tries to acquire it → deadlock.
     static bool firedOnce = false;
     if (!firedOnce) {
         firedOnce = true;
-        ::driftstackHttp3FireSmoke();
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            ::driftstackHttp3FireSmoke();
+        });
     }
 
     return BridgeResult::Success;
