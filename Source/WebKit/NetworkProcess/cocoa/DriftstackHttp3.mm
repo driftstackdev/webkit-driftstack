@@ -708,18 +708,76 @@ struct DriftstackQuicAeadCtx {
     return 0;
 }
 
-// hp_mask: header protection per RFC 9001 §5.4. Applied to QUIC packet
-// header to obscure packet number length + first bits. Algorithm depends
-// on AEAD: AES-128-GCM → AES-128-ECB; AES-256-GCM → AES-256-ECB;
-// CHACHA20-POLY1305 → ChaCha20.
+// Wave 29-499.232 — header protection per RFC 9001 §5.4. Single-block
+// AES-ECB encrypt of the 16-byte sample with the hp_key produces a 16-byte
+// mask used to XOR header bytes for packet-number-length + reserved bits
+// obfuscation.
 //
-// TODO Wave 29-499.231: wire to LibreSSL EVP_CIPHER (AES-ECB) helpers.
-[[maybe_unused]] static int driftstackNgtcp2HpMask(uint8_t* /*dest*/,
-    const ngtcp2_crypto_cipher* /*hp*/,
-    const ngtcp2_crypto_cipher_ctx* /*hp_ctx*/,
-    const uint8_t* /*sample*/)
+// DriftstackQuicHpCtx wraps the hp_key bytes (we stash this struct in
+// ngtcp2_crypto_cipher_ctx::native_handle at install time).
+struct DriftstackQuicHpCtx {
+    Vector<uint8_t> key;
+    bool isAes256 { false };
+    bool isChacha20 { false };
+};
+
+// AES-128-ECB single-block via LibreSSL AES_encrypt + AES_set_encrypt_key.
+// These are stable symbols across LibreSSL / OpenSSL / BoringSSL ABIs.
+// AES_KEY layout = struct { uint32_t rd_key[60]; int rounds; } = 244 bytes
+// — we allocate a 256-byte buffer to be safe.
+struct DriftstackAesEncryptFns {
+    int (*set_encrypt_key)(const uint8_t* userKey, const int bits, void* key) = nullptr;
+    void (*encrypt)(const uint8_t* in, uint8_t* out, const void* key) = nullptr;
+    bool ready = false;
+};
+
+static DriftstackAesEncryptFns& aesEncryptFns()
 {
-    return -1;
+    static DriftstackAesEncryptFns s;
+    return s;
+}
+
+static bool resolveAesEncryptFns()
+{
+    auto& f = aesEncryptFns();
+    if (f.ready) return true;
+    f.set_encrypt_key = reinterpret_cast<decltype(f.set_encrypt_key)>(dlsym(RTLD_DEFAULT, "AES_set_encrypt_key"));
+    f.encrypt = reinterpret_cast<decltype(f.encrypt)>(dlsym(RTLD_DEFAULT, "AES_encrypt"));
+    f.ready = f.set_encrypt_key && f.encrypt;
+    if (!f.ready) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.232] resolveAesEncryptFns: AES_set_encrypt_key=%p AES_encrypt=%p — header protection will fail",
+            reinterpret_cast<void*>(f.set_encrypt_key), reinterpret_cast<void*>(f.encrypt));
+    }
+    return f.ready;
+}
+
+[[maybe_unused]] static int driftstackNgtcp2HpMask(uint8_t* dest,
+    const ngtcp2_crypto_cipher* /*hp*/,
+    const ngtcp2_crypto_cipher_ctx* hp_ctx,
+    const uint8_t* sample)
+{
+    if (!hp_ctx || !hp_ctx->native_handle)
+        return -1;
+    if (!resolveAesEncryptFns())
+        return -1;
+
+    auto* ctx = static_cast<DriftstackQuicHpCtx*>(hp_ctx->native_handle);
+    auto& f = aesEncryptFns();
+
+    if (ctx->isChacha20) {
+        // RFC 9001 §5.4.4: ChaCha20 header protection.
+        // mask = ChaCha20(hp_key, counter=sample[0..4], nonce=sample[4..16], zero[5])
+        // TODO Wave .233: wire ChaCha20 helper. AES-GCM path covers 99% of
+        // QUIC handshakes; ChaCha20 is fallback for older mobile clients.
+        return -1;
+    }
+
+    uint8_t aesKeyBuf[256] = { };
+    int bits = ctx->isAes256 ? 256 : 128;
+    if (f.set_encrypt_key(ctx->key.span().data(), bits, aesKeyBuf) != 0)
+        return -1;
+    f.encrypt(sample, dest, aesKeyBuf);
+    return 0;
 }
 
 [[maybe_unused]] static void initDriftstackNgtcp2Callbacks(ngtcp2_callbacks* cb)
