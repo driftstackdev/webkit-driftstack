@@ -312,16 +312,13 @@ static void resolveBridgeSymbols()
             NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Slice16.6.b] resolveBridgeSymbols: ALL THREE dlsym(RTLD_DEFAULT) RESOLVED — bridge active. Interpose ACTIVE on subsequent nw_connection_create calls. isActive=%p paramsUseQuic=%p createRelay=%p",
                 (void*)bridgeIsActive, (void*)bridgeParamsUseQuic, (void*)bridgeCreateRelay);
 
-            // Wave 29-499.240 — fire the H3 smoke test here. resolveBridgeSymbols
-            // runs at first nw_connection_create (proven by .219+ logs); it's a
-            // safe init point that NetworkProcess will hit during normal
-            // navigation. The gate is double-env-gated (H3=1 + SMOKE=1) so
-            // production traffic is unaffected unless explicitly opted in.
-            void (*driftstackH3Smoke)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "driftstackHttp3FireSmoke");
-            if (driftstackH3Smoke) {
-                NSLog(@"[Driftstack-EG-WK-1.10/Task#16/Wave29-499.240] H3 smoke fn resolved — invoking");
-                driftstackH3Smoke();
-            }
+            // Wave 29-499.240b — smoke test hook removed; DriftstackQuicInterpose-
+            // Main is a separate translation unit from WebKit framework so the
+            // dlsym(RTLD_DEFAULT) lookup of driftstackHttp3FireSmoke missed (the
+            // symbol is in WebKit framework but the TBD export discipline keeps
+            // private helpers internal). Wave 29-499.241 wires the smoke from
+            // establishRelayChannel inside WebKit framework instead — same TU
+            // scope, direct call, no dlsym.
         }
     }
 }

@@ -36,6 +36,12 @@
 #include <wtf/text/MakeString.h>
 #include <wtf/text/StringHash.h>
 
+// Wave 29-499.241 — file-scope extern "C" forward declaration of the H3
+// smoke hook in DriftstackHttp3.mm. Called from establishRelayChannel
+// success path (in-namespace) via the unqualified-id syntax. Both TUs
+// link into WebKit framework so resolution is link-time, no dlsym needed.
+extern "C" void driftstackHttp3FireSmoke();
+
 namespace WebKit {
 
 namespace DriftstackRTC {
@@ -322,6 +328,17 @@ BridgeResult establishRelayChannel(RelayChannel& out)
 
     out.relayHost = state.channel.relayHost;
     out.relayPort = state.channel.relayPort;
+
+    // Wave 29-499.241 — H3 smoke test hook (same-binary direct call).
+    // Both DriftstackRTCSocks5Bridge.mm + DriftstackHttp3.mm live in WebKit
+    // framework, so the C-linkage symbol resolves at link-time without
+    // dlsym. Forward decl at file scope (kDriftstackHttp3FireSmoke below).
+    static bool firedOnce = false;
+    if (!firedOnce) {
+        firedOnce = true;
+        ::driftstackHttp3FireSmoke();
+    }
+
     return BridgeResult::Success;
 }
 
