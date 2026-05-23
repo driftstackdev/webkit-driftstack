@@ -478,5 +478,15 @@ _SSL_quic_max_handshake_flight_len
 _SSL_quic_read_level
 _SSL_quic_write_level
 
+# Wave 29-499.224 — SSL ex_data slot APIs to attach DriftstackQuicConn
+# context to the SSL pointer; QUIC TLS callbacks (set_read_secret etc.)
+# look up the ngtcp2_conn via SSL_get_ex_data inside the callback.
+_SSL_get_ex_data
+_SSL_set_ex_data
+_SSL_get_ex_new_index
+_SSL_CTX_get_ex_data
+_SSL_CTX_set_ex_data
+_SSL_CTX_get_ex_new_index
+
 # CBB/CBS helpers: CBS_* are static inline in headers (not exported as symbols);
 # skip them. MLKEM_decap takes raw bytes + len, no CBS needed.

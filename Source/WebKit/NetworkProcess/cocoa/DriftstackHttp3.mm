@@ -126,6 +126,11 @@ struct BoringSslQuicFns {
     int (*SSL_set_quic_transport_params)(void* ssl, const uint8_t* params, size_t params_len) = nullptr;
     void (*SSL_get_peer_quic_transport_params)(void* ssl, const uint8_t** out_params,
         size_t* out_params_len) = nullptr;
+    // Wave 29-499.224 — ex_data slot APIs for SSL→QuicConn linkage.
+    void* (*SSL_get_ex_data)(const void* ssl, int idx) = nullptr;
+    int (*SSL_set_ex_data)(void* ssl, int idx, void* arg) = nullptr;
+    int (*SSL_get_ex_new_index)(long argl, void* argp, void* new_func,
+        void* dup_func, void* free_func) = nullptr;
     bool ready = false;
 };
 
@@ -149,9 +154,13 @@ static bool resolveBoringSslQuic()
     RESOLVE_BQ(SSL_process_quic_post_handshake, "SSL_process_quic_post_handshake");
     RESOLVE_BQ(SSL_set_quic_transport_params, "SSL_set_quic_transport_params");
     RESOLVE_BQ(SSL_get_peer_quic_transport_params, "SSL_get_peer_quic_transport_params");
+    RESOLVE_BQ(SSL_get_ex_data, "SSL_get_ex_data");
+    RESOLVE_BQ(SSL_set_ex_data, "SSL_set_ex_data");
+    RESOLVE_BQ(SSL_get_ex_new_index, "SSL_get_ex_new_index");
 #undef RESOLVE_BQ
     f.ready = f.SSL_set_quic_method && f.SSL_provide_quic_data
-        && f.SSL_process_quic_post_handshake;
+        && f.SSL_process_quic_post_handshake
+        && f.SSL_get_ex_data && f.SSL_set_ex_data && f.SSL_get_ex_new_index;
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.223] BoringSSL QUIC dlsym ready=%d (set_quic_method=%p provide_quic_data=%p process_post_handshake=%p)",
         f.ready, reinterpret_cast<void*>(f.SSL_set_quic_method),
         reinterpret_cast<void*>(f.SSL_provide_quic_data),
@@ -227,6 +236,130 @@ static bool resolveNgtcp2()
     f.ready = required;
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.147] ngtcp2 dlsym ready=%d", required);
     return required;
+}
+
+// Wave 29-499.224 — DriftstackQuicConn ties an SSL pointer to its ngtcp2
+// connection state. Stored via SSL_set_ex_data; the 5 ssl_quic_method_st
+// callbacks recover it via SSL_get_ex_data at each invocation. Lifetime
+// equals the QUIC connection; freed when SSL_free is called (via the
+// ex_data free callback registered with SSL_get_ex_new_index).
+struct DriftstackQuicConn {
+    ngtcp2_conn* conn { nullptr };
+    void* ssl { nullptr };
+    bool handshakeCompleted { false };
+    // Persisted secrets for HKDF-Expand-Label key derivation across
+    // set_*_secret callbacks. Length depends on negotiated cipher
+    // (32 for SHA-256, 48 for SHA-384). Initial=0, Handshake=2, App=3.
+    Vector<uint8_t> rxSecret[4];
+    Vector<uint8_t> txSecret[4];
+};
+
+[[maybe_unused]] static int& quicConnExDataIndex()
+{
+    static int s_idx = -1;
+    return s_idx;
+}
+
+[[maybe_unused]] static DriftstackQuicConn* quicConnFromSsl(void* ssl)
+{
+    auto& f = boringSslQuicFns();
+    if (!f.ready || quicConnExDataIndex() < 0)
+        return nullptr;
+    return static_cast<DriftstackQuicConn*>(f.SSL_get_ex_data(ssl, quicConnExDataIndex()));
+}
+
+// Wave 29-499.224 — ssl_quic_method_st callbacks (5 total per BoringSSL ABI).
+// These bridge BoringSSL's TLS state machine to ngtcp2's QUIC packet protection.
+//
+// RFC 9001 §4.1: TLS handshake messages travel via QUIC CRYPTO frames at
+// the cryptographic level matching the TLS handshake phase (Initial,
+// Handshake, Application/1-RTT). set_read_secret / set_write_secret
+// announce that a level's traffic secrets are available; we derive the
+// AEAD keys + IVs + header-protection keys via HKDF-Expand-Label and
+// install them in ngtcp2 so it can encrypt/decrypt packets at that level.
+
+[[maybe_unused]] static int driftstackQuicSetReadSecret(void* ssl, ssl_encryption_level_t level,
+    const void* /*cipher*/, const uint8_t* secret, size_t secret_len)
+{
+    DriftstackQuicConn* qc = quicConnFromSsl(ssl);
+    if (!qc) return 0;
+    if (level < 4) {
+        qc->rxSecret[level].resize(secret_len);
+        memcpy(qc->rxSecret[level].mutableSpan().data(), secret, secret_len);
+    }
+    // TODO(Wave29-499.225): derive AEAD key+iv+hp via HKDF-Expand-Label
+    // (labels: "quic key", "quic iv", "quic hp"), then call
+    // ngtcp2_conn_install_rx_*_key matching the level.
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicSetReadSecret level=%d secret_len=%zu (key derivation TODO Wave .225)",
+        static_cast<int>(level), secret_len);
+    return 1;
+}
+
+[[maybe_unused]] static int driftstackQuicSetWriteSecret(void* ssl, ssl_encryption_level_t level,
+    const void* /*cipher*/, const uint8_t* secret, size_t secret_len)
+{
+    DriftstackQuicConn* qc = quicConnFromSsl(ssl);
+    if (!qc) return 0;
+    if (level < 4) {
+        qc->txSecret[level].resize(secret_len);
+        memcpy(qc->txSecret[level].mutableSpan().data(), secret, secret_len);
+    }
+    // TODO(Wave29-499.225): analogous tx key install.
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicSetWriteSecret level=%d secret_len=%zu (key derivation TODO Wave .225)",
+        static_cast<int>(level), secret_len);
+    return 1;
+}
+
+[[maybe_unused]] static int driftstackQuicAddHandshakeData(void* ssl, ssl_encryption_level_t level,
+    const uint8_t* data, size_t len)
+{
+    DriftstackQuicConn* qc = quicConnFromSsl(ssl);
+    if (!qc || !qc->conn) return 0;
+    auto& nf = ngtcp2Fns();
+    // Map ssl level → ngtcp2 encryption level (same enum values, but
+    // ngtcp2 uses ngtcp2_encryption_level_t — identical 0..3 layout).
+    uint32_t ngtcp2Level = static_cast<uint32_t>(level);
+    int rv = nf.conn_submit_crypto_data(qc->conn, ngtcp2Level, data, len);
+    if (rv != 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicAddHandshakeData FAILED rv=%d level=%d len=%zu",
+            rv, static_cast<int>(level), len);
+        return 0;
+    }
+    static unsigned s_firstCount = 0;
+    if (s_firstCount++ < 5) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicAddHandshakeData OK level=%d len=%zu (submitted to ngtcp2 crypto frame at level=%u)",
+            static_cast<int>(level), len, ngtcp2Level);
+    }
+    return 1;
+}
+
+[[maybe_unused]] static int driftstackQuicFlushFlight(void* /*ssl*/)
+{
+    // ngtcp2 batches packet writes via conn_writev_stream during event loop.
+    // No explicit flush needed here; the event loop polls ngtcp2 on schedule.
+    return 1;
+}
+
+[[maybe_unused]] static int driftstackQuicSendAlert(void* ssl, ssl_encryption_level_t level, uint8_t alert)
+{
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicSendAlert level=%d alert=0x%02x (TLS alert raised; will close QUIC connection with TRANSPORT_ERROR + CRYPTO_ERROR base + alert code per RFC 9001 §4.8)",
+        static_cast<int>(level), alert);
+    DriftstackQuicConn* qc = quicConnFromSsl(ssl);
+    if (qc)
+        qc->handshakeCompleted = false;
+    return 1;
+}
+
+[[maybe_unused]] static const ssl_quic_method_st& driftstackQuicMethod()
+{
+    static const ssl_quic_method_st s_method = {
+        driftstackQuicSetReadSecret,
+        driftstackQuicSetWriteSecret,
+        driftstackQuicAddHandshakeData,
+        driftstackQuicFlushFlight,
+        driftstackQuicSendAlert,
+    };
+    return s_method;
 }
 
 } // anonymous namespace
