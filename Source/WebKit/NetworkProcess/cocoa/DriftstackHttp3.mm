@@ -1252,17 +1252,52 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         }
     }
 
-    // Wave .237 will: create UDP socket via SOCKS5 UDP_ASSOCIATE +
-    // resolve peer addr via .94 hardcoded STUN map / SOCKS5 ATYP=0x03,
-    // then call connectQuic(ssl, local, remote) + drive event loop.
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.236] driftstackHttp3Execute: SSL_CTX + SSL created (ssl=%p), ALPN=h3, TLS 1.3 locked. connectQuic() + event loop pending Wave .237.",
-        ssl);
+    // Wave 29-499.237 — invoke connectQuic() + SSL_do_handshake.
+    // For this scaffold iteration: use placeholder localhost/443 sockaddrs;
+    // Wave .238 will route through SOCKS5 §7 with actual peer resolution
+    // (DriftstackRTC::establishRelayChannel + hardcodedSTUNHostnameLookup).
+    struct sockaddr_in local { };
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_port = 0;
+    struct sockaddr_in peer { };
+    peer.sin_family = AF_INET;
+    peer.sin_addr.s_addr = htonl(0x7F000001);  // 127.0.0.1 placeholder
+    peer.sin_port = htons(443);
 
+    DriftstackQuicConn* qc = connectQuic(ssl,
+        reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
+        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer));
+    if (!qc) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] connectQuic returned nullptr");
+        bsf.SSL_free(ssl);
+        bsf.SSL_CTX_free(ctx);
+        resp.failed = true;
+        resp.errorMessage = "connectQuic returned nullptr"_s;
+        return resp;
+    }
+
+    // Kick TLS state machine forward. BoringSSL invokes our quic_method
+    // callbacks (set_*_secret, add_handshake_data) which install keys +
+    // submit ClientHello CRYPTO frame to ngtcp2. Then we ask ngtcp2 to
+    // produce the wire packet via writePacket.
+    int rv = bsf.SSL_do_handshake(ssl);
+    int sslErr = bsf.SSL_get_error(ssl, rv);
+
+    uint8_t pktBuf[1500];
+    ssize_t pktSize = driftstackQuicWritePacket(qc, pktBuf, sizeof(pktBuf));
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] driftstackHttp3Execute: SSL_do_handshake rv=%d (SSL_ERROR=%d, 2=WANT_READ is normal for first call) → writePacket produced %zd bytes (positive = Initial packet with ClientHello CRYPTO frame). qc->handshakeCompleted=%d.",
+        rv, sslErr, pktSize, qc->handshakeCompleted);
+
+    // Wave .238: SOCKS5 §7 wrap + sendto + recvfrom + read_pkt loop;
+    // Wave .239: nghttp3 wire-up + HTTP/3 HEADERS frame emission.
+    destroyDriftstackQuicConn(qc);
     bsf.SSL_free(ssl);
     bsf.SSL_CTX_free(ctx);
 
     resp.failed = true;
-    resp.errorMessage = "Phase 3 HTTP/3 SSL bring-up verified; connectQuic+event loop pending Wave .237"_s;
+    resp.errorMessage = "Phase 3 HTTP/3 handshake scaffold: connectQuic+SSL_do_handshake fired; need Wave .238 for SOCKS5 §7 + recv loop"_s;
     return resp;
 }
 
