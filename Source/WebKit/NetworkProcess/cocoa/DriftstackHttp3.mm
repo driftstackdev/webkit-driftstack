@@ -712,6 +712,19 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return 0;
 }
 
+// Wave 29-499.252 — recv_retry: mandatory for client (assertion at
+// ngtcp2_conn.c:1227). Invoked when server sends Retry packet asking
+// the client to repeat the Initial with a token. Production code would
+// re-derive Initial keys with the new dcid + retry packet's data, then
+// continue. Stub returns 0 (no retry handling in scaffold; production
+// path adds retry-token retransmit logic).
+[[maybe_unused]] static int driftstackNgtcp2RecvRetry(ngtcp2_conn* /*conn*/,
+    const void* /*hd*/, void* /*user_data*/)
+{
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.252] recv_retry fired — server requested Retry; production scaffold would re-key + retransmit. Returning 0 (drop).");
+    return 0;
+}
+
 // recv_crypto_data: ngtcp2 delivers a CRYPTO frame's payload. Hand to
 // BoringSSL via SSL_provide_quic_data so the TLS state machine processes
 // it (which in turn triggers our ssl_quic_method_st callbacks for keys +
@@ -922,6 +935,7 @@ static bool resolveAesEncryptFns()
     // client-side conn. Without it ngtcp2_conn_client_new_versioned hits
     // NULL ptr in its init path → Translation fault.
     cb->client_initial = driftstackNgtcp2ClientInitial;
+    cb->recv_retry = reinterpret_cast<int(*)(ngtcp2_conn*, const ngtcp2_pkt_hd*, void*)>(driftstackNgtcp2RecvRetry);
     cb->recv_crypto_data = driftstackNgtcp2RecvCryptoData;
     cb->handshake_completed = driftstackNgtcp2HandshakeCompleted;
     cb->encrypt = driftstackNgtcp2Encrypt;
