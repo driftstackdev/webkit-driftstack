@@ -521,6 +521,9 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Wave 29-499.242 — PathB v2 HTTP/3 + smoke test gates.
             { "DRIFTSTACK_PATHB_V2_H3", getenv("DRIFTSTACK_PATHB_V2_H3") },
             { "DRIFTSTACK_PATHB_V2_H3_SMOKE", getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE") },
+            // Wave 29-499.250 — smoke force gate (production-safe; only fires
+            // when explicitly set due to .247 crash investigation).
+            { "DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE", getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
