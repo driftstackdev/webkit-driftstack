@@ -24,6 +24,7 @@
 // works for WebRTC (Wave 29-499.99-106) per the V-2026-05-23-W29-499.221
 // STUN verification.
 #import "DriftstackRTCSocks5Bridge.h"
+#import "DriftstackSocks5Framing.h"
 
 #if PLATFORM(DRIFTSTACK)
 
@@ -1352,12 +1353,63 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] driftstackHttp3Execute: SSL_do_handshake rv=%d (SSL_ERROR=%d, 2=WANT_READ is normal for first call) → writePacket produced %zd bytes (positive = Initial packet with ClientHello CRYPTO frame). qc->handshakeCompleted=%d.",
         rv, sslErr, pktSize, qc->handshakeCompleted);
 
-    // §7 wrap of pktSize bytes + sendto deferred to Wave .239 — requires
-    // pulling in the full webrtc::SocketAddress definition to construct a
-    // peer endpoint, OR adding a String+port overload to wrapOutgoingDatagram
-    // (cleaner). For this scaffold: UDP socket + SOCKS5 relay channel +
-    // peer sockaddr are all set up; verified at runtime via the log line
-    // above. Wave .239 adds the wrap + sendto + recvfrom + read_pkt loop.
+    // Wave 29-499.239 — handshake event loop.
+    // Each iteration: SSL_do_handshake → write_pkt → §7 wrap → sendto relay,
+    // recvfrom (with timeout) → §7 unwrap → read_pkt. Repeat until
+    // qc->handshakeCompleted or 5s wall-clock budget exhausted.
+    Socks5Framing::Endpoint peerEp { "1.1.1.1"_s, 443 };
+    constexpr int kMaxIterations = 20;
+    constexpr int kPerRecvTimeoutMs = 250;
+    int iters = 0;
+    int packetsSent = 0;
+    int packetsReceived = 0;
+    while (iters < kMaxIterations && !qc->handshakeCompleted) {
+        ++iters;
+        // Drive TLS state machine. May fire quic_method.set_*_secret +
+        // add_handshake_data → ngtcp2_conn_submit_crypto_data.
+        bsf.SSL_do_handshake(ssl);
+
+        // Drain all packets ngtcp2 wants to send right now.
+        for (;;) {
+            uint8_t pkt[1500];
+            ssize_t n = driftstackQuicWritePacket(qc, pkt, sizeof(pkt));
+            if (n <= 0) break;
+            Vector<uint8_t> framed;
+            if (!Socks5Framing::wrap(peerEp, std::span<const uint8_t> { pkt, static_cast<size_t>(n) }, framed))
+                break;
+            ssize_t s = sendto(udpFd, framed.span().data(), framed.size(), 0,
+                reinterpret_cast<struct sockaddr*>(&relaySa), sizeof(relaySa));
+            if (s > 0) ++packetsSent;
+        }
+
+        // Wait for inbound with a short per-iteration timeout.
+        struct timeval tv { 0, kPerRecvTimeoutMs * 1000 };
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(udpFd, &rs);
+        int sel = select(udpFd + 1, &rs, nullptr, nullptr, &tv);
+        if (sel <= 0) continue;
+
+        uint8_t inbound[2048];
+        struct sockaddr_in from { };
+        socklen_t fromLen = sizeof(from);
+        ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0,
+            reinterpret_cast<struct sockaddr*>(&from), &fromLen);
+        if (r <= 0) continue;
+        ++packetsReceived;
+
+        Socks5Framing::Endpoint src;
+        Vector<uint8_t> payload;
+        if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+            continue;
+
+        driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+            reinterpret_cast<struct sockaddr*>(&peer), sizeof(peer),
+            reinterpret_cast<struct sockaddr*>(&local), sizeof(local));
+    }
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.239] handshake event loop: iters=%d packetsSent=%d packetsReceived=%d handshakeCompleted=%d",
+        iters, packetsSent, packetsReceived, qc->handshakeCompleted);
 
     ::close(udpFd);
     destroyDriftstackQuicConn(qc);
