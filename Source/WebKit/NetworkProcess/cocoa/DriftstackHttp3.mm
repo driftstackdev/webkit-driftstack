@@ -476,6 +476,7 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return 1;
 }
 
+
 // Wave 29-499.226 — QUIC variable-length integer encoder per RFC 9000 §16.
 // Encodes value into a 1/2/4/8-byte big-endian varint with the top two bits
 // indicating length (00=1B/6b, 01=2B/14b, 10=4B/30b, 11=8B/62b).
@@ -851,6 +852,112 @@ static bool resolveAesEncryptFns()
         driftstackQuicSendAlert,
     };
     return s_method;
+}
+
+// Wave 29-499.233 — ngtcp2_conn client allocation + initial-key install.
+//
+// Pulls together .224-.232 pieces into a single helper. Caller provides:
+//   - ssl: pointer from SSL_new (we'll wire SSL_set_quic_method + ex_data)
+//   - localSock / remoteSock: bound BSD sockets for QUIC packet I/O. Local
+//     should be a fresh UDP socket; remote is the address of the destination
+//     (or the SOCKS5 relay endpoint).
+//
+// Returns a heap-allocated DriftstackQuicConn whose ownership transfers
+// to the caller; freed via destroyDriftstackQuicConn.
+[[maybe_unused]] static void destroyDriftstackQuicConn(DriftstackQuicConn* qc)
+{
+    if (!qc) return;
+    if (qc->conn) {
+        auto& nf = ngtcp2Fns();
+        if (nf.conn_del) nf.conn_del(qc->conn);
+    }
+    delete qc;
+}
+
+[[maybe_unused]] static DriftstackQuicConn* connectQuic(void* ssl,
+    const struct sockaddr* localAddr, socklen_t localAddrLen,
+    const struct sockaddr* remoteAddr, socklen_t remoteAddrLen)
+{
+    auto& nf = ngtcp2Fns();
+    auto& bsf = boringSslQuicFns();
+    if (!nf.ready || !bsf.ready) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] connectQuic: ngtcp2 (%d) or BoringSSL QUIC (%d) not resolved",
+            nf.ready, bsf.ready);
+        return nullptr;
+    }
+
+    auto* qc = new DriftstackQuicConn { };
+    qc->ssl = ssl;
+
+    // 1. Allocate dcid (8-20 random bytes per RFC 9000 §17.2) + scid (8 random
+    //    bytes is customary client choice; Apple Safari uses 8).
+    ngtcp2_cid dcid { }, scid { };
+    nf.cid_init(&dcid, nullptr, 8); arc4random_buf(dcid.data, 8); dcid.datalen = 8;
+    nf.cid_init(&scid, nullptr, 8); arc4random_buf(scid.data, 8); scid.datalen = 8;
+
+    // 2. Initialize settings + transport_params via .229 helpers.
+    ngtcp2_settings settings { };
+    initIphoneNgtcp2Settings(&settings, /*initialTs=*/0);
+
+    ngtcp2_transport_params tp { };
+    std::span<const uint8_t> scidSpan = unsafeMakeSpan(scid.data, scid.datalen);
+    initIphoneNgtcp2TransportParams(&tp, scidSpan);
+
+    // 3. Populate callbacks via .230-.232.
+    ngtcp2_callbacks cb { };
+    initDriftstackNgtcp2Callbacks(&cb);
+
+    // 4. Build ngtcp2_path from sockaddrs.
+    ngtcp2_path path { };
+    nf.addr_init(&path.local, localAddr, localAddrLen);
+    nf.addr_init(&path.remote, remoteAddr, remoteAddrLen);
+
+    // 5. Allocate the conn. QUIC v1 (RFC 9000) version constant is provided
+    // by ngtcp2.h (NGTCP2_PROTO_VER_V1 = 0x00000001U).
+    int rv = nf.conn_client_new_versioned(&qc->conn, &dcid, &scid, &path,
+        NGTCP2_PROTO_VER_V1, /*client_chosen_version_flags=*/0,
+        &cb, &settings, &tp, nullptr, /*user_data=*/qc);
+    if (rv != 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] conn_client_new_versioned FAILED rv=%d", rv);
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    // 6. Wire BoringSSL → DriftstackQuicConn linkage:
+    //    a) SSL_set_quic_method(ssl, &driftstackQuicMethod) — TLS handshake
+    //       messages now flow through our 5 ssl_quic_method_st callbacks.
+    //    b) SSL_set_ex_data(ssl, idx, qc) — qc reachable from the callbacks
+    //       via SSL_get_ex_data.
+    if (bsf.SSL_set_quic_method(ssl, &driftstackQuicMethod()) != 1) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] SSL_set_quic_method FAILED");
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+    if (quicConnExDataIndex() < 0)
+        quicConnExDataIndex() = bsf.SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    if (quicConnExDataIndex() >= 0)
+        bsf.SSL_set_ex_data(ssl, quicConnExDataIndex(), qc);
+
+    // 7. Encode iPhone transport_params for SSL_set_quic_transport_params.
+    //    These travel in the ClientHello's quic_transport_parameters extension
+    //    and are bound to the TLS transcript per RFC 9001 §8.2.
+    Vector<uint8_t> tpBytes = buildIphoneQuicTransportParams(scidSpan);
+    if (bsf.SSL_set_quic_transport_params(ssl, tpBytes.span().data(), tpBytes.size()) != 1) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] SSL_set_quic_transport_params FAILED (tpBytes=%zu)", tpBytes.size());
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    // 8. RFC 9001 §5.2: derive Initial keys from dcid + install via
+    //    conn_install_initial_key. Initial keys use AES-128-GCM-SHA256
+    //    regardless of negotiated cipher. TODO Wave .234: HKDF-Extract(salt,
+    //    dcid) → initial_secret; "client in" / "server in" labels → 32B
+    //    secrets; deriveQuicKeyMaterial → key+iv+hp; build
+    //    DriftstackQuicAeadCtx + DriftstackQuicHpCtx; conn_install_initial_key.
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] connectQuic: ngtcp2_conn allocated + BoringSSL QUIC method wired + transport_params set. dcid_len=%zu scid_len=%zu tpBytes_len=%zu. Initial-key install deferred to Wave .234.",
+        dcid.datalen, scid.datalen, tpBytes.size());
+    return qc;
 }
 
 } // anonymous namespace
