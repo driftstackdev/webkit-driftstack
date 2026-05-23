@@ -78,8 +78,19 @@ struct Ngtcp2Fns {
     ssize_t (*conn_writev_stream_versioned)(ngtcp2_conn*, ngtcp2_path*,
         ngtcp2_pkt_info*, uint8_t*, size_t, int64_t*, uint32_t, int64_t,
         const ngtcp2_vec*, size_t, ngtcp2_tstamp) = nullptr;
-    int (*conn_install_initial_key)(ngtcp2_conn*, const void*, const void*,
-        const void*, const void*, const void*, const void*, size_t) = nullptr;
+    // Wave 29-499.234 — install_initial_key signature matches real ngtcp2.h.
+    // The handshake / 1-RTT install_*_key keep void* signatures for now;
+    // their .225 call sites pass raw uint8_t* and converting them requires
+    // wrapping in DriftstackQuicAeadCtx / DriftstackQuicHpCtx structs at
+    // those sites — deferred to Wave 29-499.235 to avoid expanding scope
+    // mid-iteration. The void*+pointer reinterpret_cast preserves the
+    // pointer values that ngtcp2 ultimately dereferences via its actual
+    // typed signature.
+    int (*conn_install_initial_key)(ngtcp2_conn*,
+        const ngtcp2_crypto_aead_ctx*, const uint8_t*,
+        const ngtcp2_crypto_cipher_ctx*,
+        const ngtcp2_crypto_aead_ctx*, const uint8_t*,
+        const ngtcp2_crypto_cipher_ctx*, size_t) = nullptr;
     int (*conn_install_rx_handshake_key)(ngtcp2_conn*, const void*, const void*,
         const void*, size_t) = nullptr;
     int (*conn_install_tx_handshake_key)(ngtcp2_conn*, const void*, const void*,
@@ -948,14 +959,69 @@ static bool resolveAesEncryptFns()
         return nullptr;
     }
 
-    // 8. RFC 9001 §5.2: derive Initial keys from dcid + install via
-    //    conn_install_initial_key. Initial keys use AES-128-GCM-SHA256
-    //    regardless of negotiated cipher. TODO Wave .234: HKDF-Extract(salt,
-    //    dcid) → initial_secret; "client in" / "server in" labels → 32B
-    //    secrets; deriveQuicKeyMaterial → key+iv+hp; build
-    //    DriftstackQuicAeadCtx + DriftstackQuicHpCtx; conn_install_initial_key.
+    // 8. RFC 9001 §5.2: derive Initial keys from dcid + install. QUIC v1
+    // initial_salt = 0x38762cf7f55934b34d179ae6a4c80cadccbb7f0a (20 bytes).
+    static const uint8_t kQuicV1InitialSalt[20] = {
+        0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
+        0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a
+    };
+    Vector<uint8_t> saltVec(20);
+    memcpy(saltVec.mutableSpan().data(), kQuicV1InitialSalt, 20);
+    Vector<uint8_t> dcidVec(dcid.datalen);
+    memcpy(dcidVec.mutableSpan().data(), dcid.data, dcid.datalen);
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.233] connectQuic: ngtcp2_conn allocated + BoringSSL QUIC method wired + transport_params set. dcid_len=%zu scid_len=%zu tpBytes_len=%zu. Initial-key install deferred to Wave .234.",
+    Vector<uint8_t> initialSecret = WebKit::driftstackHkdfExtractSha256(saltVec, dcidVec);
+    if (initialSecret.size() != 32) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.234] HKDF-Extract initial_secret FAILED (got %zu bytes)", initialSecret.size());
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    Vector<uint8_t> emptyCtx;
+    Vector<uint8_t> clientInitialSecret = WebKit::driftstackHkdfExpandLabelSha256(initialSecret, "client in", emptyCtx, 32);
+    Vector<uint8_t> serverInitialSecret = WebKit::driftstackHkdfExpandLabelSha256(initialSecret, "server in", emptyCtx, 32);
+    if (clientInitialSecret.size() != 32 || serverInitialSecret.size() != 32) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.234] HKDF-Expand-Label client/server in FAILED (sizes %zu/%zu)",
+            clientInitialSecret.size(), serverInitialSecret.size());
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    // Derive {key,iv,hp} for both directions via .225 helper. cipher=nullptr
+    // forces secret_len=32 fallback → AES-128-GCM-SHA256 (QUIC Initial cipher).
+    Vector<uint8_t> txKey, txIV, txHp, rxKey, rxIV, rxHp;
+    if (!deriveQuicKeyMaterial(clientInitialSecret.span().data(), 32, /*cipher=*/nullptr, txKey, txIV, txHp)
+        || !deriveQuicKeyMaterial(serverInitialSecret.span().data(), 32, /*cipher=*/nullptr, rxKey, rxIV, rxHp)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.234] Initial key material derivation FAILED");
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    // Heap-allocate aead_ctx + hp_ctx innards (ngtcp2 holds pointers for the
+    // life of the conn). Leak intentionally — they're freed when qc is freed
+    // via the explicit deletes below if install fails.
+    auto* tx_aead = new DriftstackQuicAeadCtx { txKey, false, false };
+    auto* rx_aead = new DriftstackQuicAeadCtx { rxKey, false, false };
+    auto* tx_hp_inner = new DriftstackQuicHpCtx { txHp, false, false };
+    auto* rx_hp_inner = new DriftstackQuicHpCtx { rxHp, false, false };
+
+    ngtcp2_crypto_aead_ctx tx_aead_ctx { tx_aead };
+    ngtcp2_crypto_aead_ctx rx_aead_ctx { rx_aead };
+    ngtcp2_crypto_cipher_ctx tx_hp_ctx { tx_hp_inner };
+    ngtcp2_crypto_cipher_ctx rx_hp_ctx { rx_hp_inner };
+
+    int kv = nf.conn_install_initial_key(qc->conn,
+        &rx_aead_ctx, rxIV.span().data(), &rx_hp_ctx,
+        &tx_aead_ctx, txIV.span().data(), &tx_hp_ctx,
+        12);  // ivlen
+    if (kv != 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.234] conn_install_initial_key FAILED rv=%d", kv);
+        delete tx_aead; delete rx_aead; delete tx_hp_inner; delete rx_hp_inner;
+        destroyDriftstackQuicConn(qc);
+        return nullptr;
+    }
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.234] connectQuic: COMPLETE — ngtcp2_conn allocated + BoringSSL QUIC method wired + iPhone transport_params set + RFC 9001 §5.2 Initial keys installed (client+server, AES-128-GCM-SHA256 derived from dcid via QUIC v1 salt). dcid_len=%zu scid_len=%zu tpBytes_len=%zu. Ready for handshake event loop (Wave .235).",
         dcid.datalen, scid.datalen, tpBytes.size());
     return qc;
 }
