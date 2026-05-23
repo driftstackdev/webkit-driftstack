@@ -566,6 +566,51 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return tp;
 }
 
+// Wave 29-499.229 — iPhone-matched ngtcp2_settings + ngtcp2_transport_params
+// initializers. Uses real ngtcp2_settings_default + ngtcp2_transport_params_default
+// (dlsym'd at runtime) to zero-init structs to library-recommended baseline,
+// then overlays iPhone-Safari-typical values.
+//
+// ngtcp2_duration is uint64_t nanoseconds. RFC 9000 wire transport_params
+// encodes max_idle_timeout / max_ack_delay as milliseconds (varint); ngtcp2
+// internally translates from its nanosecond struct field.
+[[maybe_unused]] static void initIphoneNgtcp2Settings(ngtcp2_settings* settings, ngtcp2_tstamp initialTs)
+{
+    auto& f = ngtcp2Fns();
+    f.settings_default(settings);
+    settings->initial_ts = initialTs;
+    // Defaults are otherwise reasonable; iPhone-specific overrides go here
+    // (e.g., congestion control algorithm) after pcap capture per Wave .227.
+}
+
+[[maybe_unused]] static void initIphoneNgtcp2TransportParams(ngtcp2_transport_params* params,
+    std::span<const uint8_t> initialScid)
+{
+    auto& f = ngtcp2Fns();
+    f.transport_params_default(params);
+    // Override to match values targeted in Wave 29-499.226's wire-format builder.
+    params->max_idle_timeout = 30ULL * NGTCP2_SECONDS;
+    params->max_udp_payload_size = 1452;
+    params->initial_max_data = 12582912;
+    params->initial_max_stream_data_bidi_local = 6291456;
+    params->initial_max_stream_data_bidi_remote = 6291456;
+    params->initial_max_stream_data_uni = 1048576;
+    params->initial_max_streams_bidi = 100;
+    params->initial_max_streams_uni = 100;
+    params->ack_delay_exponent = 3;
+    params->max_ack_delay = 25 * NGTCP2_MILLISECONDS;
+    params->disable_active_migration = 1;  // presence flag
+    params->active_connection_id_limit = 4;
+    // initial_source_connection_id is part of ngtcp2_transport_params as a
+    // ngtcp2_cid sub-struct with datalen + data[].
+    if (!initialScid.empty()) {
+        size_t copyLen = std::min(initialScid.size(), static_cast<size_t>(NGTCP2_MAX_CIDLEN));
+        params->initial_scid.datalen = copyLen;
+        memcpy(params->initial_scid.data, initialScid.data(), copyLen);
+        params->initial_scid_present = 1;
+    }
+}
+
 [[maybe_unused]] static const ssl_quic_method_st& driftstackQuicMethod()
 {
     static const ssl_quic_method_st s_method = {
