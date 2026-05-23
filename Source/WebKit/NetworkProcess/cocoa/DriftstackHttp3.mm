@@ -1026,6 +1026,87 @@ static bool resolveAesEncryptFns()
     return qc;
 }
 
+// Wave 29-499.235 — event loop primitives. The caller drives the QUIC
+// handshake via writePacket/readPacket; SOCKS5 §7 wrap/unwrap happens at
+// the call site between these and the wire (sendto/recvfrom).
+//
+// Monotonic timestamp (nanoseconds since boot). ngtcp2 uses this for
+// pacing, packet number generation, RTT estimation.
+[[maybe_unused]] static ngtcp2_tstamp driftstackQuicTimestampNow()
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<ngtcp2_tstamp>(ts.tv_sec) * 1000000000ULL
+        + static_cast<ngtcp2_tstamp>(ts.tv_nsec);
+}
+
+// Produce the next outbound QUIC packet (or 0 if nothing to send right
+// now). The returned bytes are the raw QUIC packet — caller must SOCKS5
+// §7 wrap (with destination = the QUIC peer endpoint, NOT the proxy) and
+// sendto the relay socket. Returns -1 on conn-level error.
+[[maybe_unused]] static ssize_t driftstackQuicWritePacket(DriftstackQuicConn* qc,
+    uint8_t* buf, size_t buflen)
+{
+    if (!qc || !qc->conn) return -1;
+    auto& nf = ngtcp2Fns();
+    ngtcp2_pkt_info pi { };
+    // Use writev_stream with stream_id=-1 + datav=NULL for handshake-only
+    // packets (no application data yet). After handshake completes, use
+    // stream_id=0 + nghttp3-produced datav for HTTP/3 request emission.
+    ssize_t n = nf.conn_writev_stream_versioned(qc->conn, /*path=*/nullptr,
+        &pi, buf, buflen, /*pdatalen=*/nullptr,
+        /*flags=*/0, /*stream_id=*/-1,
+        /*datav=*/nullptr, /*datavcnt=*/0,
+        driftstackQuicTimestampNow());
+    return n;
+}
+
+// Feed an inbound QUIC packet (post-§7-unwrap, raw QUIC bytes from peer)
+// into the conn. ngtcp2 decrypts via our encrypt/decrypt callbacks,
+// dispatches CRYPTO frames to BoringSSL via recv_crypto_data, and updates
+// internal state. Returns 0 on success, -1 on protocol/auth error.
+[[maybe_unused]] static int driftstackQuicReadPacket(DriftstackQuicConn* qc,
+    const uint8_t* buf, size_t buflen,
+    const struct sockaddr* peerAddr, socklen_t peerAddrLen,
+    const struct sockaddr* localAddr, socklen_t localAddrLen)
+{
+    if (!qc || !qc->conn) return -1;
+    auto& nf = ngtcp2Fns();
+    ngtcp2_path path { };
+    nf.addr_init(&path.local, localAddr, localAddrLen);
+    nf.addr_init(&path.remote, peerAddr, peerAddrLen);
+    ngtcp2_pkt_info pi { };
+    return static_cast<int>(nf.conn_read_pkt_versioned(qc->conn, &path,
+        &pi, buf, buflen, driftstackQuicTimestampNow()));
+}
+
+// Sketch of caller-side event loop (Wave .236 will wire this into
+// driftstackHttp3Execute):
+//
+//   DriftstackQuicConn* qc = connectQuic(ssl, &local, llen, &peer, plen);
+//   uint8_t buf[1500];
+//   while (!qc->handshakeCompleted) {
+//       // Produce outbound packet(s)
+//       for (;;) {
+//           ssize_t n = driftstackQuicWritePacket(qc, buf, sizeof(buf));
+//           if (n <= 0) break;
+//           // §7 wrap with destination = peer (the actual QUIC server)
+//           Vector<uint8_t> framed = socks5Framing::wrap(peer, {buf, n});
+//           sendto(relayFd, framed.data(), framed.size(), 0, &relay, rlen);
+//       }
+//       // Wait for inbound (with timeout per ngtcp2 expiry)
+//       ssize_t r = recvfrom(relayFd, buf, sizeof(buf), 0, ...);
+//       if (r > 0) {
+//           // §7 unwrap
+//           Socks5Framing::Endpoint src; Vector<uint8_t> payload;
+//           Socks5Framing::unwrap({buf, r}, src, payload);
+//           // Feed to ngtcp2
+//           driftstackQuicReadPacket(qc, payload.data(), payload.size(),
+//               (sockaddr*)&peerSa, peerSaLen, (sockaddr*)&localSa, localSaLen);
+//       }
+//   }
+//   // qc->handshakeCompleted = true → install nghttp3 + emit h3 HEADERS
+
 } // anonymous namespace
 
 DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const DriftstackHttp3Request& /*request*/)
