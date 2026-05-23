@@ -475,6 +475,96 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
     return 1;
 }
 
+// Wave 29-499.226 — QUIC variable-length integer encoder per RFC 9000 §16.
+// Encodes value into a 1/2/4/8-byte big-endian varint with the top two bits
+// indicating length (00=1B/6b, 01=2B/14b, 10=4B/30b, 11=8B/62b).
+[[maybe_unused]] static void encodeQuicVarint(Vector<uint8_t>& out, uint64_t value)
+{
+    if (value < 0x40ULL) {
+        out.append(static_cast<uint8_t>(value));
+    } else if (value < 0x4000ULL) {
+        out.append(static_cast<uint8_t>(0x40 | (value >> 8)));
+        out.append(static_cast<uint8_t>(value & 0xFF));
+    } else if (value < 0x40000000ULL) {
+        out.append(static_cast<uint8_t>(0x80 | (value >> 24)));
+        out.append(static_cast<uint8_t>((value >> 16) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 8) & 0xFF));
+        out.append(static_cast<uint8_t>(value & 0xFF));
+    } else {
+        out.append(static_cast<uint8_t>(0xC0 | (value >> 56)));
+        out.append(static_cast<uint8_t>((value >> 48) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 40) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 32) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 24) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 16) & 0xFF));
+        out.append(static_cast<uint8_t>((value >> 8) & 0xFF));
+        out.append(static_cast<uint8_t>(value & 0xFF));
+    }
+}
+
+// Wave 29-499.226 — emit one transport parameter (RFC 9000 §18): varint id +
+// varint length + value bytes. For integer-valued params, value is itself a
+// varint.
+[[maybe_unused]] static void emitQuicTpInt(Vector<uint8_t>& out, uint64_t id, uint64_t value)
+{
+    encodeQuicVarint(out, id);
+    Vector<uint8_t> valueBytes;
+    encodeQuicVarint(valueBytes, value);
+    encodeQuicVarint(out, valueBytes.size());
+    out.append(valueBytes.span());
+}
+
+[[maybe_unused]] static void emitQuicTpBytes(Vector<uint8_t>& out, uint64_t id, std::span<const uint8_t> data)
+{
+    encodeQuicVarint(out, id);
+    encodeQuicVarint(out, data.size());
+    out.append(data);
+}
+
+[[maybe_unused]] static void emitQuicTpEmpty(Vector<uint8_t>& out, uint64_t id)
+{
+    encodeQuicVarint(out, id);
+    out.append(static_cast<uint8_t>(0));  // length=0
+}
+
+// Wave 29-499.226 — iPhone Safari 26 QUIC client transport parameters.
+// On-wire byte sequence ready for SSL_set_quic_transport_params(ssl, ..., ...).
+//
+// Values chosen to match observed iPhone Safari behavior over QUIC:
+//   max_idle_timeout = 30000 ms (Apple default per nw_quic configuration)
+//   max_udp_payload_size = 1452 (Ethernet MTU - IPv4/UDP/QUIC overhead)
+//   initial_max_data = 12582912 (~12 MB connection flow control window)
+//   initial_max_stream_data_bidi_{local,remote} = 6291456 (~6 MB stream)
+//   initial_max_stream_data_uni = 1048576 (~1 MB)
+//   initial_max_streams_bidi = 100 (typical h3 needs)
+//   initial_max_streams_uni = 100
+//   ack_delay_exponent = 3 (default)
+//   max_ack_delay = 25 ms (default)
+//   disable_active_migration = presence (Apple disables migration by default)
+//   active_connection_id_limit = 4
+//   initial_source_connection_id = scid (caller supplies)
+//
+// TODO Wave 29-499.227: capture real iPhone Safari QUIC connection via mitm
+// or pcap; refine transport params to byte-identical match.
+[[maybe_unused]] static Vector<uint8_t> buildIphoneQuicTransportParams(std::span<const uint8_t> initialScid)
+{
+    Vector<uint8_t> tp;
+    emitQuicTpInt(tp, 0x01, 30000);          // max_idle_timeout (ms)
+    emitQuicTpInt(tp, 0x03, 1452);           // max_udp_payload_size
+    emitQuicTpInt(tp, 0x04, 12582912);       // initial_max_data
+    emitQuicTpInt(tp, 0x05, 6291456);        // initial_max_stream_data_bidi_local
+    emitQuicTpInt(tp, 0x06, 6291456);        // initial_max_stream_data_bidi_remote
+    emitQuicTpInt(tp, 0x07, 1048576);        // initial_max_stream_data_uni
+    emitQuicTpInt(tp, 0x08, 100);            // initial_max_streams_bidi
+    emitQuicTpInt(tp, 0x09, 100);            // initial_max_streams_uni
+    emitQuicTpInt(tp, 0x0A, 3);              // ack_delay_exponent
+    emitQuicTpInt(tp, 0x0B, 25);             // max_ack_delay
+    emitQuicTpEmpty(tp, 0x0C);               // disable_active_migration (presence)
+    emitQuicTpInt(tp, 0x0E, 4);              // active_connection_id_limit
+    emitQuicTpBytes(tp, 0x0F, initialScid);  // initial_source_connection_id
+    return tp;
+}
+
 [[maybe_unused]] static const ssl_quic_method_st& driftstackQuicMethod()
 {
     static const ssl_quic_method_st s_method = {
