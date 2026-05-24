@@ -24,6 +24,7 @@
 
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 #import <webrtc/api/packet_socket_factory.h>
+#import <webrtc/rtc_base/time_utils.h>
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
@@ -63,6 +64,12 @@ std::unique_ptr<NetworkRTCProvider::Socket> DriftstackRTCSocks5TCPSocket::create
         return nullptr;
     }
 
+    int currentFd;
+    {
+        Locker locker { socket->m_lock };
+        currentFd = socket->m_fd;
+    }
+
     if (socket->m_isTLS) {
         // Wave 29-499.279 — TURN-TLS Phase 2: wrap fd with iPhone-byte-exact
         // TLS 1.3 ClientHello via DriftstackTLS13Client. Matches the TLS
@@ -70,7 +77,7 @@ std::unique_ptr<NetworkRTCProvider::Socket> DriftstackRTCSocks5TCPSocket::create
         // Safari 26.4 (per V-PEET-JA3 + V-AKAMAI).
         socket->m_tls = std::make_unique<DriftstackTLS13Client>();
         String sni = String::fromUTF8(host.c_str());
-        if (!socket->m_tls->connect(socket->m_fd, sni)) {
+        if (!socket->m_tls->connect(currentFd, sni)) {
             WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.279] TURN-TLS handshake FAILED for %s:%u — %s",
                 host.c_str(), remoteAddress.port(),
                 socket->m_tls->errorMessage().utf8().data());
@@ -88,7 +95,7 @@ std::unique_ptr<NetworkRTCProvider::Socket> DriftstackRTCSocks5TCPSocket::create
     socket->m_connection->send(Messages::LibWebRTCNetwork::SignalConnect(identifier), 0);
 
     WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] DriftstackRTCSocks5TCPSocket ESTABLISHED to %s:%u (fd=%d, isSTUN=%d, isTLS=%d)",
-        host.c_str(), remoteAddress.port(), socket->m_fd, socket->m_isSTUN ? 1 : 0, socket->m_isTLS ? 1 : 0);
+        host.c_str(), remoteAddress.port(), currentFd, socket->m_isSTUN ? 1 : 0, socket->m_isTLS ? 1 : 0);
 
     return socket;
 }
@@ -164,11 +171,13 @@ bool DriftstackRTCSocks5TCPSocket::connectViaSocks5(const std::string& host, uin
         return false;
     }
 
+    int fd;
     {
         Locker locker { m_lock };
         m_fd = m_socks5Client->socketFileDescriptor();
+        fd = m_fd;
     }
-    return m_fd >= 0;
+    return fd >= 0;
 }
 
 void DriftstackRTCSocks5TCPSocket::startReadLoop()
@@ -223,16 +232,16 @@ void DriftstackRTCSocks5TCPSocket::onIncomingData(std::span<const uint8_t> chunk
 
     // STUN/TURN framing: extract messages via Apple's existing helper.
     Vector<uint8_t> moved = std::exchange(m_rxBuffer, Vector<uint8_t>());
-    auto remaining = WebRTC::extractMessages(WTF::move(moved),
-        m_isSTUN ? WebRTC::MessageType::STUN : WebRTC::MessageType::Data,
+    auto remaining = WebCore::WebRTC::extractMessages(WTF::move(moved),
+        m_isSTUN ? WebCore::WebRTC::MessageType::STUN : WebCore::WebRTC::MessageType::Data,
         [&](auto data) {
             m_connection->send(Messages::LibWebRTCNetwork::SignalReadPacket {
                 m_identifier,
                 data,
-                WebKit::RTCNetwork::IPAddress(m_remoteAddress.ipaddr()),
+                WebKit::RTCNetwork::IPAddress(m_remoteAddress.ipaddr()),  // explicit qualifier
                 m_remoteAddress.port(),
                 webrtc::TimeMicros(),
-                WebRTCNetwork::EcnMarking::kNotEct,
+                WebKit::WebRTCNetwork::EcnMarking::kNotEct,
             }, 0);
         });
     m_rxBuffer = WTF::move(remaining);

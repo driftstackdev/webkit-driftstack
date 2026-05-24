@@ -61,7 +61,7 @@ private:
     Ref<NetworkRTCProvider> m_rtcProvider;
     Ref<IPC::Connection> m_connection;
     webrtc::SocketAddress m_remoteAddress;
-    int m_options { 0 };
+    [[maybe_unused]] int m_options { 0 };
     bool m_isSTUN { false };
     bool m_isTLS { false };
 
