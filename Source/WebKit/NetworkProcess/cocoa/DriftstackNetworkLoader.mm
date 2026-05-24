@@ -541,8 +541,10 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "DRIFTSTACK_SOCKS5_PROXY not set"_s, WebCore::ResourceError::Type::General);
-                WebCore::NetworkLoadMetrics metrics;
-                clientPtr->didCompleteWithError(error, metrics);
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
             }
             return;
         }
@@ -582,8 +584,10 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "SOCKS5 handshake failed"_s, WebCore::ResourceError::Type::General);
-                WebCore::NetworkLoadMetrics metrics;
-                clientPtr->didCompleteWithError(error, metrics);
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
             }
             return;
         }
@@ -602,8 +606,10 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
-                WebCore::NetworkLoadMetrics metrics;
-                clientPtr->didCompleteWithError(error, metrics);
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
             }
             return;
         }
@@ -620,8 +626,10 @@ void DriftstackNetworkLoader::resume()
                 auto* clientPtr = m_task.client();
                 if (clientPtr) {
                     WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
-                    WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                        WebCore::NetworkLoadMetrics metrics;
+                        clientPtr->didCompleteWithError(error, metrics);
+                    });
                 }
                 return;
             }
@@ -807,8 +815,10 @@ void DriftstackNetworkLoader::resume()
 
             if (h2resp.failed) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), h2resp.errorMessage, WebCore::ResourceError::Type::General);
-                WebCore::NetworkLoadMetrics metrics;
-                clientPtr->didCompleteWithError(error, metrics);
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
                 return;
             }
 
@@ -1076,14 +1086,18 @@ _Pragma("clang diagnostic pop")
         if (!clientPtr)
             return;
 
-        clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-            [clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
-                if (action == WebCore::PolicyAction::Use) {
-                    clientPtr->didReceiveData(bodyBuffer.get());
-                    WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
-                }
-            });
+        // Wave 29-499.269b — CFStream fallback also marshalled via main runloop
+        auto deliveryResponse2 = WebCore::ResourceResponse(response);
+        callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse2), bodyBuffer = std::move(bodyBuffer)]() mutable {
+            clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                    if (action == WebCore::PolicyAction::Use) {
+                        clientPtr->didReceiveData(bodyBuffer.get());
+                        WebCore::NetworkLoadMetrics metrics;
+                        clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                    }
+                });
+        });
     });
 }
 
