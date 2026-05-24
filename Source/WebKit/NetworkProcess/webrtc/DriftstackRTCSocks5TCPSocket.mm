@@ -279,7 +279,7 @@ void DriftstackRTCSocks5TCPSocket::sendTo(std::span<const uint8_t> data,
     // Apply STUN padding or length-prefix framing (matches Apple impl).
     Vector<uint8_t> buffer;
     if (m_isSTUN) {
-        auto messageLengths = WebRTC::getSTUNOrTURNMessageLengths(data);
+        auto messageLengths = WebCore::WebRTC::getSTUNOrTURNMessageLengths(data);
         if (!messageLengths)
             return;
         buffer.reserveInitialCapacity(messageLengths->messageLengthWithPadding);
