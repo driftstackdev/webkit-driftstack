@@ -760,6 +760,15 @@ void DriftstackNetworkLoader::resume()
                     || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
                     || lower == "user-agent"_s || lower == "priority"_s)
                     continue;
+                // Wave 29-499.261 — strip cache-validation headers. PathB v2
+                // has no client-side cache; If-None-Match / If-Modified-Since
+                // cause servers to return 304 with empty body, which JS engine
+                // can't execute and rendering fails. Stripping forces full
+                // 200 responses on every request.
+                if (lower == "if-none-match"_s || lower == "if-modified-since"_s
+                    || lower == "if-match"_s || lower == "if-unmodified-since"_s
+                    || lower == "if-range"_s)
+                    continue;
                 h2req.extraHeaders.append({ lower, header.value });
             }
 

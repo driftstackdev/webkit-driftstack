@@ -198,7 +198,14 @@ static const std::pair<const char*, const char*> kHpackStatic[] = {
     { ":status", "404" },
     { ":status", "500" },
     { "accept-charset", "" },
-    { "accept-encoding", "gzip, deflate" },
+    // Wave 29-499.260 — only accept identity; .220 brotli + .258 gzip + .259
+    // zlib auto-detect all had bugs that broke page rendering on real sites.
+    // Identity-only means server returns uncompressed body which PathB v2
+    // passes through verbatim to WebKit. Slightly larger transfer but
+    // correct rendering. NOTE: this changes the HTTP fingerprint slightly
+    // (iPhone Safari sends "gzip, deflate, br"). Re-enable proper compression
+    // once decoder is verified working end-to-end against multiple sites.
+    { "accept-encoding", "identity" },
     { "accept-language", "" },
     { "accept-ranges", "" },
     { "accept", "" },
@@ -751,11 +758,68 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
             break;
         }
     }
-    if (!contentEncoding.isEmpty() && !resp.body.isEmpty()) {
+    // Wave 29-499.259 — use system zlib (libz.dylib) directly for gzip+deflate.
+    // Apple's COMPRESSION_ZLIB is RFC 1950 (ZLIB-wrapped) and can't decode
+    // either raw deflate OR gzip. libz's inflate with windowBits=15+32 auto-
+    // detects gzip vs zlib wrappers, handling both formats and the FNAME/FHCRC
+    // gzip-header variants Twilio's CDN uses.
+    if (!contentEncoding.isEmpty() && !resp.body.isEmpty()
+        && (contentEncoding == "gzip"_s || contentEncoding == "deflate"_s)) {
+        static void* zlibHandle = nullptr;
+        static int (*inflateInit2_fn)(void*, int, const char*, int) = nullptr;
+        static int (*inflate_fn)(void*, int) = nullptr;
+        static int (*inflateEnd_fn)(void*) = nullptr;
+        static int zlibReady = 0;
+        if (!zlibReady) {
+            zlibHandle = dlopen("/usr/lib/libz.dylib", RTLD_NOW);
+            if (zlibHandle) {
+                inflateInit2_fn = reinterpret_cast<int(*)(void*, int, const char*, int)>(dlsym(zlibHandle, "inflateInit2_"));
+                inflate_fn = reinterpret_cast<int(*)(void*, int)>(dlsym(zlibHandle, "inflate"));
+                inflateEnd_fn = reinterpret_cast<int(*)(void*)>(dlsym(zlibHandle, "inflateEnd"));
+                zlibReady = (inflateInit2_fn && inflate_fn && inflateEnd_fn) ? 1 : -1;
+            }
+        }
+        if (zlibReady == 1) {
+            // z_stream is 112 bytes on arm64; allocate 256 to be safe
+            uint8_t zstream[256] = { };
+            // z_stream offsets: next_in@0, avail_in@8, total_in@12,
+            //   next_out@24, avail_out@32, total_out@40, ...zalloc@56, zfree@64
+            const char* zlibVersion = "1.2.11";
+            // windowBits = 15 + 32 → auto-detect gzip/zlib
+            if (inflateInit2_fn(zstream, 15 + 32, zlibVersion, 112) == 0) {
+                size_t outCapacity = resp.body.size() * 10;
+                if (outCapacity < 64 * 1024) outCapacity = 64 * 1024;
+                Vector<uint8_t> decompressed(outCapacity);
+
+                *reinterpret_cast<const uint8_t**>(zstream + 0) = resp.body.span().data();
+                *reinterpret_cast<uint32_t*>(zstream + 8) = resp.body.size();
+                *reinterpret_cast<uint8_t**>(zstream + 24) = decompressed.mutableSpan().data();
+                *reinterpret_cast<uint32_t*>(zstream + 32) = outCapacity;
+
+                int rv = inflate_fn(zstream, 4 /*Z_FINISH*/);
+                size_t actualLen = *reinterpret_cast<uint64_t*>(zstream + 40);
+                inflateEnd_fn(zstream);
+
+                if ((rv == 1 /*Z_STREAM_END*/ || rv == 0) && actualLen > 0) {
+                    decompressed.resize(actualLen);
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.259] zlib auto-decoded %s: %zu → %zu bytes (rv=%d)",
+                        contentEncoding.utf8().data(), resp.body.size(), actualLen, rv);
+                    resp.body = std::move(decompressed);
+                    Vector<std::pair<String, String>> filtered;
+                    for (auto& [k, v] : resp.headers) {
+                        if (k.convertToASCIILowercase() != "content-encoding"_s)
+                            filtered.append({ k, v });
+                    }
+                    resp.headers = std::move(filtered);
+                } else {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.259] zlib inflate failed for %s: rv=%d actualLen=%zu",
+                        contentEncoding.utf8().data(), rv, actualLen);
+                }
+            }
+        }
+    } else if (!contentEncoding.isEmpty() && !resp.body.isEmpty()) {
         compression_algorithm algo = (compression_algorithm)0;
-        if (contentEncoding == "gzip"_s || contentEncoding == "deflate"_s)
-            algo = COMPRESSION_ZLIB;
-        else if (contentEncoding == "br"_s)
+        if (contentEncoding == "br"_s)
             algo = COMPRESSION_BROTLI;
 
         if (algo) {
