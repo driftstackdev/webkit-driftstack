@@ -867,15 +867,16 @@ struct DriftstackQuicAeadCtx {
     Vector<uint8_t> aadVec(aadlen);
     if (aadlen) memcpy(aadVec.mutableSpan().data(), aad, aadlen);
 
+    // Wave 29-499.276 — ChaCha20-Poly1305 (cipher 0x1303) wired alongside AES paths
     Vector<uint8_t> result;
-    if (ctx->isAes256)
+    if (ctx->isChacha20)
+        result = WebKit::driftstackChacha20Poly1305Encrypt(ctx->key, nonceVec, ptVec, aadVec);
+    else if (ctx->isAes256)
         result = WebKit::driftstackAes256GcmEncrypt(ctx->key, nonceVec, ptVec, aadVec);
     else
         result = WebKit::driftstackAes128GcmEncrypt(ctx->key, nonceVec, ptVec, aadVec);
-    // ChaCha20-Poly1305 (0x1303): TODO Wave .232 - LibreSSL has it via
-    // EVP_aead_chacha20_poly1305; needs same dlsym wrapping.
 
-    if (result.size() != plaintextlen + 16) // GCM tag is 16 bytes
+    if (result.size() != plaintextlen + 16) // AEAD tag is 16 bytes (GCM + Poly1305)
         return -1;
     memcpy(dest, result.span().data(), result.size());
     return 0;
@@ -899,8 +900,11 @@ struct DriftstackQuicAeadCtx {
     Vector<uint8_t> aadVec(aadlen);
     if (aadlen) memcpy(aadVec.mutableSpan().data(), aad, aadlen);
 
+    // Wave 29-499.276 — ChaCha20-Poly1305 (cipher 0x1303) decrypt
     Vector<uint8_t> result;
-    if (ctx->isAes256)
+    if (ctx->isChacha20)
+        result = WebKit::driftstackChacha20Poly1305Decrypt(ctx->key, nonceVec, ctVec, aadVec);
+    else if (ctx->isAes256)
         result = WebKit::driftstackAes256GcmDecrypt(ctx->key, nonceVec, ctVec, aadVec);
     else
         result = WebKit::driftstackAes128GcmDecrypt(ctx->key, nonceVec, ctVec, aadVec);

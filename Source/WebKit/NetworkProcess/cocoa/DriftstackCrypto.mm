@@ -119,6 +119,8 @@ struct CryptoFns {
     // Wave 29-499.190 — LibreSSL/BoringSSL AEAD API (works where EVP_Cipher* doesn't)
     const void* (*evp_aead_aes_128_gcm)(void) = nullptr;
     const void* (*evp_aead_aes_256_gcm)(void) = nullptr;
+    // Wave 29-499.276 — ChaCha20-Poly1305 for QUIC AEAD cipher 0x1303
+    const void* (*evp_aead_chacha20_poly1305)(void) = nullptr;
     int (*evp_aead_ctx_init)(void* ctx, const void* aead, const uint8_t* key, size_t keyLen,
                               size_t tagLen, void* engine) = nullptr;
     void (*evp_aead_ctx_cleanup)(void* ctx) = nullptr;
@@ -234,6 +236,7 @@ bool driftstackCryptoInit()
         R(evp_aes_128_gcm, "EVP_aes_128_gcm");
         R(evp_aead_aes_128_gcm, "EVP_aead_aes_128_gcm");
         R(evp_aead_aes_256_gcm, "EVP_aead_aes_256_gcm");
+        R(evp_aead_chacha20_poly1305, "EVP_aead_chacha20_poly1305");  // Wave .276
         R(evp_aead_ctx_init, "EVP_AEAD_CTX_init");
         R(evp_aead_ctx_cleanup, "EVP_AEAD_CTX_cleanup");
         R(evp_aead_ctx_seal, "EVP_AEAD_CTX_seal");
@@ -833,6 +836,29 @@ Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
 {
     auto& f = cryptoFns();
     return aeadDecrypt(f.evp_aead_aes_128_gcm ? f.evp_aead_aes_128_gcm() : nullptr,
+                       key, nonce, ciphertext, aad);
+}
+
+// Wave 29-499.276 — ChaCha20-Poly1305 AEAD for QUIC cipher 0x1303
+// + TLS 1.3 fallback. Some QUIC servers prefer ChaCha20 for mobile clients
+// even when AES-NI is available (heuristic by remote OS hint).
+Vector<uint8_t> driftstackChacha20Poly1305Encrypt(const Vector<uint8_t>& key,
+                                                   const Vector<uint8_t>& nonce,
+                                                   const Vector<uint8_t>& plaintext,
+                                                   const Vector<uint8_t>& aad)
+{
+    auto& f = cryptoFns();
+    return aeadEncrypt(f.evp_aead_chacha20_poly1305 ? f.evp_aead_chacha20_poly1305() : nullptr,
+                       key, nonce, plaintext, aad);
+}
+
+Vector<uint8_t> driftstackChacha20Poly1305Decrypt(const Vector<uint8_t>& key,
+                                                   const Vector<uint8_t>& nonce,
+                                                   const Vector<uint8_t>& ciphertext,
+                                                   const Vector<uint8_t>& aad)
+{
+    auto& f = cryptoFns();
+    return aeadDecrypt(f.evp_aead_chacha20_poly1305 ? f.evp_aead_chacha20_poly1305() : nullptr,
                        key, nonce, ciphertext, aad);
 }
 

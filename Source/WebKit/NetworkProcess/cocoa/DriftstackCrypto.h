@@ -154,6 +154,16 @@ Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& ciphertext,
                                             const Vector<uint8_t>& aad);
 
+// Wave 29-499.276 — ChaCha20-Poly1305 for QUIC cipher 0x1303
+Vector<uint8_t> driftstackChacha20Poly1305Encrypt(const Vector<uint8_t>& key,
+                                                   const Vector<uint8_t>& nonce,
+                                                   const Vector<uint8_t>& plaintext,
+                                                   const Vector<uint8_t>& aad);
+Vector<uint8_t> driftstackChacha20Poly1305Decrypt(const Vector<uint8_t>& key,
+                                                   const Vector<uint8_t>& nonce,
+                                                   const Vector<uint8_t>& ciphertext,
+                                                   const Vector<uint8_t>& aad);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)
