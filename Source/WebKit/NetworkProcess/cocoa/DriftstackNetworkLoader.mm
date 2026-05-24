@@ -856,16 +856,25 @@ void DriftstackNetworkLoader::resume()
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);
 
+            // Wave 29-499.269 — dispatch response delivery via callOnMainRunLoop.
+            // PathB v2's fetch runs on loaderQueue (concurrent dispatch queue);
+            // NetworkResourceLoader expects didReceiveResponse callbacks on the
+            // NetworkProcess main runloop. Off-thread delivery from many
+            // parallel HTTP/2 dispatches corrupted CFRunLoop hash sets and
+            // crashed NetworkProcess (SIGTRAP in CFCheckCFInfoPACSignature_Bridged)
+            // when loading 10+ subresource Angular apps like Twilio NT.
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
-
-            clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
-                    if (action == WebCore::PolicyAction::Use) {
-                        clientPtr->didReceiveData(bodyBuffer.get());
-                        WebCore::NetworkLoadMetrics metrics;
-                        clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
-                    }
-                });
+            auto deliveryResponse = WebCore::ResourceResponse(response);
+            callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                    [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                        if (action == WebCore::PolicyAction::Use) {
+                            clientPtr->didReceiveData(bodyBuffer.get());
+                            WebCore::NetworkLoadMetrics metrics;
+                            clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                        }
+                    });
+            });
             return;
         }
 
