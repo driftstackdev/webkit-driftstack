@@ -1561,7 +1561,11 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // Each iteration: SSL_do_handshake → write_pkt → §7 wrap → sendto relay,
     // recvfrom (with timeout) → §7 unwrap → read_pkt. Repeat until
     // qc->handshakeCompleted or 5s wall-clock budget exhausted.
-    Socks5Framing::Endpoint peerEp { "cloudflare-quic.com"_s, 443 };  // Wave .256
+    // Wave 29-499.285 — use pre-resolved IPv4 for ATYP=0x01 (gost bug with
+    // ATYP=0x03 domain form per Wave .95 empirical). Hardcoded peer IP =
+    // 162.159.135.96 cloudflare-quic.com (Wave .256). Previously used
+    // hostname → ATYP=0x03 → gost dropped → packetsReceived=0 (.284b diag).
+    Socks5Framing::Endpoint peerEp { "162.159.135.96"_s, 443 };  // Wave .285
     constexpr int kMaxIterations = 20;
     constexpr int kPerRecvTimeoutMs = 250;
     int iters = 0;
