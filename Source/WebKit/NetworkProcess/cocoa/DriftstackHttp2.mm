@@ -811,9 +811,12 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.263] zlib auto-decoded %s: %zu→%zu bytes (rv=%d)",
                     contentEncoding.utf8().data(), resp.body.size(), actualLen, rv);
                 resp.body = std::move(decompressed);
+                // Wave 29-499.265 — also strip content-length (was compressed
+                // size; mismatch w/ decompressed body breaks WebKit parsing).
                 Vector<std::pair<String, String>> filtered;
                 for (auto& [k, v] : resp.headers) {
-                    if (k.convertToASCIILowercase() != "content-encoding"_s)
+                    String klow = k.convertToASCIILowercase();
+                    if (klow != "content-encoding"_s && klow != "content-length"_s)
                         filtered.append({ k, v });
                 }
                 resp.headers = std::move(filtered);
