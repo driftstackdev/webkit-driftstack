@@ -819,14 +819,20 @@ namespace {
 }
 } // namespace
 
+// Wave 29-499.293 — switch AES-128-GCM to EVP_Cipher path (aesGcmEncryptImpl).
+// Previously used aeadEncrypt with EVP_AEAD interface (BoringSSL-specific);
+// LibreSSL on macOS doesn't reliably expose EVP_AEAD_CTX_init at the same
+// signature, producing wrong tag bytes for QUIC encrypt path. EVP_Cipher
+// (EVP_EncryptInit_ex + ctrl) is universally implemented and matches NIST
+// AES-128-GCM test vector (58e2fccefa7e3061367f1d57a4e7455a for k=iv=pt=aad=0).
 Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& nonce,
                                             const Vector<uint8_t>& plaintext,
                                             const Vector<uint8_t>& aad)
 {
     auto& f = cryptoFns();
-    return aeadEncrypt(f.evp_aead_aes_128_gcm ? f.evp_aead_aes_128_gcm() : nullptr,
-                       key, nonce, plaintext, aad);
+    return aesGcmEncryptImpl(f.evp_aes_128_gcm ? f.evp_aes_128_gcm() : nullptr,
+                              key, nonce, plaintext, aad);
 }
 
 Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
@@ -835,8 +841,8 @@ Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& aad)
 {
     auto& f = cryptoFns();
-    return aeadDecrypt(f.evp_aead_aes_128_gcm ? f.evp_aead_aes_128_gcm() : nullptr,
-                       key, nonce, ciphertext, aad);
+    return aesGcmDecryptImpl(f.evp_aes_128_gcm ? f.evp_aes_128_gcm() : nullptr,
+                              key, nonce, ciphertext, aad);
 }
 
 // Wave 29-499.276 — ChaCha20-Poly1305 AEAD for QUIC cipher 0x1303
