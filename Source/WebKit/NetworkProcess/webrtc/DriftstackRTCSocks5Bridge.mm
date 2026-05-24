@@ -608,6 +608,7 @@ BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDat
     out.payload.append(WTF::span(payload.get()));
 
     // Wave 29-499.278 — log incoming TURN response message-type for diagnostics
+    // Wave 29-499.289 — parse ERROR-CODE attribute for TURN Allocate-Error
     auto p = WTF::span(payload.get());
     if (p.size() >= 20) {
         uint16_t msgType = (static_cast<uint16_t>(p[0]) << 8) | p[1];
@@ -617,8 +618,49 @@ BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDat
             const char* tn = msgType == 0x0103 ? "Allocate-Success"
                           : msgType == 0x0113 ? "Allocate-Error"
                           : "Refresh-Error";
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.278] unwrapIncoming TURN %s (0x%04x) ← %s:%u (payload=%zu, msgLen=%u)",
-                tn, msgType, source.host.utf8().data(), source.port, p.size(), msgLen);
+
+            // Wave 29-499.289 — walk STUN attributes for ERROR-CODE (0x0009)
+            // Each attr: type(2) + len(2) + value(padded to 4 bytes)
+            int errorCode = 0;
+            String errorReason;
+            String realm;
+            String nonce;
+            size_t attrCursor = 20;  // attrs start after 20-byte header
+            while (attrCursor + 4 <= p.size()) {
+                uint16_t aType = (static_cast<uint16_t>(p[attrCursor]) << 8) | p[attrCursor + 1];
+                uint16_t aLen = (static_cast<uint16_t>(p[attrCursor + 2]) << 8) | p[attrCursor + 3];
+                if (attrCursor + 4 + aLen > p.size()) break;
+                if (aType == 0x0009 && aLen >= 4) {  // ERROR-CODE
+                    uint8_t errClass = p[attrCursor + 4 + 2] & 0x07;
+                    uint8_t errNum = p[attrCursor + 4 + 3];
+                    errorCode = errClass * 100 + errNum;
+                    if (aLen > 4) {
+                        Vector<uint8_t> reasonBytes;
+                        for (size_t i = 4; i < aLen; ++i) reasonBytes.append(p[attrCursor + 4 + i]);
+                        errorReason = String::fromUTF8(byteCast<char>(reasonBytes.span()));
+                    }
+                } else if (aType == 0x0014 && aLen > 0) {  // REALM
+                    Vector<uint8_t> rBytes;
+                    for (size_t i = 0; i < aLen; ++i) rBytes.append(p[attrCursor + 4 + i]);
+                    realm = String::fromUTF8(byteCast<char>(rBytes.span()));
+                } else if (aType == 0x0015 && aLen > 0) {  // NONCE
+                    Vector<uint8_t> nBytes;
+                    for (size_t i = 0; i < aLen && i < 32; ++i) nBytes.append(p[attrCursor + 4 + i]);
+                    nonce = String::fromUTF8(byteCast<char>(nBytes.span()));
+                }
+                // Advance with 4-byte padding
+                attrCursor += 4 + ((aLen + 3) & ~3);
+            }
+
+            if (errorCode > 0) {
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.289] unwrapIncoming TURN %s (0x%04x) ← %s:%u ERROR-CODE=%d '%s' REALM='%s' NONCE='%s' (payload=%zu)",
+                    tn, msgType, source.host.utf8().data(), source.port,
+                    errorCode, errorReason.utf8().data(), realm.utf8().data(),
+                    nonce.utf8().data(), p.size());
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.278] unwrapIncoming TURN %s (0x%04x) ← %s:%u (payload=%zu, msgLen=%u)",
+                    tn, msgType, source.host.utf8().data(), source.port, p.size(), msgLen);
+            }
         }
     }
     return BridgeResult::Success;
