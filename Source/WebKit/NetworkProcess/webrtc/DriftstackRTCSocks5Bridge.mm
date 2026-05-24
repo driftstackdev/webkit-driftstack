@@ -400,6 +400,11 @@ static String hardcodedSTUNHostnameLookup(const String& hostname)
         return "52.26.250.139"_s; // Mozilla STUN (AWS Oregon).
     if (hostname == "stun.miwifi.com"_s)
         return "111.206.174.3"_s;
+    // Wave 29-499.288 — QUIC test endpoints (DriftstackHttp3 smoke targets)
+    if (hostname == "cloudflare-quic.com"_s)
+        return "104.18.26.14"_s;  // verified via dig +short @8.8.8.8
+    if (hostname == "quic.nginx.org"_s)
+        return "3.130.143.18"_s;  // another known QUIC test server
     // Wave 29-499.110-revert — Twilio TURN servers REMOVED from hardcoded map.
     // Twilio uses GeoDNS anycast — hardcoding a specific IP routes to wrong
     // region. Empirical: ATYP=0x03 domain fallback (when getaddrinfo fails)
