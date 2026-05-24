@@ -986,30 +986,25 @@ Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
     }
     auto& p = aesPrim();
 
-    // Wave .301 — wider buffer with alignas(16). LibreSSL on Apple Silicon
-    // appears to write past 256-byte buffer or require 16-byte alignment for
-    // AES-NI/AESARM accelerated path; smaller buffers produced wrong ciphertext.
+    // Wave .303 — log EVERY zero-key call to identify race/state corruption.
+    bool isZeroKey = true;
+    for (int i = 0; i < 16; i++) if (key.span().data()[i]) { isZeroKey = false; break; }
+
     alignas(16) uint8_t aesKey[512] = { };
     if (p.setKey(key.span().data(), 128, aesKey) != 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES_set_encrypt_key failed");
         return {};
     }
 
-    // H = AES_ECB(K, 0^128). NOTE: AES_encrypt is NOT in-place safe in LibreSSL.
     uint8_t zeroBlock[16] = { };
     uint8_t H[16] = { };
     p.encrypt(zeroBlock, H, aesKey);
 
-    // Wave .301 self-debug — log H every call to verify; if H ever != 66e94bd4
-    // for k=0, the AES context is corrupted.
-    static int s_logCount = 0;
-    if (s_logCount < 3) {
-        s_logCount++;
-        // Also dump first 32 bytes of aesKey to verify setKey populated.
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.301] H call#%d k[0..15]=%02x%02x%02x%02x... aesKey[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x H=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-            s_logCount,
-            key.span().data()[0], key.span().data()[1], key.span().data()[2], key.span().data()[3],
+    if (isZeroKey) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.303] ZERO-KEY call (NIST test): nonce.size=%zu pt.size=%zu aad.size=%zu aesKey[0..15]=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x H=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x (expect H=66e94bd4ef8a2c3b884cfa59ca342b2e)",
+            nonce.size(), plaintext.size(), aad.size(),
             aesKey[0],aesKey[1],aesKey[2],aesKey[3],aesKey[4],aesKey[5],aesKey[6],aesKey[7],
+            aesKey[8],aesKey[9],aesKey[10],aesKey[11],aesKey[12],aesKey[13],aesKey[14],aesKey[15],
             H[0],H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8],H[9],H[10],H[11],H[12],H[13],H[14],H[15]);
     }
 

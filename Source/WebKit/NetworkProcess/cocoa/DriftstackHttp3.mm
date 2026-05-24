@@ -949,8 +949,14 @@ static bool resolveAesEncryptFns()
 {
     auto& f = aesEncryptFns();
     if (f.ready) return true;
-    f.set_encrypt_key = reinterpret_cast<decltype(f.set_encrypt_key)>(dlsym(RTLD_DEFAULT, "AES_set_encrypt_key"));
-    f.encrypt = reinterpret_cast<decltype(f.encrypt)>(dlsym(RTLD_DEFAULT, "AES_encrypt"));
+    // Wave .302 — explicit dlopen libssl.48 BEFORE dlsym. libwebrtc.dylib
+    // bundles its own BoringSSL AES_encrypt with incompatible key schedule;
+    // RTLD_DEFAULT may return it instead of LibreSSL. See feedback memory
+    // dlopen-libssl-before-dlsym for full root-cause analysis.
+    static void* hSsl = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+    void* h = hSsl ? hSsl : RTLD_DEFAULT;
+    f.set_encrypt_key = reinterpret_cast<decltype(f.set_encrypt_key)>(dlsym(h, "AES_set_encrypt_key"));
+    f.encrypt = reinterpret_cast<decltype(f.encrypt)>(dlsym(h, "AES_encrypt"));
     f.ready = f.set_encrypt_key && f.encrypt;
     if (!f.ready) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.232] resolveAesEncryptFns: AES_set_encrypt_key=%p AES_encrypt=%p — header protection will fail",
@@ -985,11 +991,15 @@ static bool resolveAesEncryptFns()
         static Chacha20Ctr32Fn chacha20Ctr32 = nullptr;
         static dispatch_once_t chachaOnce;
         dispatch_once(&chachaOnce, ^{
+            // Wave .302 — dlopen libssl.48 before dlsym (same lib-mixup risk as
+            // AES_encrypt; see dlopen-libssl-before-dlsym feedback memory).
+            static void* hSslChacha = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+            void* h = hSslChacha ? hSslChacha : RTLD_DEFAULT;
             chacha20Ctr32 = reinterpret_cast<Chacha20Ctr32Fn>(
-                dlsym(RTLD_DEFAULT, "ChaCha20_ctr32"));
+                dlsym(h, "ChaCha20_ctr32"));
             if (!chacha20Ctr32)
                 chacha20Ctr32 = reinterpret_cast<Chacha20Ctr32Fn>(
-                    dlsym(RTLD_DEFAULT, "CRYPTO_chacha_20"));
+                    dlsym(h, "CRYPTO_chacha_20"));
             if (!chacha20Ctr32)
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.277] ChaCha20_ctr32 + CRYPTO_chacha_20 NOT FOUND in LibreSSL/BoringSSL — ChaCha20 hp_mask disabled");
         });
@@ -1270,8 +1280,13 @@ static bool resolveAesEncryptFns()
         //  example-values#aes_gcm)
         // key=00*16, iv=00*12, pt=empty, aad=empty
         // ct=empty, tag=58e2fccefa7e3061367f1d57a4e7455a
-        Vector<uint8_t> tk(16);  // all zeros
-        Vector<uint8_t> tiv(12); // all zeros
+        // Wave .303 — explicitly zero. WTF::Vector<POD>(N) reserves N but does NOT
+        // zero-initialize for POD types; previous tk(16)/tiv(12) had uninitialized
+        // stack memory that sometimes happened to be zero (flaky self-test).
+        Vector<uint8_t> tk(16);
+        memset(tk.mutableSpan().data(), 0, 16);
+        Vector<uint8_t> tiv(12);
+        memset(tiv.mutableSpan().data(), 0, 12);
         Vector<uint8_t> tpt;     // empty plaintext
         Vector<uint8_t> taad;    // empty AAD
         auto tct = WebKit::driftstackAes128GcmEncrypt(tk, tiv, tpt, taad);
