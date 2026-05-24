@@ -405,6 +405,11 @@ static String hardcodedSTUNHostnameLookup(const String& hostname)
         return "104.18.26.14"_s;  // verified via dig +short @8.8.8.8
     if (hostname == "quic.nginx.org"_s)
         return "3.130.143.18"_s;  // another known QUIC test server
+    // Wave 29-499.290 — OpenRelay TURN endpoints + Metered STUN
+    if (hostname == "openrelay.metered.ca"_s)
+        return "15.235.47.158"_s;  // dig +short @8.8.8.8 (free TURN service)
+    if (hostname == "stun.relay.metered.ca"_s)
+        return "72.14.189.175"_s;
     // Wave 29-499.110-revert — Twilio TURN servers REMOVED from hardcoded map.
     // Twilio uses GeoDNS anycast — hardcoding a specific IP routes to wrong
     // region. Empirical: ATYP=0x03 domain fallback (when getaddrinfo fails)
