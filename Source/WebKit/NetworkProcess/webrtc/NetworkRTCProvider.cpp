@@ -371,6 +371,32 @@ void NetworkRTCProvider::createClientTCPSocket(LibWebRTCSocketIdentifier identif
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.274 — HARD BLOCK direct TCP socket creation when
+    // DRIFTSTACK_CUSTOM_SOCKS5=1. NetworkRTCTCPSocketCocoa uses
+    // nw_connection_create directly with NO SOCKS5 path — it would leak
+    // Mac LAN IP to TURN TCP/TLS servers, violating CLAUDE.md egress lock
+    // ('sessions cannot egress without proxy'). Twilio NT 'NTS: TURN
+    // TCP/TLS Connectivity' tests trigger this path; with the block they
+    // fail cleanly (signalSocketIsClosed) rather than leaking.
+    //
+    // Future slice: route via DriftstackSocks5Client::tcpConnect (SOCKS5
+    // CONNECT) + tunnel nw_connection_receive callbacks through the
+    // SOCKS5 BSD socket. Substantial rewrite of NetworkRTCTCPSocketCocoa.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) {
+            loggedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.274] BLOCK direct TCP socket creation (TURN TCP/TLS) when CUSTOM_SOCKS5=1 — would leak Mac IP. signalSocketIsClosed (id=%" PRIu64 ", dest=%s:%d). TURN UDP via §7 still works; TURN TCP/TLS slated for SOCKS5 CONNECT routing next slice.",
+                identifier.toUInt64(),
+                remoteAddress.rtcAddress().hostname().c_str(),
+                remoteAddress.rtcAddress().port());
+        }
+        signalSocketIsClosed(identifier);
+        return;
+    }
+#endif
+
     auto socket = NetworkRTCTCPSocketCocoa::createClientTCPSocket(identifier, *this, remoteAddress.rtcAddress(), options, attributedBundleIdentifierFromPageIdentifier(pageIdentifier), flags, domain, m_ipcConnection.copyRef());
     if (socket)
         addSocket(identifier, WTF::move(socket));
