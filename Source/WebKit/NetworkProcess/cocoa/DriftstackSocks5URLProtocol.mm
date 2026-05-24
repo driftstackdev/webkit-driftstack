@@ -136,6 +136,37 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
         }
     }
 
+    // Wave 29-499.273 — bypass SOCKS5 for loopback + private-network
+    // hostnames. Local test harnesses (sink-server on 127.0.0.1, dev
+    // containers on 10/172.16/192.168) can't be reached via an internet
+    // SOCKS5 proxy (proxy returns REP=0x03 'Network unreachable').
+    // Matches iPhone Safari behavior — iOS bypasses VPN/proxy for
+    // private-RFC1918 + loopback by default.
+    NSString *host = url.host.lowercaseString;
+    if ([host isEqualToString:@"localhost"]
+        || [host hasPrefix:@"127."]
+        || [host isEqualToString:@"::1"]
+        || [host hasPrefix:@"10."]
+        || [host hasPrefix:@"192.168."]
+        || ([host hasPrefix:@"172."]
+            && ({
+                NSArray *parts = [host componentsSeparatedByString:@"."];
+                BOOL is172 = NO;
+                if (parts.count == 4) {
+                    int second = [parts[1] intValue];
+                    is172 = (second >= 16 && second <= 31);
+                }
+                is172;
+            }))) {
+        static bool loggedLoopbackOnce = false;
+        if (!loggedLoopbackOnce) {
+            loggedLoopbackOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.273] bypass SOCKS5 for loopback/private host '%s' (direct via CFNetwork)",
+                host.UTF8String);
+        }
+        return NO;
+    }
+
     // Wave 29-396 sub-slice 1.9.b: ACTIVATE — claim the request for
     // SOCKS5 transport via DriftstackSocks5Client.
     return YES;

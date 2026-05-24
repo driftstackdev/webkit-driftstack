@@ -699,14 +699,40 @@ void NetworkDataTaskCocoa::resume()
     // Phase 1: isActiveForSession() returns false until the loader's
     // BSD-socket impl lands. Falls through to NSURLSession resume.
     if (WebKit::DriftstackNetworkLoader::isActiveForSession()) {
-        static bool loggedOnce = false;
-        if (!loggedOnce) {
-            loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.132] NetworkDataTaskCocoa::resume — Phase 1 ACTIVE: routing via DriftstackNetworkLoader BSD-socket SOCKS5+TLS+HTTP/1.1");
+        // Wave 29-499.273 — bypass PathB v2 for loopback + private-network
+        // hostnames (matches iPhone Safari which bypasses VPN/proxy for
+        // RFC1918 + loopback). Local test sinks + dev servers must reach
+        // 127.x / 10.x / 192.168.x / 172.16-31.x directly via NSURLSession.
+        NSString* host = [[[firstRequest().nsURLRequest(WebCore::HTTPBodyUpdatePolicy::DoNotUpdateHTTPBody) URL] host] lowercaseString];
+        BOOL isLoopback = host && ([host isEqualToString:@"localhost"]
+            || [host hasPrefix:@"127."]
+            || [host isEqualToString:@"::1"]
+            || [host hasPrefix:@"10."]
+            || [host hasPrefix:@"192.168."]);
+        if (host && [host hasPrefix:@"172."]) {
+            NSArray* parts = [host componentsSeparatedByString:@"."];
+            if (parts.count == 4) {
+                int second = [parts[1] intValue];
+                if (second >= 16 && second <= 31) isLoopback = YES;
+            }
         }
-        m_driftstackLoader = WebKit::DriftstackNetworkLoader::create(*this, firstRequest());
-        m_driftstackLoader->resume();
-        return;
+        if (isLoopback) {
+            static bool loggedLoopbackOnce = false;
+            if (!loggedLoopbackOnce) {
+                loggedLoopbackOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.273] bypass PathB v2 for loopback/private host '%s' (direct via NSURLSession)", host.UTF8String);
+            }
+            // Fall through to NSURLSession resume below
+        } else {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.132] NetworkDataTaskCocoa::resume — Phase 1 ACTIVE: routing via DriftstackNetworkLoader BSD-socket SOCKS5+TLS+HTTP/1.1");
+            }
+            m_driftstackLoader = WebKit::DriftstackNetworkLoader::create(*this, firstRequest());
+            m_driftstackLoader->resume();
+            return;
+        }
     }
 #endif
 
