@@ -95,3 +95,8 @@ CLAUDE.md
 # Ignore tracing files
 *.atrc
 
+
+# Wave .301 — exclude xcodebuild side-output dirs (not the real WebKitBuild)
+Tools/MiniBrowser/build/
+Source/WebCore/build/
+Source/WebCore/PAL/build/
