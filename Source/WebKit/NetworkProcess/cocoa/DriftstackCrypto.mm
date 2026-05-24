@@ -16,11 +16,50 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import <CommonCrypto/CommonCrypto.h>
+#import <CommonCrypto/CommonCryptor.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <stdlib.h>
 #import <string.h>
 #import <wtf/Assertions.h>
+
+// Wave 29-499.294 — Apple CommonCrypto GCM oneshot SPI (private on macOS,
+// resolved via dlsym below). Bypasses LibreSSL EVP_Cipher path that produced
+// garbage tag bytes on macOS 26.2.
+typedef int32_t (*CCCryptorGCMOneshotEncryptFn)(uint32_t alg,
+    const void* key, size_t keySize,
+    const void* iv, size_t ivSize,
+    const void* aData, size_t aDataSize,
+    const void* dataIn, size_t dataInSize,
+    void* dataOut,
+    void* tag, size_t* tagSize);
+typedef int32_t (*CCCryptorGCMOneshotDecryptFn)(uint32_t alg,
+    const void* key, size_t keySize,
+    const void* iv, size_t ivSize,
+    const void* aData, size_t aDataSize,
+    const void* dataIn, size_t dataInSize,
+    void* dataOut,
+    const void* tag, size_t tagSize);
+
+// Wave 29-499.296 — CCMode + CCParameter constants for GCM via public CCCryptor
+// API (defined in CommonCryptorSPI.h which the macOS SDK doesn't ship publicly).
+enum { kCCModeGCM_DS = 11 };
+enum {
+    kCCParameterIV_DS = 0,
+    kCCParameterAuthData_DS = 1,
+    kCCMacSize_DS = 2,
+    kCCDataSize_DS = 3,
+    kCCParameterAuthTag_DS = 4,
+};
+typedef uint32_t CCParameter_DS;
+
+// Forward-declare CCCryptorAddParameter / CCCryptorGetParameter (SPI, not in
+// public CommonCryptor.h but exported from libcommonCrypto.dylib).
+extern "C" CCCryptorStatus CCCryptorAddParameter(CCCryptorRef cryptor,
+    CCParameter_DS parameter, const void* data, size_t dataSize);
+extern "C" CCCryptorStatus CCCryptorGetParameter(CCCryptorRef cryptor,
+    CCParameter_DS parameter, void* data, size_t* dataSize);
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -144,6 +183,10 @@ struct CryptoFns {
     int (*evp_encryptfinal_ex)(void* ctx, uint8_t* out, int* outLen) = nullptr;
     int (*evp_decryptfinal_ex)(void* ctx, uint8_t* out, int* outLen) = nullptr;
 
+    // Wave 29-499.294 — Apple CommonCrypto GCM oneshot SPI
+    CCCryptorGCMOneshotEncryptFn cc_gcm_oneshot_encrypt = nullptr;
+    CCCryptorGCMOneshotDecryptFn cc_gcm_oneshot_decrypt = nullptr;
+
     bool ready = false;
 };
 
@@ -253,6 +296,24 @@ bool driftstackCryptoInit()
         R(evp_encryptfinal_ex, "EVP_EncryptFinal_ex");
         R(evp_decryptfinal_ex, "EVP_DecryptFinal_ex");
 #undef R
+
+        // Wave 29-499.294 — Apple CommonCrypto GCM oneshot SPI (private but
+        // exported on macOS 10.13+). dlsym from libcommonCrypto.dylib or RTLD_DEFAULT.
+        void* hCC = dlopen("/usr/lib/system/libcommonCrypto.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!hCC) hCC = dlopen("libcommonCrypto.dylib", RTLD_NOW | RTLD_GLOBAL);
+        void* hCCResolver = hCC ? hCC : RTLD_DEFAULT;
+        f.cc_gcm_oneshot_encrypt = reinterpret_cast<CCCryptorGCMOneshotEncryptFn>(
+            dlsym(hCCResolver, "CCCryptorGCMOneshotEncrypt"));
+        f.cc_gcm_oneshot_decrypt = reinterpret_cast<CCCryptorGCMOneshotDecryptFn>(
+            dlsym(hCCResolver, "CCCryptorGCMOneshotDecrypt"));
+        if (!f.cc_gcm_oneshot_encrypt)
+            f.cc_gcm_oneshot_encrypt = reinterpret_cast<CCCryptorGCMOneshotEncryptFn>(
+                dlsym(RTLD_DEFAULT, "CCCryptorGCMOneshotEncrypt"));
+        if (!f.cc_gcm_oneshot_decrypt)
+            f.cc_gcm_oneshot_decrypt = reinterpret_cast<CCCryptorGCMOneshotDecryptFn>(
+                dlsym(RTLD_DEFAULT, "CCCryptorGCMOneshotDecrypt"));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.294] CCCryptorGCMOneshot dlsym: enc=%p dec=%p",
+            (void*)f.cc_gcm_oneshot_encrypt, (void*)f.cc_gcm_oneshot_decrypt);
 
         bool required = f.evp_sha384 && f.evp_md_ctx_new && f.evp_digestupdate
             && f.evp_digestfinal_ex && f.evp_pkey_ctx_new_id && f.evp_pkey_derive_init
@@ -819,20 +880,193 @@ namespace {
 }
 } // namespace
 
-// Wave 29-499.293 — switch AES-128-GCM to EVP_Cipher path (aesGcmEncryptImpl).
-// Previously used aeadEncrypt with EVP_AEAD interface (BoringSSL-specific);
-// LibreSSL on macOS doesn't reliably expose EVP_AEAD_CTX_init at the same
-// signature, producing wrong tag bytes for QUIC encrypt path. EVP_Cipher
-// (EVP_EncryptInit_ex + ctrl) is universally implemented and matches NIST
-// AES-128-GCM test vector (58e2fccefa7e3061367f1d57a4e7455a for k=iv=pt=aad=0).
+// Wave 29-499.297 — Manual AES-128-GCM implementation per NIST SP 800-38D.
+// All Apple/LibreSSL high-level GCM APIs failed on macOS 26.2:
+//   * LibreSSL EVP_AEAD: tag baaf8dd7… (wrong)
+//   * LibreSSL EVP_Cipher: garbage "5000\0…" (wrong)
+//   * Apple CCCryptorGCMOneshotEncrypt: rc=-4300 kCCParamError
+//   * Apple CCCryptorCreateWithMode(kCCModeGCM): rc=-4305 kCCUnimplemented
+// AES-128-ECB via LibreSSL AES_encrypt is verified correct (NIST test PASS).
+// Build GCM on top of working ECB primitive.
+
+namespace driftstack_gcm {
+
+typedef void (*AesEncFn)(const uint8_t* in, uint8_t* out, const void* aesKey);
+typedef int (*AesSetKeyFn)(const uint8_t* userKey, int bits, void* aesKey);
+
+struct AesPrimitives {
+    AesSetKeyFn setKey = nullptr;
+    AesEncFn encrypt = nullptr;
+    bool ready = false;
+};
+
+static AesPrimitives& aesPrim()
+{
+    static AesPrimitives p;
+    return p;
+}
+
+static bool resolveAes()
+{
+    auto& p = aesPrim();
+    if (p.ready) return true;
+    // Wave .300 — explicitly dlopen libssl.48 BEFORE dlsym. If we use RTLD_DEFAULT
+    // before libssl.48 is loaded, dlsym hits libwebrtc.dylib's bundled BoringSSL
+    // AES_encrypt which has incompatible key-schedule format and produces wrong
+    // ciphertext (cc96aeb8… instead of 66e94bd4… for AES_ECB(0, 0)).
+    static void* hSsl = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+    if (!hSsl) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] dlopen libssl.48 FAILED for AES resolution");
+        return false;
+    }
+    p.setKey = reinterpret_cast<AesSetKeyFn>(dlsym(hSsl, "AES_set_encrypt_key"));
+    p.encrypt = reinterpret_cast<AesEncFn>(dlsym(hSsl, "AES_encrypt"));
+    p.ready = p.setKey && p.encrypt;
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] resolveAes from libssl.48: setKey=%p encrypt=%p ready=%d",
+        (void*)p.setKey, (void*)p.encrypt, p.ready);
+    return p.ready;
+}
+
+// GF(2^128) multiplication, NIST SP 800-38D §6.3 (right-shift method).
+// Bytes are stored big-endian per GCM spec.
+inline void gf128Mul(const uint8_t x[16], const uint8_t y[16], uint8_t out[16])
+{
+    uint8_t v[16];
+    uint8_t z[16] = {0};
+    memcpy(v, y, 16);
+    for (int i = 0; i < 128; i++) {
+        // bit i of x (MSB-first across bytes)
+        int byte = i >> 3;
+        int bit = 7 - (i & 7);
+        if ((x[byte] >> bit) & 1) {
+            for (int k = 0; k < 16; k++) z[k] ^= v[k];
+        }
+        // v = v >> 1, if lsb(v_pre) then v ^= R where R = 0xe1<<120
+        bool lsb = v[15] & 1;
+        for (int k = 15; k > 0; k--) {
+            v[k] = (v[k] >> 1) | ((v[k - 1] & 1) << 7);
+        }
+        v[0] >>= 1;
+        if (lsb) v[0] ^= 0xe1;
+    }
+    memcpy(out, z, 16);
+}
+
+inline void ghashUpdate(uint8_t y[16], const uint8_t* blocks, size_t numBlocks, const uint8_t h[16])
+{
+    for (size_t i = 0; i < numBlocks; i++) {
+        for (int k = 0; k < 16; k++) y[k] ^= blocks[i * 16 + k];
+        uint8_t tmp[16];
+        gf128Mul(y, h, tmp);
+        memcpy(y, tmp, 16);
+    }
+}
+
+inline void incrCounter(uint8_t ctr[16])
+{
+    // Increment last 32-bit word (big-endian).
+    for (int i = 15; i >= 12; i--) {
+        ctr[i]++;
+        if (ctr[i] != 0) break;
+    }
+}
+
+} // namespace driftstack_gcm
+
 Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& nonce,
                                             const Vector<uint8_t>& plaintext,
                                             const Vector<uint8_t>& aad)
 {
-    auto& f = cryptoFns();
-    return aesGcmEncryptImpl(f.evp_aes_128_gcm ? f.evp_aes_128_gcm() : nullptr,
-                              key, nonce, plaintext, aad);
+    using namespace driftstack_gcm;
+    if (!resolveAes() || key.size() != 16 || nonce.size() != 12) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES-GCM precondition fail (resolveAes=%d key=%zu nonce=%zu)",
+            resolveAes(), key.size(), nonce.size());
+        return {};
+    }
+    auto& p = aesPrim();
+
+    // AES_KEY is opaque, sized ~244 bytes in LibreSSL/OpenSSL.
+    // Wave .299 — match the working .292 ECB self-test exactly (256-byte buf,
+    // no alignas). Stack scribble from larger buffer caused tag mismatch
+    // across runs (e6b0c75a / 5624a274 / etc — different each launch).
+    uint8_t aesKey[256] = { };
+    if (p.setKey(key.span().data(), 128, aesKey) != 0) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES_set_encrypt_key failed");
+        return {};
+    }
+
+    // H = AES_ECB(K, 0^128). NOTE: AES_encrypt is NOT in-place safe in LibreSSL —
+    // must use distinct in/out buffers (Wave .298 fix).
+    uint8_t zeroBlock[16] = { };
+    uint8_t H[16] = { };
+    p.encrypt(zeroBlock, H, aesKey);
+
+    // Wave .299 diagnostic: log H to verify == 66e94bd4ef8a2c3b884cfa59ca342b2e for k=0.
+    static bool s_loggedH = false;
+    if (!s_loggedH) {
+        s_loggedH = true;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.299] first-call H: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect 66 e9 4b d4 ef 8a 2c 3b 88 4c fa 59 ca 34 2b 2e for k=0)",
+            H[0],H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8],H[9],H[10],H[11],H[12],H[13],H[14],H[15]);
+    }
+
+    // J0 for 96-bit IV: nonce || 0x00000001 (big-endian)
+    uint8_t J0[16];
+    memcpy(J0, nonce.span().data(), 12);
+    J0[12] = 0; J0[13] = 0; J0[14] = 0; J0[15] = 1;
+
+    // CTR mode: starting counter = J0+1, ..., for each 16-byte plaintext block.
+    Vector<uint8_t> output(plaintext.size() + 16);
+    uint8_t ctr[16];
+    memcpy(ctr, J0, 16);
+    size_t fullBlocks = plaintext.size() / 16;
+    size_t tail = plaintext.size() % 16;
+    for (size_t i = 0; i < fullBlocks; i++) {
+        incrCounter(ctr);
+        uint8_t ks[16];
+        p.encrypt(ctr, ks, aesKey);
+        for (int k = 0; k < 16; k++)
+            output[i * 16 + k] = plaintext.span().data()[i * 16 + k] ^ ks[k];
+    }
+    if (tail) {
+        incrCounter(ctr);
+        uint8_t ks[16];
+        p.encrypt(ctr, ks, aesKey);
+        for (size_t k = 0; k < tail; k++)
+            output[fullBlocks * 16 + k] = plaintext.span().data()[fullBlocks * 16 + k] ^ ks[k];
+    }
+
+    // GHASH(H, A || pad || C || pad || lenA||lenC)
+    uint8_t Y[16] = {0};
+    size_t aadBlocks = aad.size() / 16;
+    size_t aadTail = aad.size() % 16;
+    if (aadBlocks) ghashUpdate(Y, aad.span().data(), aadBlocks, H);
+    if (aadTail) {
+        uint8_t pad[16] = {0};
+        memcpy(pad, aad.span().data() + aadBlocks * 16, aadTail);
+        ghashUpdate(Y, pad, 1, H);
+    }
+    if (fullBlocks) ghashUpdate(Y, output.span().data(), fullBlocks, H);
+    if (tail) {
+        uint8_t pad[16] = {0};
+        memcpy(pad, output.span().data() + fullBlocks * 16, tail);
+        ghashUpdate(Y, pad, 1, H);
+    }
+    // Length block: lenA in bits BE u64 || lenC in bits BE u64
+    uint8_t lenBlock[16];
+    uint64_t lenAbits = uint64_t(aad.size()) * 8;
+    uint64_t lenCbits = uint64_t(plaintext.size()) * 8;
+    for (int i = 0; i < 8; i++) lenBlock[i] = uint8_t(lenAbits >> (56 - i * 8));
+    for (int i = 0; i < 8; i++) lenBlock[8 + i] = uint8_t(lenCbits >> (56 - i * 8));
+    ghashUpdate(Y, lenBlock, 1, H);
+
+    // Tag = E_K(J0) ⊕ Y
+    uint8_t EJ0[16];
+    p.encrypt(J0, EJ0, aesKey);
+    for (int k = 0; k < 16; k++)
+        output[plaintext.size() + k] = EJ0[k] ^ Y[k];
+
+    return output;
 }
 
 Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
@@ -840,9 +1074,81 @@ Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& ciphertext,
                                             const Vector<uint8_t>& aad)
 {
-    auto& f = cryptoFns();
-    return aesGcmDecryptImpl(f.evp_aes_128_gcm ? f.evp_aes_128_gcm() : nullptr,
-                              key, nonce, ciphertext, aad);
+    using namespace driftstack_gcm;
+    if (!resolveAes() || key.size() != 16 || nonce.size() != 12 || ciphertext.size() < 16)
+        return {};
+    auto& p = aesPrim();
+
+    uint8_t aesKey[256] = { };
+    if (p.setKey(key.span().data(), 128, aesKey) != 0)
+        return {};
+
+    uint8_t zeroBlock[16] = { };
+    uint8_t H[16] = { };
+    p.encrypt(zeroBlock, H, aesKey);
+
+    uint8_t J0[16];
+    memcpy(J0, nonce.span().data(), 12);
+    J0[12] = 0; J0[13] = 0; J0[14] = 0; J0[15] = 1;
+
+    size_t ctLen = ciphertext.size() - 16;
+    const uint8_t* tag = ciphertext.span().data() + ctLen;
+
+    // GHASH FIRST (over ciphertext, before CTR decrypts it).
+    uint8_t Y[16] = {0};
+    size_t aadBlocks = aad.size() / 16;
+    size_t aadTail = aad.size() % 16;
+    if (aadBlocks) ghashUpdate(Y, aad.span().data(), aadBlocks, H);
+    if (aadTail) {
+        uint8_t pad[16] = {0};
+        memcpy(pad, aad.span().data() + aadBlocks * 16, aadTail);
+        ghashUpdate(Y, pad, 1, H);
+    }
+    size_t fullBlocks = ctLen / 16;
+    size_t tail = ctLen % 16;
+    if (fullBlocks) ghashUpdate(Y, ciphertext.span().data(), fullBlocks, H);
+    if (tail) {
+        uint8_t pad[16] = {0};
+        memcpy(pad, ciphertext.span().data() + fullBlocks * 16, tail);
+        ghashUpdate(Y, pad, 1, H);
+    }
+    uint8_t lenBlock[16];
+    uint64_t lenAbits = uint64_t(aad.size()) * 8;
+    uint64_t lenCbits = uint64_t(ctLen) * 8;
+    for (int i = 0; i < 8; i++) lenBlock[i] = uint8_t(lenAbits >> (56 - i * 8));
+    for (int i = 0; i < 8; i++) lenBlock[8 + i] = uint8_t(lenCbits >> (56 - i * 8));
+    ghashUpdate(Y, lenBlock, 1, H);
+
+    uint8_t EJ0[16];
+    p.encrypt(J0, EJ0, aesKey);
+    uint8_t expectedTag[16];
+    for (int k = 0; k < 16; k++)
+        expectedTag[k] = EJ0[k] ^ Y[k];
+
+    // Constant-time tag compare.
+    uint8_t diff = 0;
+    for (int k = 0; k < 16; k++) diff |= expectedTag[k] ^ tag[k];
+    if (diff) return {};
+
+    // CTR decrypt.
+    Vector<uint8_t> output(ctLen);
+    uint8_t ctr[16];
+    memcpy(ctr, J0, 16);
+    for (size_t i = 0; i < fullBlocks; i++) {
+        incrCounter(ctr);
+        uint8_t ks[16];
+        p.encrypt(ctr, ks, aesKey);
+        for (int k = 0; k < 16; k++)
+            output[i * 16 + k] = ciphertext.span().data()[i * 16 + k] ^ ks[k];
+    }
+    if (tail) {
+        incrCounter(ctr);
+        uint8_t ks[16];
+        p.encrypt(ctr, ks, aesKey);
+        for (size_t k = 0; k < tail; k++)
+            output[fullBlocks * 16 + k] = ciphertext.span().data()[fullBlocks * 16 + k] ^ ks[k];
+    }
+    return output;
 }
 
 // Wave 29-499.276 — ChaCha20-Poly1305 AEAD for QUIC cipher 0x1303
