@@ -1254,6 +1254,57 @@ static bool resolveAesEncryptFns()
                 cliKey[0], cliKey[1], cliKey[2], cliKey[3], cliKey[4], cliKey[5], cliKey[6], cliKey[7],
                 cliKey[8], cliKey[9], cliKey[10], cliKey[11], cliKey[12], cliKey[13], cliKey[14], cliKey[15]);
         }
+
+        // Wave 29-499.292 — RFC 9001 §A.2 packet protection self-test.
+        // Verifies AES-128-GCM encrypt + AES-ECB hp_mask produce RFC-canonical
+        // bytes. Uses test vector with KNOWN inputs to isolate AEAD/hp bugs
+        // from data-dependent issues.
+        //
+        // RFC 9001 §A.2 specifies (for Initial protection test):
+        //   plaintext frame:  CRYPTO frame containing TLS ClientHello (1162 bytes)
+        //   But simpler: just encrypt known 16-byte plaintext with known key/nonce/aad
+        //   and check tag matches NIST CAVP AES-128-GCM vector.
+
+        // AEAD AES-128-GCM test: NIST GCM-AES-128 test vector #1
+        // (https://csrc.nist.gov/projects/cryptographic-standard-and-guidelines/
+        //  example-values#aes_gcm)
+        // key=00*16, iv=00*12, pt=empty, aad=empty
+        // ct=empty, tag=58e2fccefa7e3061367f1d57a4e7455a
+        Vector<uint8_t> tk(16);  // all zeros
+        Vector<uint8_t> tiv(12); // all zeros
+        Vector<uint8_t> tpt;     // empty plaintext
+        Vector<uint8_t> taad;    // empty AAD
+        auto tct = WebKit::driftstackAes128GcmEncrypt(tk, tiv, tpt, taad);
+        bool aead_ok = tct.size() == 16
+            && tct[0] == 0x58 && tct[1] == 0xe2 && tct[2] == 0xfc && tct[3] == 0xce
+            && tct[15] == 0x5a;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.292] AES-128-GCM self-test: %d (1=PASS)", aead_ok);
+        if (tct.size() == 16) {
+            WTFLogAlways("[Wave29-499.292] AES-128-GCM(k=0,iv=0,pt=empty) tag: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect: 58 e2 fc ce fa 7e 30 61 36 7f 1d 57 a4 e7 45 5a)",
+                tct[0], tct[1], tct[2], tct[3], tct[4], tct[5], tct[6], tct[7],
+                tct[8], tct[9], tct[10], tct[11], tct[12], tct[13], tct[14], tct[15]);
+        }
+
+        // AES-ECB hp_mask test: encrypt 16-byte zero block with zero key
+        // Expected: 66e94bd4ef8a2c3b884cfa59ca342b2e (NIST AES-128 ECB test vector)
+        if (resolveAesEncryptFns()) {
+            uint8_t aesKeyBuf[256] = { };
+            uint8_t zeroKey[16] = { };
+            uint8_t zeroBlock[16] = { };
+            uint8_t cipher[16] = { };
+            if (aesEncryptFns().set_encrypt_key(zeroKey, 128, aesKeyBuf) == 0) {
+                aesEncryptFns().encrypt(zeroBlock, cipher, aesKeyBuf);
+                bool hp_ok = cipher[0] == 0x66 && cipher[1] == 0xe9 && cipher[15] == 0x2e;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.292] AES-128-ECB hp_mask self-test: %d (1=PASS)", hp_ok);
+                WTFLogAlways("[Wave29-499.292] AES-128-ECB(k=0,pt=0) cipher: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect: 66 e9 4b d4 ef 8a 2c 3b 88 4c fa 59 ca 34 2b 2e)",
+                    cipher[0], cipher[1], cipher[2], cipher[3], cipher[4], cipher[5], cipher[6], cipher[7],
+                    cipher[8], cipher[9], cipher[10], cipher[11], cipher[12], cipher[13], cipher[14], cipher[15]);
+            } else {
+                WTFLogAlways("[Wave29-499.292] AES_set_encrypt_key returned non-zero — symbol resolution wrong");
+            }
+        } else {
+            WTFLogAlways("[Wave29-499.292] resolveAesEncryptFns FAILED — AES_set_encrypt_key/AES_encrypt symbols not found");
+        }
     });
 
     Vector<uint8_t> saltVec(20);
