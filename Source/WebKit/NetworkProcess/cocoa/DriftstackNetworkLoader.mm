@@ -859,7 +859,7 @@ void DriftstackNetworkLoader::resume()
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
 
             clientPtr->didReceiveResponse(WebCore::ResourceResponse(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                [clientPtr, bodyBuffer = WTF::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                     if (action == WebCore::PolicyAction::Use) {
                         clientPtr->didReceiveData(bodyBuffer.get());
                         WebCore::NetworkLoadMetrics metrics;
