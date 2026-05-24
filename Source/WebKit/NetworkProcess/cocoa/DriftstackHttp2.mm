@@ -766,13 +766,42 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 
             const uint8_t* src = resp.body.span().data();
             size_t srcLen = resp.body.size();
-            // For gzip skip 10-byte header + parse format; libcompression
-            // ZLIB expects deflate stream (no gzip wrapper). Handle gzip wrapper:
+            // Wave 29-499.258 — RFC 1952 gzip header parsing. Was fixed-10
+            // assumption; broke on gzip streams with FNAME/FCOMMENT/FEXTRA/FHCRC
+            // (most production servers set FNAME or FHCRC).
+            //
+            // Layout:
+            //   ID1 ID2 CM FLG MTIME(4) XFL OS [FEXTRA-len(2)+XLEN] [FNAME...\0]
+            //   [FCOMMENT...\0] [FHCRC(2)] <DEFLATE> CRC32(4) ISIZE(4)
             if (contentEncoding == "gzip"_s && srcLen >= 18 && src[0] == 0x1F && src[1] == 0x8B) {
-                src += 10;
-                srcLen -= 10;
-                // Trailing 8 bytes are CRC32 + ISIZE
-                if (srcLen >= 8) srcLen -= 8;
+                uint8_t flg = src[3];
+                size_t hdrLen = 10;  // ID1..OS fixed
+                if (flg & 0x04) {  // FEXTRA
+                    if (hdrLen + 2 > srcLen) { src = nullptr; }
+                    else {
+                        uint16_t xlen = src[hdrLen] | (src[hdrLen + 1] << 8);
+                        hdrLen += 2 + xlen;
+                    }
+                }
+                if (src && (flg & 0x08)) {  // FNAME (null-terminated)
+                    while (hdrLen < srcLen && src[hdrLen] != 0) ++hdrLen;
+                    if (hdrLen < srcLen) ++hdrLen;  // skip null
+                }
+                if (src && (flg & 0x10)) {  // FCOMMENT (null-terminated)
+                    while (hdrLen < srcLen && src[hdrLen] != 0) ++hdrLen;
+                    if (hdrLen < srcLen) ++hdrLen;
+                }
+                if (src && (flg & 0x02)) {  // FHCRC
+                    hdrLen += 2;
+                }
+                if (src && hdrLen + 8 <= srcLen) {
+                    src = resp.body.span().data() + hdrLen;
+                    srcLen = resp.body.size() - hdrLen - 8;  // strip CRC32+ISIZE
+                } else {
+                    // Malformed; fall back to fixed-10 + 8 strip
+                    src = resp.body.span().data() + 10;
+                    srcLen = (resp.body.size() > 18) ? resp.body.size() - 18 : 0;
+                }
             }
 
             size_t actualLen = compression_decode_buffer(decompressed.mutableSpan().data(),
