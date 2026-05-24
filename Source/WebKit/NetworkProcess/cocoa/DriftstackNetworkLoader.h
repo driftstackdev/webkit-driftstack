@@ -74,6 +74,7 @@ private:
     WebCore::ResourceRequest m_request;
     bool m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
+    int m_attempt { 0 };  // Wave 29-499.271 — retry counter for transient TLS/H2 failures
 };
 
 } // namespace WebKit

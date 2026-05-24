@@ -516,8 +516,19 @@ DriftstackNetworkLoader::DriftstackNetworkLoader(NetworkDataTaskCocoa& task, con
 
 DriftstackNetworkLoader::~DriftstackNetworkLoader()
 {
-    if (m_fd >= 0)
-        close(m_fd);
+    // Wave 29-499.272 — DON'T close m_fd here. The fd is owned by the
+    // DriftstackSocks5Client unique_ptr inside resume()'s dispatch block;
+    // when that block exits, socks5Client's destructor closes the fd.
+    // m_fd is left dangling after that point. Closing it in our destructor
+    // (which fires AFTER cancel() or naturally when the loader is dropped)
+    // triggers EBADF or double-close on a recycled fd → NetworkProcess
+    // SIGTRAP in close(2) syscall (observed in WebKit.Networking.Development
+    // crash 2026-05-24-185241.ips).
+    //
+    // Tracking m_fd in this class is now purely informational; nobody owns
+    // the lifetime through this handle. Cancellation just sets m_cancelled
+    // which the dispatch block re-checks; the actual TCP teardown happens
+    // when socks5Client falls out of scope.
 }
 
 void DriftstackNetworkLoader::resume()
@@ -529,6 +540,11 @@ void DriftstackNetworkLoader::resume()
     auto httpHeaders = m_request.httpHeaderFields();
     // TODO Phase 2: support request body (POST)
     (void)m_request.httpBody();
+
+    // Wave 29-499.271 — count this attempt
+    const int currentAttempt = ++m_attempt;
+    const int kMaxAttempts = 3;
+    const bool canRetry = currentAttempt < kMaxAttempts;
 
     Ref protectedThis { *this };
     dispatch_async(loaderQueue(), ^{
@@ -603,6 +619,16 @@ void DriftstackNetworkLoader::resume()
         Socks5Endpoint bnd;
         auto connectResult = socks5Client->tcpConnect(dest, bnd);
         if (connectResult != Socks5Result::Success) {
+            if (canRetry) {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for SOCKS5 CONNECT to %s",
+                    currentAttempt, url.host().toString().utf8().data());
+                Ref<DriftstackNetworkLoader> retryRef { *this };
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                    dispatch_get_main_queue(), ^{
+                        if (!retryRef->m_cancelled) retryRef->resume();
+                    });
+                return;
+            }
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
@@ -623,6 +649,16 @@ void DriftstackNetworkLoader::resume()
         if (isHttps) {
             ssl = driftstackTLSConnect(socketFd, host.utf8().data());
             if (!ssl) {
+                if (canRetry) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for TLS handshake to %s",
+                        currentAttempt, host.utf8().data());
+                    Ref<DriftstackNetworkLoader> retryRef { *this };
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                        dispatch_get_main_queue(), ^{
+                            if (!retryRef->m_cancelled) retryRef->resume();
+                        });
+                    return;
+                }
                 auto* clientPtr = m_task.client();
                 if (clientPtr) {
                     WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
@@ -814,6 +850,16 @@ void DriftstackNetworkLoader::resume()
             if (!clientPtr) return;
 
             if (h2resp.failed) {
+                if (canRetry) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for HTTP/2 transport to %s",
+                        currentAttempt, url.host().toString().utf8().data());
+                    Ref<DriftstackNetworkLoader> retryRef { *this };
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                        dispatch_get_main_queue(), ^{
+                            if (!retryRef->m_cancelled) retryRef->resume();
+                        });
+                    return;
+                }
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), h2resp.errorMessage, WebCore::ResourceError::Type::General);
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
@@ -1103,11 +1149,10 @@ _Pragma("clang diagnostic pop")
 
 void DriftstackNetworkLoader::cancel()
 {
+    // Wave 29-499.272 — fd is owned by DriftstackSocks5Client in resume's
+    // dispatch block. Don't close here (see ~ for explanation).
     m_cancelled = true;
-    if (m_fd >= 0) {
-        close(m_fd);
-        m_fd = -1;
-    }
+    m_fd = -1;
 }
 
 void DriftstackNetworkLoader::suspend()
