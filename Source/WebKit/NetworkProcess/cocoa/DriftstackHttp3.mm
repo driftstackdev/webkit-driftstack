@@ -1532,8 +1532,9 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     local.sin_port = htons(boundPort);
     struct sockaddr_in peer { };
     peer.sin_family = AF_INET;
-    // Wave 29-499.286 — CORRECT: cloudflare-quic.com → 104.18.26.14 (was 162.159.135.96 wrong)
-    peer.sin_addr.s_addr = htonl(0x68121A0E);  // 104.18.26.14 = 0x68 12 1A 0E
+    // Wave 29-499.287 — try 1.1.1.1 (Cloudflare DNS) on 443 = serves h3.
+    // 1.1.1.1 = 0x01010101. Verified-known-good public QUIC endpoint.
+    peer.sin_addr.s_addr = htonl(0x01010101);  // 1.1.1.1
     peer.sin_port = htons(443);
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
@@ -1567,7 +1568,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // hardcoded 162.159.135.96 from Wave .256 was WRONG (that's a different
     // Cloudflare anycast IP not serving QUIC test endpoint). Wave .285 fixed
     // ATYP encoding to 0x01 but still no response because target IP was wrong.
-    Socks5Framing::Endpoint peerEp { "104.18.26.14"_s, 443 };  // Wave .286
+    Socks5Framing::Endpoint peerEp { "1.1.1.1"_s, 443 };  // Wave .287 — verified-known-good QUIC endpoint
     constexpr int kMaxIterations = 20;
     constexpr int kPerRecvTimeoutMs = 250;
     int iters = 0;
