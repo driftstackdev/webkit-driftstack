@@ -49,6 +49,7 @@
 #include "NetworkSessionCocoa.h"
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackRTCSocks5Bridge.h"
+#include "DriftstackRTCSocks5TCPSocket.h"
 #include <arpa/inet.h>
 #endif
 #else // PLATFORM(COCOA)
@@ -372,27 +373,26 @@ void NetworkRTCProvider::createClientTCPSocket(LibWebRTCSocketIdentifier identif
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-499.274 — HARD BLOCK direct TCP socket creation when
-    // DRIFTSTACK_CUSTOM_SOCKS5=1. NetworkRTCTCPSocketCocoa uses
-    // nw_connection_create directly with NO SOCKS5 path — it would leak
-    // Mac LAN IP to TURN TCP/TLS servers, violating CLAUDE.md egress lock
-    // ('sessions cannot egress without proxy'). Twilio NT 'NTS: TURN
-    // TCP/TLS Connectivity' tests trigger this path; with the block they
-    // fail cleanly (signalSocketIsClosed) rather than leaking.
-    //
-    // Future slice: route via DriftstackSocks5Client::tcpConnect (SOCKS5
-    // CONNECT) + tunnel nw_connection_receive callbacks through the
-    // SOCKS5 BSD socket. Substantial rewrite of NetworkRTCTCPSocketCocoa.
+    // Wave 29-499.274 → .275: route TURN TCP via SOCKS5 CONNECT through
+    // DriftstackRTCSocks5TCPSocket (BSD-socket replacement for nw_connection_t).
+    // Previous .274 hard-blocked all TCP socket creation when CUSTOM_SOCKS5=1
+    // to prevent Mac-IP leak via NetworkRTCTCPSocketCocoa's direct
+    // nw_connection_create. This slice replaces the block with a tunneled
+    // socket that actually carries TURN TCP through the proxy.
+    // TURN-TLS still refused at create() time (Phase 2 wrap pending).
     if (DriftstackRTC::isCustomSocks5Active()) {
-        static bool loggedOnce = false;
-        if (!loggedOnce) {
-            loggedOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.274] BLOCK direct TCP socket creation (TURN TCP/TLS) when CUSTOM_SOCKS5=1 — would leak Mac IP. signalSocketIsClosed (id=%" PRIu64 ", dest=%s:%d). TURN UDP via §7 still works; TURN TCP/TLS slated for SOCKS5 CONNECT routing next slice.",
+        auto socket = DriftstackRTCSocks5TCPSocket::create(identifier, *this, remoteAddress.rtcAddress(), options, m_ipcConnection.copyRef());
+        if (socket) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] TURN TCP via SOCKS5 CONNECT — socket created (id=%" PRIu64 ", dest=%s:%d)",
                 identifier.toUInt64(),
                 remoteAddress.rtcAddress().hostname().c_str(),
                 remoteAddress.rtcAddress().port());
+            addSocket(identifier, WTF::move(socket));
+        } else {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] DriftstackRTCSocks5TCPSocket::create returned null (id=%" PRIu64 ") — signaling closed",
+                identifier.toUInt64());
+            signalSocketIsClosed(identifier);
         }
-        signalSocketIsClosed(identifier);
         return;
     }
 #endif
