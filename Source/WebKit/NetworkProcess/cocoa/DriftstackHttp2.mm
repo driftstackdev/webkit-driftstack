@@ -685,7 +685,18 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
             break;
         case kFrameData:
             if (sid == streamId) {
-                resp.body.append(payload.span());
+                // Wave 29-499.264 — strip RFC 7540 §6.1 padding when PADDED
+                // flag set. Was missing → first byte of every PADDED DATA
+                // frame leaked into body, breaking gzip header magic check
+                // (saw "fa 1f 8b 08" where "fa" was the pad-length byte).
+                std::span<const uint8_t> dataSpan = payload.span();
+                if (frameFlags & kFlagPadded) {
+                    if (dataSpan.size() < 1) break;
+                    uint8_t padLen = dataSpan[0];
+                    if (static_cast<size_t>(padLen) + 1 > dataSpan.size()) break;
+                    dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
+                }
+                resp.body.append(dataSpan);
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;
             }
@@ -765,6 +776,18 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     // 15+32 auto-detects gzip OR zlib wrapper format.
     if (!contentEncoding.isEmpty() && !resp.body.isEmpty()
         && (contentEncoding == "gzip"_s || contentEncoding == "deflate"_s)) {
+        // Wave 29-499.263b — diagnostic: log first 16 bytes of body to
+        // confirm gzip magic (1F 8B 08) or zlib magic (78 ??).
+        {
+            const uint8_t* b = resp.body.span().data();
+            size_t n = resp.body.size();
+            WTFLogAlways("[Wave29-499.263b] body first 16 bytes (size=%zu, encoding=%s): %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                n, contentEncoding.utf8().data(),
+                n>0?b[0]:0, n>1?b[1]:0, n>2?b[2]:0, n>3?b[3]:0,
+                n>4?b[4]:0, n>5?b[5]:0, n>6?b[6]:0, n>7?b[7]:0,
+                n>8?b[8]:0, n>9?b[9]:0, n>10?b[10]:0, n>11?b[11]:0,
+                n>12?b[12]:0, n>13?b[13]:0, n>14?b[14]:0, n>15?b[15]:0);
+        }
         z_stream zs;
         memset(&zs, 0, sizeof(zs));
         // 15 + 32 = max window + auto-detect gzip/zlib
