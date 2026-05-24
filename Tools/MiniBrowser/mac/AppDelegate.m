@@ -323,6 +323,40 @@ static NSNumber *_currentBadge;
 
         if (sForceSiteIsolationSetting)
             configuration.preferences._siteIsolationEnabled = sShouldEnableSiteIsolation;
+
+        // Wave 29-499.282 — DRIFTSTACK_BEHAVIORAL_SIM=1 injects a user script
+        // at document-start that synthesizes mouse activity throughout the
+        // page's lifetime. Foundation for reCAPTCHA invisible behavioral
+        // scoring; standalone synthetic events have isTrusted=false which
+        // reCAPTCHA may detect, but baseline coverage is better than nothing.
+        // Future: WebKit-level native event injection via EventDispatcher for
+        // isTrusted=true.
+        const char* behavioralSim = getenv("DRIFTSTACK_BEHAVIORAL_SIM");
+        if (behavioralSim && behavioralSim[0] == '1') {
+            NSString *jsSrc = @"(function(){\n"
+                "  if (window.__driftstackBehavioralSim) return;\n"
+                "  window.__driftstackBehavioralSim = true;\n"
+                "  let mmCount = 0;\n"
+                "  const fire = () => {\n"
+                "    const x = Math.random() * (window.innerWidth || 402);\n"
+                "    const y = Math.random() * (window.innerHeight || 874);\n"
+                "    document.dispatchEvent(new MouseEvent('mousemove', {\n"
+                "      clientX: x, clientY: y, screenX: x, screenY: y,\n"
+                "      bubbles: true, cancelable: true, view: window\n"
+                "    }));\n"
+                "    mmCount++;\n"
+                "    if (mmCount < 200) setTimeout(fire, 50 + Math.random() * 150);\n"
+                "  };\n"
+                "  setTimeout(fire, 500);\n"
+                "  // also occasional scroll\n"
+                "  setTimeout(() => { for (let i = 0; i < 3; i++) setTimeout(() => window.scrollBy(0, 50 + Math.random() * 100), i * 800); }, 2000);\n"
+                "})();";
+            WKUserScript *script = [[WKUserScript alloc] initWithSource:jsSrc
+                injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                forMainFrameOnly:NO];
+            [configuration.userContentController addUserScript:script];
+            NSLog(@"[Driftstack-EG-WK-Wave29-499.282] BehavioralSim user script injected (mousemove + scroll at documentStart)");
+        }
     }
 
     configuration.suppressesIncrementalRendering = _settingsController.incrementalRenderingSuppressed;
