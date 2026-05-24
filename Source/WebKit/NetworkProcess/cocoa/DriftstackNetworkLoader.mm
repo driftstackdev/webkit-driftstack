@@ -78,6 +78,7 @@
 #import <wtf/Assertions.h>
 #import <wtf/CompletionHandler.h>
 #import <wtf/RetainPtr.h>
+#include <utility>  // Wave 29-499.267b — std::move
 #import <wtf/text/ParsingUtilities.h>
 #import <wtf/text/StringBuilder.h>
 #import <wtf/text/StringToIntegerConversion.h>
@@ -850,7 +851,7 @@ void DriftstackNetworkLoader::resume()
             if (expectedLength < 0)
                 expectedLength = static_cast<long long>(h2resp.body.size());
 
-            WebCore::ResourceResponse response { URL(m_request.url()), WTFMove(mimeType), expectedLength, WTFMove(charset) };
+            WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
             response.setHTTPStatusCode(h2resp.statusCode);
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);
