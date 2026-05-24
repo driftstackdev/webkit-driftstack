@@ -1532,7 +1532,8 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     local.sin_port = htons(boundPort);
     struct sockaddr_in peer { };
     peer.sin_family = AF_INET;
-    peer.sin_addr.s_addr = htonl(0xA29F8760);  // 162.159.135.96 cloudflare-quic.com (Wave .256)
+    // Wave 29-499.286 — CORRECT: cloudflare-quic.com → 104.18.26.14 (was 162.159.135.96 wrong)
+    peer.sin_addr.s_addr = htonl(0x68121A0E);  // 104.18.26.14 = 0x68 12 1A 0E
     peer.sin_port = htons(443);
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
@@ -1561,11 +1562,12 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // Each iteration: SSL_do_handshake → write_pkt → §7 wrap → sendto relay,
     // recvfrom (with timeout) → §7 unwrap → read_pkt. Repeat until
     // qc->handshakeCompleted or 5s wall-clock budget exhausted.
-    // Wave 29-499.285 — use pre-resolved IPv4 for ATYP=0x01 (gost bug with
-    // ATYP=0x03 domain form per Wave .95 empirical). Hardcoded peer IP =
-    // 162.159.135.96 cloudflare-quic.com (Wave .256). Previously used
-    // hostname → ATYP=0x03 → gost dropped → packetsReceived=0 (.284b diag).
-    Socks5Framing::Endpoint peerEp { "162.159.135.96"_s, 443 };  // Wave .285
+    // Wave 29-499.286 — CORRECT IP: cloudflare-quic.com resolves to 104.18.26.14
+    // (verified via `dig +short cloudflare-quic.com @8.8.8.8`). Previously
+    // hardcoded 162.159.135.96 from Wave .256 was WRONG (that's a different
+    // Cloudflare anycast IP not serving QUIC test endpoint). Wave .285 fixed
+    // ATYP encoding to 0x01 but still no response because target IP was wrong.
+    Socks5Framing::Endpoint peerEp { "104.18.26.14"_s, 443 };  // Wave .286
     constexpr int kMaxIterations = 20;
     constexpr int kPerRecvTimeoutMs = 250;
     int iters = 0;
