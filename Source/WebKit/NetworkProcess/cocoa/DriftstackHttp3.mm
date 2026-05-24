@@ -33,6 +33,7 @@
 #import <netinet/in.h>
 #import <stdlib.h>
 #import <string.h>
+#import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
 
@@ -1207,6 +1208,54 @@ static bool resolveAesEncryptFns()
         0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
         0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a
     };
+
+    // Wave 29-499.291 — RFC 9001 Appendix A.1 self-test on first call.
+    // dcid = 0x8394c8f03e515708 must produce:
+    //   initial_secret = 7db5df06e7a69e432496adedb00851923595221596ae2ae9fb8115c1e9ed0a44
+    //   client_initial_secret = c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea
+    //   client_key = 1f369613dd76d5467730efcbe3b1a22d
+    //   client_iv  = fa044b2f42a3fd3b46fb255c
+    //   client_hp  = 9f50449e04a0e810283a1e9933adedd2
+    static std::once_flag selfTestOnce;
+    std::call_once(selfTestOnce, [&] {
+        static const uint8_t kTestDcid[8] = { 0x83,0x94,0xc8,0xf0,0x3e,0x51,0x57,0x08 };
+        Vector<uint8_t> testSalt(20);
+        memcpy(testSalt.mutableSpan().data(), kQuicV1InitialSalt, 20);
+        Vector<uint8_t> testDcid(8);
+        memcpy(testDcid.mutableSpan().data(), kTestDcid, 8);
+        auto initSec = WebKit::driftstackHkdfExtractSha256(testSalt, testDcid);
+        // expected first 16 bytes: 7d b5 df 06 e7 a6 9e 43 24 96 ad ed b0 08 51 92
+        bool match_secret = initSec.size() == 32
+            && initSec[0] == 0x7d && initSec[1] == 0xb5 && initSec[2] == 0xdf && initSec[3] == 0x06
+            && initSec[15] == 0x92;
+        Vector<uint8_t> emptyC;
+        auto cliSec = WebKit::driftstackHkdfExpandLabelSha256(initSec, "client in", emptyC, 32);
+        bool match_cli = cliSec.size() == 32
+            && cliSec[0] == 0xc0 && cliSec[1] == 0x0c && cliSec[2] == 0xf1 && cliSec[3] == 0x51;
+        auto cliKey = WebKit::driftstackHkdfExpandLabelSha256(cliSec, "quic key", emptyC, 16);
+        bool match_key = cliKey.size() == 16
+            && cliKey[0] == 0x1f && cliKey[1] == 0x36 && cliKey[2] == 0x96 && cliKey[3] == 0x13
+            && cliKey[15] == 0x2d;
+        auto cliIv = WebKit::driftstackHkdfExpandLabelSha256(cliSec, "quic iv", emptyC, 12);
+        bool match_iv = cliIv.size() == 12
+            && cliIv[0] == 0xfa && cliIv[1] == 0x04 && cliIv[11] == 0x5c;
+        auto cliHp = WebKit::driftstackHkdfExpandLabelSha256(cliSec, "quic hp", emptyC, 16);
+        bool match_hp = cliHp.size() == 16
+            && cliHp[0] == 0x9f && cliHp[15] == 0xd2;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.291] RFC 9001 §A.1 self-test: secret=%d cli_in=%d key=%d iv=%d hp=%d (1=PASS, 0=FAIL)",
+            match_secret, match_cli, match_key, match_iv, match_hp);
+        if (initSec.size() >= 16) {
+            WTFLogAlways("[Wave29-499.291] our initial_secret first 16: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect: 7d b5 df 06 e7 a6 9e 43 24 96 ad ed b0 08 51 92)",
+                initSec[0], initSec[1], initSec[2], initSec[3], initSec[4], initSec[5], initSec[6], initSec[7],
+                initSec[8], initSec[9], initSec[10], initSec[11], initSec[12], initSec[13], initSec[14], initSec[15]);
+        }
+        if (cliKey.size() >= 16) {
+            WTFLogAlways("[Wave29-499.291] our client_key 16: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect: 1f 36 96 13 dd 76 d5 46 77 30 ef cb e3 b1 a2 2d)",
+                cliKey[0], cliKey[1], cliKey[2], cliKey[3], cliKey[4], cliKey[5], cliKey[6], cliKey[7],
+                cliKey[8], cliKey[9], cliKey[10], cliKey[11], cliKey[12], cliKey[13], cliKey[14], cliKey[15]);
+        }
+    });
+
     Vector<uint8_t> saltVec(20);
     memcpy(saltVec.mutableSpan().data(), kQuicV1InitialSalt, 20);
     Vector<uint8_t> dcidVec(dcid.datalen);
