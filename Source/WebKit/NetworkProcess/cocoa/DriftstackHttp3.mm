@@ -972,11 +972,35 @@ static bool resolveAesEncryptFns()
     auto& f = aesEncryptFns();
 
     if (ctx->isChacha20) {
-        // RFC 9001 §5.4.4: ChaCha20 header protection.
-        // mask = ChaCha20(hp_key, counter=sample[0..4], nonce=sample[4..16], zero[5])
-        // TODO Wave .233: wire ChaCha20 helper. AES-GCM path covers 99% of
-        // QUIC handshakes; ChaCha20 is fallback for older mobile clients.
-        return -1;
+        // Wave 29-499.277 — RFC 9001 §5.4.4 ChaCha20 header protection.
+        // mask = first 5 bytes of ChaCha20(hp_key, counter=sample[0..4],
+        //        nonce=sample[4..16]) encryption of zero-bytes.
+        //
+        // LibreSSL exposes ChaCha20_ctr32(out, in, len, key, iv) where iv
+        // is 16 bytes = LE counter(4) || nonce(12). We dlsym at first call.
+        typedef void (*Chacha20Ctr32Fn)(uint8_t* out, const uint8_t* in,
+                                         size_t len, const uint8_t* key,
+                                         const uint8_t* iv);
+        static Chacha20Ctr32Fn chacha20Ctr32 = nullptr;
+        static dispatch_once_t chachaOnce;
+        dispatch_once(&chachaOnce, ^{
+            chacha20Ctr32 = reinterpret_cast<Chacha20Ctr32Fn>(
+                dlsym(RTLD_DEFAULT, "ChaCha20_ctr32"));
+            if (!chacha20Ctr32)
+                chacha20Ctr32 = reinterpret_cast<Chacha20Ctr32Fn>(
+                    dlsym(RTLD_DEFAULT, "CRYPTO_chacha_20"));
+            if (!chacha20Ctr32)
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.277] ChaCha20_ctr32 + CRYPTO_chacha_20 NOT FOUND in LibreSSL/BoringSSL — ChaCha20 hp_mask disabled");
+        });
+        if (!chacha20Ctr32)
+            return -1;
+
+        // IV layout = LE counter(4 bytes) || nonce(12 bytes) per RFC 8439 §2.4
+        uint8_t iv[16];
+        memcpy(iv, sample, 16);
+        uint8_t zero[5] = { 0, 0, 0, 0, 0 };
+        chacha20Ctr32(dest, zero, 5, ctx->key.span().data(), iv);
+        return 0;
     }
 
     uint8_t aesKeyBuf[256] = { };
