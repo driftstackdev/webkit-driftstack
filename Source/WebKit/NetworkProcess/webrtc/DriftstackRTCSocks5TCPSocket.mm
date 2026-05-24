@@ -14,6 +14,7 @@
 #if PLATFORM(DRIFTSTACK) && USE(LIBWEBRTC) && PLATFORM(COCOA)
 
 #import "../cocoa/DriftstackSocks5Client.h"
+#import "../cocoa/DriftstackTLS13Client.h"
 #import "LibWebRTCNetworkMessages.h"
 #import <WebCore/STUNMessageParsing.h>
 #import <unistd.h>

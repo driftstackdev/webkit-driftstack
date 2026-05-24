@@ -22,8 +22,6 @@
 #if PLATFORM(DRIFTSTACK) && USE(LIBWEBRTC) && PLATFORM(COCOA)
 
 #include "NetworkRTCProvider.h"
-#include "../cocoa/DriftstackSocks5Client.h"
-#include "../cocoa/DriftstackTLS13Client.h"
 #include <wtf/Lock.h>
 #include <wtf/RetainPtr.h>
 #include <wtf/TZoneMalloc.h>
@@ -31,6 +29,11 @@
 #include <memory>
 
 #include <dispatch/dispatch.h>
+
+namespace WebKit {
+class DriftstackSocks5Client;  // fwd — Foundation-using; .mm only
+class DriftstackTLS13Client;   // fwd — same
+}
 
 namespace WebKit {
 
