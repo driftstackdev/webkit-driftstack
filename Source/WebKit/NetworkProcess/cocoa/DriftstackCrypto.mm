@@ -986,27 +986,30 @@ Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
     }
     auto& p = aesPrim();
 
-    // AES_KEY is opaque, sized ~244 bytes in LibreSSL/OpenSSL.
-    // Wave .299 — match the working .292 ECB self-test exactly (256-byte buf,
-    // no alignas). Stack scribble from larger buffer caused tag mismatch
-    // across runs (e6b0c75a / 5624a274 / etc — different each launch).
-    uint8_t aesKey[256] = { };
+    // Wave .301 — wider buffer with alignas(16). LibreSSL on Apple Silicon
+    // appears to write past 256-byte buffer or require 16-byte alignment for
+    // AES-NI/AESARM accelerated path; smaller buffers produced wrong ciphertext.
+    alignas(16) uint8_t aesKey[512] = { };
     if (p.setKey(key.span().data(), 128, aesKey) != 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES_set_encrypt_key failed");
         return {};
     }
 
-    // H = AES_ECB(K, 0^128). NOTE: AES_encrypt is NOT in-place safe in LibreSSL —
-    // must use distinct in/out buffers (Wave .298 fix).
+    // H = AES_ECB(K, 0^128). NOTE: AES_encrypt is NOT in-place safe in LibreSSL.
     uint8_t zeroBlock[16] = { };
     uint8_t H[16] = { };
     p.encrypt(zeroBlock, H, aesKey);
 
-    // Wave .299 diagnostic: log H to verify == 66e94bd4ef8a2c3b884cfa59ca342b2e for k=0.
-    static bool s_loggedH = false;
-    if (!s_loggedH) {
-        s_loggedH = true;
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.299] first-call H: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect 66 e9 4b d4 ef 8a 2c 3b 88 4c fa 59 ca 34 2b 2e for k=0)",
+    // Wave .301 self-debug — log H every call to verify; if H ever != 66e94bd4
+    // for k=0, the AES context is corrupted.
+    static int s_logCount = 0;
+    if (s_logCount < 3) {
+        s_logCount++;
+        // Also dump first 32 bytes of aesKey to verify setKey populated.
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.301] H call#%d k[0..15]=%02x%02x%02x%02x... aesKey[0..7]=%02x%02x%02x%02x%02x%02x%02x%02x H=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+            s_logCount,
+            key.span().data()[0], key.span().data()[1], key.span().data()[2], key.span().data()[3],
+            aesKey[0],aesKey[1],aesKey[2],aesKey[3],aesKey[4],aesKey[5],aesKey[6],aesKey[7],
             H[0],H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8],H[9],H[10],H[11],H[12],H[13],H[14],H[15]);
     }
 
