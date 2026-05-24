@@ -543,6 +543,34 @@ BridgeResult wrapOutgoingDatagram(const webrtc::SocketAddress& dest, std::span<c
     if (destination.host.utf8().length() > 255)
         return BridgeResult::DomainTooLong;
 
+    // Wave 29-499.278 — log STUN/TURN message type for outbound diagnostics.
+    // STUN/TURN message format: 2-byte type + 2-byte length + 4-byte magic + 12-byte txid.
+    // Type 0x0001=Binding, 0x0003=Allocate, 0x0004=Refresh, 0x0006=Send, 0x0008=CreatePerm,
+    // 0x0009=ChannelBind, 0x0101=Binding Success, 0x0103=Allocate Success,
+    // 0x0111=Binding Error, 0x0113=Allocate Error.
+    if (payload.size() >= 20 && payload.size() < 65536) {
+        uint16_t msgType = (static_cast<uint16_t>(payload[0]) << 8) | payload[1];
+        uint16_t msgLen = (static_cast<uint16_t>(payload[2]) << 8) | payload[3];
+        bool isStun = (payload[4] == 0x21 && payload[5] == 0x12 && payload[6] == 0xa4 && payload[7] == 0x42);
+        const char* typeName = "?";
+        switch (msgType) {
+            case 0x0001: typeName = "Binding"; break;
+            case 0x0003: typeName = "Allocate"; break;
+            case 0x0004: typeName = "Refresh"; break;
+            case 0x0006: typeName = "Send"; break;
+            case 0x0008: typeName = "CreatePerm"; break;
+            case 0x0009: typeName = "ChannelBind"; break;
+            case 0x0101: typeName = "Binding-Success"; break;
+            case 0x0103: typeName = "Allocate-Success"; break;
+            case 0x0111: typeName = "Binding-Error"; break;
+            case 0x0113: typeName = "Allocate-Error"; break;
+        }
+        if (isStun && (msgType == 0x0003 || msgType == 0x0006 || msgType == 0x0008 || msgType == 0x0009)) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.278] wrapOutgoing TURN %s (0x%04x) → %s:%u (payload=%zu, msgLen=%u)",
+                typeName, msgType, destination.host.utf8().data(), destination.port, payload.size(), msgLen);
+        }
+    }
+
     RetainPtr<NSData> payloadData = adoptNS([[NSData alloc] initWithBytes:payload.data() length:payload.size()]);
     RetainPtr<NSData> framed = DriftstackSocks5Client::wrapUdpDatagram(destination, payloadData.get());
     if (!framed) {
@@ -573,6 +601,21 @@ BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDat
     out.sourcePort = source.port;
     out.payload.clear();
     out.payload.append(WTF::span(payload.get()));
+
+    // Wave 29-499.278 — log incoming TURN response message-type for diagnostics
+    auto p = WTF::span(payload.get());
+    if (p.size() >= 20) {
+        uint16_t msgType = (static_cast<uint16_t>(p[0]) << 8) | p[1];
+        uint16_t msgLen = (static_cast<uint16_t>(p[2]) << 8) | p[3];
+        bool isStun = (p[4] == 0x21 && p[5] == 0x12 && p[6] == 0xa4 && p[7] == 0x42);
+        if (isStun && (msgType == 0x0103 || msgType == 0x0113 || msgType == 0x0117)) {
+            const char* tn = msgType == 0x0103 ? "Allocate-Success"
+                          : msgType == 0x0113 ? "Allocate-Error"
+                          : "Refresh-Error";
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.278] unwrapIncoming TURN %s (0x%04x) ← %s:%u (payload=%zu, msgLen=%u)",
+                tn, msgType, source.host.utf8().data(), source.port, p.size(), msgLen);
+        }
+    }
     return BridgeResult::Success;
 }
 
