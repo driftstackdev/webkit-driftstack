@@ -811,7 +811,46 @@ void DriftstackNetworkLoader::resume()
                 return;
             }
 
-            WebCore::ResourceResponse response { URL(m_request.url()), String("text/html"_s), -1, String("UTF-8"_s) };
+            // Wave 29-499.267 — extract real Content-Type + charset from response
+            // headers BEFORE constructing ResourceResponse. Previous code hard-coded
+            // mimeType="text/html" charset="UTF-8" which made CSS/JS be treated as
+            // HTML (no styling, no script execution → blank pages).
+            String mimeType = "text/html"_s;
+            String charset = "UTF-8"_s;
+            long long expectedLength = -1;
+            for (auto& [k, v] : h2resp.headers) {
+                if (equalIgnoringASCIICase(k, "content-type"_s)) {
+                    // "text/css; charset=utf-8" → split on ';'
+                    String headerValue = v;
+                    size_t semi = headerValue.find(';');
+                    if (semi != notFound) {
+                        mimeType = headerValue.left(semi).trim(deprecatedIsSpaceOrNewline);
+                        String params = headerValue.substring(semi + 1);
+                        size_t cidx = params.findIgnoringASCIICase("charset="_s);
+                        if (cidx != notFound) {
+                            String cs = params.substring(cidx + 8).trim(deprecatedIsSpaceOrNewline);
+                            // strip trailing params after charset
+                            size_t end = cs.find(';');
+                            if (end != notFound) cs = cs.left(end);
+                            // strip quotes
+                            if (cs.startsWith('"') && cs.endsWith('"')) cs = cs.substring(1, cs.length() - 2);
+                            if (!cs.isEmpty()) charset = cs;
+                        }
+                    } else {
+                        mimeType = headerValue.trim(deprecatedIsSpaceOrNewline);
+                    }
+                } else if (equalIgnoringASCIICase(k, "content-length"_s)) {
+                    bool ok = false;
+                    long long n = parseInteger<long long>(v).value_or(-1);
+                    if (n >= 0) expectedLength = n;
+                    (void)ok;
+                }
+            }
+            // Body size known post-decompression; use it if Content-Length absent/stripped
+            if (expectedLength < 0)
+                expectedLength = static_cast<long long>(h2resp.body.size());
+
+            WebCore::ResourceResponse response { URL(m_request.url()), WTFMove(mimeType), expectedLength, WTFMove(charset) };
             response.setHTTPStatusCode(h2resp.statusCode);
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);

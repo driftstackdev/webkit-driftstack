@@ -27,6 +27,7 @@
 #import <zlib.h>  // Wave 29-499.263 — system libz for gzip/deflate decode
 #import <wtf/Assertions.h>
 #import <wtf/text/CString.h>
+#import <wtf/text/StringBuilder.h>  // Wave 29-499.266 — header dump diagnostic
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -760,8 +761,20 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     // WebKit's fast path doesn't auto-decompress; iPhone Safari does it natively.
     // Use Apple's libcompression for gzip/deflate; brotli also supported.
     String contentEncoding;
+    {
+        // Wave 29-499.266 — dump all response headers for diagnosis
+        StringBuilder hdrDump;
+        for (auto& [k, v] : resp.headers) {
+            hdrDump.append(k);
+            hdrDump.append(": "_s);
+            hdrDump.append(v);
+            hdrDump.append(" | "_s);
+        }
+        WTFLogAlways("[Wave29-499.266] response headers for %s: %s",
+            request.path.utf8().data(), hdrDump.toString().utf8().data());
+    }
     for (auto& [k, v] : resp.headers) {
-        if (k.convertToASCIILowercase() == "content-encoding"_s) {
+        if (equalIgnoringASCIICase(k, "content-encoding"_s)) {
             contentEncoding = v.convertToASCIILowercase();
             break;
         }
