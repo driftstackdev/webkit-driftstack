@@ -23,6 +23,7 @@
 
 #include "NetworkRTCProvider.h"
 #include "../cocoa/DriftstackSocks5Client.h"
+#include "../cocoa/DriftstackTLS13Client.h"
 #include <wtf/Lock.h>
 #include <wtf/RetainPtr.h>
 #include <wtf/TZoneMalloc.h>
@@ -66,6 +67,7 @@ private:
     bool m_closed WTF_GUARDED_BY_LOCK(m_lock) { false };
     dispatch_source_t m_readSource WTF_GUARDED_BY_LOCK(m_lock) { nullptr };
     std::unique_ptr<DriftstackSocks5Client> m_socks5Client;  // owns fd lifetime
+    std::unique_ptr<DriftstackTLS13Client> m_tls;  // Wave 29-499.279 — TURN-TLS wrap (iPhone-byte-exact ClientHello)
 
     Vector<uint8_t> m_rxBuffer;  // accumulate incoming bytes between TCP-framing
 };

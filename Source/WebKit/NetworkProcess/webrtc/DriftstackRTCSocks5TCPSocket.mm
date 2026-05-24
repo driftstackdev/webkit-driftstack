@@ -63,12 +63,21 @@ std::unique_ptr<NetworkRTCProvider::Socket> DriftstackRTCSocks5TCPSocket::create
     }
 
     if (socket->m_isTLS) {
-        // Phase 2 TODO — wrap fd with DriftstackTLS13Client for
-        // iPhone-byte-exact ClientHello. Until then, refuse TURN-TLS at
-        // socket level (caller signalSocketIsClosed).
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] TURN-TLS requested but Phase 2 wrap not yet wired — refusing socket (id=%" PRIu64 ")",
-            identifier.toUInt64());
-        return nullptr;
+        // Wave 29-499.279 — TURN-TLS Phase 2: wrap fd with iPhone-byte-exact
+        // TLS 1.3 ClientHello via DriftstackTLS13Client. Matches the TLS
+        // identity our HTTP/2 PathB v2 already proves bit-identical to iPhone
+        // Safari 26.4 (per V-PEET-JA3 + V-AKAMAI).
+        socket->m_tls = std::make_unique<DriftstackTLS13Client>();
+        String sni = String::fromUTF8(host.c_str());
+        if (!socket->m_tls->connect(socket->m_fd, sni)) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.279] TURN-TLS handshake FAILED for %s:%u — %s",
+                host.c_str(), remoteAddress.port(),
+                socket->m_tls->errorMessage().utf8().data());
+            return nullptr;
+        }
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.279] TURN-TLS handshake COMPLETE for %s:%u (ALPN=%s) — iPhone-byte-exact ClientHello",
+            host.c_str(), remoteAddress.port(),
+            socket->m_tls->selectedALPN().utf8().data());
     }
 
     socket->startReadLoop();
@@ -186,7 +195,14 @@ void DriftstackRTCSocks5TCPSocket::startReadLoop()
         }
         if (fd < 0) return;
         uint8_t buf[4096];
-        ssize_t n = read(fd, buf, sizeof(buf));
+        ssize_t n;
+        // Wave 29-499.279 — TLS-wrapped path reads through DriftstackTLS13Client
+        // which handles record framing + decryption. Plain TCP reads raw fd.
+        if (m_tls) {
+            n = m_tls->read(buf, sizeof(buf));
+        } else {
+            n = read(fd, buf, sizeof(buf));
+        }
         if (n > 0)
             onIncomingData(std::span<const uint8_t> { buf, static_cast<size_t>(n) });
         else if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK))
@@ -277,15 +293,25 @@ void DriftstackRTCSocks5TCPSocket::sendTo(std::span<const uint8_t> data,
     }
     if (fd < 0) return;
 
-    ssize_t total = 0;
-    while (total < static_cast<ssize_t>(buffer.size())) {
-        ssize_t n = write(fd, buffer.span().data() + total, buffer.size() - total);
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+    // Wave 29-499.279 — if TLS-wrapped (TURN-TLS), route through
+    // DriftstackTLS13Client::write which encrypts + frames per TLS 1.3.
+    if (m_tls) {
+        int wrote = m_tls->write(buffer.span().data(), buffer.size());
+        if (wrote < 0) {
             close();
             return;
         }
-        total += n;
+    } else {
+        ssize_t total = 0;
+        while (total < static_cast<ssize_t>(buffer.size())) {
+            ssize_t n = write(fd, buffer.span().data() + total, buffer.size() - total);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                close();
+                return;
+            }
+            total += n;
+        }
     }
 
     m_connection->send(Messages::LibWebRTCNetwork::SignalSentPacket {
