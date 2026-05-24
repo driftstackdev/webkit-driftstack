@@ -1666,9 +1666,10 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     }
 
     resp.failed = true;
-    resp.errorMessage = makeString("Phase 3 HTTP/3 handshake: iters="_s, iters,
-        " packetsSent="_s, packetsSent, " packetsReceived="_s, packetsReceived,
-        " handshakeCompleted=false (likely AEAD/hp_mask decrypt fail on recv Initial — diagnostic .284)"_s);
+    char buf[256];
+    snprintf(buf, sizeof(buf), "Phase 3 HTTP/3 handshake: iters=%d packetsSent=%d packetsReceived=%d handshakeCompleted=false (likely AEAD/hp_mask decrypt fail on recv Initial - diagnostic .284)",
+        iters, packetsSent, packetsReceived);
+    resp.errorMessage = String::fromUTF8(buf);
     return resp;
 }
 
