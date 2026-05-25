@@ -137,6 +137,10 @@ struct Ngtcp2Fns {
     // Wave 29-499.316 — tell ngtcp2 TLS completed (hand-rolled integration must
     // call this; the ngtcp2_crypto helper does it automatically).
     void (*conn_tls_handshake_completed)(ngtcp2_conn*) = nullptr;
+    // Wave 29-499.318 — set Handshake/1-RTT crypto ctx (AEAD overhead) too;
+    // set_initial_crypto_ctx only covers Initial. Without this, ngtcp2 reserves
+    // 0 tag bytes for handshake/1-RTT packets → ngtcp2_ppe_final assert (SIGABRT).
+    void (*conn_set_crypto_ctx)(ngtcp2_conn*, const ngtcp2_crypto_ctx*) = nullptr;
     bool ready = false;
 };
 
@@ -382,6 +386,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_handshake_completed, "ngtcp2_conn_get_handshake_completed");
     RESOLVE(conn_set_initial_crypto_ctx, "ngtcp2_conn_set_initial_crypto_ctx");  // Wave .308
     RESOLVE(conn_tls_handshake_completed, "ngtcp2_conn_tls_handshake_completed");  // Wave .316
+    RESOLVE(conn_set_crypto_ctx, "ngtcp2_conn_set_crypto_ctx");  // Wave .318
 #undef RESOLVE
 
     bool required = f.settings_default_versioned && f.transport_params_default_versioned
@@ -1340,6 +1345,14 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
         cctx.max_decryption_failure = (1ull << 23);
         nf.conn_set_initial_crypto_ctx(qc->conn, &cctx);
         WTFLogAlways("[Wave29-499.308] set Initial crypto ctx: aead.max_overhead=16");
+        // Wave 29-499.318 — ALSO set the Handshake/1-RTT crypto ctx overhead.
+        // Without this, ngtcp2 reserves 0 tag bytes for handshake/1-RTT packet
+        // writes → ngtcp2_ppe_final assertion abort (SIGABRT) when our encrypt
+        // callback appends the 16-byte GCM tag. (Initial ctx alone is insufficient.)
+        if (nf.conn_set_crypto_ctx) {
+            nf.conn_set_crypto_ctx(qc->conn, &cctx);  // same AEAD overhead=16
+            WTFLogAlways("[Wave29-499.318] set Handshake/1-RTT crypto ctx: aead.max_overhead=16");
+        }
     } else {
         WTFLogAlways("[Wave29-499.308] WARN conn_set_initial_crypto_ctx unresolved — tag overhead not set");
     }
@@ -2057,7 +2070,16 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         FD_ZERO(&rs);
         FD_SET(udpFd, &rs);
         int sel = select(udpFd + 1, &rs, nullptr, nullptr, &tv);
-        if (sel <= 0) continue;
+        if (sel <= 0) {
+            // Wave 29-499.317 — no inbound this tick: drive ngtcp2 loss recovery
+            // so a lost Initial/Handshake packet gets RETRANSMITTED. Without this,
+            // a single dropped UDP datagram stalls the handshake (packetsSent=1,
+            // packetsReceived=0) → flaky completion. handle_expiry triggers PTO;
+            // the next loop iteration's write-drain re-sends the lost packet.
+            if (nf.conn_handle_expiry)
+                nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+            continue;
+        }
 
         uint8_t inbound[2048];
         struct sockaddr_in from { };
