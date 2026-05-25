@@ -476,6 +476,16 @@ static nw_protocol_definition_t driftstackSocks5FramerDefinition()
             ^nw_framer_start_result_t (nw_framer_t framer) {
                 // Claim the pending destination for this framer instance.
                 FramerDestination destination = claimDestinationForFramer(framer);
+                // Wave 29-499.320 — confirm the framer actually starts (= CFNetwork
+                // is using our relay connection for QUIC). If this never logs while
+                // a QUIC connection was attempted, CFNetwork isn't routing QUIC
+                // through the framer at all.
+                static bool loggedFramerStartOnce = false;
+                if (!loggedFramerStartOnce) {
+                    loggedFramerStartOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.320] nw_framer START — dest=%s:%u (CFNetwork is using the relay connection for QUIC)",
+                        destination.host.utf8().data(), destination.port);
+                }
 
                 // OUTPUT handler — CFNetwork → wire. §7-wrap with destination.
                 nw_framer_set_output_handler(framer, ^(nw_framer_t framerInner, nw_framer_message_t message, size_t messageLength, bool isComplete) {
@@ -574,8 +584,16 @@ RetainPtr<nw_connection_t> createRelayConnectionForQuic(nw_endpoint_t originalEn
     // injection deferred to 16.4.b.6.b for clarity (one architectural decision
     // per atomic slice).
 
+    // Wave 29-499.320 — use the DEDICATED QUIC relay (not the shared STUN/WebRTC
+    // relay). gost binds a relay to its first sender; the shared relay is owned
+    // by the STUN socket, so QUIC responses route there, not this connection.
+    // The dedicated associate (proven for the DriftstackHttp3 smoke, .310/.311)
+    // binds the relay to the QUIC flow. Falls back to the shared relay if the
+    // dedicated one is unavailable.
     DriftstackRTC::RelayChannel channel;
-    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
+    DriftstackRTC::BridgeResult r = DriftstackRTC::establishDedicatedQuicRelay(channel);
+    if (r != DriftstackRTC::BridgeResult::Success)
+        r = DriftstackRTC::establishRelayChannel(channel);
     if (r != DriftstackRTC::BridgeResult::Success) {
         slice16_6_counters().relayEstablishFailures.fetch_add(1, std::memory_order_relaxed);
         static bool loggedFailOnce = false;
