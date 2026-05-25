@@ -213,6 +213,14 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
         WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] WKDriftstackSocks5URLProtocol class loaded — gate set on g_driftstackCustomSocks5Active flag (Wave 29-396 sub-slice 1.6).");
     });
 
+    // Wave .321 diagnostic — is canInitWithRequest even called for real page loads?
+    {
+        NSURL* u = request.URL;
+        WTFLogAlways("[Wave29-499.321/canInit] called for %s://%s%s flagActive=%d",
+            [(u.scheme ?: @"?") UTF8String], [(u.host ?: @"?") UTF8String],
+            [(u.path ?: @"") UTF8String], WebKit::g_driftstackCustomSocks5Active.load(std::memory_order_relaxed));
+    }
+
     if (!WebKit::g_driftstackCustomSocks5Active.load(std::memory_order_relaxed))
         return NO;
 
