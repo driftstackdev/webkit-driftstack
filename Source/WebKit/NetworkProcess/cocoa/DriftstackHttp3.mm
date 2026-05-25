@@ -134,6 +134,9 @@ struct Ngtcp2Fns {
     // Wave 29-499.308 — set Initial crypto ctx so ngtcp2 knows AEAD tag
     // overhead (16 bytes) and reserves packet space for it.
     void (*conn_set_initial_crypto_ctx)(ngtcp2_conn*, const ngtcp2_crypto_ctx*) = nullptr;
+    // Wave 29-499.316 — tell ngtcp2 TLS completed (hand-rolled integration must
+    // call this; the ngtcp2_crypto helper does it automatically).
+    void (*conn_tls_handshake_completed)(ngtcp2_conn*) = nullptr;
     bool ready = false;
 };
 
@@ -153,6 +156,34 @@ enum ssl_encryption_level_t : int {
     ssl_encryption_handshake = 2,
     ssl_encryption_application = 3,
 };
+
+// Wave 29-499.314 — CRITICAL: ngtcp2's ngtcp2_encryption_level enum DIFFERS
+// from BoringSSL's ssl_encryption_level_t:
+//   ngtcp2:    INITIAL=0, HANDSHAKE=1, 0RTT=2,        1RTT=3
+//   BoringSSL: initial=0, early_data=1, handshake=2,  application=3
+// A raw cast mislabels Handshake data as 0-RTT → SSL_provide_quic_data rejects
+// the server's EncryptedExtensions/Certificate/Finished → handshake stalls.
+// These map between the two encodings.
+static inline ssl_encryption_level_t ngtcp2LevelToSsl(int ngtcp2Level)
+{
+    switch (ngtcp2Level) {
+    case 0: return ssl_encryption_initial;      // INITIAL
+    case 1: return ssl_encryption_handshake;    // HANDSHAKE
+    case 2: return ssl_encryption_early_data;   // 0RTT
+    case 3: return ssl_encryption_application;  // 1RTT
+    default: return ssl_encryption_initial;
+    }
+}
+static inline uint32_t sslLevelToNgtcp2(ssl_encryption_level_t sslLevel)
+{
+    switch (sslLevel) {
+    case ssl_encryption_initial:     return 0;  // INITIAL
+    case ssl_encryption_handshake:   return 1;  // HANDSHAKE
+    case ssl_encryption_early_data:  return 2;  // 0RTT
+    case ssl_encryption_application: return 3;  // 1RTT
+    default: return 0;
+    }
+}
 
 struct ssl_quic_method_st {
     int (*set_read_secret)(void* ssl, ssl_encryption_level_t level,
@@ -350,6 +381,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_submit_crypto_data, "ngtcp2_conn_submit_crypto_data");
     RESOLVE(conn_handshake_completed, "ngtcp2_conn_get_handshake_completed");
     RESOLVE(conn_set_initial_crypto_ctx, "ngtcp2_conn_set_initial_crypto_ctx");  // Wave .308
+    RESOLVE(conn_tls_handshake_completed, "ngtcp2_conn_tls_handshake_completed");  // Wave .316
 #undef RESOLVE
 
     bool required = f.settings_default_versioned && f.transport_params_default_versioned
@@ -596,9 +628,9 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     DriftstackQuicConn* qc = quicConnFromSsl(ssl);
     if (!qc || !qc->conn) return 0;
     auto& nf = ngtcp2Fns();
-    // Map ssl level → ngtcp2 encryption level (same enum values, but
-    // ngtcp2 uses ngtcp2_encryption_level_t — identical 0..3 layout).
-    uint32_t ngtcp2Level = static_cast<uint32_t>(level);
+    // Wave .314 — map ssl level → ngtcp2 encryption level (enums DIFFER:
+    // ngtcp2 HANDSHAKE=1 vs BoringSSL handshake=2). Was a raw cast → wrong.
+    uint32_t ngtcp2Level = sslLevelToNgtcp2(level);
     int rv = nf.conn_submit_crypto_data(qc->conn, ngtcp2Level, data, len);
     if (rv != 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.224] QuicAddHandshakeData FAILED rv=%d level=%d len=%zu",
@@ -819,14 +851,36 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
 // it (which in turn triggers our ssl_quic_method_st callbacks for keys +
 // outbound handshake data).
 [[maybe_unused]] static int driftstackNgtcp2RecvCryptoData(ngtcp2_conn* /*conn*/,
-    ngtcp2_encryption_level level, uint64_t /*offset*/,
+    ngtcp2_encryption_level level, uint64_t offset,
     const uint8_t* data, size_t datalen, void* user_data)
 {
     DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
     if (!qc || !qc->ssl) return -1;
     auto& f = boringSslQuicFns();
-    ssl_encryption_level_t sslLevel = static_cast<ssl_encryption_level_t>(level);
+    // Wave .314 — map ngtcp2 encryption level → BoringSSL level (enums differ).
+    ssl_encryption_level_t sslLevel = ngtcp2LevelToSsl(static_cast<int>(level));
     int rv = f.SSL_provide_quic_data(qc->ssl, sslLevel, data, datalen);
+    WTFLogAlways("[Wave29-499.314] RecvCryptoData ngtcp2Level=%d→sslLevel=%d offset=%llu datalen=%zu provide_rv=%d",
+        static_cast<int>(level), static_cast<int>(sslLevel), (unsigned long long)offset, datalen, rv);
+    // Wave .315 — drive the TLS state machine immediately after feeding data so
+    // BoringSSL processes the just-delivered handshake CRYPTO (EE/Cert/Finished)
+    // and emits the next flight + 1-RTT keys within this read.
+    if (rv == 1) {
+        int hs = f.SSL_do_handshake(qc->ssl);
+        if (hs == 1) {
+            // Wave .316 — TLS handshake done; tell ngtcp2 so it can complete the
+            // QUIC handshake (hand-rolled integration must call this explicitly).
+            auto& nf = ngtcp2Fns();
+            if (nf.conn_tls_handshake_completed) {
+                nf.conn_tls_handshake_completed(qc->conn);
+                WTFLogAlways("[Wave29-499.316] SSL_do_handshake=1 → ngtcp2_conn_tls_handshake_completed() called");
+            }
+        } else {
+            int e = f.SSL_get_error ? f.SSL_get_error(qc->ssl, hs) : -999;
+            if (e != 2) // not WANT_READ
+                WTFLogAlways("[Wave29-499.315] post-provide SSL_do_handshake rv=%d err=%d", hs, e);
+        }
+    }
     if (rv != 1) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] RecvCryptoData: SSL_provide_quic_data FAILED level=%d datalen=%zu rv=%d",
             static_cast<int>(level), datalen, rv);
@@ -958,6 +1012,15 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     else
         result = WebKit::driftstackAes128GcmDecrypt(ctx->key, nonceVec, ctVec, aadVec);
 
+    // Wave 29-499.315 — log decrypt outcome (handshake-level decrypt failures
+    // would stall the handshake by silently dropping server CRYPTO).
+    static int s_decLog = 0;
+    if (s_decLog < 12) {
+        s_decLog++;
+        WTFLogAlways("[Wave29-499.315] DECRYPT ctlen=%zu aadlen=%zu aes256=%d chacha=%d -> %s (%zu bytes)",
+            ciphertextlen, aadlen, ctx->isAes256, ctx->isChacha20,
+            result.isEmpty() ? "FAIL" : "ok", result.size());
+    }
     if (result.isEmpty())
         return -1;  // AEAD verification failed
     memcpy(dest, result.span().data(), result.size());
@@ -1560,8 +1623,11 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     nf.addr_init(&path.local, localAddr, localAddrLen);
     nf.addr_init(&path.remote, peerAddr, peerAddrLen);
     ngtcp2_pkt_info pi { };
-    return static_cast<int>(nf.conn_read_pkt_versioned(qc->conn, &path,
+    int rv = static_cast<int>(nf.conn_read_pkt_versioned(qc->conn, &path,
         NGTCP2_PKT_INFO_VERSION, &pi, buf, buflen, driftstackQuicTimestampNow()));
+    if (rv != 0)
+        WTFLogAlways("[Wave29-499.313] conn_read_pkt rv=%d (buflen=%zu)", rv, buflen);
+    return rv;
 }
 
 // Sketch of caller-side event loop (Wave .236 will wire this into
@@ -1756,6 +1822,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // this iteration verifies the SSL bring-up + first conn_write_pkt
     // returns a valid Initial packet.
     auto& bsf = boringSslQuicFns();
+    auto& nf = ngtcp2Fns();  // Wave .316 — needed for tls_handshake_completed in loop
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.244c] Calling TLS_client_method()...");
     const void* method = bsf.TLS_client_method();
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.244c] TLS_client_method()=%p — calling SSL_CTX_new...", method);
@@ -1909,7 +1976,22 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         ++iters;
         // Drive TLS state machine. May fire quic_method.set_*_secret +
         // add_handshake_data → ngtcp2_conn_submit_crypto_data.
-        bsf.SSL_do_handshake(ssl);
+        int hsRv = bsf.SSL_do_handshake(ssl);
+        if (hsRv == 1) {
+            // Wave .316 — TLS done; notify ngtcp2 so QUIC handshake can complete.
+            if (nf.conn_tls_handshake_completed && !qc->handshakeCompleted) {
+                nf.conn_tls_handshake_completed(qc->conn);
+                WTFLogAlways("[Wave29-499.316] (loop) SSL_do_handshake=1 → tls_handshake_completed()");
+            }
+        } else {
+            int sslErr = bsf.SSL_get_error ? bsf.SSL_get_error(ssl, hsRv) : -999;
+            // SSL_ERROR_WANT_READ=2 is normal (waiting for more crypto data).
+            static int s_hsLogCount = 0;
+            if (sslErr != 2 && s_hsLogCount < 6) {
+                s_hsLogCount++;
+                WTFLogAlways("[Wave29-499.313] iter=%d SSL_do_handshake rv=%d SSL_get_error=%d", iters, hsRv, sslErr);
+            }
+        }
 
         // Drain all packets ngtcp2 wants to send right now.
         for (;;) {
