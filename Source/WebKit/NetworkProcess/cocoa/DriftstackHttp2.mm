@@ -26,6 +26,8 @@
 #import <dlfcn.h>
 #import <zlib.h>  // Wave 29-499.263 — system libz for gzip/deflate decode
 #import <wtf/Assertions.h>
+#import <wtf/MonotonicTime.h>
+#import <wtf/StdLibExtras.h>
 #import <wtf/text/CString.h>
 #import <wtf/text/StringBuilder.h>  // Wave 29-499.266 — header dump diagnostic
 
@@ -955,6 +957,269 @@ DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport
     static uint8_t dummySsl;
     auto resp = driftstackHttp2Execute(&dummySsl, request);
     g_activeTransport = nullptr;
+    return resp;
+}
+
+// ============================================================================
+// Wave 29-499.321 (Phase 2.5) — persistent multiplexed HTTP/2 session.
+// ============================================================================
+
+static bool transportWriteAll(const DriftstackHttp2Transport& t, const uint8_t* buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        int w = t.writeFn(t.ctx, buf + off, n - off);
+        if (w <= 0)
+            return false;
+        off += static_cast<size_t>(w);
+    }
+    return true;
+}
+
+static bool transportReadExact(const DriftstackHttp2Transport& t, uint8_t* buf, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        int r = t.readFn(t.ctx, buf + off, n - off);
+        if (r <= 0)
+            return false;
+        off += static_cast<size_t>(r);
+    }
+    return true;
+}
+
+RefPtr<DriftstackHttp2Session> DriftstackHttp2Session::create(const DriftstackHttp2Transport& transport)
+{
+    RefPtr<DriftstackHttp2Session> session = adoptRef(new DriftstackHttp2Session(transport));
+    if (!session->sendPrefaceAndSettings())
+        return nullptr;
+    // Start the background reader. It holds a ref so the session stays alive
+    // while the connection is open; it drops the ref when the loop exits.
+    session->m_readerThread = Thread::create("driftstack-h2-session"_s, [session = session.copyRef()]() mutable {
+        session->readerLoop();
+    });
+    return session;
+}
+
+DriftstackHttp2Session::DriftstackHttp2Session(const DriftstackHttp2Transport& transport)
+    : m_transport(transport)
+{
+}
+
+DriftstackHttp2Session::~DriftstackHttp2Session()
+{
+}
+
+bool DriftstackHttp2Session::isAlive()
+{
+    Locker locker { m_lock };
+    return m_alive;
+}
+
+bool DriftstackHttp2Session::sendPrefaceAndSettings()
+{
+    Locker locker { m_writeLock };
+    if (!transportWriteAll(m_transport, reinterpret_cast<const uint8_t*>(kHttp2Preface), sizeof(kHttp2Preface) - 1))
+        return false;
+    // iPhone Safari 26 SETTINGS (same values + order as the one-shot path).
+    Vector<uint8_t> sp;
+    auto pushSetting = [&](uint16_t id, uint32_t val) {
+        sp.append(static_cast<uint8_t>(id >> 8)); sp.append(static_cast<uint8_t>(id & 0xff));
+        sp.append(static_cast<uint8_t>((val >> 24) & 0xff)); sp.append(static_cast<uint8_t>((val >> 16) & 0xff));
+        sp.append(static_cast<uint8_t>((val >> 8) & 0xff)); sp.append(static_cast<uint8_t>(val & 0xff));
+    };
+    pushSetting(kSettingEnablePush, 0);
+    pushSetting(kSettingInitialWindowSize, 4194304);
+    pushSetting(kSettingMaxConcurrentStreams, 100);
+    pushSetting(kSettingNoRfc7540Priorities, 1);
+    uint8_t sh[9];
+    encodeFrameHeader(sh, sp.size(), kFrameSettings, 0, 0);
+    if (!transportWriteAll(m_transport, sh, 9) || !transportWriteAll(m_transport, sp.span().data(), sp.size()))
+        return false;
+    uint8_t wu[13];
+    encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
+    uint32_t inc = 10485760;
+    wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
+    return transportWriteAll(m_transport, wu, 13);
+}
+
+void DriftstackHttp2Session::readerLoop()
+{
+    auto markDeadAndFailAll = [&] {
+        Locker locker { m_lock };
+        m_alive = false;
+        for (auto& [id, s] : m_streams) {
+            s->failed = true;
+            s->complete = true;
+        }
+        m_cond.notifyAll();
+    };
+
+    for (;;) {
+        uint8_t hdr[9];
+        if (!transportReadExact(m_transport, hdr, 9)) { markDeadAndFailAll(); return; }
+        uint32_t length; uint8_t type, frameFlags; uint32_t sid;
+        decodeFrameHeader(hdr, length, type, frameFlags, sid);
+
+        Vector<uint8_t> payload;
+        if (length) {
+            payload.resize(length);
+            if (!transportReadExact(m_transport, payload.mutableSpan().data(), length)) { markDeadAndFailAll(); return; }
+        }
+
+        switch (type) {
+        case kFrameSettings:
+            if (!(frameFlags & kFlagAck)) {
+                Locker w { m_writeLock };
+                uint8_t ack[9]; encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
+                transportWriteAll(m_transport, ack, 9);
+            }
+            break;
+        case kFramePing:
+            if (!(frameFlags & kFlagAck) && length == 8) {
+                Locker w { m_writeLock };
+                uint8_t pong[9 + 8]; encodeFrameHeader(pong, 8, kFramePing, kFlagAck, 0);
+                memcpy(pong + 9, payload.span().data(), 8);
+                transportWriteAll(m_transport, pong, sizeof(pong));
+            }
+            break;
+        case kFrameGoaway:
+            markDeadAndFailAll();
+            return;
+        case kFrameWindowUpdate:
+            break; // we replenish our own receive window in the DATA path
+        case kFrameRstStream: {
+            Locker locker { m_lock };
+            if (auto it = m_streams.find(sid); it != m_streams.end()) {
+                it->value->failed = true;
+                it->value->complete = true;
+                m_cond.notifyAll();
+            }
+            break;
+        }
+        case kFrameHeaders: {
+            Vector<std::pair<String, String>> decoded;
+            size_t start = 0;
+            if (frameFlags & kFlagPadded) { if (payload.size() < 1) break; start = 1 + payload[0]; }
+            if (frameFlags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
+            size_t cursor = start;
+            while (cursor < payload.size()) {
+                if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded))
+                    break;
+            }
+            Locker locker { m_lock };
+            auto it = m_streams.find(sid);
+            if (it != m_streams.end()) {
+                for (auto& [k, v] : decoded) {
+                    if (k == ":status"_s) {
+                        int sc = 0; auto v8 = v.utf8();
+                        for (size_t i = 0; i < v8.length(); ++i) { char c = v8.data()[i]; if (c < '0' || c > '9') break; sc = sc * 10 + (c - '0'); }
+                        if (sc > 0) it->value->resp.statusCode = sc;
+                    } else if (!k.startsWith(':'))
+                        it->value->resp.headers.append({ k, v });
+                }
+                if (!it->value->resp.statusCode) it->value->resp.statusCode = 200;
+                if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
+            }
+            break;
+        }
+        case kFrameData: {
+            std::span<const uint8_t> dataSpan = payload.span();
+            if (frameFlags & kFlagPadded) {
+                if (dataSpan.size() < 1) break;
+                uint8_t padLen = dataSpan[0];
+                if (static_cast<size_t>(padLen) + 1 > dataSpan.size()) break;
+                dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
+            }
+            {
+                Locker locker { m_lock };
+                if (auto it = m_streams.find(sid); it != m_streams.end()) {
+                    it->value->resp.body.append(dataSpan);
+                    if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
+                }
+            }
+            // Replenish flow-control windows (connection + stream) by the FULL
+            // frame length so large/streamed responses don't stall.
+            if (length) {
+                Locker w { m_writeLock };
+                uint8_t wu[13];
+                uint32_t inc = length;
+                encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
+                wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
+                transportWriteAll(m_transport, wu, 13); // connection (stream 0)
+                encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, sid);
+                transportWriteAll(m_transport, wu, 13); // this stream
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Request& request)
+{
+    DriftstackHttp2Response resp;
+    uint32_t streamId;
+    {
+        Locker locker { m_lock };
+        if (!m_alive) { resp.failed = true; resp.errorMessage = "h2 session not alive"_s; return resp; }
+        streamId = m_nextStreamId;
+        m_nextStreamId += 2;
+        if (m_nextStreamId >= 0x7FFFFFFF) m_alive = false; // stream-id space nearly exhausted; retire after this
+        m_streams.set(streamId, makeUniqueWithoutFastMallocCheck<Stream>());
+    }
+
+    // Build HEADERS (iPhone pseudo-header order m,s,p,a) + optional DATA, send
+    // under the write lock so frames from concurrent streams don't interleave.
+    Vector<uint8_t> hb;
+    hpackEncodeHeader(hb, ":method"_s, request.method);
+    hpackEncodeHeader(hb, ":scheme"_s, request.scheme);
+    hpackEncodeHeader(hb, ":path"_s, request.path);
+    hpackEncodeHeader(hb, ":authority"_s, request.authority);
+    for (auto& [k, v] : request.extraHeaders)
+        hpackEncodeHeader(hb, k.convertToASCIILowercase(), v);
+
+    bool hasBody = !request.body.isEmpty();
+    bool sendOk = true;
+    {
+        Locker w { m_writeLock };
+        uint8_t fh[9];
+        uint8_t flags = kFlagEndHeaders;
+        if (!hasBody) flags |= kFlagEndStream;
+        encodeFrameHeader(fh, hb.size(), kFrameHeaders, flags, streamId);
+        sendOk = transportWriteAll(m_transport, fh, 9) && transportWriteAll(m_transport, hb.span().data(), hb.size());
+        if (sendOk && hasBody) {
+            uint8_t dh[9];
+            encodeFrameHeader(dh, request.body.size(), kFrameData, kFlagEndStream, streamId);
+            sendOk = transportWriteAll(m_transport, dh, 9) && transportWriteAll(m_transport, request.body.span().data(), request.body.size());
+        }
+    }
+
+    Locker locker { m_lock };
+    if (!sendOk) {
+        m_streams.remove(streamId);
+        m_alive = false;
+        resp.failed = true; resp.errorMessage = "h2 stream write failed"_s;
+        return resp;
+    }
+    MonotonicTime deadline = MonotonicTime::now() + Seconds(30);
+    while (true) {
+        auto it = m_streams.find(streamId);
+        if (it == m_streams.end()) break;
+        if (it->value->complete || !m_alive) break;
+        if (!m_cond.waitUntil(m_lock, deadline)) break; // timeout
+    }
+    auto it = m_streams.find(streamId);
+    if (it != m_streams.end()) {
+        resp = std::move(it->value->resp);
+        bool failed = it->value->failed || !it->value->complete;
+        m_streams.remove(streamId);
+        if (failed && !resp.statusCode) { resp.failed = true; if (resp.errorMessage.isEmpty()) resp.errorMessage = "h2 stream incomplete"_s; }
+    } else {
+        resp.failed = true; resp.errorMessage = "h2 stream lost"_s;
+    }
     return resp;
 }
 

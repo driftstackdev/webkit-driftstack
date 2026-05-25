@@ -31,7 +31,12 @@
 #if PLATFORM(DRIFTSTACK)
 
 #include <stdint.h>
+#include <wtf/Condition.h>
 #include <wtf/Forward.h>
+#include <wtf/HashMap.h>
+#include <wtf/Lock.h>
+#include <wtf/ThreadSafeRefCounted.h>
+#include <wtf/Threading.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
@@ -74,6 +79,49 @@ struct DriftstackHttp2Transport {
 };
 DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
                                                   const DriftstackHttp2Request& request);
+
+// Wave 29-499.321 (Phase 2.5) — PERSISTENT, MULTIPLEXED HTTP/2 session for
+// connection pooling. One session per origin owns the established h2 transport
+// (preface + SETTINGS sent once) and a background reader thread that demuxes
+// frames to per-stream buffers. execute() is thread-safe + concurrent: many
+// loader threads submit requests on the SAME connection, each on its own h2
+// stream — exactly like a real browser (no per-request handshake). Used by the
+// connection pool in DriftstackNetworkLoader when ALPN selects "h2".
+class DriftstackHttp2Session : public ThreadSafeRefCounted<DriftstackHttp2Session> {
+public:
+    // Create over an established h2 transport; sends preface+SETTINGS+WINDOW_UPDATE
+    // and starts the reader thread. Returns nullptr on setup failure.
+    static RefPtr<DriftstackHttp2Session> create(const DriftstackHttp2Transport&);
+    ~DriftstackHttp2Session();
+
+    // Submit one request on a new stream; blocks the caller until the response
+    // completes (or error / timeout). Thread-safe; concurrent calls multiplex.
+    DriftstackHttp2Response execute(const DriftstackHttp2Request&);
+
+    // True while the connection is healthy + accepting new streams (no GOAWAY /
+    // transport error / max-stream-id exhaustion).
+    bool isAlive();
+
+private:
+    explicit DriftstackHttp2Session(const DriftstackHttp2Transport&);
+    bool sendPrefaceAndSettings();
+    void readerLoop();
+
+    struct Stream {
+        DriftstackHttp2Response resp;
+        bool complete { false };
+        bool failed { false };
+    };
+
+    DriftstackHttp2Transport m_transport;
+    Lock m_writeLock;   // serializes transport writes (HEADERS/DATA/ACKs)
+    Lock m_lock;        // guards m_streams + m_alive + m_nextStreamId
+    Condition m_cond;   // signals a stream completing/failing
+    HashMap<uint32_t, std::unique_ptr<Stream>> m_streams WTF_GUARDED_BY_LOCK(m_lock);
+    uint32_t m_nextStreamId WTF_GUARDED_BY_LOCK(m_lock) { 1 };
+    bool m_alive WTF_GUARDED_BY_LOCK(m_lock) { true };
+    RefPtr<Thread> m_readerThread;
+};
 
 } // namespace WebKit
 
