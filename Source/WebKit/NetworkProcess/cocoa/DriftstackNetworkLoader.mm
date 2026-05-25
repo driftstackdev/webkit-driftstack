@@ -665,6 +665,62 @@ static HashSet<String>& driftstackH2PoolPending()
     driftstackH2PoolCond().notifyAll();
 }
 
+// === Wave 29-499.322 — HTTP/3 connection pool (mirrors the h2 pool above) ===
+// One persistent QUIC+h3 session per origin, reused across requests (1 handshake
+// per origin instead of N). The session itself serializes requests (m_lock), so
+// the pool's job is purely to avoid duplicate connections via the same SERIALIZED
+// claim used for h2 (winner connects, waiters reuse). Gated by DRIFTSTACK_H3_POOL.
+[[maybe_unused]] static Lock& driftstackH3PoolLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+[[maybe_unused]] static HashMap<String, RefPtr<WebKit::DriftstackHttp3Session>>& driftstackH3Pool()
+{
+    static NeverDestroyed<HashMap<String, RefPtr<WebKit::DriftstackHttp3Session>>> pool;
+    return pool.get();
+}
+[[maybe_unused]] static Condition& driftstackH3PoolCond()
+{
+    static NeverDestroyed<Condition> cond;
+    return cond.get();
+}
+[[maybe_unused]] static HashSet<String>& driftstackH3PoolPending()
+{
+    static NeverDestroyed<HashSet<String>> pending;
+    return pending.get();
+}
+[[maybe_unused]] static std::pair<RefPtr<WebKit::DriftstackHttp3Session>, bool> driftstackH3PoolClaim(const String& origin)
+{
+    Locker locker { driftstackH3PoolLock() };
+    MonotonicTime deadline = MonotonicTime::now() + Seconds(20);
+    while (true) {
+        auto it = driftstackH3Pool().find(origin);
+        if (it != driftstackH3Pool().end()) {
+            if (it->value && it->value->isAlive())
+                return { it->value, false }; // reuse the live session
+            driftstackH3Pool().remove(it);
+        }
+        if (!driftstackH3PoolPending().contains(origin)) {
+            driftstackH3PoolPending().add(origin);
+            return { nullptr, true }; // winner: must connect + publish
+        }
+        if (!driftstackH3PoolCond().waitUntil(driftstackH3PoolLock(), deadline))
+            return { nullptr, false }; // total timeout → last-resort own connect
+    }
+}
+[[maybe_unused]] static void driftstackH3PoolSet(const String& origin, RefPtr<WebKit::DriftstackHttp3Session>&& session)
+{
+    Locker locker { driftstackH3PoolLock() };
+    driftstackH3Pool().set(origin, std::move(session));
+}
+[[maybe_unused]] static void driftstackH3PoolFinishPending(const String& origin)
+{
+    Locker locker { driftstackH3PoolLock() };
+    driftstackH3PoolPending().remove(origin);
+    driftstackH3PoolCond().notifyAll();
+}
+
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
 // (pseudo-header order m,s,p,a + canonical real-header order + cookies + cache-
 // validation stripping). Shared by the one-shot path AND the pooled session
@@ -889,7 +945,32 @@ void DriftstackNetworkLoader::resume()
 
                 WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 path for https://%s%s (forced=%d known=%d)",
                     h3host.utf8().data(), h3req.path.utf8().data(), h3forced, driftstackLoaderHostKnownH3(h3host));
-                WebKit::DriftstackHttp3Response h3resp = WebKit::driftstackHttp3Execute(nullptr, h3req);
+                // Wave .322 — when DRIFTSTACK_H3_POOL is set, reuse ONE persistent
+                // QUIC+h3 connection per origin (serialized claim → 1 handshake/origin
+                // instead of N). Falls back to one-shot driftstackHttp3Execute if the
+                // session can't be established. Default OFF → one-shot behaviour.
+                WebKit::DriftstackHttp3Response h3resp;
+                bool h3PoolHandled = false;
+                if (WebKit::driftstackHttp3PoolEnabled()) {
+                    String h3origin = h3req.authority;
+                    auto claim = driftstackH3PoolClaim(h3origin);
+                    RefPtr<WebKit::DriftstackHttp3Session> session = claim.first;
+                    if (!session && claim.second) {
+                        // Winner: establish the connection, publish it, wake waiters.
+                        session = WebKit::DriftstackHttp3Session::create(h3req.authority);
+                        if (session)
+                            driftstackH3PoolSet(h3origin, RefPtr<WebKit::DriftstackHttp3Session>(session));
+                        driftstackH3PoolFinishPending(h3origin);
+                    }
+                    if (session) {
+                        h3resp = session->execute(h3req);
+                        h3PoolHandled = true;
+                        WTFLogAlways("[Wave29-499.322/LOADER/H3POOL] pooled h3 execute for %s status=%d failed=%d",
+                            h3origin.utf8().data(), h3resp.statusCode, h3resp.failed);
+                    }
+                }
+                if (!h3PoolHandled)
+                    h3resp = WebKit::driftstackHttp3Execute(nullptr, h3req);
 
                 auto* clientPtr = m_task.client();
                 if (!clientPtr) return;
