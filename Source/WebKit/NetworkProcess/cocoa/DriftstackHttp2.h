@@ -30,6 +30,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <memory>
 #include <stdint.h>
 #include <wtf/Condition.h>
 #include <wtf/Forward.h>
@@ -41,6 +42,9 @@
 #include <wtf/text/WTFString.h>
 
 namespace WebKit {
+
+class DriftstackTLS13Client;
+class DriftstackSocks5Client;
 
 struct DriftstackHttp2Request {
     String method;         // "GET", "POST", etc.
@@ -89,9 +93,13 @@ DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport
 // connection pool in DriftstackNetworkLoader when ALPN selects "h2".
 class DriftstackHttp2Session : public ThreadSafeRefCounted<DriftstackHttp2Session> {
 public:
-    // Create over an established h2 transport; sends preface+SETTINGS+WINDOW_UPDATE
-    // and starts the reader thread. Returns nullptr on setup failure.
-    static RefPtr<DriftstackHttp2Session> create(const DriftstackHttp2Transport&);
+    // Create over an established, h2-ALPN-negotiated TLS connection. The session
+    // takes OWNERSHIP of the TLS + SOCKS5 clients so the connection lives exactly
+    // as long as the session is referenced (pool entry + any in-flight execute) —
+    // makes pooling lifetime-safe. Sends preface+SETTINGS+WINDOW_UPDATE and starts
+    // the reader thread. Returns nullptr on setup failure.
+    static RefPtr<DriftstackHttp2Session> create(std::unique_ptr<DriftstackTLS13Client>&&,
+        std::unique_ptr<DriftstackSocks5Client>&&);
     ~DriftstackHttp2Session();
 
     // Submit one request on a new stream; blocks the caller until the response
@@ -103,7 +111,7 @@ public:
     bool isAlive();
 
 private:
-    explicit DriftstackHttp2Session(const DriftstackHttp2Transport&);
+    DriftstackHttp2Session(std::unique_ptr<DriftstackTLS13Client>&&, std::unique_ptr<DriftstackSocks5Client>&&);
     bool sendPrefaceAndSettings();
     void readerLoop();
 
@@ -113,7 +121,9 @@ private:
         bool failed { false };
     };
 
-    DriftstackHttp2Transport m_transport;
+    std::unique_ptr<DriftstackTLS13Client> m_tls;       // owned; outlives the reader
+    std::unique_ptr<DriftstackSocks5Client> m_socks5;   // owned; holds the proxy fd
+    DriftstackHttp2Transport m_transport;               // ctx = m_tls.get()
     Lock m_writeLock;   // serializes transport writes (HEADERS/DATA/ACKs)
     Lock m_lock;        // guards m_streams + m_alive + m_nextStreamId
     Condition m_cond;   // signals a stream completing/failing

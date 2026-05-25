@@ -22,6 +22,9 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "DriftstackTLS13Client.h"
+#import "DriftstackSocks5Client.h"
+
 #import <compression.h>
 #import <dlfcn.h>
 #import <zlib.h>  // Wave 29-499.263 — system libz for gzip/deflate decode
@@ -988,22 +991,36 @@ static bool transportReadExact(const DriftstackHttp2Transport& t, uint8_t* buf, 
     return true;
 }
 
-RefPtr<DriftstackHttp2Session> DriftstackHttp2Session::create(const DriftstackHttp2Transport& transport)
+RefPtr<DriftstackHttp2Session> DriftstackHttp2Session::create(std::unique_ptr<DriftstackTLS13Client>&& tls,
+    std::unique_ptr<DriftstackSocks5Client>&& socks5)
 {
-    RefPtr<DriftstackHttp2Session> session = adoptRef(new DriftstackHttp2Session(transport));
+    if (!tls)
+        return nullptr;
+    RefPtr<DriftstackHttp2Session> session = adoptRef(new DriftstackHttp2Session(std::move(tls), std::move(socks5)));
     if (!session->sendPrefaceAndSettings())
         return nullptr;
-    // Start the background reader. It holds a ref so the session stays alive
-    // while the connection is open; it drops the ref when the loop exits.
+    // Start the background reader. It holds a ref so the session (and the TLS +
+    // SOCKS5 connection it owns) stays alive while the connection is open; it
+    // drops the ref when the loop exits (peer GOAWAY / transport error).
     session->m_readerThread = Thread::create("driftstack-h2-session"_s, [session = session.copyRef()]() mutable {
         session->readerLoop();
     });
     return session;
 }
 
-DriftstackHttp2Session::DriftstackHttp2Session(const DriftstackHttp2Transport& transport)
-    : m_transport(transport)
+DriftstackHttp2Session::DriftstackHttp2Session(std::unique_ptr<DriftstackTLS13Client>&& tls,
+    std::unique_ptr<DriftstackSocks5Client>&& socks5)
+    : m_tls(std::move(tls))
+    , m_socks5(std::move(socks5))
 {
+    // Transport reads/writes go through the owned TLS client.
+    m_transport.ctx = m_tls.get();
+    m_transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
+        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
+    };
+    m_transport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
+        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
+    };
 }
 
 DriftstackHttp2Session::~DriftstackHttp2Session()
