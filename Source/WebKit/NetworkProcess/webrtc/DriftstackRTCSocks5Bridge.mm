@@ -274,6 +274,65 @@ static bool parseProxyEndpoint(const char* env, Socks5Endpoint& out)
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
+// Wave 29-499.310 — dedicated QUIC relay. Separate NeverDestroyed client so its
+// fresh UDP_ASSOCIATE binds to the QUIC udpFd (first sender), unlike the shared
+// relay which gost binds to the STUN socket.
+struct DedicatedQuicRelayState {
+    Lock lock;
+    std::unique_ptr<DriftstackSocks5Client> client WTF_GUARDED_BY_LOCK(lock);
+    Socks5UdpRelayChannel channel WTF_GUARDED_BY_LOCK(lock);
+    bool established WTF_GUARDED_BY_LOCK(lock) { false };
+};
+
+static DedicatedQuicRelayState& dedicatedQuicRelayState()
+{
+    static NeverDestroyed<DedicatedQuicRelayState> s;
+    return s.get();
+}
+
+BridgeResult establishDedicatedQuicRelay(RelayChannel& out)
+{
+    if (!isCustomSocks5Active())
+        return BridgeResult::Socks5Disabled;
+
+    auto& state = dedicatedQuicRelayState();
+    Locker locker { state.lock };
+    if (state.established) {
+        out.relayHost = state.channel.relayHost;
+        out.relayPort = state.channel.relayPort;
+        return BridgeResult::Success;
+    }
+
+    Socks5Endpoint proxy;
+    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
+        WTFLogAlways("[Wave29-499.310] establishDedicatedQuicRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
+        return BridgeResult::ProtocolError;
+    }
+    Socks5Credentials creds;
+    if (const char* u = getenv("DRIFTSTACK_SOCKS5_USER"))
+        creds.username = String::fromUTF8(u);
+    if (const char* p = getenv("DRIFTSTACK_SOCKS5_PASS"))
+        creds.password = String::fromUTF8(p);
+
+    state.client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
+    if (state.client->performHandshake() != Socks5Result::Success) {
+        WTFLogAlways("[Wave29-499.310] dedicated QUIC relay: handshake FAILED");
+        state.client.reset();
+        return BridgeResult::NetworkError;
+    }
+    if (state.client->udpAssociate(state.channel) != Socks5Result::Success) {
+        WTFLogAlways("[Wave29-499.310] dedicated QUIC relay: UDP ASSOCIATE FAILED");
+        state.client.reset();
+        return BridgeResult::UdpAssociateFailed;
+    }
+    state.established = true;
+    out.relayHost = state.channel.relayHost;
+    out.relayPort = state.channel.relayPort;
+    WTFLogAlways("[Wave29-499.310] dedicated QUIC relay SUCCESS — fresh relay %s:%u (binds to QUIC udpFd)",
+        state.channel.relayHost.utf8().data(), state.channel.relayPort);
+    return BridgeResult::Success;
+}
+
 BridgeResult establishRelayChannel(RelayChannel& out)
 {
     if (!isCustomSocks5Active())

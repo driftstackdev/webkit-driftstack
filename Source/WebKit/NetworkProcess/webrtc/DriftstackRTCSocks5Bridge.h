@@ -78,6 +78,13 @@ struct RelayChannel {
 // caller should send all subsequent UDP datagrams to.
 BridgeResult establishRelayChannel(RelayChannel& out);
 
+// Wave 29-499.310 — DEDICATED UDP ASSOCIATE for the QUIC/HTTP-3 flow.
+// The shared relay (establishRelayChannel) is bound by gost to the first
+// sender (STUN socket), so QUIC responses route there, not our udpFd. A fresh
+// dedicated associate binds to the QUIC sender → responses return correctly.
+// The dedicated client's TCP control connection is kept alive process-lifetime.
+BridgeResult establishDedicatedQuicRelay(RelayChannel& out);
+
 // Phase C: wrap an outgoing UDP datagram in RFC 1928 §7 framing.
 // dest = peer the application wants to reach; payload = original UDP bytes.
 // out = SOCKS5-framed bytes the caller sends to the relayPort.

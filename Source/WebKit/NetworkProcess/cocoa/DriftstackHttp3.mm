@@ -1662,12 +1662,14 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         }
     }
 
-    // Wave 29-499.238 — establish SOCKS5 UDP_ASSOCIATE relay (same shared
-    // channel as WebRTC + WebTransport per Wave .102/.221 architecture).
+    // Wave 29-499.310 — DEDICATED UDP_ASSOCIATE for QUIC (was shared relay).
+    // gost binds the shared relay to the first sender (STUN socket), so QUIC
+    // server responses routed there instead of our udpFd → packetsReceived=0.
+    // A fresh dedicated associate binds to the QUIC udpFd (first sender on it).
     DriftstackRTC::RelayChannel relayChannel;
-    DriftstackRTC::BridgeResult relayResult = DriftstackRTC::establishRelayChannel(relayChannel);
+    DriftstackRTC::BridgeResult relayResult = DriftstackRTC::establishDedicatedQuicRelay(relayChannel);
     if (relayResult != DriftstackRTC::BridgeResult::Success) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] establishRelayChannel FAILED (result=%d) — h3 falls back to h2",
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.310] establishDedicatedQuicRelay FAILED (result=%d) — h3 falls back to h2",
             static_cast<int>(relayResult));
         bsf.SSL_free(ssl);
         bsf.SSL_CTX_free(ctx);
