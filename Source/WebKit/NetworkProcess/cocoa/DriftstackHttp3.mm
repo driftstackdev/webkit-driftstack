@@ -1761,8 +1761,8 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // Cloudflare anycast IP not serving QUIC test endpoint). Wave .285 fixed
     // ATYP encoding to 0x01 but still no response because target IP was wrong.
     Socks5Framing::Endpoint peerEp { "1.1.1.1"_s, 443 };  // Wave .287 — verified-known-good QUIC endpoint
-    constexpr int kMaxIterations = 20;
-    constexpr int kPerRecvTimeoutMs = 250;
+    constexpr int kMaxIterations = 40;       // Wave .309 — wider window (was 20)
+    constexpr int kPerRecvTimeoutMs = 300;
     int iters = 0;
     int packetsSent = 0;
     int packetsReceived = 0;
@@ -1845,16 +1845,18 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
             reinterpret_cast<struct sockaddr*>(&from), &fromLen);
         if (r <= 0) continue;
         ++packetsReceived;
-        static bool loggedFirstRecvOnce = false;
-        if (!loggedFirstRecvOnce) {
-            loggedFirstRecvOnce = true;
-            WTFLogAlways("[Wave29-499.255] FIRST QUIC recvfrom: %zd bytes from %s:%u",
-                r, inet_ntoa(from.sin_addr), ntohs(from.sin_port));
-        }
 
         Socks5Framing::Endpoint src;
         Vector<uint8_t> payload;
-        if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+        bool unwrapped = Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload);
+        // Wave 29-499.309 — log EVERY inbound datagram + unwrap result to
+        // characterize the SOCKS5 §7 recv transport (was: first-only).
+        WTFLogAlways("[Wave29-499.309] RECV iter=%d %zd bytes from %s:%u unwrap=%d payload=%zu src=%s:%u first4=%02x %02x %02x %02x",
+            iters, r, inet_ntoa(from.sin_addr), ntohs(from.sin_port),
+            unwrapped, unwrapped ? payload.size() : 0,
+            unwrapped ? src.host.utf8().data() : "?", unwrapped ? src.port : 0,
+            r > 0 ? inbound[0] : 0, r > 1 ? inbound[1] : 0, r > 2 ? inbound[2] : 0, r > 3 ? inbound[3] : 0);
+        if (!unwrapped)
             continue;
 
         driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
