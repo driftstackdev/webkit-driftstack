@@ -893,10 +893,12 @@ void DriftstackNetworkLoader::resume()
             // AFTER an h2 response, so endpoints like quic.browserleaks.com (h3
             // advertised only via HTTPS RR, measured on first contact) need this.
             // Cached per host; only consulted when not already known + not forced.
-            // Gated behind DRIFTSTACK_PATHB_V2_H3_DNSRR=1 — the current RR query
-            // opens a dedicated §7 associate per host, which on a many-origin
-            // page is a proxy-connection storm (long page loads). Off by default
-            // until the shared-persistent-DNS-relay optimization lands.
+            // Gated behind DRIFTSTACK_PATHB_V2_H3_DNSRR=1. The shared-persistent-
+            // DNS-relay optimization HAS landed (driftstackHostAdvertisesH3ViaDns:
+            // one §7 relay opened once + a background reader thread + txid demux +
+            // 800ms-capped concurrent waits → NO per-host associate storm). Verified
+            // on www.cloudflare.com: 3 RR queries for 3 hosts, h3 detected, main page
+            // status=200 114KB, no stall. Enabled in launch-env (Wave .322).
             static const bool s_dnsRrEnabled = [] {
                 const char* e = getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR");
                 return e && e[0] == '1';
