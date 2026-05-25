@@ -1864,7 +1864,7 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
 // uni-streams, opens a client bidirectional stream, and submits a GET request.
 // Returns true on success (qc->h3conn + qc->h3RequestStreamId set).
 [[maybe_unused]] static bool driftstackHttp3SetupAndSubmit(DriftstackQuicConn* qc,
-    const char* authority, const char* path)
+    const DriftstackHttp3Request& request)
 {
     if (!resolveNgHttp3())
         return false;
@@ -1916,29 +1916,59 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     }
     qc->h3RequestStreamId = reqStream;
 
-    auto nv = [](const char* n, const char* v) -> nghttp3_nv {
-        return nghttp3_nv {
-            reinterpret_cast<const uint8_t*>(n), reinterpret_cast<const uint8_t*>(v),
-            strlen(n), strlen(v), NGHTTP3_NV_FLAG_NONE
-        };
-    };
-    nghttp3_nv hdrs[] = {
-        nv(":method", "GET"),
-        nv(":scheme", "https"),
-        nv(":authority", authority),
-        nv(":path", path),
-        nv("user-agent", "Driftstack-H3/1.0"),
-        nv("accept", "*/*"),
-    };
-    rv = h.conn_submit_request(h3, reqStream, hdrs, sizeof(hdrs) / sizeof(hdrs[0]),
+    // Build the request header set. CRITICAL for fingerprint authenticity: send
+    // EXACTLY the headers WebKit configured (real Safari UA, Accept, Accept-
+    // Language, sec-fetch-*, etc.) via request.extraHeaders — never a synthetic
+    // UA. The pseudo-headers use Safari's h2 order (:method, :scheme, :path,
+    // :authority); the exact h3 pseudo-header order still wants a real-iPhone
+    // capture to confirm (peet.ws/h3 or device). Regular-header ORDER is already
+    // lost upstream (NSURLRequest.allHTTPHeaderFields is an unordered dict) —
+    // a pre-existing limitation of the URLProtocol approach shared with the TCP
+    // path; tracked separately.
+    //
+    // nghttp3 copies name/value with NGHTTP3_NV_FLAG_NONE, so the backing CString
+    // storage only needs to outlive the submit_request call (it does — same scope).
+    Vector<std::pair<CString, CString>> store;
+    auto add = [&](const char* n, CString v) { store.append({ CString(n), std::move(v) }); };
+
+    add(":method", request.method.isEmpty() ? CString("GET") : request.method.utf8());
+    add(":scheme", request.scheme.isEmpty() ? CString("https") : request.scheme.utf8());
+    add(":path", request.path.isEmpty() ? CString("/") : request.path.utf8());
+    // :authority — strip the default :443 (real Safari omits it).
+    String authStr = request.authority;
+    if (authStr.endsWith(":443"_s))
+        authStr = authStr.left(authStr.length() - 4);
+    add(":authority", authStr.utf8());
+    // Forward every non-pseudo, non-connection-specific request header verbatim.
+    for (auto& kv : request.extraHeaders) {
+        String lname = kv.first.convertToASCIILowercase();
+        if (lname.isEmpty() || lname.startsWith(':')
+            || lname == "host"_s || lname == "connection"_s
+            || lname == "proxy-connection"_s || lname == "keep-alive"_s
+            || lname == "transfer-encoding"_s || lname == "upgrade"_s)
+            continue;
+        store.append({ kv.first.utf8(), kv.second.utf8() });
+    }
+
+    Vector<nghttp3_nv> nva;
+    nva.reserveInitialCapacity(store.size());
+    for (auto& kv : store) {
+        nva.append(nghttp3_nv {
+            reinterpret_cast<const uint8_t*>(kv.first.data()),
+            reinterpret_cast<const uint8_t*>(kv.second.data()),
+            kv.first.length(), kv.second.length(), NGHTTP3_NV_FLAG_NONE });
+    }
+
+    rv = h.conn_submit_request(h3, reqStream, nva.span().data(), nva.size(),
         /*data_reader=*/nullptr, /*stream_user_data=*/qc);
     if (rv != 0) {
         WTFLogAlways("[Wave29-499.321] nghttp3_conn_submit_request FAILED rv=%d", rv);
         return false;
     }
-    WTFLogAlways("[Wave29-499.321] H3 setup OK: ctrl=%lld qpackEnc=%lld qpackDec=%lld reqStream=%lld GET %s%s",
+    WTFLogAlways("[Wave29-499.321] H3 setup OK: ctrl=%lld qpackEnc=%lld qpackDec=%lld reqStream=%lld %s https://%s%s (%zu headers, real UA forwarded)",
         (long long)ctrlStream, (long long)qpackEnc, (long long)qpackDec,
-        (long long)reqStream, authority, path);
+        (long long)reqStream, store[0].second.data(), authStr.utf8().data(),
+        request.path.isEmpty() ? "/" : request.path.utf8().data(), store.size());
     return true;
 }
 
@@ -1966,7 +1996,11 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
 
         uint8_t pkt[1500];
         ngtcp2_ssize ndatalen = 0;
-        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+        // Set MORE only when nghttp3 handed us stream data (and might have more
+        // to coalesce). When there's no stream data (sveccnt==0, sid==-1), MORE
+        // would tell ngtcp2 to keep buffering instead of flushing — leaving the
+        // request packet unsent. A non-MORE call flushes any buffered packet.
+        uint32_t flags = (sveccnt > 0) ? NGTCP2_WRITE_STREAM_FLAG_MORE : 0;
         if (fin)
             flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
         ngtcp2_pkt_info pi { };
@@ -2654,10 +2688,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // bounded budget is exhausted). This turns the smoke harness into a real
     // H3 client — the engine WebKit's loader routes H3 resource loads to.
     if (completed) {
-        // Derive authority + path from the request (default to a known h3 GET).
-        CString authUtf8 = request.authority.isEmpty() ? CString("cloudflare-quic.com") : request.authority.utf8();
-        CString pathUtf8 = request.path.isEmpty() ? CString("/") : request.path.utf8();
-        if (!driftstackHttp3SetupAndSubmit(qc, authUtf8.data(), pathUtf8.data())) {
+        if (!driftstackHttp3SetupAndSubmit(qc, request)) {
             WTFLogAlways("[Wave29-499.321] H3 setup/submit failed — returning handshake-only success");
         } else {
             constexpr int kH3MaxIterations = 60;
