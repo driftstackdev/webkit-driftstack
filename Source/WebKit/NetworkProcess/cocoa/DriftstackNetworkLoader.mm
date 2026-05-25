@@ -630,26 +630,31 @@ static HashSet<String>& driftstackH2PoolPending()
 [[maybe_unused]] static std::pair<RefPtr<WebKit::DriftstackHttp2Session>, bool> driftstackH2PoolClaim(const String& origin)
 {
     Locker locker { driftstackH2PoolLock() };
-    auto it = driftstackH2Pool().find(origin);
-    if (it != driftstackH2Pool().end()) {
-        if (it->value && it->value->isAlive())
-            return { it->value, false };
-        driftstackH2Pool().remove(it);
-    }
-    if (driftstackH2PoolPending().contains(origin)) {
-        // Another thread is connecting — wait for it (bounded), then re-check.
-        MonotonicTime deadline = MonotonicTime::now() + Seconds(10);
-        while (driftstackH2PoolPending().contains(origin)) {
-            if (!driftstackH2PoolCond().waitUntil(driftstackH2PoolLock(), deadline))
-                break; // timeout
+    // Wave .322 — SERIALIZED coalescing. Only ONE TLS+SOCKS5 handshake per origin
+    // is ever in flight; everyone else waits and then multiplexes on the resulting
+    // h2 session (exactly how a browser coalesces). Crucially, when a winner's
+    // handshake FAILS (flaky proxy: connection-reset / bad-record), we must NOT
+    // wake every waiter to stampede their own connections — that amplifies the
+    // proxy reset cascade. Instead the next waiter becomes the new winner and the
+    // rest keep waiting, so failures retry serially, not in a storm.
+    MonotonicTime deadline = MonotonicTime::now() + Seconds(20);
+    while (true) {
+        auto it = driftstackH2Pool().find(origin);
+        if (it != driftstackH2Pool().end()) {
+            if (it->value && it->value->isAlive())
+                return { it->value, false }; // multiplex on the live session
+            driftstackH2Pool().remove(it);
         }
-        auto it2 = driftstackH2Pool().find(origin);
-        if (it2 != driftstackH2Pool().end() && it2->value && it2->value->isAlive())
-            return { it2->value, false };
-        return { nullptr, false }; // winner failed/timed out → connect on our own
+        if (!driftstackH2PoolPending().contains(origin)) {
+            // No live session and nobody connecting → we become the winner.
+            driftstackH2PoolPending().add(origin);
+            return { nullptr, true };
+        }
+        // Someone is connecting. Wait for them to finish (success → live session
+        // next loop; failure → pending cleared, we claim winner next loop).
+        if (!driftstackH2PoolCond().waitUntil(driftstackH2PoolLock(), deadline))
+            return { nullptr, false }; // total timeout → last-resort own connect
     }
-    driftstackH2PoolPending().add(origin);
-    return { nullptr, true };
 }
 // Winner finished its connect attempt (success or failure): clear pending +
 // wake all waiters (they pick up the now-published session, or connect on their own).

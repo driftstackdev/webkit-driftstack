@@ -1237,6 +1237,8 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     } else {
         resp.failed = true; resp.errorMessage = "h2 stream lost"_s;
     }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] HTTP/2 pooled stream %u completed: status=%d, body=%zu bytes (failed=%d)",
+        streamId, resp.statusCode, resp.body.size(), resp.failed ? 1 : 0);
     return resp;
 }
 

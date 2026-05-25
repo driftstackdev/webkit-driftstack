@@ -186,6 +186,17 @@ bool DriftstackTLS13Client::receiveServerHello()
     }
 
     if (type != 0x16 || body.size() < 4) {
+        // Diagnostic (Wave .322): if type==0x15 the server/proxy sent a TLS
+        // alert; otherwise we're framed wrong (SOCKS5 leftover / proxy reset /
+        // partial record). Dump the record header + first bytes so the failure
+        // mode is identifiable instead of guessed.
+        char hexbuf[40];
+        size_t n = body.size() < 8 ? body.size() : 8;
+        for (size_t i = 0; i < n; ++i)
+            snprintf(hexbuf + i * 3, 4, " %02x", body[i]);
+        if (!n) hexbuf[0] = '\0';
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.322] receiveServerHello bad record: type=0x%02x version=0x%04x bodyLen=%zu first=%s",
+            type, version, body.size(), hexbuf);
         m_errorMessage = "Expected handshake record (0x16) with handshake header"_s;
         return false;
     }

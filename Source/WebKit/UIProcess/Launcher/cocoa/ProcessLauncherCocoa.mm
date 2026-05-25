@@ -531,6 +531,11 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_PATHB_V2_H3_FORCE", getenv("DRIFTSTACK_PATHB_V2_H3_FORCE") },
             { "DRIFTSTACK_PATHB_V2_H3_DNSRR", getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR") },
             { "DRIFTSTACK_H2_POOL", getenv("DRIFTSTACK_H2_POOL") },
+            // iPhone-byte-exact TLS 1.3 ClientHello (DriftstackTLS13Client). Without
+            // this Path B v2 uses BoringSSL's ClientHello (NOT iPhone-exact). Also
+            // required for h2 connection pooling (the session adopts the custom-TLS
+            // connection). Forward (unprefixed) so production NetworkProcess sees it.
+            { "DRIFTSTACK_PATHB_V2_CUSTOM_TLS", getenv("DRIFTSTACK_PATHB_V2_CUSTOM_TLS") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
