@@ -524,6 +524,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Wave 29-499.250 — smoke force gate (production-safe; only fires
             // when explicitly set due to .247 crash investigation).
             { "DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE", getenv("DRIFTSTACK_PATHB_V2_H3_SMOKE_FORCE") },
+            // Wave 29-499.321 — Path B v2 egress activator + h3 discovery + h2
+            // connection pooling flags. Forwarded explicitly so the NetworkProcess
+            // (where DriftstackNetworkLoader runs) sees them.
+            { "DRIFTSTACK_PATHB_V2", getenv("DRIFTSTACK_PATHB_V2") },
+            { "DRIFTSTACK_PATHB_V2_H3_FORCE", getenv("DRIFTSTACK_PATHB_V2_H3_FORCE") },
+            { "DRIFTSTACK_PATHB_V2_H3_DNSRR", getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR") },
+            { "DRIFTSTACK_H2_POOL", getenv("DRIFTSTACK_H2_POOL") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",

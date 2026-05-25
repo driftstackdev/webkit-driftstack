@@ -571,6 +571,7 @@ static bool driftstackH2PoolEnabled()
 {
     static const bool enabled = [] {
         const char* e = getenv("DRIFTSTACK_H2_POOL");
+        WTFLogAlways("[Wave29-499.321/H2POOL] driftstackH2PoolEnabled: getenv(DRIFTSTACK_H2_POOL)=%s", e ?: "(null)");
         return e && e[0] == '1';
     }();
     return enabled;
@@ -1156,9 +1157,32 @@ void DriftstackNetworkLoader::resume()
                 h2req.extraHeaders.append({ lower, header.value });
             }
 
-            // Wave 29-499.193 — route HTTP/2 via custom TLS client if active
+            // Wave 29-499.193 — route HTTP/2 via custom TLS client if active.
+            // Wave .321 P2.5 — when pooling is enabled + the custom TLS client
+            // negotiated h2, ADOPT this freshly-established connection into a
+            // persistent multiplexed session and pool it for reuse (instead of a
+            // one-shot). The session takes OWNERSHIP of the TLS + SOCKS5 clients,
+            // so the one-shot cleanup below must be skipped for them (double-free
+            // / wrong-branch shutdown otherwise). handledConnection tracks that we
+            // moved the clients out (true even if session-create fails, since the
+            // failed session's destruction already freed them).
             DriftstackHttp2Response h2resp;
-            if (g_customTLSClient) {
+            bool handledConnection = false;
+            if (driftstackH2PoolEnabled() && g_customTLSClient) {
+                handledConnection = true;
+                auto tlsOwned = std::unique_ptr<DriftstackTLS13Client>(g_customTLSClient);
+                g_customTLSClient = nullptr;
+                RefPtr<WebKit::DriftstackHttp2Session> session = WebKit::DriftstackHttp2Session::create(std::move(tlsOwned), std::move(socks5Client));
+                if (session) {
+                    String origin = makeString(host, ':', static_cast<unsigned>(url.port().value_or(443)));
+                    h2resp = session->execute(h2req);
+                    driftstackH2PoolSet(origin, RefPtr<WebKit::DriftstackHttp2Session>(session));
+                    WTFLogAlways("[Wave29-499.321/H2POOL] adopted connection for %s into pool (first request status=%d)", origin.utf8().data(), h2resp.statusCode);
+                } else {
+                    h2resp.failed = true;
+                    h2resp.errorMessage = "h2 session adopt/create failed"_s;
+                }
+            } else if (g_customTLSClient) {
                 DriftstackHttp2Transport transport;
                 transport.ctx = g_customTLSClient;
                 transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
@@ -1174,14 +1198,18 @@ void DriftstackNetworkLoader::resume()
 
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
             // Wave 29-499.193 — skip SSL_shutdown/free when our custom TLS
-            // client is active (ssl is a sentinel pointer, not a real SSL*)
-            if (!g_customTLSClient) {
-                auto& f = boringSSLFns();
-                if (f.ssl_shutdown) f.ssl_shutdown(ssl);
-                if (f.ssl_free) f.ssl_free(ssl);
-            } else {
-                delete g_customTLSClient;
-                g_customTLSClient = nullptr;
+            // client is active (ssl is a sentinel pointer, not a real SSL*).
+            // Wave .321 — also skip entirely if we adopted the connection into a
+            // pooled session (the session owns the clients now).
+            if (!handledConnection) {
+                if (!g_customTLSClient) {
+                    auto& f = boringSSLFns();
+                    if (f.ssl_shutdown) f.ssl_shutdown(ssl);
+                    if (f.ssl_free) f.ssl_free(ssl);
+                } else {
+                    delete g_customTLSClient;
+                    g_customTLSClient = nullptr;
+                }
             }
 #endif
 
