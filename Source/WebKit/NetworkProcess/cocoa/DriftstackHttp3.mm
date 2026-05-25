@@ -126,6 +126,9 @@ struct Ngtcp2Fns {
         const void*, size_t) = nullptr;
     int (*conn_submit_crypto_data)(ngtcp2_conn*, uint32_t, const uint8_t*, size_t) = nullptr;
     int (*conn_handshake_completed)(ngtcp2_conn*) = nullptr;
+    // Wave 29-499.308 — set Initial crypto ctx so ngtcp2 knows AEAD tag
+    // overhead (16 bytes) and reserves packet space for it.
+    void (*conn_set_initial_crypto_ctx)(ngtcp2_conn*, const ngtcp2_crypto_ctx*) = nullptr;
     bool ready = false;
 };
 
@@ -341,6 +344,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_install_tx_key, "ngtcp2_conn_install_tx_key");
     RESOLVE(conn_submit_crypto_data, "ngtcp2_conn_submit_crypto_data");
     RESOLVE(conn_handshake_completed, "ngtcp2_conn_get_handshake_completed");
+    RESOLVE(conn_set_initial_crypto_ctx, "ngtcp2_conn_set_initial_crypto_ctx");  // Wave .308
 #undef RESOLVE
 
     bool required = f.settings_default_versioned && f.transport_params_default_versioned
@@ -880,6 +884,25 @@ struct DriftstackQuicAeadCtx {
     if (result.size() != plaintextlen + 16) // AEAD tag is 16 bytes (GCM + Poly1305)
         return -1;
     memcpy(dest, result.span().data(), result.size());
+
+    // Wave 29-499.307 — log first encrypt call's nonce/aad/key/pt to compare
+    // against the server-side reconstruction (stepwise decrypt script).
+    static bool loggedEnc = false;
+    if (!loggedEnc) {
+        loggedEnc = true;
+        auto hx = [](const uint8_t* p, size_t n, char* o) {
+            static const char* h = "0123456789abcdef";
+            for (size_t i = 0; i < n; i++) { o[i*2]=h[p[i]>>4]; o[i*2+1]=h[p[i]&0xf]; }
+            o[n*2]='\0';
+        };
+        char kbuf[80], nbuf[40], abuf[120], pbuf[40];
+        hx(ctx->key.span().data(), ctx->key.size() > 32 ? 32 : ctx->key.size(), kbuf);
+        hx(nonce, noncelen, nbuf);
+        hx(aad, aadlen > 48 ? 48 : aadlen, abuf);
+        hx(plaintext, plaintextlen > 16 ? 16 : plaintextlen, pbuf);
+        WTFLogAlways("[Wave29-499.307] ENC#1 isChaCha=%d isAes256=%d keylen=%zu key=%s noncelen=%zu nonce=%s aadlen=%zu aad=%s ptlen=%zu pt[0..15]=%s",
+            ctx->isChacha20, ctx->isAes256, ctx->key.size(), kbuf, noncelen, nbuf, aadlen, abuf, plaintextlen, pbuf);
+    }
     return 0;
 }
 
@@ -1187,6 +1210,27 @@ static bool resolveAesEncryptFns()
         return nullptr;
     }
 
+    // Wave 29-499.308 — tell ngtcp2 the Initial AEAD overhead is 16 bytes
+    // (AES-128-GCM / ChaCha20-Poly1305 tag). Without this, ngtcp2's default
+    // Initial crypto ctx has max_overhead=0, so it reserves no tag space and
+    // our 16-byte tag overflows the packet → server can't verify → silent drop
+    // (root cause of packetsReceived=0; verified Wave .307: key/nonce/aad all
+    // matched server reconstruction, only the length accounting was off by 16).
+    if (nf.conn_set_initial_crypto_ctx) {
+        ngtcp2_crypto_ctx cctx;
+        memset(&cctx, 0, sizeof(cctx));
+        cctx.aead.native_handle = nullptr;   // we encrypt via the encrypt callback
+        cctx.aead.max_overhead = 16;
+        cctx.md.native_handle = nullptr;
+        cctx.hp.native_handle = nullptr;
+        cctx.max_encryption = (1ull << 23);            // RFC 9001 AES-128-GCM limit
+        cctx.max_decryption_failure = (1ull << 23);
+        nf.conn_set_initial_crypto_ctx(qc->conn, &cctx);
+        WTFLogAlways("[Wave29-499.308] set Initial crypto ctx: aead.max_overhead=16");
+    } else {
+        WTFLogAlways("[Wave29-499.308] WARN conn_set_initial_crypto_ctx unresolved — tag overhead not set");
+    }
+
     // 6. Wire BoringSSL → DriftstackQuicConn linkage:
     //    a) SSL_set_quic_method(ssl, &driftstackQuicMethod) — TLS handshake
     //       messages now flow through our 5 ssl_quic_method_st callbacks.
@@ -1298,6 +1342,39 @@ static bool resolveAesEncryptFns()
             WTFLogAlways("[Wave29-499.292] AES-128-GCM(k=0,iv=0,pt=empty) tag: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x (expect: 58 e2 fc ce fa 7e 30 61 36 7f 1d 57 a4 e7 45 5a)",
                 tct[0], tct[1], tct[2], tct[3], tct[4], tct[5], tct[6], tct[7],
                 tct[8], tct[9], tct[10], tct[11], tct[12], tct[13], tct[14], tct[15]);
+        }
+
+        // Wave 29-499.306 — NIST GCM Test Case 3 (MULTI-BLOCK plaintext).
+        // The empty-pt test above only exercises tag = E(J0); it never tests
+        // GHASH-over-data or CTR. QUIC Initial has ~1155-byte plaintext, so
+        // this multi-block path MUST be correct.
+        //   K = feffe9928665731c6d6a8f9467308308
+        //   IV= cafebabefacedbaddecaf888
+        //   P = d9313225...ba637b39 (60 bytes)
+        //   A = empty
+        //   expected C first 4 = 42 83 1e c2 ; T = 5bc94fbc3221a5db94fae95ae7121a47
+        {
+            static const uint8_t k3[16] = {0xfe,0xff,0xe9,0x92,0x86,0x65,0x73,0x1c,0x6d,0x6a,0x8f,0x94,0x67,0x30,0x83,0x08};
+            static const uint8_t iv3[12] = {0xca,0xfe,0xba,0xbe,0xfa,0xce,0xdb,0xad,0xde,0xca,0xf8,0x88};
+            static const uint8_t p3[60] = {
+                0xd9,0x31,0x32,0x25,0xf8,0x84,0x06,0xe5,0xa5,0x59,0x09,0xc5,0xaf,0xf5,0x26,0x9a,
+                0x86,0xa7,0xa9,0x53,0x15,0x34,0xf7,0xda,0x2e,0x4c,0x30,0x3d,0x8a,0x31,0x8a,0x72,
+                0x1c,0x3c,0x0c,0x95,0x95,0x68,0x09,0x53,0x2f,0xcf,0x0e,0x24,0x49,0xa6,0xb5,0x25,
+                0xb1,0x6a,0xed,0xf5,0xaa,0x0d,0xe6,0x57,0xba,0x63,0x7b,0x39};
+            Vector<uint8_t> K3(16); memcpy(K3.mutableSpan().data(), k3, 16);
+            Vector<uint8_t> IV3(12); memcpy(IV3.mutableSpan().data(), iv3, 12);
+            Vector<uint8_t> P3(60); memcpy(P3.mutableSpan().data(), p3, 60);
+            Vector<uint8_t> A3;
+            auto ct3 = WebKit::driftstackAes128GcmEncrypt(K3, IV3, P3, A3);
+            // empty-AAD expected: C[0..3]=42831ec2, T=cc15abcc191161501aabab46b8fbac85
+            bool ok3 = ct3.size() == 76
+                && ct3[0]==0x42 && ct3[1]==0x83 && ct3[2]==0x1e && ct3[3]==0xc2
+                && ct3[60]==0xcc && ct3[61]==0x15 && ct3[75]==0x85;
+            WTFLogAlways("[Wave29-499.306] AES-128-GCM MULTI-BLOCK (NIST TC3) self-test: %d (1=PASS) size=%zu", ok3, ct3.size());
+            if (ct3.size() == 76) {
+                WTFLogAlways("[Wave29-499.306] C[0..3]=%02x %02x %02x %02x (exp 42 83 1e c2) T[0..3]=%02x %02x %02x %02x (exp cc 15 ab cc) T[15]=%02x (exp 85)",
+                    ct3[0],ct3[1],ct3[2],ct3[3], ct3[60],ct3[61],ct3[62],ct3[63], ct3[75]);
+            }
         }
 
         // AES-ECB hp_mask test: encrypt 16-byte zero block with zero key
@@ -1730,6 +1807,26 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
                     b(56), b(57), b(58), b(59), b(60), b(61), b(62), b(63));
                 WTFLogAlways("[Wave29-499.255] FIRST QUIC sendto: pkt=%zd framed=%zu sent=%zd errno=%d peer=cloudflare-quic.com:443 via relay",
                     n, framed.size(), s, s < 0 ? errno : 0);
+                // Wave 29-499.305b — NetworkProcess sandbox blocks /tmp writes,
+                // so emit the FULL Initial as base64 to the log for offline
+                // aioquic-crypto decryption test (byte-diff debugging).
+                {
+                    static const char b64c[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                    size_t len = static_cast<size_t>(n);
+                    char enc[2400];
+                    size_t o = 0;
+                    for (size_t i = 0; i < len && o + 4 < sizeof(enc); i += 3) {
+                        uint32_t v = static_cast<uint32_t>(pkt[i]) << 16;
+                        if (i + 1 < len) v |= static_cast<uint32_t>(pkt[i + 1]) << 8;
+                        if (i + 2 < len) v |= pkt[i + 2];
+                        enc[o++] = b64c[(v >> 18) & 0x3f];
+                        enc[o++] = b64c[(v >> 12) & 0x3f];
+                        enc[o++] = (i + 1 < len) ? b64c[(v >> 6) & 0x3f] : '=';
+                        enc[o++] = (i + 2 < len) ? b64c[v & 0x3f] : '=';
+                    }
+                    enc[o] = '\0';
+                    WTFLogAlways("[Wave29-499.305] INITIAL_B64 len=%zd %s", n, enc);
+                }
             }
         }
 
