@@ -17,9 +17,13 @@
 
 #import "AuthenticationManager.h"
 #import "DriftstackHttp2.h"
+#import "DriftstackHttp3.h"
 #import "DriftstackTLS13Client.h"
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
+#import <wtf/HashSet.h>
+#import <wtf/Lock.h>
+#import <wtf/NeverDestroyed.h>
 
 // Wave 29-499.154 — STATIC LINK libwebrtc's libboringssl.a into WebKit
 // framework via OTHER_LDFLAGS += -lboringssl in WebKit.xcconfig. All 560
@@ -531,6 +535,31 @@ DriftstackNetworkLoader::~DriftstackNetworkLoader()
     // when socks5Client falls out of scope.
 }
 
+// Wave 29-499.321 — h3-capable origin registry (RFC 7838 Alt-Svc). A host is
+// added when an h2/h1 response from it carries `alt-svc: h3=...`; subsequent
+// loads to that host then take the QUIC/HTTP-3 path via driftstackHttp3Execute.
+// DRIFTSTACK_PATHB_V2_H3_FORCE=1 forces h3 on first contact (verification).
+static Lock& driftstackLoaderH3HostsLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+static HashSet<String>& driftstackLoaderH3Hosts()
+{
+    static NeverDestroyed<HashSet<String>> hosts;
+    return hosts.get();
+}
+static bool driftstackLoaderHostKnownH3(const String& host)
+{
+    Locker locker { driftstackLoaderH3HostsLock() };
+    return driftstackLoaderH3Hosts().contains(host);
+}
+static void driftstackLoaderRememberH3Host(const String& host)
+{
+    Locker locker { driftstackLoaderH3HostsLock() };
+    driftstackLoaderH3Hosts().add(host);
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // Capture request data on the calling thread; do network work async.
@@ -592,6 +621,114 @@ void DriftstackNetworkLoader::resume()
         if (userEnv && userEnv[0] && passEnv) {
             creds.username = String::fromUTF8(userEnv);
             creds.password = String::fromUTF8(passEnv);
+        }
+
+        // Wave 29-499.321 — HTTP/3 branch. For https origins that are h3-capable
+        // (learned via Alt-Svc, or forced for first-contact verification), route
+        // through the QUIC/HTTP-3 engine over SOCKS5 §7 (driftstackHttp3Execute,
+        // which does its own UDP_ASSOCIATE) instead of the TCP h2/h1 path below.
+        // This is the in-browser h3 path: NetworkDataTaskCocoa::resume already
+        // routes here (DriftstackNetworkLoader is the active loader), so unlike
+        // the URLProtocol, it actually fires for WebKit page loads. On any h3
+        // failure we fall through to the proven TCP h2/h1 path.
+        {
+            const char* h3env = getenv("DRIFTSTACK_PATHB_V2_H3");
+            const char* h3force = getenv("DRIFTSTACK_PATHB_V2_H3_FORCE");
+            bool h3enabled = h3env && h3env[0] == '1';
+            bool h3forced = h3force && h3force[0] == '1';
+            String h3host = url.host().toString();
+            bool h3https = url.protocolIs("https"_s);
+            if (h3enabled && h3https && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
+                WebKit::DriftstackHttp3Request h3req;
+                h3req.method = httpMethod;
+                h3req.scheme = "https"_s;
+                uint16_t h3port = static_cast<uint16_t>(url.port().value_or(443));
+                h3req.authority = h3port == 443 ? h3host : makeString(h3host, ':', h3port);
+                h3req.path = url.path().toString();
+                if (h3req.path.isEmpty()) h3req.path = "/"_s;
+                if (!url.query().isEmpty())
+                    h3req.path = makeString(h3req.path, '?', url.query());
+                // iPhone Safari 26 canonical header order (same as the h2 path):
+                // accept, sec-fetch-site, sec-fetch-dest, accept-encoding,
+                // sec-fetch-mode, user-agent, priority, accept-language; WebKit's
+                // natural values, only the ORDER is enforced.
+                HashMap<String, String> wk;
+                for (auto& header : httpHeaders)
+                    wk.add(header.key.convertToASCIILowercase(), header.value);
+                auto orDefault = [&](ASCIILiteral key, ASCIILiteral fallback) -> String {
+                    auto it = wk.find(String(key));
+                    return it != wk.end() ? it->value : String(fallback);
+                };
+                h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
+                if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
+                if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
+                h3req.extraHeaders.append({ "accept-encoding"_s, orDefault("accept-encoding"_s, "gzip, deflate, br"_s) });
+                if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
+                h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
+                if (wk.contains("priority"_s)) h3req.extraHeaders.append({ "priority"_s, wk.get("priority"_s) });
+                h3req.extraHeaders.append({ "accept-language"_s, orDefault("accept-language"_s, "en-US,en;q=0.9"_s) });
+                // cookies
+                if (auto nsURLPtr = url.createNSURL()) {
+                    NSArray<NSHTTPCookie*>* cookies = [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookiesForURL:nsURLPtr.get()];
+                    if (cookies.count > 0) {
+                        NSString* cookie = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies][@"Cookie"];
+                        if (cookie) h3req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
+                    }
+                }
+
+                WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 path for https://%s%s (forced=%d known=%d)",
+                    h3host.utf8().data(), h3req.path.utf8().data(), h3forced, driftstackLoaderHostKnownH3(h3host));
+                WebKit::DriftstackHttp3Response h3resp = WebKit::driftstackHttp3Execute(nullptr, h3req);
+
+                auto* clientPtr = m_task.client();
+                if (!clientPtr) return;
+                if (!h3resp.failed && h3resp.statusCode) {
+                    String mimeType = "text/html"_s, charset = "UTF-8"_s;
+                    long long expectedLength = -1;
+                    for (auto& [k, v] : h3resp.headers) {
+                        if (equalIgnoringASCIICase(k, "content-type"_s)) {
+                            String hv = v; size_t semi = hv.find(';');
+                            if (semi != notFound) {
+                                mimeType = hv.left(semi).trim(deprecatedIsSpaceOrNewline);
+                                String params = hv.substring(semi + 1);
+                                size_t ci = params.findIgnoringASCIICase("charset="_s);
+                                if (ci != notFound) {
+                                    String cs = params.substring(ci + 8).trim(deprecatedIsSpaceOrNewline);
+                                    size_t e = cs.find(';'); if (e != notFound) cs = cs.left(e);
+                                    if (cs.startsWith('"') && cs.endsWith('"')) cs = cs.substring(1, cs.length() - 2);
+                                    if (!cs.isEmpty()) charset = cs;
+                                }
+                            } else
+                                mimeType = hv.trim(deprecatedIsSpaceOrNewline);
+                        } else if (equalIgnoringASCIICase(k, "content-length"_s)) {
+                            long long n = parseInteger<long long>(v).value_or(-1);
+                            if (n >= 0) expectedLength = n;
+                        }
+                    }
+                    if (expectedLength < 0) expectedLength = static_cast<long long>(h3resp.body.size());
+                    WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
+                    response.setHTTPStatusCode(h3resp.statusCode);
+                    for (auto& [k, v] : h3resp.headers)
+                        response.setHTTPHeaderField(k, v);
+                    auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
+                    callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                        clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                            [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                                if (action == WebCore::PolicyAction::Use) {
+                                    clientPtr->didReceiveData(bodyBuffer.get());
+                                    WebCore::NetworkLoadMetrics metrics;
+                                    clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                                }
+                            });
+                    });
+                    WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 delivered status=%d bodyLen=%zu for %s",
+                        h3resp.statusCode, h3resp.body.size(), h3host.utf8().data());
+                    return;
+                }
+                WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 failed (%s) — falling through to TCP h2/h1",
+                    h3resp.errorMessage.utf8().data());
+                // fall through to the TCP path below
+            }
         }
 
         auto socks5Client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
@@ -876,6 +1013,14 @@ void DriftstackNetworkLoader::resume()
             String charset = "UTF-8"_s;
             long long expectedLength = -1;
             for (auto& [k, v] : h2resp.headers) {
+                // Wave 29-499.321 — learn h3 support (RFC 7838). If this origin's
+                // h2 response advertises h3, remember it so subsequent loads take
+                // the QUIC/HTTP-3 path (matches Safari's Alt-Svc-gated h3).
+                if (equalIgnoringASCIICase(k, "alt-svc"_s) && v.contains("h3"_s)) {
+                    driftstackLoaderRememberH3Host(url.host().toString());
+                    WTFLogAlways("[Wave29-499.321/LOADER] learned h3 for %s via Alt-Svc: %s",
+                        url.host().toString().utf8().data(), v.utf8().data());
+                }
                 if (equalIgnoringASCIICase(k, "content-type"_s)) {
                     // "text/css; charset=utf-8" → split on ';'
                     String headerValue = v;
