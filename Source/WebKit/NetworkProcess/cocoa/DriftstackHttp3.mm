@@ -89,6 +89,7 @@ struct Ngtcp2Fns {
     int (*conn_open_uni_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;  // Wave .321 — nghttp3 control+qpack streams
     int (*conn_extend_max_stream_offset)(ngtcp2_conn*, int64_t, uint64_t) = nullptr;  // Wave .321 — per-stream flow control
     void (*conn_extend_max_offset)(ngtcp2_conn*, uint64_t) = nullptr;  // Wave .321 — connection flow control
+    int (*conn_decode_and_set_remote_transport_params)(ngtcp2_conn*, const uint8_t*, size_t) = nullptr;  // Wave .321 — apply server's TP (stream limits)
     ngtcp2_tstamp (*conn_get_expiry)(ngtcp2_conn*) = nullptr;
     int (*conn_handle_expiry)(ngtcp2_conn*, ngtcp2_tstamp) = nullptr;
     void (*addr_init)(ngtcp2_addr*, const struct sockaddr*, size_t) = nullptr;
@@ -378,6 +379,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_open_uni_stream, "ngtcp2_conn_open_uni_stream");  // Wave .321
     RESOLVE(conn_extend_max_stream_offset, "ngtcp2_conn_extend_max_stream_offset");  // Wave .321
     RESOLVE(conn_extend_max_offset, "ngtcp2_conn_extend_max_offset");  // Wave .321
+    RESOLVE(conn_decode_and_set_remote_transport_params, "ngtcp2_conn_decode_and_set_remote_transport_params");  // Wave .321
     RESOLVE(conn_get_expiry, "ngtcp2_conn_get_expiry");
     RESOLVE(conn_handle_expiry, "ngtcp2_conn_handle_expiry");
     RESOLVE(addr_init, "ngtcp2_addr_init");
@@ -1893,10 +1895,13 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     // Bind the HTTP/3 control stream + QPACK encoder/decoder streams to three
     // client-initiated unidirectional streams (RFC 9114 §6.2 / §3.2.2).
     int64_t ctrlStream = -1, qpackEnc = -1, qpackDec = -1;
-    if (nf.conn_open_uni_stream(qc->conn, &ctrlStream, nullptr) != 0
-        || nf.conn_open_uni_stream(qc->conn, &qpackEnc, nullptr) != 0
-        || nf.conn_open_uni_stream(qc->conn, &qpackDec, nullptr) != 0) {
-        WTFLogAlways("[Wave29-499.321] open_uni_stream (control/qpack) FAILED");
+    int rvc = nf.conn_open_uni_stream(qc->conn, &ctrlStream, nullptr);
+    int rve = rvc ? rvc : nf.conn_open_uni_stream(qc->conn, &qpackEnc, nullptr);
+    int rvd = rve ? rve : nf.conn_open_uni_stream(qc->conn, &qpackDec, nullptr);
+    if (rvc || rve || rvd) {
+        // NGTCP2_ERR_STREAM_ID_BLOCKED = -209 (peer's uni-stream allowance not
+        // yet available); other negatives are hard failures.
+        WTFLogAlways("[Wave29-499.321] open_uni_stream FAILED rvc=%d rve=%d rvd=%d (-209=STREAM_ID_BLOCKED)", rvc, rve, rvd);
         return false;
     }
     if (h.conn_bind_control_stream(h3, ctrlStream) != 0) {
@@ -2555,11 +2560,32 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     int iters = 0;
     int packetsSent = 0;
     int packetsReceived = 0;
+    bool remoteTpApplied = false;  // Wave .321 — per-connection (NOT static)
     while (iters < kMaxIterations && !qc->handshakeCompleted) {
         ++iters;
         // Drive TLS state machine. May fire quic_method.set_*_secret +
         // add_handshake_data → ngtcp2_conn_submit_crypto_data.
         int hsRv = bsf.SSL_do_handshake(ssl);
+        // Wave .321 — feed the server's QUIC transport parameters (from the TLS
+        // quic_transport_parameters extension) into ngtcp2 AS SOON AS available,
+        // every iteration until it succeeds. Without this, ngtcp2 keeps default
+        // remote limits (initial_max_streams_uni=0) and every
+        // ngtcp2_conn_open_uni_stream returns STREAM_ID_BLOCKED (-206), so the 3
+        // HTTP/3 control/QPACK streams can't open. Must happen BEFORE ngtcp2
+        // marks the handshake complete (which fires from conn_read_pkt, not from
+        // SSL_do_handshake==1). The ngtcp2_crypto helper does this automatically;
+        // our hand-rolled path must do it explicitly.
+        if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+            && nf.conn_decode_and_set_remote_transport_params) {
+            const uint8_t* tp = nullptr;
+            size_t tpLen = 0;
+            bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
+            if (tp && tpLen > 0) {
+                int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen);
+                remoteTpApplied = (tprv == 0);
+                WTFLogAlways("[Wave29-499.321] applied server transport params (%zu bytes) rv=%d — uni-stream limits now available", tpLen, tprv);
+            }
+        }
         if (hsRv == 1) {
             // Wave .316 — TLS done; notify ngtcp2 so QUIC handshake can complete.
             if (nf.conn_tls_handshake_completed && !qc->handshakeCompleted) {
@@ -2691,7 +2717,11 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         if (!driftstackHttp3SetupAndSubmit(qc, request)) {
             WTFLogAlways("[Wave29-499.321] H3 setup/submit failed — returning handshake-only success");
         } else {
-            constexpr int kH3MaxIterations = 60;
+            // Wave .321 — wider budget; each iteration now DRAINS all queued
+            // datagrams (not one), so a multi-packet response completes in a few
+            // wakeups instead of one-packet-per-300ms (the cause of the earlier
+            // budget-exhausted-at-60KB stall).
+            constexpr int kH3MaxIterations = 200;
             int h3iters = 0;
             int h3PacketsSent = 0;
             int h3PacketsReceived = 0;
@@ -2711,20 +2741,24 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
                         nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
                     continue;
                 }
-                uint8_t inbound[2048];
-                struct sockaddr_in from { };
-                socklen_t fromLen = sizeof(from);
-                ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0,
-                    reinterpret_cast<struct sockaddr*>(&from), &fromLen);
-                if (r <= 0) continue;
-                ++h3PacketsReceived;
-                Socks5Framing::Endpoint src;
-                Vector<uint8_t> payload;
-                if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
-                    continue;
-                driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
-                    reinterpret_cast<struct sockaddr*>(&peer), sizeof(peer),
-                    reinterpret_cast<struct sockaddr*>(&local), sizeof(local));
+                // Drain EVERY queued datagram this wakeup (non-blocking) so a
+                // burst of response packets is consumed in one pass.
+                for (;;) {
+                    uint8_t inbound[2048];
+                    ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), MSG_DONTWAIT, nullptr, nullptr);
+                    if (r <= 0)
+                        break;
+                    ++h3PacketsReceived;
+                    Socks5Framing::Endpoint src;
+                    Vector<uint8_t> payload;
+                    if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+                        continue;
+                    driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+                        reinterpret_cast<struct sockaddr*>(&peer), sizeof(peer),
+                        reinterpret_cast<struct sockaddr*>(&local), sizeof(local));
+                    if (qc->h3ResponseComplete)
+                        break;
+                }
             }
             // Final write-drain to flush ACKs for the last received packets.
             driftstackHttp3DrainWrites(qc, udpFd, peerEp, relaySa);
