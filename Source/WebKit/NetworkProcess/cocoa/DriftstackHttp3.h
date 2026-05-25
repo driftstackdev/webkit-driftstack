@@ -43,8 +43,11 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <memory>
 #include <stdint.h>
 #include <wtf/Forward.h>
+#include <wtf/Lock.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
@@ -88,6 +91,44 @@ bool driftstackHttp3Enabled();
 // advertises HTTP/3 (alpn contains "h3"). This is how real Safari discovers h3
 // for FIRST contact (before any Alt-Svc response header). Result cached per host.
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host);
+
+// Wave 29-499.322 (Phase 3.5) — PERSISTENT HTTP/3 session for connection pooling.
+// Like real Safari, ONE QUIC connection per origin is established once (handshake
+// + nghttp3 setup) and REUSED for every request to that origin, instead of a fresh
+// QUIC handshake per request (what one-shot driftstackHttp3Execute does — N
+// handshakes for an N-resource page). MVP scope is SERIALIZED reuse: one request
+// at a time on the live connection (the DriftstackQuicConn response model is
+// single-request), which still removes the per-request handshake (the dominant
+// cost). Concurrent stream multiplexing + a background servicing thread is a later
+// phase. Gated by DRIFTSTACK_H3_POOL (default off).
+class DriftstackHttp3Session : public ThreadSafeRefCounted<DriftstackHttp3Session> {
+public:
+    // Establish a QUIC+h3 connection to `authority` (host[:port]) over a fresh
+    // SOCKS5 UDP_ASSOCIATE relay (proxy + creds from env, same path as
+    // driftstackHttp3Execute). Returns nullptr on setup/handshake failure.
+    static RefPtr<DriftstackHttp3Session> create(const String& authority);
+    ~DriftstackHttp3Session();
+
+    // Submit one request on a new bidi stream of the live connection; blocks until
+    // the response completes (or error / timeout). NOT concurrent in the MVP —
+    // callers serialize via the pool claim (the lock enforces it regardless).
+    DriftstackHttp3Response execute(const DriftstackHttp3Request&);
+
+    // True while the QUIC connection is healthy + usable for new requests.
+    bool isAlive();
+
+private:
+    DriftstackHttp3Session(void* qc, void* ssl);
+
+    Lock m_lock;                          // serializes execute() on the shared conn
+    void* m_qc { nullptr };                // owned DriftstackQuicConn* (opaque here;
+                                           // real type is .mm-internal, anon namespace)
+    void* m_ssl { nullptr };               // SSL* (owned; freed at session close)
+    bool m_alive { true };
+};
+
+// Gate: true if h3 connection pooling is enabled via DRIFTSTACK_H3_POOL=1.
+bool driftstackHttp3PoolEnabled();
 
 } // namespace WebKit
 

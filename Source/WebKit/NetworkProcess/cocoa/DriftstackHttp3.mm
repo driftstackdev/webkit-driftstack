@@ -553,6 +553,17 @@ struct DriftstackQuicConn {
     Vector<uint8_t> h3ReqMethod;
     Vector<uint8_t> h3ReqPath;
     Vector<uint8_t> h3ReqAuthority;
+
+    // Wave .322 — transport state a persistent DriftstackHttp3Session needs to
+    // keep so execute() can pump the SAME connection for many sequential
+    // requests (the one-shot driftstackHttp3Execute keeps these as locals).
+    void* sslCtx { nullptr };                // SSL_CTX* (owned; freed at session close)
+    int udpFd { -1 };                        // SOCKS5 UDP_ASSOCIATE relay socket (owned)
+    struct sockaddr_in relaySa { };          // §7 relay endpoint (sendto target)
+    struct sockaddr_in peerSa { };           // resolved server addr (ngtcp2 path peer)
+    struct sockaddr_in localSa { };          // local bound addr (ngtcp2 path local)
+    String peerIp;                           // resolved server IPv4 (for §7 framing)
+    uint16_t peerPort { 443 };
 };
 
 [[maybe_unused]] static int& quicConnExDataIndex()
@@ -3081,6 +3092,327 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     snprintf(buf, sizeof(buf), "Phase 3 HTTP/3 handshake: iters=%d packetsSent=%d packetsReceived=%d handshakeCompleted=false (likely AEAD/hp_mask decrypt fail on recv Initial - diagnostic .284)",
         iters, packetsSent, packetsReceived);
     resp.errorMessage = String::fromUTF8(buf);
+    return resp;
+}
+
+// ===========================================================================
+// Wave 29-499.322 (Phase 3.5) — DriftstackHttp3Session: persistent QUIC+h3
+// connection for pooling. create() does the one-time setup + handshake (mirrors
+// driftstackHttp3Execute's bring-up, reusing the same factored primitives —
+// connectQuic / driftstackQuicRawSocks5Associate / SetupConnection / etc. — so
+// the one-shot Execute path is left completely untouched). execute() reuses the
+// live connection for each request (no new handshake). SERIALIZED via m_lock.
+// Gated by DRIFTSTACK_H3_POOL.
+// ===========================================================================
+bool driftstackHttp3PoolEnabled()
+{
+    static const char* e = getenv("DRIFTSTACK_H3_POOL");
+    return e && e[0] == '1';
+}
+
+DriftstackHttp3Session::DriftstackHttp3Session(void* qc, void* ssl)
+    : m_qc(qc)
+    , m_ssl(ssl)
+{
+}
+
+DriftstackHttp3Session::~DriftstackHttp3Session()
+{
+    if (!m_qc)
+        return;
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(m_qc);
+    auto& bsf = boringSslQuicFns();
+    if (qc->h3conn) {
+        ngHttp3Fns().conn_del(static_cast<nghttp3_conn*>(qc->h3conn));
+        qc->h3conn = nullptr;
+    }
+    if (qc->udpFd >= 0)
+        ::close(qc->udpFd);
+    void* ctx = qc->sslCtx;            // read before destroy frees qc
+    destroyDriftstackQuicConn(qc);
+    if (m_ssl)
+        bsf.SSL_free(m_ssl);
+    if (ctx)
+        bsf.SSL_CTX_free(ctx);
+    m_qc = nullptr;
+    m_ssl = nullptr;
+}
+
+bool DriftstackHttp3Session::isAlive()
+{
+    Locker locker { m_lock };
+    return m_alive && m_qc && static_cast<DriftstackQuicConn*>(m_qc)->handshakeCompleted;
+}
+
+RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& authority)
+{
+    if (!resolveNgtcp2() || !resolveBoringSslQuic())
+        return nullptr;
+    auto& bsf = boringSslQuicFns();
+    auto& nf = ngtcp2Fns();
+
+    const void* method = bsf.TLS_client_method();
+    void* ctx = bsf.SSL_CTX_new(method);
+    if (!ctx)
+        return nullptr;
+    constexpr int kTLS13 = 0x0304;
+    bsf.SSL_CTX_set_min_proto_version(ctx, kTLS13);
+    bsf.SSL_CTX_set_max_proto_version(ctx, kTLS13);
+    static const uint8_t alpnH3[] = { 0x02, 'h', '3' };
+    bsf.SSL_CTX_set_alpn_protos(ctx, alpnH3, sizeof(alpnH3));
+    void* ssl = bsf.SSL_new(ctx);
+    if (!ssl) {
+        bsf.SSL_CTX_free(ctx);
+        return nullptr;
+    }
+    bsf.SSL_set_connect_state(ssl);
+
+    // Parse host[:port] from authority; set SNI.
+    String authHost;
+    uint16_t authPort = 443;
+    {
+        CString a = authority.utf8();
+        const char* astr = a.data();
+        if (astr && astr[0]) {
+            const char* colon = strchr(astr, ':');
+            if (colon) {
+                authHost = String::fromUTF8(std::span<const char> { astr, static_cast<size_t>(colon - astr) });
+                authPort = static_cast<uint16_t>(atoi(colon + 1));
+                if (!authPort) authPort = 443;
+            } else
+                authHost = String::fromUTF8(astr);
+        }
+    }
+    if (!authHost.isEmpty())
+        bsf.SSL_set_tlsext_host_name(ssl, authHost.utf8().data());
+
+    auto cleanup = [&]() { bsf.SSL_free(ssl); bsf.SSL_CTX_free(ctx); };
+
+    struct sockaddr_in relaySa { };
+    if (!driftstackQuicRawSocks5Associate(&relaySa)) {
+        WTFLogAlways("[Wave29-499.322/H3POOL] SOCKS5 UDP_ASSOCIATE failed for %s", authority.utf8().data());
+        cleanup();
+        return nullptr;
+    }
+
+    int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udpFd < 0) { cleanup(); return nullptr; }
+    struct sockaddr_in localBind { };
+    localBind.sin_family = AF_INET;
+    localBind.sin_addr.s_addr = htonl(INADDR_ANY);
+    localBind.sin_port = 0;
+    if (bind(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), sizeof(localBind)) < 0) {
+        ::close(udpFd);
+        cleanup();
+        return nullptr;
+    }
+    socklen_t localLen = sizeof(localBind);
+    getsockname(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), &localLen);
+    uint16_t boundPort = ntohs(localBind.sin_port);
+
+    struct sockaddr_in local { };
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_port = htons(boundPort);
+
+    String peerIpStr = "1.1.1.1"_s;
+    if (!authHost.isEmpty()) {
+        String viaRelay = driftstackResolveHostViaSocks5Relay(authHost, udpFd, relaySa, "1.1.1.1");
+        if (!viaRelay.isEmpty())
+            peerIpStr = viaRelay;
+        else {
+            struct addrinfo hints { };
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            struct addrinfo* res = nullptr;
+            CString hostC = authHost.utf8();
+            if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+                char ipbuf[INET_ADDRSTRLEN] = {};
+                inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf));
+                peerIpStr = String::fromUTF8(ipbuf);
+                freeaddrinfo(res);
+            } else if (res)
+                freeaddrinfo(res);
+        }
+    }
+
+    struct sockaddr_in peer { };
+    peer.sin_family = AF_INET;
+    inet_pton(AF_INET, peerIpStr.utf8().data(), &peer.sin_addr);
+    peer.sin_port = htons(authPort);
+
+    DriftstackQuicConn* qc = connectQuic(ssl,
+        reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
+        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer));
+    if (!qc) {
+        ::close(udpFd);
+        cleanup();
+        return nullptr;
+    }
+
+    // Handshake event loop (mirrors driftstackHttp3Execute .239/.317/.321).
+    Socks5Framing::Endpoint peerEp { peerIpStr, authPort };
+    constexpr int kMaxIterations = 40;
+    constexpr int kPerRecvTimeoutMs = 300;
+    int iters = 0;
+    bool remoteTpApplied = false;
+    while (iters < kMaxIterations && !qc->handshakeCompleted) {
+        ++iters;
+        int hsRv = bsf.SSL_do_handshake(ssl);
+        if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+            && nf.conn_decode_and_set_remote_transport_params) {
+            const uint8_t* tp = nullptr;
+            size_t tpLen = 0;
+            bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
+            if (tp && tpLen > 0)
+                remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen) == 0);
+        }
+        if (hsRv == 1 && nf.conn_tls_handshake_completed && !qc->handshakeCompleted)
+            nf.conn_tls_handshake_completed(qc->conn);
+        for (;;) {
+            uint8_t pkt[1500];
+            ssize_t n = driftstackQuicWritePacket(qc, pkt, sizeof(pkt));
+            if (n <= 0)
+                break;
+            Vector<uint8_t> framed;
+            if (!Socks5Framing::wrap(peerEp, std::span<const uint8_t> { pkt, static_cast<size_t>(n) }, framed))
+                break;
+            sendto(udpFd, framed.span().data(), framed.size(), 0,
+                reinterpret_cast<struct sockaddr*>(&relaySa), sizeof(relaySa));
+        }
+        struct timeval tv { 0, kPerRecvTimeoutMs * 1000 };
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(udpFd, &rs);
+        int sel = select(udpFd + 1, &rs, nullptr, nullptr, &tv);
+        if (sel <= 0) {
+            if (nf.conn_handle_expiry)
+                nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+            continue;
+        }
+        uint8_t inbound[2048];
+        ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0, nullptr, nullptr);
+        if (r <= 0)
+            continue;
+        Socks5Framing::Endpoint src;
+        Vector<uint8_t> payload;
+        if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+            continue;
+        driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+            reinterpret_cast<struct sockaddr*>(&peer), sizeof(peer),
+            reinterpret_cast<struct sockaddr*>(&local), sizeof(local));
+    }
+
+    if (!qc->handshakeCompleted) {
+        WTFLogAlways("[Wave29-499.322/H3POOL] handshake FAILED for %s (iters=%d)", authority.utf8().data(), iters);
+        ::close(udpFd);
+        destroyDriftstackQuicConn(qc);
+        cleanup();
+        return nullptr;
+    }
+    if (!driftstackHttp3SetupConnection(qc)) {
+        WTFLogAlways("[Wave29-499.322/H3POOL] nghttp3 setup FAILED for %s", authority.utf8().data());
+        ::close(udpFd);
+        destroyDriftstackQuicConn(qc);
+        cleanup();
+        return nullptr;
+    }
+
+    // Persist the transport state so execute() can pump the SAME connection.
+    qc->sslCtx = ctx;
+    qc->udpFd = udpFd;
+    qc->relaySa = relaySa;
+    qc->peerSa = peer;
+    qc->localSa = local;
+    qc->peerIp = peerIpStr;
+    qc->peerPort = authPort;
+
+    WTFLogAlways("[Wave29-499.322/H3POOL] session ESTABLISHED for %s (peer=%s:%u, handshake OK, h3 streams bound)",
+        authority.utf8().data(), peerIpStr.utf8().data(), authPort);
+    return adoptRef(new DriftstackHttp3Session(qc, ssl));
+}
+
+DriftstackHttp3Response DriftstackHttp3Session::execute(const DriftstackHttp3Request& request)
+{
+    DriftstackHttp3Response resp;
+    Locker locker { m_lock };
+    if (!m_alive || !m_qc) {
+        resp.failed = true;
+        resp.errorMessage = "h3 session not alive"_s;
+        return resp;
+    }
+    auto& nf = ngtcp2Fns();
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(m_qc);
+    Socks5Framing::Endpoint peerEp { qc->peerIp, qc->peerPort };
+
+    // Pre-pump: service expiry + flush any pending writes so a briefly-idle
+    // connection is healthy before we submit the new request.
+    if (nf.conn_handle_expiry)
+        nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+    driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
+
+    if (!driftstackHttp3SubmitRequest(qc, request)) {
+        m_alive = false;
+        resp.failed = true;
+        resp.errorMessage = "h3 submit on pooled connection failed"_s;
+        return resp;
+    }
+
+    constexpr int kH3MaxIterations = 200;
+    constexpr int kPerRecvTimeoutMs = 300;
+    int h3iters = 0;
+    while (h3iters < kH3MaxIterations && !qc->h3ResponseComplete) {
+        ++h3iters;
+        int w = driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
+        if (w < 0)
+            break;
+        struct timeval tv { 0, kPerRecvTimeoutMs * 1000 };
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(qc->udpFd, &rs);
+        int sel = select(qc->udpFd + 1, &rs, nullptr, nullptr, &tv);
+        if (sel <= 0) {
+            if (nf.conn_handle_expiry)
+                nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+            continue;
+        }
+        for (;;) {
+            uint8_t inbound[2048];
+            ssize_t r = recvfrom(qc->udpFd, inbound, sizeof(inbound), MSG_DONTWAIT, nullptr, nullptr);
+            if (r <= 0)
+                break;
+            Socks5Framing::Endpoint src;
+            Vector<uint8_t> payload;
+            if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+                continue;
+            driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+                reinterpret_cast<struct sockaddr*>(&qc->peerSa), sizeof(qc->peerSa),
+                reinterpret_cast<struct sockaddr*>(&qc->localSa), sizeof(qc->localSa));
+            if (qc->h3ResponseComplete)
+                break;
+        }
+    }
+    driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
+
+    if (!qc->h3ResponseComplete) {
+        resp.failed = true;
+        resp.errorMessage = "h3 pooled response incomplete (budget exhausted)"_s;
+        WTFLogAlways("[Wave29-499.322/H3POOL] response INCOMPLETE iters=%d status=%d bodyLen=%zu",
+            h3iters, qc->h3Status, qc->h3ResponseBody.size());
+        return resp;
+    }
+
+    resp.failed = false;
+    resp.statusCode = qc->h3Status ? qc->h3Status : 200;
+    resp.body = std::move(qc->h3ResponseBody);
+    for (auto& kv : qc->h3ResponseHeaders) {
+        resp.headers.append({
+            String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.first.span().data()), kv.first.size() }),
+            String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
+    }
+    WTFLogAlways("[Wave29-499.322/H3POOL] pooled request COMPLETE status=%d bodyLen=%zu (REUSED conn, iters=%d)",
+        resp.statusCode, resp.body.size(), h3iters);
     return resp;
 }
 
