@@ -747,9 +747,19 @@ void DriftstackNetworkLoader::resume()
         requestBody = fd->flatten();
 
     // Wave 29-499.271 — count this attempt
+    // Wave .322 — transient-proxy resilience: a modest spaced retry (150/300/600ms,
+    // ~1.05s worst case over 4 tries). A failed handshake is often a transient
+    // proxy-exit hiccup; spacing the retry lets a per-connection-rotating proxy
+    // land a fresh exit. NOTE (empirical): when a proxy's exit is *persistently*
+    // bad in a window it mangles the 1538-byte post-quantum ClientHello on every
+    // connection (fatal illegal_parameter alert) and no retry count helps — that
+    // is proxy quality, not a client bug. So retries stay modest to fail fast
+    // rather than slam a bad exit for seconds.
     const int currentAttempt = ++m_attempt;
-    const int kMaxAttempts = 3;
+    const int kMaxAttempts = 4;
     const bool canRetry = currentAttempt < kMaxAttempts;
+    int64_t retryDelayMs = static_cast<int64_t>(150) << (currentAttempt - 1);
+    if (retryDelayMs > 600) retryDelayMs = 600;
 
     Ref protectedThis { *this };
     dispatch_async(loaderQueue(), ^{
@@ -1037,7 +1047,7 @@ void DriftstackNetworkLoader::resume()
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for SOCKS5 CONNECT to %s",
                     currentAttempt, url.host().toString().utf8().data());
                 Ref<DriftstackNetworkLoader> retryRef { *this };
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, retryDelayMs * NSEC_PER_MSEC),
                     dispatch_get_main_queue(), ^{
                         if (!retryRef->m_cancelled) retryRef->resume();
                     });
@@ -1067,7 +1077,7 @@ void DriftstackNetworkLoader::resume()
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for TLS handshake to %s",
                         currentAttempt, host.utf8().data());
                     Ref<DriftstackNetworkLoader> retryRef { *this };
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, retryDelayMs * NSEC_PER_MSEC),
                         dispatch_get_main_queue(), ^{
                             if (!retryRef->m_cancelled) retryRef->resume();
                         });
@@ -1299,7 +1309,7 @@ void DriftstackNetworkLoader::resume()
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for HTTP/2 transport to %s",
                         currentAttempt, url.host().toString().utf8().data());
                     Ref<DriftstackNetworkLoader> retryRef { *this };
-                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, retryDelayMs * NSEC_PER_MSEC),
                         dispatch_get_main_queue(), ^{
                             if (!retryRef->m_cancelled) retryRef->resume();
                         });
