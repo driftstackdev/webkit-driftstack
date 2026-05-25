@@ -561,6 +561,111 @@ static void driftstackLoaderRememberH3Host(const String& host)
     driftstackLoaderH3Hosts().add(host);
 }
 
+// ============================================================================
+// Wave 29-499.321 (Phase 2.5) — HTTP/2 connection pool.
+// One persistent multiplexed DriftstackHttp2Session per origin (host:port).
+// Eliminates the per-request SOCKS5+TLS handshake that makes Path B v2 slow on
+// multi-resource pages. Gated by DRIFTSTACK_H2_POOL until proven.
+// ============================================================================
+static bool driftstackH2PoolEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_H2_POOL");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+static Lock& driftstackH2PoolLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+static HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>& driftstackH2Pool()
+{
+    static NeverDestroyed<HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>> pool;
+    return pool.get();
+}
+// Return a live pooled session for origin, or nullptr (evicting a dead one).
+static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    auto it = driftstackH2Pool().find(origin);
+    if (it == driftstackH2Pool().end())
+        return nullptr;
+    if (it->value && it->value->isAlive())
+        return it->value;
+    driftstackH2Pool().remove(it); // dead → evict (its connection is torn down when the last ref drops)
+    return nullptr;
+}
+[[maybe_unused]] static void driftstackH2PoolSet(const String& origin, RefPtr<WebKit::DriftstackHttp2Session>&& session)
+{
+    Locker locker { driftstackH2PoolLock() };
+    driftstackH2Pool().set(origin, std::move(session));
+}
+
+// Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
+// (pseudo-header order m,s,p,a + canonical real-header order + cookies + cache-
+// validation stripping). Shared by the one-shot path AND the pooled session
+// path so the wire fingerprint is identical regardless of pooling.
+static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& url,
+    const String& httpMethod, const WebCore::HTTPHeaderMap& httpHeaders,
+    const Vector<uint8_t>& requestBody, const String& host)
+{
+    WebKit::DriftstackHttp2Request h2req;
+    h2req.method = httpMethod;
+    h2req.scheme = "https"_s;
+    h2req.authority = host;
+    h2req.body = requestBody;
+    h2req.path = url.path().toString();
+    if (h2req.path.isEmpty()) h2req.path = "/"_s;
+    if (!url.query().isEmpty())
+        h2req.path = makeString(h2req.path, '?', url.query());
+    // Cookie injection (NSHTTPCookieStorage), same as the one-shot path.
+    {
+        auto nsURLPtr = url.createNSURL();
+        NSURL* nsURL = nsURLPtr.get();
+        if (nsURL) {
+            NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
+            NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
+            if (cookies.count > 0) {
+                NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
+                NSString* cookie = fields[@"Cookie"];
+                if (cookie)
+                    h2req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
+            }
+        }
+    }
+    // iPhone Safari 26 canonical header ORDER, WebKit's natural values.
+    HashMap<String, String> webkitHdrs;
+    for (auto& header : httpHeaders)
+        webkitHdrs.add(header.key.convertToASCIILowercase(), header.value);
+    auto getOrDefault = [&](ASCIILiteral key, ASCIILiteral fallback) -> String {
+        auto it = webkitHdrs.find(String(key));
+        return it != webkitHdrs.end() ? it->value : String(fallback);
+    };
+    h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
+    if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+    if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
+    h2req.extraHeaders.append({ "accept-encoding"_s, getOrDefault("accept-encoding"_s, "gzip, deflate, br"_s) });
+    if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+    h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
+    if (webkitHdrs.contains("priority"_s)) h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
+    h2req.extraHeaders.append({ "accept-language"_s, getOrDefault("accept-language"_s, "en-US,en;q=0.9"_s) });
+    for (auto& header : httpHeaders) {
+        String lower = header.key.convertToASCIILowercase();
+        if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s || lower.startsWith(':')
+            || lower == "accept"_s || lower == "accept-encoding"_s || lower == "accept-language"_s
+            || lower == "sec-fetch-site"_s || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
+            || lower == "user-agent"_s || lower == "priority"_s)
+            continue;
+        if (lower == "if-none-match"_s || lower == "if-modified-since"_s || lower == "if-match"_s
+            || lower == "if-unmodified-since"_s || lower == "if-range"_s)
+            continue;
+        h2req.extraHeaders.append({ lower, header.value });
+    }
+    return h2req;
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // Capture request data on the calling thread; do network work async.
@@ -762,6 +867,68 @@ void DriftstackNetworkLoader::resume()
                 WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 failed (%s) — falling through to TCP h2/h1",
                     h3resp.errorMessage.utf8().data());
                 // fall through to the TCP path below
+            }
+        }
+
+        // Wave 29-499.321 (Phase 2.5) — HTTP/2 connection-pool FAST PATH. If a
+        // live multiplexed session already exists for this origin, reuse it (a
+        // new stream) — NO SOCKS5/TLS handshake. This is what makes Path B v2
+        // fast on multi-resource pages. The pool is populated by the adopt step
+        // after a fresh connection negotiates h2 (below), so until then this is
+        // a no-op miss that falls through to the normal path. Gated by
+        // DRIFTSTACK_H2_POOL.
+        if (driftstackH2PoolEnabled() && url.protocolIs("https"_s)) {
+            String origin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
+            if (RefPtr<WebKit::DriftstackHttp2Session> session = driftstackH2PoolGet(origin)) {
+                String poolHost = url.host().toString();
+                auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost);
+                WebKit::DriftstackHttp2Response h2resp = session->execute(h2req);
+                auto* clientPtr = m_task.client();
+                if (!clientPtr) return;
+                if (!h2resp.failed && h2resp.statusCode) {
+                    String mimeType = "text/html"_s, charset = "UTF-8"_s;
+                    long long expectedLength = -1;
+                    for (auto& [k, v] : h2resp.headers) {
+                        if (equalIgnoringASCIICase(k, "content-type"_s)) {
+                            String hv = v; size_t semi = hv.find(';');
+                            if (semi != notFound) {
+                                mimeType = hv.left(semi).trim(deprecatedIsSpaceOrNewline);
+                                String params = hv.substring(semi + 1);
+                                size_t ci = params.findIgnoringASCIICase("charset="_s);
+                                if (ci != notFound) {
+                                    String cs = params.substring(ci + 8).trim(deprecatedIsSpaceOrNewline);
+                                    size_t e = cs.find(';'); if (e != notFound) cs = cs.left(e);
+                                    if (cs.startsWith('"') && cs.endsWith('"')) cs = cs.substring(1, cs.length() - 2);
+                                    if (!cs.isEmpty()) charset = cs;
+                                }
+                            } else
+                                mimeType = hv.trim(deprecatedIsSpaceOrNewline);
+                        } else if (equalIgnoringASCIICase(k, "content-length"_s)) {
+                            long long n = parseInteger<long long>(v).value_or(-1);
+                            if (n >= 0) expectedLength = n;
+                        }
+                    }
+                    if (expectedLength < 0) expectedLength = static_cast<long long>(h2resp.body.size());
+                    WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
+                    response.setHTTPStatusCode(h2resp.statusCode);
+                    for (auto& [k, v] : h2resp.headers)
+                        response.setHTTPHeaderField(k, v);
+                    auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
+                    callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                        clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                            [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                                if (action == WebCore::PolicyAction::Use) {
+                                    clientPtr->didReceiveData(bodyBuffer.get());
+                                    WebCore::NetworkLoadMetrics metrics;
+                                    clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                                }
+                            });
+                    });
+                    return;
+                }
+                // Pooled session failed (e.g. GOAWAY mid-flight) — fall through
+                // to a fresh connection.
+                WTFLogAlways("[Wave29-499.321/H2POOL] pooled session execute failed for %s — fresh connect", origin.utf8().data());
             }
         }
 
