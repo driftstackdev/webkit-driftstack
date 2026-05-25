@@ -116,14 +116,19 @@ struct Ngtcp2Fns {
         const ngtcp2_crypto_cipher_ctx*,
         const ngtcp2_crypto_aead_ctx*, const uint8_t*,
         const ngtcp2_crypto_cipher_ctx*, size_t) = nullptr;
-    int (*conn_install_rx_handshake_key)(ngtcp2_conn*, const void*, const void*,
-        const void*, size_t) = nullptr;
-    int (*conn_install_tx_handshake_key)(ngtcp2_conn*, const void*, const void*,
-        const void*, size_t) = nullptr;
-    int (*conn_install_rx_key)(ngtcp2_conn*, const void*, size_t, const void*,
-        const void*, size_t) = nullptr;
-    int (*conn_install_tx_key)(ngtcp2_conn*, const void*, size_t, const void*,
-        const void*, size_t) = nullptr;
+    // Wave 29-499.312 — REAL ngtcp2 signatures (were wrong void* placeholders
+    // that crashed: ngtcp2 read raw key bytes as a ngtcp2_crypto_aead_ctx
+    // struct → garbage native_handle → memmove SIGSEGV in install_tx_handshake).
+    int (*conn_install_rx_handshake_key)(ngtcp2_conn*, const ngtcp2_crypto_aead_ctx*,
+        const uint8_t* iv, size_t ivlen, const ngtcp2_crypto_cipher_ctx*) = nullptr;
+    int (*conn_install_tx_handshake_key)(ngtcp2_conn*, const ngtcp2_crypto_aead_ctx*,
+        const uint8_t* iv, size_t ivlen, const ngtcp2_crypto_cipher_ctx*) = nullptr;
+    int (*conn_install_rx_key)(ngtcp2_conn*, const uint8_t* secret, size_t secretlen,
+        const ngtcp2_crypto_aead_ctx*, const uint8_t* iv, size_t ivlen,
+        const ngtcp2_crypto_cipher_ctx*) = nullptr;
+    int (*conn_install_tx_key)(ngtcp2_conn*, const uint8_t* secret, size_t secretlen,
+        const ngtcp2_crypto_aead_ctx*, const uint8_t* iv, size_t ivlen,
+        const ngtcp2_crypto_cipher_ctx*) = nullptr;
     int (*conn_submit_crypto_data)(ngtcp2_conn*, uint32_t, const uint8_t*, size_t) = nullptr;
     int (*conn_handshake_completed)(ngtcp2_conn*) = nullptr;
     // Wave 29-499.308 — set Initial crypto ctx so ngtcp2 knows AEAD tag
@@ -477,6 +482,28 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
 // Wave 29-499.224 — ssl_quic_method_st callbacks (5 total per BoringSSL ABI).
 // These bridge BoringSSL's TLS state machine to ngtcp2's QUIC packet protection.
 //
+// Wave 29-499.312 — AEAD/HP ctx structs (moved up from below so the
+// set_secret callbacks can build proper ngtcp2_crypto_aead_ctx/cipher_ctx).
+struct DriftstackQuicAeadCtx {
+    Vector<uint8_t> key;
+    bool isAes256 { false };       // 0x1302 (32-byte key)
+    bool isChacha20 { false };     // 0x1303 (32-byte key)
+};
+struct DriftstackQuicHpCtx {
+    Vector<uint8_t> key;
+    bool isAes256 { false };
+    bool isChacha20 { false };
+};
+
+// Wave 29-499.312 — install a directional (rx/tx) handshake or 1-RTT key with
+// proper ngtcp2_crypto_aead_ctx + cipher_ctx structs. Returns ngtcp2 rv.
+// isHandshake selects handshake vs application (1-RTT) install. The aead/hp
+// inner ctxs are heap-allocated; ngtcp2 holds them for the conn lifetime (freed
+// via delete_crypto_*_ctx callbacks).
+static int installDirectionalQuicKey(bool isRx, bool isHandshake,
+    const Vector<uint8_t>& key, const Vector<uint8_t>& iv, const Vector<uint8_t>& hp,
+    bool isAes256, bool isChacha20, const uint8_t* secret, size_t secret_len, void* connPtr);
+
 // RFC 9001 §4.1: TLS handshake messages travel via QUIC CRYPTO frames at
 // the cryptographic level matching the TLS handshake phase (Initial,
 // Handshake, Application/1-RTT). set_read_secret / set_write_secret
@@ -498,29 +525,29 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetReadSecret: key derivation FAILED level=%d", static_cast<int>(level));
         return 0;
     }
-    auto& nf = ngtcp2Fns();
+    // Wave .312 — cipher flags for the AEAD ctx (0x1302=AES-256, 0x1303=ChaCha20).
+    bool isAes256 = false, isChacha20 = false;
+    if (auto& bf = boringSslQuicFns(); cipher && bf.SSL_CIPHER_get_protocol_id) {
+        uint16_t id = bf.SSL_CIPHER_get_protocol_id(cipher);
+        isAes256 = (id == 0x1302);
+        isChacha20 = (id == 0x1303);
+    }
     int rv = -1;
     switch (level) {
     case ssl_encryption_handshake:
-        rv = nf.conn_install_rx_handshake_key(qc->conn,
-            key.span().data(), iv.span().data(), hp.span().data(), key.size());
+        rv = installDirectionalQuicKey(/*isRx=*/true, /*isHandshake=*/true, key, iv, hp, isAes256, isChacha20, secret, secret_len, qc->conn);
         break;
     case ssl_encryption_application:
-        rv = nf.conn_install_rx_key(qc->conn,
-            secret, secret_len,
-            key.span().data(), iv.span().data(), key.size());
+        rv = installDirectionalQuicKey(/*isRx=*/true, /*isHandshake=*/false, key, iv, hp, isAes256, isChacha20, secret, secret_len, qc->conn);
         break;
     case ssl_encryption_initial:
     case ssl_encryption_early_data:
     default:
-        // Initial keys are installed via ngtcp2_conn_install_initial_key
-        // separately (during conn setup, before any TLS messages). 0-RTT
-        // is post-launch scope.
-        rv = 0;
+        rv = 0;  // Initial via conn_install_initial_key; 0-RTT post-launch.
         break;
     }
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetReadSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu install_rv=%d",
-        static_cast<int>(level), secret_len, key.size(), hp.size(), rv);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.312] QuicSetReadSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu aes256=%d chacha=%d install_rv=%d",
+        static_cast<int>(level), secret_len, key.size(), hp.size(), isAes256, isChacha20, rv);
     return rv == 0 ? 1 : 0;
 }
 
@@ -538,17 +565,19 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetWriteSecret: key derivation FAILED level=%d", static_cast<int>(level));
         return 0;
     }
-    auto& nf = ngtcp2Fns();
+    bool isAes256 = false, isChacha20 = false;
+    if (auto& bf = boringSslQuicFns(); cipher && bf.SSL_CIPHER_get_protocol_id) {
+        uint16_t id = bf.SSL_CIPHER_get_protocol_id(cipher);
+        isAes256 = (id == 0x1302);
+        isChacha20 = (id == 0x1303);
+    }
     int rv = -1;
     switch (level) {
     case ssl_encryption_handshake:
-        rv = nf.conn_install_tx_handshake_key(qc->conn,
-            key.span().data(), iv.span().data(), hp.span().data(), key.size());
+        rv = installDirectionalQuicKey(/*isRx=*/false, /*isHandshake=*/true, key, iv, hp, isAes256, isChacha20, secret, secret_len, qc->conn);
         break;
     case ssl_encryption_application:
-        rv = nf.conn_install_tx_key(qc->conn,
-            secret, secret_len,
-            key.span().data(), iv.span().data(), key.size());
+        rv = installDirectionalQuicKey(/*isRx=*/false, /*isHandshake=*/false, key, iv, hp, isAes256, isChacha20, secret, secret_len, qc->conn);
         break;
     case ssl_encryption_initial:
     case ssl_encryption_early_data:
@@ -556,8 +585,8 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
         rv = 0;
         break;
     }
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.225] QuicSetWriteSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu install_rv=%d",
-        static_cast<int>(level), secret_len, key.size(), hp.size(), rv);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.312] QuicSetWriteSecret level=%d secret_len=%zu key_len=%zu hp_len=%zu aes256=%d chacha=%d install_rv=%d",
+        static_cast<int>(level), secret_len, key.size(), hp.size(), isAes256, isChacha20, rv);
     return rv == 0 ? 1 : 0;
 }
 
@@ -848,11 +877,7 @@ static bool deriveQuicKeyMaterial(const uint8_t* secret, size_t secret_len,
 // ngtcp2_crypto_aead_ctx whose native_handle we populate with our own
 // DriftstackQuicAeadCtx { key, key_len, is_aes256, is_chacha20 } at
 // install-key time (Wave .232 will wire the install path).
-struct DriftstackQuicAeadCtx {
-    Vector<uint8_t> key;
-    bool isAes256 { false };       // 0x1302 (32-byte key)
-    bool isChacha20 { false };     // 0x1303 (32-byte key)
-};
+// DriftstackQuicAeadCtx moved to Wave .312 block above.
 
 [[maybe_unused]] static int driftstackNgtcp2Encrypt(uint8_t* dest,
     const ngtcp2_crypto_aead* /*aead*/,
@@ -946,11 +971,7 @@ struct DriftstackQuicAeadCtx {
 //
 // DriftstackQuicHpCtx wraps the hp_key bytes (we stash this struct in
 // ngtcp2_crypto_cipher_ctx::native_handle at install time).
-struct DriftstackQuicHpCtx {
-    Vector<uint8_t> key;
-    bool isAes256 { false };
-    bool isChacha20 { false };
-};
+// DriftstackQuicHpCtx moved to Wave .312 block above.
 
 // AES-128-ECB single-block via LibreSSL AES_encrypt + AES_set_encrypt_key.
 // These are stable symbols across LibreSSL / OpenSSL / BoringSSL ABIs.
@@ -1043,6 +1064,35 @@ static bool resolveAesEncryptFns()
         return -1;
     f.encrypt(sample, dest, aesKeyBuf);
     return 0;
+}
+
+// Wave 29-499.312 — install handshake/1-RTT keys with proper ngtcp2 ctx structs.
+static int installDirectionalQuicKey(bool isRx, bool isHandshake,
+    const Vector<uint8_t>& key, const Vector<uint8_t>& iv, const Vector<uint8_t>& hp,
+    bool isAes256, bool isChacha20, const uint8_t* secret, size_t secret_len, void* connPtr)
+{
+    auto& nf = ngtcp2Fns();
+    auto* conn = static_cast<ngtcp2_conn*>(connPtr);
+    auto* aeadInner = new DriftstackQuicAeadCtx { key, isAes256, isChacha20 };
+    auto* hpInner = new DriftstackQuicHpCtx { hp, isAes256, isChacha20 };
+    ngtcp2_crypto_aead_ctx aeadCtx { aeadInner };
+    ngtcp2_crypto_cipher_ctx hpCtx { hpInner };
+
+    int rv;
+    if (isHandshake) {
+        rv = isRx
+            ? nf.conn_install_rx_handshake_key(conn, &aeadCtx, iv.span().data(), iv.size(), &hpCtx)
+            : nf.conn_install_tx_handshake_key(conn, &aeadCtx, iv.span().data(), iv.size(), &hpCtx);
+    } else {
+        rv = isRx
+            ? nf.conn_install_rx_key(conn, secret, secret_len, &aeadCtx, iv.span().data(), iv.size(), &hpCtx)
+            : nf.conn_install_tx_key(conn, secret, secret_len, &aeadCtx, iv.span().data(), iv.size(), &hpCtx);
+    }
+    if (rv != 0) {
+        delete aeadInner;
+        delete hpInner;
+    }
+    return rv;
 }
 
 [[maybe_unused]] static void initDriftstackNgtcp2Callbacks(ngtcp2_callbacks* cb)
@@ -1541,6 +1591,97 @@ static bool resolveAesEncryptFns()
 //   }
 //   // qc->handshakeCompleted = true → install nghttp3 + emit h3 HEADERS
 
+// Wave 29-499.311 — self-contained raw SOCKS5 UDP_ASSOCIATE for QUIC. Does
+// ONLY the TCP control handshake (no internal UDP socket), so the QUIC udpFd
+// is the FIRST + ONLY UDP sender on this relay → gost binds the relay to udpFd
+// and routes server responses back to it. Mirrors the proven aioquic-via-gost
+// bridge. The TCP control fd is kept open process-lifetime (relay dies if it
+// closes, RFC 1928 §7). Returns true + fills outRelay on success.
+static int s_quicSocks5CtrlFd = -1;
+static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay)
+{
+    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+    const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
+    const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
+    if (!proxyEnv || !proxyEnv[0]) {
+        WTFLogAlways("[Wave29-499.311] raw associate: DRIFTSTACK_SOCKS5_PROXY unset");
+        return false;
+    }
+    // Parse host:port (last colon). Manual parse — WTF::String has no toInt().
+    size_t envLen = strlen(proxyEnv);
+    const char* colonP = nullptr;
+    for (size_t i = envLen; i > 0; --i) {
+        if (proxyEnv[i - 1] == ':') { colonP = proxyEnv + (i - 1); break; }
+    }
+    if (!colonP || colonP == proxyEnv) return false;
+    Vector<char> hostBuf;
+    for (const char* p = proxyEnv; p < colonP; ++p) hostBuf.append(*p);
+    hostBuf.append('\0');
+    int proxyPort = 0;
+    for (const char* p = colonP + 1; *p; ++p) {
+        if (*p < '0' || *p > '9') return false;
+        proxyPort = proxyPort * 10 + (*p - '0');
+        if (proxyPort > 0xFFFF) return false;
+    }
+    if (proxyPort <= 0) return false;
+
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    struct sockaddr_in pa { };
+    pa.sin_family = AF_INET;
+    pa.sin_port = htons(static_cast<uint16_t>(proxyPort));
+    if (inet_pton(AF_INET, hostBuf.span().data(), &pa.sin_addr) != 1) { ::close(fd); return false; }
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&pa), sizeof(pa)) < 0) {
+        WTFLogAlways("[Wave29-499.311] raw associate: TCP connect failed errno=%d", errno);
+        ::close(fd); return false;
+    }
+
+    // Method negotiation — offer user/pass (0x02).
+    uint8_t greet[3] = { 0x05, 0x01, 0x02 };
+    if (::send(fd, greet, 3, 0) != 3) { ::close(fd); return false; }
+    uint8_t mr[2];
+    if (::recv(fd, mr, 2, MSG_WAITALL) != 2 || mr[0] != 0x05) { ::close(fd); return false; }
+    if (mr[1] == 0x02) {
+        // RFC 1929 user/pass auth.
+        size_t ul = userEnv ? strlen(userEnv) : 0, pl = passEnv ? strlen(passEnv) : 0;
+        Vector<uint8_t> aReq;
+        aReq.append(0x01);
+        aReq.append(static_cast<uint8_t>(ul));
+        for (size_t i = 0; i < ul; i++) aReq.append(static_cast<uint8_t>(userEnv[i]));
+        aReq.append(static_cast<uint8_t>(pl));
+        for (size_t i = 0; i < pl; i++) aReq.append(static_cast<uint8_t>(passEnv[i]));
+        if (::send(fd, aReq.span().data(), aReq.size(), 0) != static_cast<ssize_t>(aReq.size())) { ::close(fd); return false; }
+        uint8_t ar[2];
+        if (::recv(fd, ar, 2, MSG_WAITALL) != 2 || ar[1] != 0x00) {
+            WTFLogAlways("[Wave29-499.311] raw associate: auth rejected");
+            ::close(fd); return false;
+        }
+    }
+
+    // UDP_ASSOCIATE with 0.0.0.0:0 (accept UDP from any local socket → binds to
+    // first sender, which will be the QUIC udpFd).
+    uint8_t areq[10] = { 0x05, 0x03, 0x00, 0x01, 0,0,0,0, 0,0 };
+    if (::send(fd, areq, 10, 0) != 10) { ::close(fd); return false; }
+    uint8_t arep[10];
+    if (::recv(fd, arep, 10, MSG_WAITALL) != 10 || arep[0] != 0x05 || arep[1] != 0x00) {
+        WTFLogAlways("[Wave29-499.311] raw associate: UDP_ASSOCIATE rejected rep0=%02x rep1=%02x", arep[0], arep[1]);
+        ::close(fd); return false;
+    }
+    // BND.ADDR (4) + BND.PORT (2). If BND.ADDR is 0.0.0.0, use the proxy IP.
+    outRelay->sin_family = AF_INET;
+    memcpy(&outRelay->sin_addr, arep + 4, 4);
+    memcpy(&outRelay->sin_port, arep + 8, 2);
+    if (outRelay->sin_addr.s_addr == 0)
+        outRelay->sin_addr = pa.sin_addr;
+
+    s_quicSocks5CtrlFd = fd;  // keep open — relay lives as long as this TCP does
+    char relayIp[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &outRelay->sin_addr, relayIp, sizeof(relayIp));
+    WTFLogAlways("[Wave29-499.311] raw SOCKS5 associate OK — relay %s:%u (ctrlFd=%d kept open, udpFd will be sole sender)",
+        relayIp, ntohs(outRelay->sin_port), fd);
+    return true;
+}
+
 } // anonymous namespace
 
 DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const DriftstackHttp3Request& request)
@@ -1662,15 +1803,15 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         }
     }
 
-    // Wave 29-499.310 — DEDICATED UDP_ASSOCIATE for QUIC (was shared relay).
-    // gost binds the shared relay to the first sender (STUN socket), so QUIC
-    // server responses routed there instead of our udpFd → packetsReceived=0.
-    // A fresh dedicated associate binds to the QUIC udpFd (first sender on it).
-    DriftstackRTC::RelayChannel relayChannel;
-    DriftstackRTC::BridgeResult relayResult = DriftstackRTC::establishDedicatedQuicRelay(relayChannel);
-    if (relayResult != DriftstackRTC::BridgeResult::Success) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.310] establishDedicatedQuicRelay FAILED (result=%d) — h3 falls back to h2",
-            static_cast<int>(relayResult));
+    // Wave 29-499.311 — raw single-socket SOCKS5 UDP_ASSOCIATE for QUIC.
+    // The TCP control handshake creates the relay; the QUIC udpFd (created
+    // below) is then the FIRST + ONLY UDP sender on it, so gost binds the relay
+    // to udpFd and routes server responses back to it. (Prior shared/dedicated
+    // client approaches used a separate internal UDP socket → responses routed
+    // elsewhere → packetsReceived=0.)
+    struct sockaddr_in relaySa { };
+    if (!driftstackQuicRawSocks5Associate(&relaySa)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.311] raw SOCKS5 associate FAILED — h3 falls back to h2");
         bsf.SSL_free(ssl);
         bsf.SSL_CTX_free(ctx);
         resp.failed = true;
@@ -1678,10 +1819,8 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         return resp;
     }
 
-    // Create + bind local UDP socket for receiving §7-wrapped responses
-    // from the relay. The socket connects to the relayHost:relayPort so
-    // sendto/recvfrom address the relay (which forwards to peer via §7
-    // destination header).
+    // Create + bind local UDP socket. This udpFd is the sole UDP sender on the
+    // relay established above.
     int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
     if (udpFd < 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket() failed errno=%d", errno);
@@ -1708,13 +1847,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     socklen_t localLen = sizeof(localBind);
     getsockname(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), &localLen);
     uint16_t boundPort = ntohs(localBind.sin_port);
-
-    // Build relay endpoint sockaddr for sendto/recvfrom target.
-    struct sockaddr_in relaySa { };
-    relaySa.sin_family = AF_INET;
-    relaySa.sin_port = htons(relayChannel.relayPort);
-    auto relayHostUtf8 = relayChannel.relayHost.utf8();
-    inet_pton(AF_INET, relayHostUtf8.data(), &relaySa.sin_addr);
+    // relaySa was filled by driftstackQuicRawSocks5Associate above (Wave .311).
 
     // Peer addr for connectQuic. For this scaffold: cloudflare-quic.com
     // (1.1.1.1:443) — a known h3 server. Wave .239 wires request.authority
@@ -1731,8 +1864,12 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     peer.sin_addr.s_addr = htonl(0x01010101);  // 1.1.1.1
     peer.sin_port = htons(443);
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop (Wave .239 wires sendto+recvfrom + timeout).",
-        udpFd, boundPort, relayHostUtf8.data(), relayChannel.relayPort);
+    {
+        char relayIpStr[INET_ADDRSTRLEN] = {};
+        inet_ntop(AF_INET, &relaySa.sin_addr, relayIpStr, sizeof(relayIpStr));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop.",
+            udpFd, boundPort, relayIpStr, ntohs(relaySa.sin_port));
+    }
 
     WTFLogAlways("[Wave29-499.247] before connectQuic call");
     DriftstackQuicConn* qc = connectQuic(ssl,
