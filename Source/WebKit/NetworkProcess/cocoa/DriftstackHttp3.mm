@@ -36,6 +36,10 @@
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
+#import <wtf/HashMap.h>
+#import <wtf/Lock.h>
+#import <wtf/NeverDestroyed.h>
+#import <wtf/text/StringHash.h>
 
 // Wave 29-499.228 — ngtcp2 header inclusion. Provides real struct layouts
 // for ngtcp2_settings, ngtcp2_transport_params, ngtcp2_cid, ngtcp2_callbacks,
@@ -2200,7 +2204,11 @@ qdone:
 // bridge. The TCP control fd is kept open process-lifetime (relay dies if it
 // closes, RFC 1928 §7). Returns true + fills outRelay on success.
 static int s_quicSocks5CtrlFd = -1;
-static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay)
+// Wave .321 — outFd (optional): when non-null, the caller owns the TCP control
+// fd lifetime (e.g. a short-lived DNS query closes it right after). When null,
+// the fd is parked in s_quicSocks5CtrlFd and kept open for the QUIC connection
+// lifetime (the original behaviour).
+static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr)
 {
     const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
     const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
@@ -2276,7 +2284,10 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay)
     if (outRelay->sin_addr.s_addr == 0)
         outRelay->sin_addr = pa.sin_addr;
 
-    s_quicSocks5CtrlFd = fd;  // keep open — relay lives as long as this TCP does
+    if (outFd)
+        *outFd = fd;            // caller owns lifetime (Wave .321 DNS query path)
+    else
+        s_quicSocks5CtrlFd = fd;  // keep open — relay lives as long as this TCP does
     char relayIp[INET_ADDRSTRLEN] = {};
     inet_ntop(AF_INET, &outRelay->sin_addr, relayIp, sizeof(relayIp));
     WTFLogAlways("[Wave29-499.311] raw SOCKS5 associate OK — relay %s:%u (ctrlFd=%d kept open, udpFd will be sole sender)",
@@ -2285,6 +2296,155 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay)
 }
 
 } // anonymous namespace
+
+// Wave 29-499.321 — DNS HTTPS RR (RFC 9460 type 65) lookup over SOCKS5 §7 to
+// discover first-contact h3 (the mechanism real Safari uses, in addition to
+// Alt-Svc). Returns true iff the host's HTTPS RR advertises alpn "h3". Cached
+// per host (process-global) so it's one §7 DNS round-trip per origin, matching
+// Safari's per-connection HTTPS-RR query.
+bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
+{
+    static Lock s_cacheLock;
+    static NeverDestroyed<HashMap<String, bool>> s_cache;
+    {
+        Locker locker { s_cacheLock };
+        auto it = s_cache->find(host);
+        if (it != s_cache->end())
+            return it->value;
+    }
+
+    bool h3 = false;
+    struct sockaddr_in relaySa { };
+    int ctrlFd = -1;
+    if (driftstackQuicRawSocks5Associate(&relaySa, &ctrlFd)) {
+        int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udpFd >= 0) {
+            struct sockaddr_in lb { };
+            lb.sin_family = AF_INET;
+            lb.sin_addr.s_addr = htonl(INADDR_ANY);
+            lb.sin_port = 0;
+            bind(udpFd, reinterpret_cast<struct sockaddr*>(&lb), sizeof(lb));
+
+            // Build a type-65 (HTTPS) DNS query for host.
+            Vector<uint8_t> query;
+            uint8_t txid[2];
+            arc4random_buf(txid, 2);
+            query.append(std::span<const uint8_t> { txid, 2 });
+            static const uint8_t hdr[] = { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+            query.append(std::span<const uint8_t> { hdr, sizeof(hdr) });
+            CString hostC = host.utf8();
+            const char* hp = hostC.data();
+            size_t ls = 0, hl = strlen(hp);
+            for (size_t i = 0; i <= hl; ++i) {
+                if (i == hl || hp[i] == '.') {
+                    size_t ll = i - ls;
+                    if (ll > 0 && ll <= 63) {
+                        query.append(static_cast<uint8_t>(ll));
+                        query.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(hp + ls), ll });
+                    }
+                    ls = i + 1;
+                }
+            }
+            query.append(static_cast<uint8_t>(0));
+            static const uint8_t qtail[] = { 0x00, 0x41, 0x00, 0x01 }; // QTYPE=65 (HTTPS) QCLASS=IN
+            query.append(std::span<const uint8_t> { qtail, sizeof(qtail) });
+
+            Socks5Framing::Endpoint resolverEp { "1.1.1.1"_s, 53 };
+            Vector<uint8_t> framed;
+            if (Socks5Framing::wrap(resolverEp, query.span(), framed)
+                && sendto(udpFd, framed.span().data(), framed.size(), 0,
+                       reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) > 0) {
+                struct timeval tv { 2, 0 };
+                fd_set rs;
+                FD_ZERO(&rs);
+                FD_SET(udpFd, &rs);
+                if (select(udpFd + 1, &rs, nullptr, nullptr, &tv) > 0) {
+                    uint8_t inbound[2048];
+                    ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0, nullptr, nullptr);
+                    if (r > 0) {
+                        Socks5Framing::Endpoint src;
+                        Vector<uint8_t> payload;
+                        if (Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload)) {
+                            const uint8_t* d = payload.span().data();
+                            size_t n = payload.size();
+                            if (n >= 12 && d[0] == txid[0] && d[1] == txid[1]) {
+                                uint16_t qd = (d[4] << 8) | d[5];
+                                uint16_t an = (d[6] << 8) | d[7];
+                                size_t i = 12;
+                                for (uint16_t q = 0; q < qd && i < n; ++q) {
+                                    while (i < n && d[i]) {
+                                        if (d[i] & 0xC0) { i += 2; goto qskipped; }
+                                        i += d[i] + 1;
+                                    }
+                                    ++i;
+qskipped:
+                                    i += 4;
+                                }
+                                for (uint16_t a = 0; a < an && i + 10 <= n; ++a) {
+                                    if (d[i] & 0xC0)
+                                        i += 2;
+                                    else {
+                                        while (i < n && d[i]) i += d[i] + 1;
+                                        ++i;
+                                    }
+                                    if (i + 10 > n) break;
+                                    uint16_t rtype = (d[i] << 8) | d[i + 1];
+                                    uint16_t rdlen = (d[i + 8] << 8) | d[i + 9];
+                                    i += 10;
+                                    if (i + rdlen > n) break;
+                                    if (rtype == 65) {
+                                        // HTTPS RR: SvcPriority(2) + TargetName + SvcParams.
+                                        size_t p = i, end = i + rdlen;
+                                        p += 2; // SvcPriority
+                                        // skip TargetName (labels until 0, or compressed pointer)
+                                        while (p < end && d[p]) {
+                                            if (d[p] & 0xC0) { p += 2; goto nameDone; }
+                                            p += d[p] + 1;
+                                        }
+                                        ++p; // root label
+nameDone:
+                                        // SvcParams: key(2)+len(2)+value; alpn = key 1.
+                                        while (p + 4 <= end) {
+                                            uint16_t key = (d[p] << 8) | d[p + 1];
+                                            uint16_t vlen = (d[p + 2] << 8) | d[p + 3];
+                                            p += 4;
+                                            if (p + vlen > end) break;
+                                            if (key == 1) {
+                                                // alpn value: sequence of (len-prefixed) tokens
+                                                size_t a2 = p, aend = p + vlen;
+                                                while (a2 < aend) {
+                                                    uint8_t tl = d[a2++];
+                                                    if (a2 + tl > aend) break;
+                                                    if (tl == 2 && d[a2] == 'h' && d[a2 + 1] == '3')
+                                                        h3 = true;
+                                                    a2 += tl;
+                                                }
+                                            }
+                                            p += vlen;
+                                        }
+                                    }
+                                    i += rdlen;
+                                    if (h3) break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ::close(udpFd);
+        }
+    }
+    if (ctrlFd >= 0)
+        ::close(ctrlFd);
+
+    if (h3)
+        WTFLogAlways("[Wave29-499.321] DNS HTTPS RR: %s advertises h3 (first-contact h3, no local leak)", host.utf8().data());
+    {
+        Locker locker { s_cacheLock };
+        s_cache->set(host, h3);
+    }
+    return h3;
+}
 
 DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const DriftstackHttp3Request& request)
 {

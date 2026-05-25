@@ -83,6 +83,12 @@ DriftstackHttp3Response driftstackHttp3Execute(void* socks5UdpRelay, const Drift
 // DRIFTSTACK_PATHB_V2_H3=1 env. Default false until Phase 3 impl complete.
 bool driftstackHttp3Enabled();
 
+// Wave 29-499.321 — query the DNS HTTPS resource record (RFC 9460 type 65) for
+// `host` THROUGH the SOCKS5 §7 relay (no local leak), and return true if it
+// advertises HTTP/3 (alpn contains "h3"). This is how real Safari discovers h3
+// for FIRST contact (before any Alt-Svc response header). Result cached per host.
+bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)

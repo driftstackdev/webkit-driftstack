@@ -654,6 +654,16 @@ void DriftstackNetworkLoader::resume()
             // (nghttp3 data_reader) lands. GET/HEAD have no body.
             bool h3bodyless = (equalIgnoringASCIICase(httpMethod, "GET"_s)
                 || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !m_request.httpBody();
+            // Wave 29-499.321 — FIRST-CONTACT h3 via DNS HTTPS RR (RFC 9460 type
+            // 65), matching real Safari (which queries the HTTPS record and goes
+            // straight to h3, before any Alt-Svc response). Alt-Svc only upgrades
+            // AFTER an h2 response, so endpoints like quic.browserleaks.com (h3
+            // advertised only via HTTPS RR, measured on first contact) need this.
+            // Cached per host; only consulted when not already known + not forced.
+            if (h3enabled && h3https && h3bodyless && !h3forced && !driftstackLoaderHostKnownH3(h3host)) {
+                if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
+                    driftstackLoaderRememberH3Host(h3host);
+            }
             if (h3enabled && h3https && h3bodyless && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
                 WebKit::DriftstackHttp3Request h3req;
                 h3req.method = httpMethod;
