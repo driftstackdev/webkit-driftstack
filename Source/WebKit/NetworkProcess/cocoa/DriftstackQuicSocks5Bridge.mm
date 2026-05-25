@@ -19,6 +19,7 @@
 #import <Network/Network.h>
 // Wave 29-499.84 — BSD socket headers for IP-form endpoint extraction.
 #include <arpa/inet.h>
+#include <netdb.h>  // Wave .319 — getaddrinfo for QUIC §7 hostname pre-resolution
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <atomic>
@@ -281,6 +282,41 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
     destination.host = destinationHost;
     destination.port = destinationPort;
 
+    // Wave 29-499.319 — pre-resolve hostname → IPv4 so Socks5Framing::wrap emits
+    // ATYP=0x01 (gost drops ATYP=0x03 domain form per Wave .95). The browser's
+    // CFNetwork QUIC nw_connection arrives as a HOSTNAME endpoint (e.g.
+    // cloudflare-quic.com), so without this the §7 frame used ATYP=0x03 and gost
+    // silently dropped every QUIC datagram → browser h3 never completed. The §7
+    // envelope is transport-only; the QUIC/TLS ClientHello still carries the SNI.
+    {
+        auto hostUtf8 = destinationHost.utf8();
+        struct in_addr probe { };
+        if (inet_pton(AF_INET, hostUtf8.data(), &probe) != 1) {
+            // Not already an IPv4 literal — resolve.
+            struct addrinfo hints { };
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            struct addrinfo* res = nullptr;
+            if (getaddrinfo(hostUtf8.data(), nullptr, &hints, &res) == 0 && res) {
+                char ipBuf[INET_ADDRSTRLEN] = { };
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+                if (inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf))) {
+                    destination.host = String::fromUTF8(ipBuf);
+                    static bool loggedResolveOnce = false;
+                    if (!loggedResolveOnce) {
+                        loggedResolveOnce = true;
+                        WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve: %s → %s (ATYP=0x01 for gost)",
+                            hostUtf8.data(), ipBuf);
+                    }
+                }
+                freeaddrinfo(res);
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve FAILED for %s — falling back to ATYP=0x03 (gost may drop)",
+                    hostUtf8.data());
+            }
+        }
+    }
+
     RetainPtr<NSData> payloadData = adoptNS([[NSData alloc] initWithBytes:payload.data() length:payload.size()]);
     RetainPtr<NSData> framed = DriftstackSocks5Client::wrapUdpDatagram(destination, payloadData.get());
     if (!framed) {
@@ -373,9 +409,41 @@ static FramerDestinationRegistry& framerDestinationRegistry()
 
 static void setPendingFramerDestination(const String& host, uint16_t port)
 {
+    // Wave 29-499.319b — pre-resolve hostname → IPv4 so the nw_framer's
+    // Socks5Framing::wrap emits ATYP=0x01 (gost drops ATYP=0x03 domain form per
+    // Wave .95). CFNetwork's QUIC nw_connection arrives as a HOSTNAME endpoint
+    // (e.g. cloudflare-quic.com); without this every QUIC datagram was §7-wrapped
+    // as ATYP=0x03 and silently dropped by gost → browser h3 never completed.
+    // Transport-only; the QUIC/TLS ClientHello still carries the real SNI.
+    String resolvedHost = host;
+    {
+        auto hostUtf8 = host.utf8();
+        struct in_addr probe { };
+        if (!host.isEmpty() && inet_pton(AF_INET, hostUtf8.data(), &probe) != 1) {
+            struct addrinfo hints { };
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            struct addrinfo* res = nullptr;
+            if (getaddrinfo(hostUtf8.data(), nullptr, &hints, &res) == 0 && res) {
+                char ipBuf[INET_ADDRSTRLEN] = { };
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+                if (inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf)))
+                    resolvedHost = String::fromUTF8(ipBuf);
+                freeaddrinfo(res);
+                static bool loggedOnce = false;
+                if (!loggedOnce) {
+                    loggedOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319b] framer dest pre-resolve: %s → %s (ATYP=0x01 for gost QUIC §7)",
+                        hostUtf8.data(), resolvedHost.utf8().data());
+                }
+            } else {
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319b] framer dest pre-resolve FAILED for %s — ATYP=0x03 (gost may drop)", hostUtf8.data());
+            }
+        }
+    }
     auto& registry = framerDestinationRegistry();
     Locker locker { registry.lock };
-    registry.pendingDestination.host = host;
+    registry.pendingDestination.host = resolvedHost;
     registry.pendingDestination.port = port;
 }
 
