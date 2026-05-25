@@ -22,6 +22,8 @@
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
 #import <wtf/HashSet.h>
+#import <wtf/MonotonicTime.h>
+#import <wtf/Scope.h>
 #import <wtf/Lock.h>
 #import <wtf/NeverDestroyed.h>
 
@@ -587,7 +589,7 @@ static HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>& driftstackH2Pool
     return pool.get();
 }
 // Return a live pooled session for origin, or nullptr (evicting a dead one).
-static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& origin)
+[[maybe_unused]] static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& origin)
 {
     Locker locker { driftstackH2PoolLock() };
     auto it = driftstackH2Pool().find(origin);
@@ -602,6 +604,60 @@ static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& 
 {
     Locker locker { driftstackH2PoolLock() };
     driftstackH2Pool().set(origin, std::move(session));
+}
+
+// Wave 29-499.321 (Phase 2.5) — pending-connection coalescing. Prevents the
+// thundering herd where N concurrent first-requests to an origin each open their
+// own connection: only the FIRST claims the origin and connects; the rest wait
+// for it, then multiplex over the same pooled session.
+static Condition& driftstackH2PoolCond()
+{
+    static NeverDestroyed<Condition> cond;
+    return cond.get();
+}
+static HashSet<String>& driftstackH2PoolPending()
+{
+    static NeverDestroyed<HashSet<String>> pending;
+    return pending.get();
+}
+// Claim the right to connect for `origin`. Returns:
+//   { session, * }      — a live pooled session exists → use it (fast-path).
+//   { nullptr, true }   — caller is the WINNER → must connect, then publish the
+//                         session via driftstackH2PoolSet + signal via
+//                         driftstackH2PoolFinishPending.
+//   { nullptr, false }  — caller waited for a winner that failed/timed out →
+//                         connect on its own (no pending claim held).
+[[maybe_unused]] static std::pair<RefPtr<WebKit::DriftstackHttp2Session>, bool> driftstackH2PoolClaim(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    auto it = driftstackH2Pool().find(origin);
+    if (it != driftstackH2Pool().end()) {
+        if (it->value && it->value->isAlive())
+            return { it->value, false };
+        driftstackH2Pool().remove(it);
+    }
+    if (driftstackH2PoolPending().contains(origin)) {
+        // Another thread is connecting — wait for it (bounded), then re-check.
+        MonotonicTime deadline = MonotonicTime::now() + Seconds(10);
+        while (driftstackH2PoolPending().contains(origin)) {
+            if (!driftstackH2PoolCond().waitUntil(driftstackH2PoolLock(), deadline))
+                break; // timeout
+        }
+        auto it2 = driftstackH2Pool().find(origin);
+        if (it2 != driftstackH2Pool().end() && it2->value && it2->value->isAlive())
+            return { it2->value, false };
+        return { nullptr, false }; // winner failed/timed out → connect on our own
+    }
+    driftstackH2PoolPending().add(origin);
+    return { nullptr, true };
+}
+// Winner finished its connect attempt (success or failure): clear pending +
+// wake all waiters (they pick up the now-published session, or connect on their own).
+[[maybe_unused]] static void driftstackH2PoolFinishPending(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    driftstackH2PoolPending().remove(origin);
+    driftstackH2PoolCond().notifyAll();
 }
 
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
@@ -878,9 +934,15 @@ void DriftstackNetworkLoader::resume()
         // after a fresh connection negotiates h2 (below), so until then this is
         // a no-op miss that falls through to the normal path. Gated by
         // DRIFTSTACK_H2_POOL.
+        bool h2PoolWinner = false;
+        String h2PoolOrigin;
         if (driftstackH2PoolEnabled() && url.protocolIs("https"_s)) {
-            String origin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
-            if (RefPtr<WebKit::DriftstackHttp2Session> session = driftstackH2PoolGet(origin)) {
+            h2PoolOrigin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
+            const String& origin = h2PoolOrigin;
+            // Coalesce: live session → fast-path; else claim winner / wait for one.
+            auto h2Claim = driftstackH2PoolClaim(origin);
+            h2PoolWinner = h2Claim.second;
+            if (RefPtr<WebKit::DriftstackHttp2Session> session = h2Claim.first) {
                 String poolHost = url.host().toString();
                 auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost);
                 WebKit::DriftstackHttp2Response h2resp = session->execute(h2req);
@@ -932,6 +994,14 @@ void DriftstackNetworkLoader::resume()
                 WTFLogAlways("[Wave29-499.321/H2POOL] pooled session execute failed for %s — fresh connect", origin.utf8().data());
             }
         }
+
+        // Wave .321 — winner guard: if we claimed the origin (h2PoolWinner) but
+        // exit before publishing a session (any connect/TLS failure path), clear
+        // the pending claim + wake waiters so they connect on their own instead
+        // of blocking the full 10s. On adopt-success we set h2PoolWinner=false.
+        auto h2PoolGuard = WTF::makeScopeExit([&] {
+            if (h2PoolWinner) driftstackH2PoolFinishPending(h2PoolOrigin);
+        });
 
         auto socks5Client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
         auto handshakeResult = socks5Client->performHandshake();
@@ -1175,8 +1245,11 @@ void DriftstackNetworkLoader::resume()
                 RefPtr<WebKit::DriftstackHttp2Session> session = WebKit::DriftstackHttp2Session::create(std::move(tlsOwned), std::move(socks5Client));
                 if (session) {
                     String origin = makeString(host, ':', static_cast<unsigned>(url.port().value_or(443)));
-                    h2resp = session->execute(h2req);
+                    // Publish the session + wake coalesced waiters NOW (before our
+                    // own request runs) so they multiplex concurrently over it.
                     driftstackH2PoolSet(origin, RefPtr<WebKit::DriftstackHttp2Session>(session));
+                    if (h2PoolWinner) { driftstackH2PoolFinishPending(origin); h2PoolWinner = false; }
+                    h2resp = session->execute(h2req);
                     WTFLogAlways("[Wave29-499.321/H2POOL] adopted connection for %s into pool (first request status=%d)", origin.utf8().data(), h2resp.statusCode);
                 } else {
                     h2resp.failed = true;
