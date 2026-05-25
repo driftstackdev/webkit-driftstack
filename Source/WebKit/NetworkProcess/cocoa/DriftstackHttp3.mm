@@ -2314,16 +2314,39 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
     }
 
     bool h3 = false;
-    struct sockaddr_in relaySa { };
-    int ctrlFd = -1;
-    if (driftstackQuicRawSocks5Associate(&relaySa, &ctrlFd)) {
-        int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+    // Wave .321 fix — SHARED persistent §7 DNS relay (opened once, reused +
+    // serialized under one lock). The earlier per-host associate opened a fresh
+    // SOCKS5 connection for every origin → a connection storm that hung
+    // many-origin page loads. One relay + a quick serialized query each is cheap.
+    static Lock s_dnsRelayLock;
+    static int s_dnsUdpFd = -1;
+    static struct sockaddr_in s_dnsRelaySa { };
+    Locker relayLocker { s_dnsRelayLock };
+    if (s_dnsUdpFd < 0) {
+        struct sockaddr_in rs { };
+        int cf = -1;
+        if (driftstackQuicRawSocks5Associate(&rs, &cf)) {
+            int uf = socket(AF_INET, SOCK_DGRAM, 0);
+            if (uf >= 0) {
+                struct sockaddr_in lb { };
+                lb.sin_family = AF_INET;
+                lb.sin_addr.s_addr = htonl(INADDR_ANY);
+                lb.sin_port = 0;
+                bind(uf, reinterpret_cast<struct sockaddr*>(&lb), sizeof(lb));
+                s_dnsUdpFd = uf;
+                s_dnsRelaySa = rs;
+                (void)cf; // control fd parked open for the relay's lifetime
+            } else if (cf >= 0)
+                ::close(cf);
+        }
+    }
+    {
+        int udpFd = s_dnsUdpFd;
+        struct sockaddr_in relaySa = s_dnsRelaySa;
         if (udpFd >= 0) {
-            struct sockaddr_in lb { };
-            lb.sin_family = AF_INET;
-            lb.sin_addr.s_addr = htonl(INADDR_ANY);
-            lb.sin_port = 0;
-            bind(udpFd, reinterpret_cast<struct sockaddr*>(&lb), sizeof(lb));
+            // Drain any stale datagram from a previous timed-out query so this
+            // query's recv matches its own txid.
+            { uint8_t tmp[2048]; while (recvfrom(udpFd, tmp, sizeof(tmp), MSG_DONTWAIT, nullptr, nullptr) > 0) { } }
 
             // Build a type-65 (HTTPS) DNS query for host.
             Vector<uint8_t> query;
@@ -2354,7 +2377,7 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
             if (Socks5Framing::wrap(resolverEp, query.span(), framed)
                 && sendto(udpFd, framed.span().data(), framed.size(), 0,
                        reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) > 0) {
-                struct timeval tv { 2, 0 };
+                struct timeval tv { 0, 800000 }; // 800ms — DNS is fast; cap the no-answer case
                 fd_set rs;
                 FD_ZERO(&rs);
                 FD_SET(udpFd, &rs);
@@ -2431,11 +2454,8 @@ nameDone:
                     }
                 }
             }
-            ::close(udpFd);
-        }
-    }
-    if (ctrlFd >= 0)
-        ::close(ctrlFd);
+        } // if (udpFd >= 0)
+    } // shared-relay block (relay + udpFd persist for reuse; relayLocker unlocks at scope end)
 
     if (h3)
         WTFLogAlways("[Wave29-499.321] DNS HTTPS RR: %s advertises h3 (first-contact h3, no local leak)", host.utf8().data());

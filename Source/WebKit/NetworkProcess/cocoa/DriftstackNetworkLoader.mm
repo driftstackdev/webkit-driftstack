@@ -660,7 +660,15 @@ void DriftstackNetworkLoader::resume()
             // AFTER an h2 response, so endpoints like quic.browserleaks.com (h3
             // advertised only via HTTPS RR, measured on first contact) need this.
             // Cached per host; only consulted when not already known + not forced.
-            if (h3enabled && h3https && h3bodyless && !h3forced && !driftstackLoaderHostKnownH3(h3host)) {
+            // Gated behind DRIFTSTACK_PATHB_V2_H3_DNSRR=1 — the current RR query
+            // opens a dedicated §7 associate per host, which on a many-origin
+            // page is a proxy-connection storm (long page loads). Off by default
+            // until the shared-persistent-DNS-relay optimization lands.
+            static const bool s_dnsRrEnabled = [] {
+                const char* e = getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR");
+                return e && e[0] == '1';
+            }();
+            if (s_dnsRrEnabled && h3enabled && h3https && h3bodyless && !h3forced && !driftstackLoaderHostKnownH3(h3host)) {
                 if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
                     driftstackLoaderRememberH3Host(h3host);
             }
