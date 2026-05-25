@@ -614,7 +614,15 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     uint32_t streamId = 1;
     bool streamComplete = false;
     int frameCount = 0;
-    while (!streamComplete && frameCount < 100) {
+    // Wave 29-499.321 — was `frameCount < 100`, which truncated responses larger
+    // than ~1.6 MB (100 × 16 KB max frame) — e.g. big JS bundles. Raise the frame
+    // ceiling to effectively unbounded for normal use, and bound MEMORY with a
+    // total-body cap below (kMaxBodyBytes). True unbounded streams (SSE) never
+    // reach here — NetworkDataTaskCocoa::resume routes text/event-stream to
+    // CFNetwork (Wave .321 streaming-bypass).
+    constexpr int kMaxFrames = 500000;
+    constexpr size_t kMaxBodyBytes = 128 * 1024 * 1024; // 128 MB safety cap
+    while (!streamComplete && frameCount < kMaxFrames) {
         ++frameCount;
         uint8_t hdr[9];
         if (!sslReadExact(ssl, hdr, 9)) {
@@ -698,6 +706,11 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                     dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
                 }
                 resp.body.append(dataSpan);
+                if (resp.body.size() > kMaxBodyBytes) {
+                    resp.failed = true;
+                    resp.errorMessage = "response body exceeds 128MB cap"_s;
+                    return resp;
+                }
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;
             }

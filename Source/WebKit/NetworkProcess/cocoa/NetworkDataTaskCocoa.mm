@@ -42,6 +42,7 @@
 #import "WebPrivacyHelpers.h"
 #import <WebCore/AdvancedPrivacyProtections.h>
 #import <WebCore/AuthenticationChallenge.h>
+#import <WebCore/FormData.h>
 #import <WebCore/HTTPStatusCodes.h>
 #import <WebCore/NetworkStorageSession.h>
 #import <WebCore/NotImplemented.h>
@@ -716,9 +717,47 @@ void NetworkDataTaskCocoa::resume()
                 if (second >= 16 && second <= 31) isLoopback = YES;
             }
         }
-        if (isLoopback) {
+        // Wave 29-499.321 — bypass PathB v2 for true-streaming requests
+        // (Server-Sent Events / EventSource). The loader buffers the full
+        // response before delivery, so an infinite text/event-stream would hang
+        // forever. Route these to CFNetwork (which streams + honours nw_proxy_config
+        // SOCKS5 → no leak; same class of TLS-fingerprint nuance as websockets).
+        // Detect via the request Accept header. (Incremental streaming inside
+        // PathB v2 is a tracked follow-up for full TLS-fingerprint consistency.)
+        NSString* accept = [[firstRequest().nsURLRequest(WebCore::HTTPBodyUpdatePolicy::DoNotUpdateHTTPBody) valueForHTTPHeaderField:@"Accept"] lowercaseString];
+        BOOL isEventStream = accept && [accept containsString:@"text/event-stream"];
+        if (isEventStream) {
+            static bool loggedSseOnce = false;
+            if (!loggedSseOnce) {
+                loggedSseOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] bypass PathB v2 for text/event-stream (SSE) — routed via CFNetwork to avoid full-buffer hang");
+            }
+        }
+        // Wave 29-499.321 — bypass PathB v2 for requests whose body contains file
+        // or blob parts. The loader sends FormData::flatten() (omits file/blob
+        // parts), so a multipart file upload would send an INCOMPLETE body. Route
+        // these to CFNetwork (handles multipart natively + honours nw_proxy_config
+        // SOCKS5 → no leak). Pure data bodies (JSON/urlencoded) flatten completely
+        // and stay on PathB v2. (Native multipart assembly in PathB v2 = follow-up.)
+        BOOL hasUnflattenableBody = NO;
+        if (RefPtr<WebCore::FormData> body = firstRequest().httpBody()) {
+            for (auto& el : body->elements()) {
+                if (!std::holds_alternative<Vector<uint8_t>>(el.data)) {
+                    hasUnflattenableBody = YES;
+                    break;
+                }
+            }
+            if (hasUnflattenableBody) {
+                static bool loggedUploadOnce = false;
+                if (!loggedUploadOnce) {
+                    loggedUploadOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] bypass PathB v2 for file/blob upload body — routed via CFNetwork (flatten omits files)");
+                }
+            }
+        }
+        if (isLoopback || isEventStream || hasUnflattenableBody) {
             static bool loggedLoopbackOnce = false;
-            if (!loggedLoopbackOnce) {
+            if (isLoopback && !loggedLoopbackOnce) {
                 loggedLoopbackOnce = true;
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.273] bypass PathB v2 for loopback/private host '%s' (direct via NSURLSession)", host.UTF8String);
             }
