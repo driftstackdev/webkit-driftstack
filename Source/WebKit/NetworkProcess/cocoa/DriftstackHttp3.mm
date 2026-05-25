@@ -46,6 +46,10 @@
 // declarations in Ngtcp2Fns below.
 #define DRIFTSTACK_HAS_NGTCP2_HEADERS 1
 #include <ngtcp2/ngtcp2.h>
+// Wave 29-499.321 — real nghttp3 types for the HTTP/3 client layer. Functions
+// are dlsym-resolved at runtime (like ngtcp2); only the struct layouts come
+// from the header.
+#include <nghttp3/nghttp3.h>
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -82,6 +86,7 @@ struct Ngtcp2Fns {
         const void*, void*) = nullptr;
     void (*conn_del)(ngtcp2_conn*) = nullptr;
     int (*conn_open_bidi_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;
+    int (*conn_open_uni_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;  // Wave .321 — nghttp3 control+qpack streams
     ngtcp2_tstamp (*conn_get_expiry)(ngtcp2_conn*) = nullptr;
     int (*conn_handle_expiry)(ngtcp2_conn*, ngtcp2_tstamp) = nullptr;
     void (*addr_init)(ngtcp2_addr*, const struct sockaddr*, size_t) = nullptr;
@@ -368,6 +373,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_client_new_versioned, "ngtcp2_conn_client_new_versioned");
     RESOLVE(conn_del, "ngtcp2_conn_del");
     RESOLVE(conn_open_bidi_stream, "ngtcp2_conn_open_bidi_stream");
+    RESOLVE(conn_open_uni_stream, "ngtcp2_conn_open_uni_stream");  // Wave .321
     RESOLVE(conn_get_expiry, "ngtcp2_conn_get_expiry");
     RESOLVE(conn_handle_expiry, "ngtcp2_conn_handle_expiry");
     RESOLVE(addr_init, "ngtcp2_addr_init");
@@ -416,6 +422,94 @@ static bool resolveNgtcp2()
     return required;
 }
 
+// Wave 29-499.321 — nghttp3 (HTTP/3 framing + QPACK) dlsym layer. Resolves the
+// ~11 functions the client needs from libnghttp3.9.dylib. nghttp3 sits ON TOP
+// of ngtcp2: ngtcp2 owns the QUIC transport (streams + crypto), nghttp3 owns
+// the HTTP/3 mapping (HEADERS via QPACK + DATA frames). After the QUIC
+// handshake completes we create an nghttp3_conn, bind its control + QPACK
+// uni-streams, open a client bidi stream, submit a GET, then shuttle bytes
+// between ngtcp2 streams and nghttp3 until the response is complete.
+struct NgHttp3Fns {
+    void (*settings_default_versioned)(int, nghttp3_settings*) = nullptr;
+    int (*conn_client_new_versioned)(nghttp3_conn**, int, const nghttp3_callbacks*,
+        int, const nghttp3_settings*, const nghttp3_mem*, void*) = nullptr;
+    void (*conn_del)(nghttp3_conn*) = nullptr;
+    int (*conn_bind_control_stream)(nghttp3_conn*, int64_t) = nullptr;
+    int (*conn_bind_qpack_streams)(nghttp3_conn*, int64_t, int64_t) = nullptr;
+    int (*conn_submit_request)(nghttp3_conn*, int64_t, const nghttp3_nv*, size_t,
+        const nghttp3_data_reader*, void*) = nullptr;
+    nghttp3_ssize (*conn_read_stream)(nghttp3_conn*, int64_t, const uint8_t*, size_t, int) = nullptr;
+    nghttp3_ssize (*conn_writev_stream)(nghttp3_conn*, int64_t*, int*, nghttp3_vec*, size_t) = nullptr;
+    int (*conn_add_write_offset)(nghttp3_conn*, int64_t, size_t) = nullptr;
+    int (*conn_add_ack_offset)(nghttp3_conn*, int64_t, uint64_t) = nullptr;
+    int (*conn_close_stream)(nghttp3_conn*, int64_t, uint64_t) = nullptr;
+    int (*conn_set_stream_user_data)(nghttp3_conn*, int64_t, void*) = nullptr;
+    nghttp3_vec (*rcbuf_get_buf)(const nghttp3_rcbuf*) = nullptr;
+    bool ready = false;
+};
+
+static NgHttp3Fns& ngHttp3Fns()
+{
+    static NgHttp3Fns s;
+    return s;
+}
+
+static bool resolveNgHttp3()
+{
+    auto& f = ngHttp3Fns();
+    if (f.ready) return true;
+    const char* candidates[] = {
+        "libnghttp3.dylib",
+        "libnghttp3.9.dylib",
+        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libnghttp3.dylib",  // copy beside WebKit framework (matches ngtcp2 layout)
+        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libnghttp3.9.dylib",
+        "/opt/homebrew/opt/libnghttp3/lib/libnghttp3.9.dylib",
+        "/opt/homebrew/lib/libnghttp3.dylib",
+        "@executable_path/../Frameworks/libnghttp3.9.dylib",
+        nullptr,
+    };
+    void* handle = nullptr;
+    for (int i = 0; candidates[i]; ++i) {
+        handle = dlopen(candidates[i], RTLD_NOW | RTLD_GLOBAL);
+        if (handle) {
+            WTFLogAlways("[Wave29-499.321] dlopen nghttp3 OK at '%s'", candidates[i]);
+            break;
+        }
+    }
+    if (!handle) {
+        WTFLogAlways("[Wave29-499.321] dlopen nghttp3 FAILED (HTTP/3 request layer disabled)");
+        return false;
+    }
+#define RESOLVE3(field, sym) f.field = reinterpret_cast<decltype(f.field)>(dlsym(handle, sym))
+    RESOLVE3(settings_default_versioned, "nghttp3_settings_default_versioned");
+    RESOLVE3(conn_client_new_versioned, "nghttp3_conn_client_new_versioned");
+    RESOLVE3(conn_del, "nghttp3_conn_del");
+    RESOLVE3(conn_bind_control_stream, "nghttp3_conn_bind_control_stream");
+    RESOLVE3(conn_bind_qpack_streams, "nghttp3_conn_bind_qpack_streams");
+    RESOLVE3(conn_submit_request, "nghttp3_conn_submit_request");
+    RESOLVE3(conn_read_stream, "nghttp3_conn_read_stream");
+    RESOLVE3(conn_writev_stream, "nghttp3_conn_writev_stream");
+    RESOLVE3(conn_add_write_offset, "nghttp3_conn_add_write_offset");
+    RESOLVE3(conn_add_ack_offset, "nghttp3_conn_add_ack_offset");
+    RESOLVE3(conn_close_stream, "nghttp3_conn_close_stream");
+    RESOLVE3(conn_set_stream_user_data, "nghttp3_conn_set_stream_user_data");
+    RESOLVE3(rcbuf_get_buf, "nghttp3_rcbuf_get_buf");
+#undef RESOLVE3
+    bool required = f.settings_default_versioned && f.conn_client_new_versioned
+        && f.conn_del && f.conn_bind_control_stream && f.conn_bind_qpack_streams
+        && f.conn_submit_request && f.conn_read_stream && f.conn_writev_stream
+        && f.conn_add_write_offset && f.conn_add_ack_offset && f.conn_close_stream
+        && f.rcbuf_get_buf;
+    f.ready = required;
+    WTFLogAlways("[Wave29-499.321] nghttp3 dlsym ready=%d (settings=%p new=%p bind_ctrl=%p bind_qpack=%p submit=%p read=%p writev=%p add_write=%p add_ack=%p close=%p rcbuf=%p)",
+        required, (void*)f.settings_default_versioned, (void*)f.conn_client_new_versioned,
+        (void*)f.conn_bind_control_stream, (void*)f.conn_bind_qpack_streams,
+        (void*)f.conn_submit_request, (void*)f.conn_read_stream, (void*)f.conn_writev_stream,
+        (void*)f.conn_add_write_offset, (void*)f.conn_add_ack_offset,
+        (void*)f.conn_close_stream, (void*)f.rcbuf_get_buf);
+    return required;
+}
+
 // Wave 29-499.224 — DriftstackQuicConn ties an SSL pointer to its ngtcp2
 // connection state. Stored via SSL_set_ex_data; the 5 ssl_quic_method_st
 // callbacks recover it via SSL_get_ex_data at each invocation. Lifetime
@@ -430,6 +524,21 @@ struct DriftstackQuicConn {
     // (32 for SHA-256, 48 for SHA-384). Initial=0, Handshake=2, App=3.
     Vector<uint8_t> rxSecret[4];
     Vector<uint8_t> txSecret[4];
+
+    // Wave 29-499.321 — HTTP/3 (nghttp3) client state. Populated after the
+    // QUIC handshake completes: nghttp3_conn drives QPACK + HEADERS/DATA frames
+    // over QUIC streams. This turns the smoke harness into a real request/
+    // response H3 client (the engine WebKit's loader will route H3 loads to).
+    void* h3conn { nullptr };               // nghttp3_conn*
+    int64_t h3RequestStreamId { -1 };
+    int h3Status { 0 };                      // :status pseudo-header
+    Vector<std::pair<Vector<uint8_t>, Vector<uint8_t>>> h3ResponseHeaders;
+    Vector<uint8_t> h3ResponseBody;
+    bool h3ResponseComplete { false };       // end_stream on request stream
+    // Request data the client emits (set before submit).
+    Vector<uint8_t> h3ReqMethod;
+    Vector<uint8_t> h3ReqPath;
+    Vector<uint8_t> h3ReqAuthority;
 };
 
 [[maybe_unused]] static int& quicConnExDataIndex()
@@ -1163,6 +1272,116 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     return rv;
 }
 
+// ============================================================================
+// Wave 29-499.321 — HTTP/3 request/response layer (nghttp3 ⇄ ngtcp2 bridge).
+//
+// nghttp3 callbacks: invoked by nghttp3_conn_read_stream as it parses the
+// server's HEADERS/DATA frames. conn_user_data is the DriftstackQuicConn*
+// (passed to nghttp3_conn_client_new_versioned below).
+// ============================================================================
+
+static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
+    int32_t /*token*/, nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t /*flags*/,
+    void* connUserData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
+    auto& h = ngHttp3Fns();
+    nghttp3_vec nv = h.rcbuf_get_buf(name);
+    nghttp3_vec vv = h.rcbuf_get_buf(value);
+    Vector<uint8_t> nameBuf; nameBuf.append(std::span<const uint8_t> { nv.base, nv.len });
+    Vector<uint8_t> valBuf; valBuf.append(std::span<const uint8_t> { vv.base, vv.len });
+    // :status pseudo-header → numeric status code.
+    if (nv.len == 7 && !memcmp(nv.base, ":status", 7)) {
+        int code = 0;
+        for (size_t i = 0; i < vv.len; ++i) {
+            if (vv.base[i] < '0' || vv.base[i] > '9') break;
+            code = code * 10 + (vv.base[i] - '0');
+        }
+        qc->h3Status = code;
+    }
+    qc->h3ResponseHeaders.append({ std::move(nameBuf), std::move(valBuf) });
+    if (qc->h3ResponseHeaders.size() <= 16) {
+        WTFLogAlways("[Wave29-499.321] H3 recv_header stream=%lld %.*s: %.*s",
+            (long long)streamId, (int)nv.len, nv.base, (int)vv.len, vv.base);
+    }
+    return 0;
+}
+
+static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t /*streamId*/,
+    const uint8_t* data, size_t datalen, void* connUserData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
+    qc->h3ResponseBody.append(std::span<const uint8_t> { data, datalen });
+    return 0;
+}
+
+static int driftstackH3EndStream(nghttp3_conn* /*conn*/, int64_t streamId,
+    void* connUserData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
+    if (streamId == qc->h3RequestStreamId) {
+        qc->h3ResponseComplete = true;
+        WTFLogAlways("[Wave29-499.321] H3 end_stream stream=%lld status=%d bodyLen=%zu",
+            (long long)streamId, qc->h3Status, qc->h3ResponseBody.size());
+    }
+    return 0;
+}
+
+static int driftstackH3StreamClose(nghttp3_conn* /*conn*/, int64_t streamId,
+    uint64_t /*appErrorCode*/, void* connUserData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
+    if (streamId == qc->h3RequestStreamId)
+        qc->h3ResponseComplete = true;
+    return 0;
+}
+
+// ngtcp2 stream callbacks: feed received stream bytes into nghttp3, and tell
+// nghttp3 how much stream data was acked / when ngtcp2 closes a stream. These
+// are wired into initDriftstackNgtcp2Callbacks below (the .311 cb struct).
+static int driftstackNgtcp2RecvStreamData(ngtcp2_conn* /*conn*/, uint32_t flags,
+    int64_t streamId, uint64_t /*offset*/, const uint8_t* data, size_t datalen,
+    void* userData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(userData);
+    if (!qc->h3conn)
+        return 0;
+    auto& h = ngHttp3Fns();
+    int fin = (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0;
+    nghttp3_ssize consumed = h.conn_read_stream(static_cast<nghttp3_conn*>(qc->h3conn),
+        streamId, data, datalen, fin);
+    if (consumed < 0) {
+        WTFLogAlways("[Wave29-499.321] nghttp3_conn_read_stream FAILED rv=%zd stream=%lld",
+            (ssize_t)consumed, (long long)streamId);
+        return -1; // NGTCP2_ERR_CALLBACK_FAILURE
+    }
+    return 0;
+}
+
+static int driftstackNgtcp2AckedStreamDataOffset(ngtcp2_conn* /*conn*/, int64_t streamId,
+    uint64_t /*offset*/, uint64_t datalen, void* userData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(userData);
+    if (!qc->h3conn)
+        return 0;
+    auto& h = ngHttp3Fns();
+    if (h.conn_add_ack_offset(static_cast<nghttp3_conn*>(qc->h3conn), streamId, datalen) != 0)
+        return -1;
+    return 0;
+}
+
+static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/,
+    int64_t streamId, uint64_t appErrorCode, void* userData, void* /*streamUserData*/)
+{
+    auto* qc = static_cast<DriftstackQuicConn*>(userData);
+    if (!qc->h3conn)
+        return 0;
+    auto& h = ngHttp3Fns();
+    if (h.conn_close_stream)
+        h.conn_close_stream(static_cast<nghttp3_conn*>(qc->h3conn), streamId, appErrorCode);
+    return 0;
+}
+
 [[maybe_unused]] static void initDriftstackNgtcp2Callbacks(ngtcp2_callbacks* cb)
 {
     memset(cb, 0, sizeof(*cb));
@@ -1183,8 +1402,13 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     cb->hp_mask = driftstackNgtcp2HpMask;
     cb->rand = driftstackNgtcp2Rand;
     cb->get_new_connection_id = driftstackNgtcp2GetNewConnectionId;
-    // recv_stream_data, acked_stream_data_offset, stream_open, stream_close,
-    // update_key, recv_version_negotiation, recv_token, send_token,
+    // Wave 29-499.321 — HTTP/3 stream callbacks: route received stream bytes
+    // into nghttp3 + relay ack/close. Only active once qc->h3conn is set
+    // (after handshake); they no-op otherwise.
+    cb->recv_stream_data = driftstackNgtcp2RecvStreamData;
+    cb->acked_stream_data_offset = driftstackNgtcp2AckedStreamDataOffset;
+    cb->stream_close = driftstackNgtcp2StreamClose;
+    // recv_version_negotiation, recv_token, send_token,
     // remove_connection_id, path_validation: optional callbacks added on
     // demand in subsequent waves (.231+).
 }
@@ -1621,6 +1845,151 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     return n;
 }
 
+// Wave 29-499.321 — set up the nghttp3 client connection after the QUIC
+// handshake completes. Opens the HTTP/3 control + QPACK encoder/decoder
+// uni-streams, opens a client bidirectional stream, and submits a GET request.
+// Returns true on success (qc->h3conn + qc->h3RequestStreamId set).
+[[maybe_unused]] static bool driftstackHttp3SetupAndSubmit(DriftstackQuicConn* qc,
+    const char* authority, const char* path)
+{
+    if (!resolveNgHttp3())
+        return false;
+    auto& h = ngHttp3Fns();
+    auto& nf = ngtcp2Fns();
+
+    nghttp3_settings settings;
+    h.settings_default_versioned(NGHTTP3_SETTINGS_VERSION, &settings);
+
+    nghttp3_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.recv_header = driftstackH3RecvHeader;
+    cb.recv_data = driftstackH3RecvData;
+    cb.end_stream = driftstackH3EndStream;
+    cb.stream_close = driftstackH3StreamClose;
+
+    nghttp3_conn* h3 = nullptr;
+    int rv = h.conn_client_new_versioned(&h3, NGHTTP3_CALLBACKS_VERSION, &cb,
+        NGHTTP3_SETTINGS_VERSION, &settings, /*mem=*/nullptr, /*conn_user_data=*/qc);
+    if (rv != 0 || !h3) {
+        WTFLogAlways("[Wave29-499.321] nghttp3_conn_client_new FAILED rv=%d", rv);
+        return false;
+    }
+    qc->h3conn = h3;
+
+    // Bind the HTTP/3 control stream + QPACK encoder/decoder streams to three
+    // client-initiated unidirectional streams (RFC 9114 §6.2 / §3.2.2).
+    int64_t ctrlStream = -1, qpackEnc = -1, qpackDec = -1;
+    if (nf.conn_open_uni_stream(qc->conn, &ctrlStream, nullptr) != 0
+        || nf.conn_open_uni_stream(qc->conn, &qpackEnc, nullptr) != 0
+        || nf.conn_open_uni_stream(qc->conn, &qpackDec, nullptr) != 0) {
+        WTFLogAlways("[Wave29-499.321] open_uni_stream (control/qpack) FAILED");
+        return false;
+    }
+    if (h.conn_bind_control_stream(h3, ctrlStream) != 0) {
+        WTFLogAlways("[Wave29-499.321] bind_control_stream FAILED");
+        return false;
+    }
+    if (h.conn_bind_qpack_streams(h3, qpackEnc, qpackDec) != 0) {
+        WTFLogAlways("[Wave29-499.321] bind_qpack_streams FAILED");
+        return false;
+    }
+
+    // Open the request bidi stream and submit GET <path>.
+    int64_t reqStream = -1;
+    if (nf.conn_open_bidi_stream(qc->conn, &reqStream, nullptr) != 0) {
+        WTFLogAlways("[Wave29-499.321] open_bidi_stream (request) FAILED");
+        return false;
+    }
+    qc->h3RequestStreamId = reqStream;
+
+    auto nv = [](const char* n, const char* v) -> nghttp3_nv {
+        return nghttp3_nv {
+            reinterpret_cast<const uint8_t*>(n), reinterpret_cast<const uint8_t*>(v),
+            strlen(n), strlen(v), NGHTTP3_NV_FLAG_NONE
+        };
+    };
+    nghttp3_nv hdrs[] = {
+        nv(":method", "GET"),
+        nv(":scheme", "https"),
+        nv(":authority", authority),
+        nv(":path", path),
+        nv("user-agent", "Driftstack-H3/1.0"),
+        nv("accept", "*/*"),
+    };
+    rv = h.conn_submit_request(h3, reqStream, hdrs, sizeof(hdrs) / sizeof(hdrs[0]),
+        /*data_reader=*/nullptr, /*stream_user_data=*/qc);
+    if (rv != 0) {
+        WTFLogAlways("[Wave29-499.321] nghttp3_conn_submit_request FAILED rv=%d", rv);
+        return false;
+    }
+    WTFLogAlways("[Wave29-499.321] H3 setup OK: ctrl=%lld qpackEnc=%lld qpackDec=%lld reqStream=%lld GET %s%s",
+        (long long)ctrlStream, (long long)qpackEnc, (long long)qpackDec,
+        (long long)reqStream, authority, path);
+    return true;
+}
+
+// Wave 29-499.321 — pull pending HTTP/3 stream data from nghttp3, hand it to
+// ngtcp2 for QUIC packetization, and emit each resulting packet via the §7
+// SOCKS5 relay. Mirrors the ngtcp2/nghttp3 client write loop. Returns the
+// number of packets written, or -1 on a fatal error.
+[[maybe_unused]] static int driftstackHttp3DrainWrites(DriftstackQuicConn* qc,
+    int udpFd, const Socks5Framing::Endpoint& peerEp,
+    const struct sockaddr_in& relaySa)
+{
+    auto& h = ngHttp3Fns();
+    auto& nf = ngtcp2Fns();
+    auto* h3 = static_cast<nghttp3_conn*>(qc->h3conn);
+    int written = 0;
+    for (;;) {
+        int64_t sid = -1;
+        int fin = 0;
+        nghttp3_vec vec[16];
+        nghttp3_ssize sveccnt = h.conn_writev_stream(h3, &sid, &fin, vec, 16);
+        if (sveccnt < 0) {
+            WTFLogAlways("[Wave29-499.321] nghttp3_conn_writev_stream rv=%zd", (ssize_t)sveccnt);
+            return -1;
+        }
+
+        uint8_t pkt[1500];
+        ngtcp2_ssize ndatalen = 0;
+        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+        if (fin)
+            flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
+        ngtcp2_pkt_info pi { };
+        ngtcp2_ssize n = nf.conn_writev_stream_versioned(qc->conn, /*path=*/nullptr,
+            NGTCP2_PKT_INFO_VERSION, &pi, pkt, sizeof(pkt), &ndatalen, flags, sid,
+            reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(sveccnt),
+            driftstackQuicTimestampNow());
+        if (n < 0) {
+            if (n == NGTCP2_ERR_WRITE_MORE) {
+                // ngtcp2 buffered the stream data; account for it and keep going.
+                if (sid >= 0 && ndatalen >= 0)
+                    h.conn_add_write_offset(h3, sid, static_cast<size_t>(ndatalen));
+                continue;
+            }
+            if (n == NGTCP2_ERR_STREAM_DATA_BLOCKED) {
+                // Can't send this stream's data right now; stop draining.
+                break;
+            }
+            WTFLogAlways("[Wave29-499.321] conn_writev_stream rv=%zd", (ssize_t)n);
+            return -1;
+        }
+        if (sid >= 0 && ndatalen >= 0)
+            h.conn_add_write_offset(h3, sid, static_cast<size_t>(ndatalen));
+        if (n == 0)
+            break; // nothing more to send
+
+        Vector<uint8_t> framed;
+        if (!Socks5Framing::wrap(peerEp, std::span<const uint8_t> { pkt, static_cast<size_t>(n) }, framed))
+            break;
+        ssize_t s = sendto(udpFd, framed.span().data(), framed.size(), 0,
+            reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa));
+        if (s > 0)
+            ++written;
+    }
+    return written;
+}
+
 // Feed an inbound QUIC packet (post-§7-unwrap, raw QUIC bytes from peer)
 // into the conn. ngtcp2 decrypts via our encrypt/decrypt callbacks,
 // dispatches CRYPTO frames to BoringSSL via recv_crypto_data, and updates
@@ -1937,18 +2306,59 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     local.sin_family = AF_INET;
     local.sin_addr.s_addr = htonl(INADDR_ANY);
     local.sin_port = htons(boundPort);
+
+    // Wave 29-499.321 — resolve the REAL request host → IPv4 for production
+    // routing (was hardcoded 1.1.1.1 smoke target). gost's §7 relay requires
+    // ATYP=0x01 (IPv4 literal), so we resolve locally via getaddrinfo before
+    // §7-wrapping. (DNS-over-proxy via ATYP=0x03 is a separate hardening item;
+    // the QUIC bridge framer path already does the same local pre-resolution
+    // per .319b, so this is consistent.) Default port 443 unless the authority
+    // carries an explicit :port.
+    String authHost;
+    uint16_t authPort = 443;
+    {
+        CString a = request.authority.utf8();
+        const char* astr = a.data();
+        if (astr && astr[0]) {
+            const char* colon = strchr(astr, ':');
+            if (colon) {
+                authHost = String::fromUTF8(std::span<const char> { astr, static_cast<size_t>(colon - astr) });
+                authPort = static_cast<uint16_t>(atoi(colon + 1));
+                if (!authPort) authPort = 443;
+            } else
+                authHost = String::fromUTF8(astr);
+        }
+    }
+    String peerIpStr = "1.1.1.1"_s;  // smoke fallback (empty authority)
+    if (!authHost.isEmpty()) {
+        struct addrinfo hints { };
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        struct addrinfo* res = nullptr;
+        CString hostC = authHost.utf8();
+        if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
+            auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+            char ipbuf[INET_ADDRSTRLEN] = {};
+            inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf));
+            peerIpStr = String::fromUTF8(ipbuf);
+            freeaddrinfo(res);
+        } else {
+            WTFLogAlways("[Wave29-499.321] getaddrinfo FAILED for '%s' — falling back to 1.1.1.1", hostC.data());
+            if (res) freeaddrinfo(res);
+        }
+    }
+
     struct sockaddr_in peer { };
     peer.sin_family = AF_INET;
-    // Wave 29-499.287 — try 1.1.1.1 (Cloudflare DNS) on 443 = serves h3.
-    // 1.1.1.1 = 0x01010101. Verified-known-good public QUIC endpoint.
-    peer.sin_addr.s_addr = htonl(0x01010101);  // 1.1.1.1
-    peer.sin_port = htons(443);
+    inet_pton(AF_INET, peerIpStr.utf8().data(), &peer.sin_addr);
+    peer.sin_port = htons(authPort);
 
     {
         char relayIpStr[INET_ADDRSTRLEN] = {};
         inet_ntop(AF_INET, &relaySa.sin_addr, relayIpStr, sizeof(relayIpStr));
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.238] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=1.1.1.1:443. Ready for handshake event loop.",
-            udpFd, boundPort, relayIpStr, ntohs(relaySa.sin_port));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] UDP socket fd=%d localPort=%u, relay=%s:%u, peer=%s:%u (authority=%s). Ready for handshake event loop.",
+            udpFd, boundPort, relayIpStr, ntohs(relaySa.sin_port),
+            peerIpStr.utf8().data(), authPort, request.authority.utf8().data());
     }
 
     WTFLogAlways("[Wave29-499.247] before connectQuic call");
@@ -1979,7 +2389,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // hardcoded 162.159.135.96 from Wave .256 was WRONG (that's a different
     // Cloudflare anycast IP not serving QUIC test endpoint). Wave .285 fixed
     // ATYP encoding to 0x01 but still no response because target IP was wrong.
-    Socks5Framing::Endpoint peerEp { "1.1.1.1"_s, 443 };  // Wave .287 — verified-known-good QUIC endpoint
+    Socks5Framing::Endpoint peerEp { peerIpStr, authPort };  // Wave .321 — resolved real request host (was hardcoded 1.1.1.1)
     constexpr int kMaxIterations = 40;       // Wave .309 — wider window (was 20)
     constexpr int kPerRecvTimeoutMs = 300;
     int iters = 0;
@@ -2110,22 +2520,99 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.239] handshake event loop: iters=%d packetsSent=%d packetsReceived=%d handshakeCompleted=%d",
         iters, packetsSent, packetsReceived, qc->handshakeCompleted);
 
-    // Wave 29-499.284 — branch on actual completion state instead of hardcoding
-    // failure. handshakeCompleted=true means TLS 1.3 reached 1-RTT keys; we
-    // can then submit HTTP/3 HEADERS via nghttp3 (TODO next slice).
     bool completed = qc->handshakeCompleted;
 
+    // Wave 29-499.321 — HTTP/3 request/response phase. TLS 1.3 reached 1-RTT
+    // keys; now create the nghttp3 client, submit the GET, and pump bytes
+    // between ngtcp2 streams and nghttp3 until the response is complete (or a
+    // bounded budget is exhausted). This turns the smoke harness into a real
+    // H3 client — the engine WebKit's loader routes H3 resource loads to.
+    if (completed) {
+        // Derive authority + path from the request (default to a known h3 GET).
+        CString authUtf8 = request.authority.isEmpty() ? CString("cloudflare-quic.com") : request.authority.utf8();
+        CString pathUtf8 = request.path.isEmpty() ? CString("/") : request.path.utf8();
+        if (!driftstackHttp3SetupAndSubmit(qc, authUtf8.data(), pathUtf8.data())) {
+            WTFLogAlways("[Wave29-499.321] H3 setup/submit failed — returning handshake-only success");
+        } else {
+            constexpr int kH3MaxIterations = 60;
+            int h3iters = 0;
+            int h3PacketsSent = 0;
+            int h3PacketsReceived = 0;
+            while (h3iters < kH3MaxIterations && !qc->h3ResponseComplete) {
+                ++h3iters;
+                int w = driftstackHttp3DrainWrites(qc, udpFd, peerEp, relaySa);
+                if (w > 0) h3PacketsSent += w;
+                if (w < 0) break;
+
+                struct timeval tv { 0, kPerRecvTimeoutMs * 1000 };
+                fd_set rs;
+                FD_ZERO(&rs);
+                FD_SET(udpFd, &rs);
+                int sel = select(udpFd + 1, &rs, nullptr, nullptr, &tv);
+                if (sel <= 0) {
+                    if (nf.conn_handle_expiry)
+                        nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+                    continue;
+                }
+                uint8_t inbound[2048];
+                struct sockaddr_in from { };
+                socklen_t fromLen = sizeof(from);
+                ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0,
+                    reinterpret_cast<struct sockaddr*>(&from), &fromLen);
+                if (r <= 0) continue;
+                ++h3PacketsReceived;
+                Socks5Framing::Endpoint src;
+                Vector<uint8_t> payload;
+                if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+                    continue;
+                driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+                    reinterpret_cast<struct sockaddr*>(&peer), sizeof(peer),
+                    reinterpret_cast<struct sockaddr*>(&local), sizeof(local));
+            }
+            // Final write-drain to flush ACKs for the last received packets.
+            driftstackHttp3DrainWrites(qc, udpFd, peerEp, relaySa);
+            WTFLogAlways("[Wave29-499.321] H3 request loop: iters=%d sent=%d recv=%d complete=%d status=%d bodyLen=%zu",
+                h3iters, h3PacketsSent, h3PacketsReceived, qc->h3ResponseComplete,
+                qc->h3Status, qc->h3ResponseBody.size());
+        }
+    }
+
+    // Snapshot H3 results before tearing down the conn.
+    bool h3Complete = qc->h3ResponseComplete;
+    int h3Status = qc->h3Status;
+    Vector<uint8_t> h3Body = std::move(qc->h3ResponseBody);
+    Vector<std::pair<Vector<uint8_t>, Vector<uint8_t>>> h3Hdrs = std::move(qc->h3ResponseHeaders);
+
+    if (qc->h3conn) {
+        ngHttp3Fns().conn_del(static_cast<nghttp3_conn*>(qc->h3conn));
+        qc->h3conn = nullptr;
+    }
     ::close(udpFd);
     destroyDriftstackQuicConn(qc);
     bsf.SSL_free(ssl);
     bsf.SSL_CTX_free(ctx);
 
-    if (completed) {
+    if (completed && h3Complete) {
         resp.failed = false;
-        resp.statusCode = 200;
+        resp.statusCode = h3Status ? h3Status : 200;
+        resp.body = std::move(h3Body);
+        for (auto& kv : h3Hdrs) {
+            resp.headers.append({
+                String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.first.span().data()), kv.first.size() }),
+                String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
+        }
         resp.errorMessage = ""_s;
-        // body remains empty until nghttp3 HEADERS+DATA emission lands
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.284] QUIC handshake COMPLETE — TLS 1.3 1-RTT keys ready. HTTP/3 HEADERS+DATA emission still pending nghttp3 wiring.");
+        WTFLogAlways("[Wave29-499.321] HTTP/3 REQUEST COMPLETE — status=%d bodyLen=%zu headers=%zu via SOCKS5 §7",
+            resp.statusCode, resp.body.size(), resp.headers.size());
+        return resp;
+    }
+
+    if (completed) {
+        // Handshake worked but the H3 exchange didn't finish in budget.
+        resp.failed = true;
+        resp.statusCode = 0;
+        resp.errorMessage = "QUIC handshake complete but HTTP/3 response did not finish (nghttp3 request loop budget exhausted)"_s;
+        WTFLogAlways("[Wave29-499.321] handshake OK but H3 response incomplete");
         return resp;
     }
 

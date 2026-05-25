@@ -14,6 +14,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import "DriftstackSocks5Client.h"
+#import "DriftstackHttp3.h"
 #import <stdlib.h>
 #import <string.h>
 #import <wtf/Assertions.h>
@@ -65,6 +66,71 @@ static NSData* readAllFromCFStream(CFReadStreamRef stream)
         [out appendBytes:chunk length:n];
     }
     return out;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+// Wave 29-499.321 — HTTP/3 fast-path. For https requests (when
+// DRIFTSTACK_PATHB_V2_H3=1), attempt a real QUIC/HTTP-3 request through the
+// SOCKS5 §7 UDP relay via the DriftstackHttp3 ngtcp2/nghttp3 engine. CFNetwork
+// will not negotiate h3 when a proxy is configured (it abandons the QUIC
+// connection below the interceptable layer), so this is the only way the
+// browser actually speaks QUIC through the customer proxy. On success the
+// response is delivered to the URL-loading client and YES is returned; on any
+// failure we return NO and the caller falls through to the TCP h1/h2 path
+// (mirrors Safari's h3→h2 fallback for non-h3 origins).
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+static BOOL driftstackTryHttp3(NSURLProtocol* proto, NSURL* url, NSString* host, int actualPort)
+{
+    const char* h3env = getenv("DRIFTSTACK_PATHB_V2_H3");
+    if (!h3env || h3env[0] != '1')
+        return NO;
+
+    WebKit::DriftstackHttp3Request req;
+    req.method = WTF::String::fromUTF8([(proto.request.HTTPMethod ?: @"GET") UTF8String]);
+    req.scheme = "https"_s;
+    req.authority = WTF::String::fromUTF8([[NSString stringWithFormat:@"%@:%d", host, actualPort] UTF8String]);
+    NSString* path = url.path.length ? url.path : @"/";
+    if (url.query.length > 0)
+        path = [NSString stringWithFormat:@"%@?%@", path, url.query];
+    req.path = WTF::String::fromUTF8([path UTF8String]);
+    NSDictionary* hdrs = proto.request.allHTTPHeaderFields ?: @{};
+    for (NSString* key in hdrs) {
+        NSString* lk = key.lowercaseString;
+        if ([lk isEqualToString:@"host"] || [lk isEqualToString:@"connection"])
+            continue;
+        req.extraHeaders.append({ WTF::String::fromUTF8([key UTF8String]), WTF::String::fromUTF8([hdrs[key] UTF8String]) });
+    }
+    NSData* body = proto.request.HTTPBody;
+    if (body.length > 0)
+        req.body.append(std::span<const uint8_t> { static_cast<const uint8_t*>(body.bytes), static_cast<size_t>(body.length) });
+
+    WTFLogAlways("[Wave29-499.321/URLPROTOCOL] attempting HTTP/3 for https://%s:%d%s via SOCKS5 §7",
+        [host UTF8String], actualPort, [path UTF8String]);
+    WebKit::DriftstackHttp3Response resp = WebKit::driftstackHttp3Execute(nullptr, req);
+    if (resp.failed || resp.statusCode == 0) {
+        WTFLogAlways("[Wave29-499.321/URLPROTOCOL] HTTP/3 attempt failed (%s) — falling back to TCP h1/h2",
+            resp.errorMessage.utf8().data());
+        return NO;
+    }
+
+    NSMutableDictionary<NSString*, NSString*>* respHeaders = [NSMutableDictionary dictionary];
+    for (auto& kv : resp.headers) {
+        NSString* k = [NSString stringWithUTF8String:kv.first.utf8().data()];
+        NSString* v = [NSString stringWithUTF8String:kv.second.utf8().data()];
+        if (k && v && ![k hasPrefix:@":"])  // skip :status / pseudo-headers
+            respHeaders[k] = v;
+    }
+    NSHTTPURLResponse* nsResp = [[NSHTTPURLResponse alloc] initWithURL:url
+        statusCode:resp.statusCode HTTPVersion:@"HTTP/3.0" headerFields:respHeaders];
+    [[proto client] URLProtocol:proto didReceiveResponse:nsResp cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    if (!resp.body.isEmpty()) {
+        NSData* bodyData = [NSData dataWithBytes:resp.body.span().data() length:resp.body.size()];
+        [[proto client] URLProtocol:proto didLoadData:bodyData];
+    }
+    [[proto client] URLProtocolDidFinishLoading:proto];
+    WTFLogAlways("[Wave29-499.321/URLPROTOCOL] HTTP/3 SUCCESS — status=%d bodyLen=%zu delivered via QUIC over SOCKS5 §7",
+        resp.statusCode, resp.body.size());
+    return YES;
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
@@ -190,6 +256,12 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     NSString *scheme = url.scheme.lowercaseString ?: @"";
     int defaultPort = [scheme isEqualToString:@"https"] ? 443 : 80;
     int actualPort = port ? port.intValue : defaultPort;
+
+    // Wave 29-499.321 — HTTP/3 fast-path for https origins. If the QUIC/h3
+    // request through the SOCKS5 §7 relay succeeds, the response is delivered
+    // here and we're done; otherwise fall through to the TCP h1/h2 path below.
+    if ([scheme isEqualToString:@"https"] && driftstackTryHttp3(self, url, host, actualPort))
+        return;
 
     // Read SOCKS5 proxy from env var (EG-WK-1.1 path). Per-session
     // proxy_configuration plumb-through is a future sub-slice; for
