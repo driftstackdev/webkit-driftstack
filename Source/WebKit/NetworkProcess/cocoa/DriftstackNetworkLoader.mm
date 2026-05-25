@@ -72,6 +72,7 @@
 #import "NetworkDataTaskCocoa.h"
 #import "PrivateRelayed.h"
 #import <CFNetwork/CFNetwork.h>
+#import <WebCore/FormData.h>
 #import <WebCore/HTTPStatusCodes.h>
 #import <WebCore/NetworkLoadMetrics.h>
 #import <WebCore/ResourceError.h>
@@ -567,8 +568,16 @@ void DriftstackNetworkLoader::resume()
     String httpMethod = m_request.httpMethod();
     if (httpMethod.isEmpty()) httpMethod = "GET"_s;
     auto httpHeaders = m_request.httpHeaderFields();
-    // TODO Phase 2: support request body (POST)
-    (void)m_request.httpBody();
+    // Wave 29-499.321 — request-body (POST/PUT) support. Flatten the FormData to
+    // bytes on the calling thread (FormData isn't thread-safe to touch off the
+    // main thread). driftstackHttp2Execute already emits request.body as an h2
+    // DATA frame; without this the loader dropped every POST body, which is why
+    // Path B v2 couldn't be the production egress (CFNetwork was used instead).
+    // flatten() omits file/blob parts — covers the common form/JSON/urlencoded
+    // POST case; multipart-with-files is a follow-up.
+    Vector<uint8_t> requestBody;
+    if (RefPtr<WebCore::FormData> fd = m_request.httpBody())
+        requestBody = fd->flatten();
 
     // Wave 29-499.271 — count this attempt
     const int currentAttempt = ++m_attempt;
@@ -858,6 +867,7 @@ void DriftstackNetworkLoader::resume()
             h2req.method = httpMethod;
             h2req.scheme = "https"_s;
             h2req.authority = host;
+            h2req.body = requestBody;  // Wave .321 — POST/PUT body (h2 DATA frame)
             h2req.path = url.path().toString();
             if (h2req.path.isEmpty()) h2req.path = "/"_s;
             if (!url.query().isEmpty())
