@@ -638,7 +638,14 @@ void DriftstackNetworkLoader::resume()
             bool h3forced = h3force && h3force[0] == '1';
             String h3host = url.host().toString();
             bool h3https = url.protocolIs("https"_s);
-            if (h3enabled && h3https && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
+            // Only take the h3 path for body-less methods. driftstackHttp3Execute
+            // submits with data_reader=nullptr (no request body), so routing a
+            // POST/PUT here would silently drop its body. Requests with a body
+            // fall through to the proven TCP h2/h1 path until h3 body support
+            // (nghttp3 data_reader) lands. GET/HEAD have no body.
+            bool h3bodyless = (equalIgnoringASCIICase(httpMethod, "GET"_s)
+                || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !m_request.httpBody();
+            if (h3enabled && h3https && h3bodyless && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
                 WebKit::DriftstackHttp3Request h3req;
                 h3req.method = httpMethod;
                 h3req.scheme = "https"_s;
