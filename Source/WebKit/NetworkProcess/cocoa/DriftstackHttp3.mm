@@ -87,6 +87,8 @@ struct Ngtcp2Fns {
     void (*conn_del)(ngtcp2_conn*) = nullptr;
     int (*conn_open_bidi_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;
     int (*conn_open_uni_stream)(ngtcp2_conn*, int64_t*, void*) = nullptr;  // Wave .321 — nghttp3 control+qpack streams
+    int (*conn_extend_max_stream_offset)(ngtcp2_conn*, int64_t, uint64_t) = nullptr;  // Wave .321 — per-stream flow control
+    void (*conn_extend_max_offset)(ngtcp2_conn*, uint64_t) = nullptr;  // Wave .321 — connection flow control
     ngtcp2_tstamp (*conn_get_expiry)(ngtcp2_conn*) = nullptr;
     int (*conn_handle_expiry)(ngtcp2_conn*, ngtcp2_tstamp) = nullptr;
     void (*addr_init)(ngtcp2_addr*, const struct sockaddr*, size_t) = nullptr;
@@ -374,6 +376,8 @@ static bool resolveNgtcp2()
     RESOLVE(conn_del, "ngtcp2_conn_del");
     RESOLVE(conn_open_bidi_stream, "ngtcp2_conn_open_bidi_stream");
     RESOLVE(conn_open_uni_stream, "ngtcp2_conn_open_uni_stream");  // Wave .321
+    RESOLVE(conn_extend_max_stream_offset, "ngtcp2_conn_extend_max_stream_offset");  // Wave .321
+    RESOLVE(conn_extend_max_offset, "ngtcp2_conn_extend_max_offset");  // Wave .321
     RESOLVE(conn_get_expiry, "ngtcp2_conn_get_expiry");
     RESOLVE(conn_handle_expiry, "ngtcp2_conn_handle_expiry");
     RESOLVE(addr_init, "ngtcp2_addr_init");
@@ -1354,6 +1358,16 @@ static int driftstackNgtcp2RecvStreamData(ngtcp2_conn* /*conn*/, uint32_t flags,
         WTFLogAlways("[Wave29-499.321] nghttp3_conn_read_stream FAILED rv=%zd stream=%lld",
             (ssize_t)consumed, (long long)streamId);
         return -1; // NGTCP2_ERR_CALLBACK_FAILURE
+    }
+    // Extend QUIC flow-control credit by the bytes nghttp3 consumed (both
+    // stream-level + connection-level), else responses larger than the initial
+    // window stall once the peer exhausts its send allowance.
+    auto& nf = ngtcp2Fns();
+    if (consumed > 0) {
+        if (nf.conn_extend_max_stream_offset)
+            nf.conn_extend_max_stream_offset(qc->conn, streamId, static_cast<uint64_t>(consumed));
+        if (nf.conn_extend_max_offset)
+            nf.conn_extend_max_offset(qc->conn, static_cast<uint64_t>(consumed));
     }
     return 0;
 }

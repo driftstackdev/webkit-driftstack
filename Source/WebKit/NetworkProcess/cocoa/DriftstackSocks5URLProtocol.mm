@@ -18,12 +18,49 @@
 #import <stdlib.h>
 #import <string.h>
 #import <wtf/Assertions.h>
+#import <wtf/HashSet.h>
+#import <wtf/Lock.h>
+#import <wtf/NeverDestroyed.h>
 #import <wtf/text/WTFString.h>
 
 namespace WebKit {
 // Wave 29-396 sub-slice 1.6: global dispatch flag definition.
 std::atomic<bool> g_driftstackCustomSocks5Active { false };
 } // namespace WebKit
+
+// Wave 29-499.321 — Alt-Svc-based HTTP/3 discovery. Real Safari does NOT speak
+// h3 to an origin until that origin has advertised it via an `Alt-Svc: h3=...`
+// response header (RFC 7838). Without this, we'd attempt a full QUIC handshake
+// (up to ~12s budget) on every https request to an h2-only origin before
+// falling back — making general browsing unusable. So: the first request to a
+// host goes over TCP h1/h2, we learn h3 support from its Alt-Svc header, and
+// only subsequent requests to that host take the QUIC fast-path. The
+// DRIFTSTACK_PATHB_V2_H3_FORCE=1 escape hatch attempts h3 unconditionally (for
+// the cloudflare-quic.com / browserleaks first-contact verification path).
+static Lock& driftstackH3HostsLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+static HashSet<String>& driftstackH3Hosts()
+{
+    static NeverDestroyed<HashSet<String>> hosts;
+    return hosts.get();
+}
+static String driftstackH3HostKey(NSString* host, int port)
+{
+    return WTF::String::fromUTF8([[NSString stringWithFormat:@"%@:%d", host, port] UTF8String]);
+}
+static bool driftstackHostKnownH3(NSString* host, int port)
+{
+    Locker locker { driftstackH3HostsLock() };
+    return driftstackH3Hosts().contains(driftstackH3HostKey(host, port));
+}
+static void driftstackRememberH3Host(NSString* host, int port)
+{
+    Locker locker { driftstackH3HostsLock() };
+    driftstackH3Hosts().add(driftstackH3HostKey(host, port));
+}
 
 // Wave 29-396 sub-slice 1.7.2.c helper: write all bytes to CFWriteStream.
 // WTF_ALLOW_UNSAFE_BUFFER_USAGE at function scope per WebKit precedent
@@ -84,6 +121,17 @@ static BOOL driftstackTryHttp3(NSURLProtocol* proto, NSURL* url, NSString* host,
     const char* h3env = getenv("DRIFTSTACK_PATHB_V2_H3");
     if (!h3env || h3env[0] != '1')
         return NO;
+
+    // Alt-Svc gating: only attempt h3 for origins that advertised it (learned
+    // from a prior TCP response's Alt-Svc header), unless FORCE is set. This
+    // keeps first-contact + h2-only origins on the fast TCP path.
+    const char* forceEnv = getenv("DRIFTSTACK_PATHB_V2_H3_FORCE");
+    bool force = forceEnv && forceEnv[0] == '1';
+    if (!force && !driftstackHostKnownH3(host, actualPort)) {
+        WTFLogAlways("[Wave29-499.321/URLPROTOCOL] %s:%d not yet known h3-capable (no Alt-Svc seen) — using TCP h1/h2",
+            [host UTF8String], actualPort);
+        return NO;
+    }
 
     WebKit::DriftstackHttp3Request req;
     req.method = WTF::String::fromUTF8([(proto.request.HTTPMethod ?: @"GET") UTF8String]);
@@ -486,6 +534,18 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
         NSString *key = [line substringToIndex:colon.location];
         NSString *val = [[line substringFromIndex:colon.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         respHeaders[key] = val;
+        // Wave 29-499.321 — learn h3 support from Alt-Svc (RFC 7838). If this
+        // https origin advertises h3, remember it so subsequent requests take
+        // the QUIC fast-path. We only need to detect the "h3" token; the
+        // authority/port advertised is assumed to be the same origin (the
+        // common case for h3=":443").
+        if ([key.lowercaseString isEqualToString:@"alt-svc"]
+            && [scheme isEqualToString:@"https"]
+            && [val rangeOfString:@"h3"].location != NSNotFound) {
+            driftstackRememberH3Host(host, actualPort);
+            WTFLogAlways("[Wave29-499.321/URLPROTOCOL] learned h3 for %s:%d via Alt-Svc: %s",
+                [host UTF8String], actualPort, [val UTF8String]);
+        }
     }
 
     NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:statusCode HTTPVersion:httpVersion headerFields:respHeaders];
