@@ -2026,6 +2026,107 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     return rv;
 }
 
+// Wave 29-499.321 — resolve a hostname's A record THROUGH the SOCKS5 §7 UDP
+// relay, so DNS egress stays on the customer proxy (no local-resolver leak).
+// The QUIC path needs an IPv4 literal (gost §7 requires ATYP=0x01), and
+// resolving locally via getaddrinfo would leak the destination hostname to the
+// Mac fleet's resolver. This sends a DNS A query (wrapped in §7, targeting the
+// given resolver) over the already-established udpFd/relay, parses the first A
+// answer, and returns it as a dotted-quad String. Returns a null String on any
+// failure so the caller can fall back to local getaddrinfo. Validated wire
+// format: operations/probes/dns-over-socks5-gost.py.
+[[maybe_unused]] static String driftstackResolveHostViaSocks5Relay(const String& host,
+    int udpFd, const struct sockaddr_in& relaySa, const char* resolverIp)
+{
+    // Build the DNS A query (RFC 1035 §4.1).
+    Vector<uint8_t> query;
+    uint8_t txid[2];
+    arc4random_buf(txid, 2);
+    query.append(std::span<const uint8_t> { txid, 2 });
+    static const uint8_t hdr[] = { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // RD set, QD=1
+    query.append(std::span<const uint8_t> { hdr, sizeof(hdr) });
+    CString hostC = host.utf8();
+    const char* h = hostC.data();
+    size_t labelStart = 0, len = strlen(h);
+    for (size_t i = 0; i <= len; ++i) {
+        if (i == len || h[i] == '.') {
+            size_t labelLen = i - labelStart;
+            if (labelLen > 0 && labelLen <= 63) {
+                query.append(static_cast<uint8_t>(labelLen));
+                query.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(h + labelStart), labelLen });
+            }
+            labelStart = i + 1;
+        }
+    }
+    query.append(static_cast<uint8_t>(0)); // root label
+    static const uint8_t qtail[] = { 0x00, 0x01, 0x00, 0x01 }; // QTYPE=A QCLASS=IN
+    query.append(std::span<const uint8_t> { qtail, sizeof(qtail) });
+
+    // §7-wrap targeting the resolver:53 and send over the relay.
+    Socks5Framing::Endpoint resolverEp { String::fromUTF8(resolverIp), 53 };
+    Vector<uint8_t> framed;
+    if (!Socks5Framing::wrap(resolverEp, query.span(), framed))
+        return String();
+    if (sendto(udpFd, framed.span().data(), framed.size(), 0,
+            reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) <= 0)
+        return String();
+
+    // Wait for the response (short budget; falls back to getaddrinfo on miss).
+    struct timeval tv { 2, 0 };
+    fd_set rs;
+    FD_ZERO(&rs);
+    FD_SET(udpFd, &rs);
+    if (select(udpFd + 1, &rs, nullptr, nullptr, &tv) <= 0)
+        return String();
+    uint8_t inbound[2048];
+    ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0, nullptr, nullptr);
+    if (r <= 0)
+        return String();
+    Socks5Framing::Endpoint src;
+    Vector<uint8_t> payload;
+    if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+        return String();
+
+    // Parse the DNS response: verify txid, skip header + question, read answers.
+    const uint8_t* d = payload.span().data();
+    size_t n = payload.size();
+    if (n < 12 || d[0] != txid[0] || d[1] != txid[1])
+        return String();
+    uint16_t qd = (d[4] << 8) | d[5];
+    uint16_t an = (d[6] << 8) | d[7];
+    size_t i = 12;
+    for (uint16_t q = 0; q < qd && i < n; ++q) {
+        while (i < n && d[i]) {
+            if (d[i] & 0xC0) { i += 2; goto qdone; }
+            i += d[i] + 1;
+        }
+        ++i; // null label
+qdone:
+        i += 4; // qtype + qclass
+    }
+    for (uint16_t a = 0; a < an && i + 10 <= n; ++a) {
+        if (d[i] & 0xC0)
+            i += 2;
+        else {
+            while (i < n && d[i]) i += d[i] + 1;
+            ++i;
+        }
+        if (i + 10 > n) break;
+        uint16_t rtype = (d[i] << 8) | d[i + 1];
+        uint16_t rdlen = (d[i + 8] << 8) | d[i + 9];
+        i += 10;
+        if (i + rdlen > n) break;
+        if (rtype == 1 && rdlen == 4) {
+            char ipbuf[INET_ADDRSTRLEN] = {};
+            snprintf(ipbuf, sizeof(ipbuf), "%u.%u.%u.%u", d[i], d[i + 1], d[i + 2], d[i + 3]);
+            WTFLogAlways("[Wave29-499.321] DNS-over-§7 resolved %s -> %s (no local leak)", hostC.data(), ipbuf);
+            return String::fromUTF8(ipbuf);
+        }
+        i += rdlen;
+    }
+    return String();
+}
+
 // Sketch of caller-side event loop (Wave .236 will wire this into
 // driftstackHttp3Execute):
 //
@@ -2345,20 +2446,31 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     }
     String peerIpStr = "1.1.1.1"_s;  // smoke fallback (empty authority)
     if (!authHost.isEmpty()) {
-        struct addrinfo hints { };
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-        struct addrinfo* res = nullptr;
-        CString hostC = authHost.utf8();
-        if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
-            auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
-            char ipbuf[INET_ADDRSTRLEN] = {};
-            inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf));
-            peerIpStr = String::fromUTF8(ipbuf);
-            freeaddrinfo(res);
-        } else {
-            WTFLogAlways("[Wave29-499.321] getaddrinfo FAILED for '%s' — falling back to 1.1.1.1", hostC.data());
-            if (res) freeaddrinfo(res);
+        // Prefer DNS-over-§7 (resolves through the customer proxy, no local
+        // hostname leak). Fall back to local getaddrinfo only if that fails so
+        // the path stays functional — best case no leak, worst case current
+        // behaviour. (Tracked: the fallback still leaks; the proxy-DNS path is
+        // the privacy-correct one.)
+        String viaRelay = driftstackResolveHostViaSocks5Relay(authHost, udpFd, relaySa, "1.1.1.1");
+        if (!viaRelay.isEmpty())
+            peerIpStr = viaRelay;
+        else {
+            struct addrinfo hints { };
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+            struct addrinfo* res = nullptr;
+            CString hostC = authHost.utf8();
+            if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+                char ipbuf[INET_ADDRSTRLEN] = {};
+                inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf));
+                peerIpStr = String::fromUTF8(ipbuf);
+                freeaddrinfo(res);
+                WTFLogAlways("[Wave29-499.321] DNS-over-§7 failed for '%s' — fell back to LOCAL getaddrinfo (leaks; %s)", hostC.data(), ipbuf);
+            } else {
+                WTFLogAlways("[Wave29-499.321] both DNS-over-§7 and getaddrinfo FAILED for '%s' — using 1.1.1.1", hostC.data());
+                if (res) freeaddrinfo(res);
+            }
         }
     }
 
