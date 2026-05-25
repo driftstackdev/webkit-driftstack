@@ -36,9 +36,13 @@
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
+#import <wtf/Condition.h>
 #import <wtf/HashMap.h>
+#import <wtf/HashSet.h>
 #import <wtf/Lock.h>
+#import <wtf/MonotonicTime.h>
 #import <wtf/NeverDestroyed.h>
+#import <wtf/Threading.h>
 #import <wtf/text/StringHash.h>
 
 // Wave 29-499.228 — ngtcp2 header inclusion. Provides real struct layouts
@@ -2297,172 +2301,220 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
 
 } // anonymous namespace
 
-// Wave 29-499.321 — DNS HTTPS RR (RFC 9460 type 65) lookup over SOCKS5 §7 to
-// discover first-contact h3 (the mechanism real Safari uses, in addition to
-// Alt-Svc). Returns true iff the host's HTTPS RR advertises alpn "h3". Cached
-// per host (process-global) so it's one §7 DNS round-trip per origin, matching
-// Safari's per-connection HTTPS-RR query.
+// Wave 29-499.321 — parse a DNS response payload (post-§7-unwrap): does any
+// type-65 HTTPS RR advertise alpn "h3"? RFC 9460 §2.2 SvcParams (alpn = key 1).
+static bool driftstackParseHttpsRrAlpnH3(const uint8_t* d, size_t n)
+{
+    if (n < 12)
+        return false;
+    uint16_t qd = (d[4] << 8) | d[5];
+    uint16_t an = (d[6] << 8) | d[7];
+    size_t i = 12;
+    for (uint16_t q = 0; q < qd && i < n; ++q) {
+        while (i < n && d[i]) {
+            if (d[i] & 0xC0) { i += 2; goto qskipped; }
+            i += d[i] + 1;
+        }
+        ++i;
+qskipped:
+        i += 4;
+    }
+    for (uint16_t a = 0; a < an && i + 10 <= n; ++a) {
+        if (d[i] & 0xC0)
+            i += 2;
+        else {
+            while (i < n && d[i]) i += d[i] + 1;
+            ++i;
+        }
+        if (i + 10 > n) break;
+        uint16_t rtype = (d[i] << 8) | d[i + 1];
+        uint16_t rdlen = (d[i + 8] << 8) | d[i + 9];
+        i += 10;
+        if (i + rdlen > n) break;
+        if (rtype == 65) {
+            size_t p = i, end = i + rdlen;
+            p += 2; // SvcPriority
+            while (p < end && d[p]) {
+                if (d[p] & 0xC0) { p += 2; goto nameDone; }
+                p += d[p] + 1;
+            }
+            ++p; // root label
+nameDone:
+            while (p + 4 <= end) {
+                uint16_t key = (d[p] << 8) | d[p + 1];
+                uint16_t vlen = (d[p + 2] << 8) | d[p + 3];
+                p += 4;
+                if (p + vlen > end) break;
+                if (key == 1) { // alpn
+                    size_t a2 = p, aend = p + vlen;
+                    while (a2 < aend) {
+                        uint8_t tl = d[a2++];
+                        if (a2 + tl > aend) break;
+                        if (tl == 2 && d[a2] == 'h' && d[a2 + 1] == '3')
+                            return true;
+                        a2 += tl;
+                    }
+                }
+                p += vlen;
+            }
+        }
+        i += rdlen;
+    }
+    return false;
+}
+
+// Wave 29-499.321 — CONCURRENT DNS-over-§7 resolver for HTTPS RR (type 65), used
+// for first-contact h3 discovery (the mechanism real Safari uses alongside
+// Alt-Svc). One shared §7 DNS relay + a background reader thread that demuxes
+// responses by transaction-ID, so MANY origins' lookups run in PARALLEL — no
+// per-query serialization (an earlier per-host-associate / serialized-lock cut
+// stalled many-origin pages like browserleaks). Per-host result cache.
+namespace {
+Lock g_dnsLock;
+Condition g_dnsCond;
+int g_dnsUdpFd = -1;
+struct sockaddr_in g_dnsRelaySa { };
+bool g_dnsReaderStarted = false;
+uint16_t g_dnsNextTxid = 1;
+// Lazy function-local statics (namespace-scope NeverDestroyed would need a
+// global constructor, which WebKit forbids via -Werror,-Wglobal-constructors).
+HashSet<uint16_t>& g_dnsPending() { static NeverDestroyed<HashSet<uint16_t>> s; return s; }   // txids awaiting a response
+HashMap<uint16_t, bool>& g_dnsResults() { static NeverDestroyed<HashMap<uint16_t, bool>> s; return s; } // txid -> h3?
+HashMap<String, bool>& g_dnsHostCache() { static NeverDestroyed<HashMap<String, bool>> s; return s; }   // host -> h3? (final)
+
+// Reader: blocking recv on the shared relay (NO lock held during recv), then
+// briefly locks to deliver the result to the waiting query by txid.
+void driftstackDnsReaderLoop()
+{
+    for (;;) {
+        uint8_t inbound[2048];
+        ssize_t r = recvfrom(g_dnsUdpFd, inbound, sizeof(inbound), 0, nullptr, nullptr);
+        if (r <= 0) {
+            if (r < 0 && (errno == EBADF || errno == ENOTSOCK))
+                return; // relay torn down
+            continue;
+        }
+        Socks5Framing::Endpoint src;
+        Vector<uint8_t> payload;
+        if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+            continue;
+        const uint8_t* d = payload.span().data();
+        size_t n = payload.size();
+        if (n < 12)
+            continue;
+        uint16_t txid = (d[0] << 8) | d[1];
+        bool h3 = driftstackParseHttpsRrAlpnH3(d, n);
+        Locker locker { g_dnsLock };
+        bool wasPending = g_dnsPending().remove(txid);
+        WTFLogAlways("[Wave29-499.321/dnsReader] recv %zdB txid=%u h3=%d pending-hit=%d", r, txid, h3, wasPending);
+        if (wasPending) {
+            g_dnsResults().set(txid, h3);
+            g_dnsCond.notifyAll();
+        }
+    }
+}
+} // anonymous namespace
+
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
 {
-    static Lock s_cacheLock;
-    static NeverDestroyed<HashMap<String, bool>> s_cache;
     {
-        Locker locker { s_cacheLock };
-        auto it = s_cache->find(host);
-        if (it != s_cache->end())
+        Locker locker { g_dnsLock };
+        auto it = g_dnsHostCache().find(host);
+        if (it != g_dnsHostCache().end())
             return it->value;
     }
 
     bool h3 = false;
-    // Wave .321 fix — SHARED persistent §7 DNS relay (opened once, reused +
-    // serialized under one lock). The earlier per-host associate opened a fresh
-    // SOCKS5 connection for every origin → a connection storm that hung
-    // many-origin page loads. One relay + a quick serialized query each is cheap.
-    static Lock s_dnsRelayLock;
-    static int s_dnsUdpFd = -1;
-    static struct sockaddr_in s_dnsRelaySa { };
-    Locker relayLocker { s_dnsRelayLock };
-    if (s_dnsUdpFd < 0) {
-        struct sockaddr_in rs { };
-        int cf = -1;
-        if (driftstackQuicRawSocks5Associate(&rs, &cf)) {
-            int uf = socket(AF_INET, SOCK_DGRAM, 0);
-            if (uf >= 0) {
-                struct sockaddr_in lb { };
-                lb.sin_family = AF_INET;
-                lb.sin_addr.s_addr = htonl(INADDR_ANY);
-                lb.sin_port = 0;
-                bind(uf, reinterpret_cast<struct sockaddr*>(&lb), sizeof(lb));
-                s_dnsUdpFd = uf;
-                s_dnsRelaySa = rs;
-                (void)cf; // control fd parked open for the relay's lifetime
-            } else if (cf >= 0)
-                ::close(cf);
-        }
-    }
+    uint16_t txid = 0;
+    bool sent = false;
     {
-        int udpFd = s_dnsUdpFd;
-        struct sockaddr_in relaySa = s_dnsRelaySa;
-        if (udpFd >= 0) {
-            // Drain any stale datagram from a previous timed-out query so this
-            // query's recv matches its own txid.
-            { uint8_t tmp[2048]; while (recvfrom(udpFd, tmp, sizeof(tmp), MSG_DONTWAIT, nullptr, nullptr) > 0) { } }
+        Locker locker { g_dnsLock };
+        // Lazily open the shared relay + start the reader thread once.
+        if (g_dnsUdpFd < 0) {
+            struct sockaddr_in rs { };
+            int cf = -1;
+            if (driftstackQuicRawSocks5Associate(&rs, &cf)) {
+                int uf = socket(AF_INET, SOCK_DGRAM, 0);
+                if (uf >= 0) {
+                    struct sockaddr_in lb { };
+                    lb.sin_family = AF_INET;
+                    lb.sin_addr.s_addr = htonl(INADDR_ANY);
+                    lb.sin_port = 0;
+                    bind(uf, reinterpret_cast<struct sockaddr*>(&lb), sizeof(lb));
+                    g_dnsUdpFd = uf;
+                    g_dnsRelaySa = rs;
+                    (void)cf; // control fd parked open for the relay's lifetime
+                } else if (cf >= 0)
+                    ::close(cf);
+            }
+        }
+        if (g_dnsUdpFd >= 0 && !g_dnsReaderStarted) {
+            g_dnsReaderStarted = true;
+            Thread::create("driftstack-dns-https-rr"_s, [] { driftstackDnsReaderLoop(); })->detach();
+        }
 
-            // Build a type-65 (HTTPS) DNS query for host.
+        if (g_dnsUdpFd >= 0) {
+            txid = g_dnsNextTxid++;
+            if (!g_dnsNextTxid) g_dnsNextTxid = 1;
+
+            // Build the type-65 (HTTPS) query for host.
             Vector<uint8_t> query;
-            uint8_t txid[2];
-            arc4random_buf(txid, 2);
-            query.append(std::span<const uint8_t> { txid, 2 });
+            query.append(static_cast<uint8_t>(txid >> 8));
+            query.append(static_cast<uint8_t>(txid & 0xFF));
             static const uint8_t hdr[] = { 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
             query.append(std::span<const uint8_t> { hdr, sizeof(hdr) });
             CString hostC = host.utf8();
             const char* hp = hostC.data();
-            size_t ls = 0, hl = strlen(hp);
+            size_t lstart = 0, hl = strlen(hp);
             for (size_t i = 0; i <= hl; ++i) {
                 if (i == hl || hp[i] == '.') {
-                    size_t ll = i - ls;
+                    size_t ll = i - lstart;
                     if (ll > 0 && ll <= 63) {
                         query.append(static_cast<uint8_t>(ll));
-                        query.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(hp + ls), ll });
+                        query.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(hp + lstart), ll });
                     }
-                    ls = i + 1;
+                    lstart = i + 1;
                 }
             }
             query.append(static_cast<uint8_t>(0));
-            static const uint8_t qtail[] = { 0x00, 0x41, 0x00, 0x01 }; // QTYPE=65 (HTTPS) QCLASS=IN
+            static const uint8_t qtail[] = { 0x00, 0x41, 0x00, 0x01 }; // QTYPE=65 QCLASS=IN
             query.append(std::span<const uint8_t> { qtail, sizeof(qtail) });
 
             Socks5Framing::Endpoint resolverEp { "1.1.1.1"_s, 53 };
             Vector<uint8_t> framed;
-            if (Socks5Framing::wrap(resolverEp, query.span(), framed)
-                && sendto(udpFd, framed.span().data(), framed.size(), 0,
-                       reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) > 0) {
-                struct timeval tv { 0, 800000 }; // 800ms — DNS is fast; cap the no-answer case
-                fd_set rs;
-                FD_ZERO(&rs);
-                FD_SET(udpFd, &rs);
-                if (select(udpFd + 1, &rs, nullptr, nullptr, &tv) > 0) {
-                    uint8_t inbound[2048];
-                    ssize_t r = recvfrom(udpFd, inbound, sizeof(inbound), 0, nullptr, nullptr);
-                    if (r > 0) {
-                        Socks5Framing::Endpoint src;
-                        Vector<uint8_t> payload;
-                        if (Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload)) {
-                            const uint8_t* d = payload.span().data();
-                            size_t n = payload.size();
-                            if (n >= 12 && d[0] == txid[0] && d[1] == txid[1]) {
-                                uint16_t qd = (d[4] << 8) | d[5];
-                                uint16_t an = (d[6] << 8) | d[7];
-                                size_t i = 12;
-                                for (uint16_t q = 0; q < qd && i < n; ++q) {
-                                    while (i < n && d[i]) {
-                                        if (d[i] & 0xC0) { i += 2; goto qskipped; }
-                                        i += d[i] + 1;
-                                    }
-                                    ++i;
-qskipped:
-                                    i += 4;
-                                }
-                                for (uint16_t a = 0; a < an && i + 10 <= n; ++a) {
-                                    if (d[i] & 0xC0)
-                                        i += 2;
-                                    else {
-                                        while (i < n && d[i]) i += d[i] + 1;
-                                        ++i;
-                                    }
-                                    if (i + 10 > n) break;
-                                    uint16_t rtype = (d[i] << 8) | d[i + 1];
-                                    uint16_t rdlen = (d[i + 8] << 8) | d[i + 9];
-                                    i += 10;
-                                    if (i + rdlen > n) break;
-                                    if (rtype == 65) {
-                                        // HTTPS RR: SvcPriority(2) + TargetName + SvcParams.
-                                        size_t p = i, end = i + rdlen;
-                                        p += 2; // SvcPriority
-                                        // skip TargetName (labels until 0, or compressed pointer)
-                                        while (p < end && d[p]) {
-                                            if (d[p] & 0xC0) { p += 2; goto nameDone; }
-                                            p += d[p] + 1;
-                                        }
-                                        ++p; // root label
-nameDone:
-                                        // SvcParams: key(2)+len(2)+value; alpn = key 1.
-                                        while (p + 4 <= end) {
-                                            uint16_t key = (d[p] << 8) | d[p + 1];
-                                            uint16_t vlen = (d[p + 2] << 8) | d[p + 3];
-                                            p += 4;
-                                            if (p + vlen > end) break;
-                                            if (key == 1) {
-                                                // alpn value: sequence of (len-prefixed) tokens
-                                                size_t a2 = p, aend = p + vlen;
-                                                while (a2 < aend) {
-                                                    uint8_t tl = d[a2++];
-                                                    if (a2 + tl > aend) break;
-                                                    if (tl == 2 && d[a2] == 'h' && d[a2 + 1] == '3')
-                                                        h3 = true;
-                                                    a2 += tl;
-                                                }
-                                            }
-                                            p += vlen;
-                                        }
-                                    }
-                                    i += rdlen;
-                                    if (h3) break;
-                                }
-                            }
-                        }
-                    }
-                }
+            if (Socks5Framing::wrap(resolverEp, query.span(), framed)) {
+                g_dnsPending().add(txid);
+                ssize_t sret = sendto(g_dnsUdpFd, framed.span().data(), framed.size(), 0,
+                        reinterpret_cast<const struct sockaddr*>(&g_dnsRelaySa), sizeof(g_dnsRelaySa));
+                WTFLogAlways("[Wave29-499.321/dnsQuery] send host=%s txid=%u fd=%d sret=%zd readerStarted=%d", host.utf8().data(), txid, g_dnsUdpFd, sret, g_dnsReaderStarted);
+                if (sret > 0)
+                    sent = true;
+                else
+                    g_dnsPending().remove(txid);
             }
-        } // if (udpFd >= 0)
-    } // shared-relay block (relay + udpFd persist for reuse; relayLocker unlocks at scope end)
+        }
+
+        // Wait (concurrently with other queries — waitUntil releases the lock)
+        // for the reader to deliver this txid's result. 800ms cap.
+        if (sent) {
+            MonotonicTime deadline = MonotonicTime::now() + Seconds::fromMilliseconds(800);
+            while (!g_dnsResults().contains(txid)) {
+                if (!g_dnsCond.waitUntil(g_dnsLock, deadline))
+                    break; // timeout
+            }
+            auto it = g_dnsResults().find(txid);
+            if (it != g_dnsResults().end()) {
+                h3 = it->value;
+                g_dnsResults().remove(txid);
+            }
+            g_dnsPending().remove(txid);
+        }
+
+        g_dnsHostCache().set(host, h3);
+    }
 
     if (h3)
         WTFLogAlways("[Wave29-499.321] DNS HTTPS RR: %s advertises h3 (first-contact h3, no local leak)", host.utf8().data());
-    {
-        Locker locker { s_cacheLock };
-        s_cache->set(host, h3);
-    }
     return h3;
 }
 
