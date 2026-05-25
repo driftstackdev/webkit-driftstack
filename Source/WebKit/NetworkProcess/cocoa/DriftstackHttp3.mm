@@ -1873,9 +1873,14 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
 // handshake completes. Opens the HTTP/3 control + QPACK encoder/decoder
 // uni-streams, opens a client bidirectional stream, and submits a GET request.
 // Returns true on success (qc->h3conn + qc->h3RequestStreamId set).
-[[maybe_unused]] static bool driftstackHttp3SetupAndSubmit(DriftstackQuicConn* qc,
-    const DriftstackHttp3Request& request)
+// Wave .322 — split out of driftstackHttp3SetupAndSubmit so a persistent
+// DriftstackHttp3Session can do this ONCE per connection (create the nghttp3
+// client + bind the control/QPACK uni-streams) and then submit many requests
+// over it. Returns true if qc->h3conn is ready for submit_request calls.
+[[maybe_unused]] static bool driftstackHttp3SetupConnection(DriftstackQuicConn* qc)
 {
+    if (qc->h3conn)
+        return true; // already set up (reused connection)
     if (!resolveNgHttp3())
         return false;
     auto& h = ngHttp3Fns();
@@ -1920,6 +1925,28 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
         WTFLogAlways("[Wave29-499.321] bind_qpack_streams FAILED");
         return false;
     }
+    WTFLogAlways("[Wave29-499.321] H3 connection setup OK: ctrl=%lld qpackEnc=%lld qpackDec=%lld",
+        (long long)ctrlStream, (long long)qpackEnc, (long long)qpackDec);
+    return true;
+}
+
+// Wave .322 — submit ONE request on a fresh bidi stream of an already-set-up
+// nghttp3 connection. Resets the per-request response fields so a persistent
+// session can reuse the connection for multiple sequential requests.
+[[maybe_unused]] static bool driftstackHttp3SubmitRequest(DriftstackQuicConn* qc,
+    const DriftstackHttp3Request& request)
+{
+    auto& h = ngHttp3Fns();
+    auto& nf = ngtcp2Fns();
+    nghttp3_conn* h3 = static_cast<nghttp3_conn*>(qc->h3conn);
+    if (!h3)
+        return false;
+
+    // Reset per-request response accumulators (connection-level state persists).
+    qc->h3Status = 0;
+    qc->h3ResponseHeaders.clear();
+    qc->h3ResponseBody.clear();
+    qc->h3ResponseComplete = false;
 
     // Open the request bidi stream and submit GET <path>.
     int64_t reqStream = -1;
@@ -1972,17 +1999,27 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
             kv.first.length(), kv.second.length(), NGHTTP3_NV_FLAG_NONE });
     }
 
-    rv = h.conn_submit_request(h3, reqStream, nva.span().data(), nva.size(),
+    int rv = h.conn_submit_request(h3, reqStream, nva.span().data(), nva.size(),
         /*data_reader=*/nullptr, /*stream_user_data=*/qc);
     if (rv != 0) {
         WTFLogAlways("[Wave29-499.321] nghttp3_conn_submit_request FAILED rv=%d", rv);
         return false;
     }
-    WTFLogAlways("[Wave29-499.321] H3 setup OK: ctrl=%lld qpackEnc=%lld qpackDec=%lld reqStream=%lld %s https://%s%s (%zu headers, real UA forwarded)",
-        (long long)ctrlStream, (long long)qpackEnc, (long long)qpackDec,
+    WTFLogAlways("[Wave29-499.321] H3 request submitted: reqStream=%lld %s https://%s%s (%zu headers, real UA forwarded)",
         (long long)reqStream, store[0].second.data(), authStr.utf8().data(),
         request.path.isEmpty() ? "/" : request.path.utf8().data(), store.size());
     return true;
+}
+
+// Wave .322 — original one-shot entry point, now a thin wrapper: set up the
+// nghttp3 connection (once) then submit the request. Behaviour for the existing
+// driftstackHttp3Execute path is unchanged.
+[[maybe_unused]] static bool driftstackHttp3SetupAndSubmit(DriftstackQuicConn* qc,
+    const DriftstackHttp3Request& request)
+{
+    if (!driftstackHttp3SetupConnection(qc))
+        return false;
+    return driftstackHttp3SubmitRequest(qc, request);
 }
 
 // Wave 29-499.321 — pull pending HTTP/3 stream data from nghttp3, hand it to
