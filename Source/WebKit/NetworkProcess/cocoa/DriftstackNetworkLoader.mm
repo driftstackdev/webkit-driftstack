@@ -1125,6 +1125,8 @@ void DriftstackNetworkLoader::resume()
                         response.setHTTPHeaderField(k, v);
                     if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
                     WebKit::driftstackDecodeContentEncoding(h3resp.body, h3resp.headers);  // .331 chokepoint
+                    if (url.host().toString().endsWith("browserleaks.com"_s))  // Wave .346 DEBUG (removable) — fingerprint-JSON dump (h3 path)
+                        WTFLogAlways("[BLFP-BEGIN]%.*s[BLFP-END]", (int)h3resp.body.size(), reinterpret_cast<const char*>(h3resp.body.span().data()));
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
@@ -1201,6 +1203,10 @@ void DriftstackNetworkLoader::resume()
                         response.setHTTPHeaderField(k, v);
                     if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
                     WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
+                    // Wave .346 DEBUG (removable) — dump decompressed fingerprint JSON for browserleaks
+                    // probe endpoints so we can diff our TLS/QUIC family vs the real-iPhone reference.
+                    if (url.host().toString().endsWith("browserleaks.com"_s))
+                        WTFLogAlways("[BLFP-BEGIN]%.*s[BLFP-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
@@ -1604,6 +1610,8 @@ void DriftstackNetworkLoader::resume()
             // when loading 10+ subresource Angular apps like Twilio NT.
             if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
             WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint — decode any encoding any h2 path missed
+            if (url.host().toString().endsWith("browserleaks.com"_s))  // Wave .346 DEBUG (removable) — fingerprint-JSON dump
+                WTFLogAlways("[BLFP-BEGIN]%.*s[BLFP-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
             if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard

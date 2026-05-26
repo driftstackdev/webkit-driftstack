@@ -19,6 +19,9 @@
 #import "config.h"
 #import "DriftstackHttp3.h"
 #import "DriftstackCrypto.h"
+#import "DriftstackTLS13KeySchedule.h"   // Wave .349 — custom QUIC-TLS engine key schedule
+#import "DriftstackCustomTLS.h"          // Wave .349 — iPhone QUIC ClientHello builder
+#import "DriftstackTLS13.h"              // Wave .349 — ServerHello parser (driftstackParseServerHello)
 // Wave 29-499.238 — pull in SOCKS5 §7 wrap/unwrap helpers + relay channel
 // establishment. Reuses the same DriftstackRTC infrastructure that already
 // works for WebRTC (Wave 29-499.99-106) per the V-2026-05-23-W29-499.221
@@ -148,6 +151,7 @@ struct Ngtcp2Fns {
         const ngtcp2_crypto_aead_ctx*, const uint8_t* iv, size_t ivlen,
         const ngtcp2_crypto_cipher_ctx*) = nullptr;
     int (*conn_submit_crypto_data)(ngtcp2_conn*, uint32_t, const uint8_t*, size_t) = nullptr;
+    const ngtcp2_ccerr* (*conn_get_ccerr)(ngtcp2_conn*) = nullptr;  // Wave .349 — close-reason decode
     int (*conn_handshake_completed)(ngtcp2_conn*) = nullptr;
     // Wave 29-499.308 — set Initial crypto ctx so ngtcp2 knows AEAD tag
     // overhead (16 bytes) and reserves packet space for it.
@@ -438,6 +442,7 @@ static bool resolveNgtcp2()
     RESOLVE(conn_install_rx_key, "ngtcp2_conn_install_rx_key");
     RESOLVE(conn_install_tx_key, "ngtcp2_conn_install_tx_key");
     RESOLVE(conn_submit_crypto_data, "ngtcp2_conn_submit_crypto_data");
+    RESOLVE(conn_get_ccerr, "ngtcp2_conn_get_ccerr");
     RESOLVE(conn_handshake_completed, "ngtcp2_conn_get_handshake_completed");
     RESOLVE(conn_set_initial_crypto_ctx, "ngtcp2_conn_set_initial_crypto_ctx");  // Wave .308
     RESOLVE(conn_tls_handshake_completed, "ngtcp2_conn_tls_handshake_completed");  // Wave .316
@@ -611,6 +616,27 @@ struct DriftstackQuicConn {
     struct sockaddr_in localSa { };          // local bound addr (ngtcp2 path local)
     String peerIp;                           // resolved server IPv4 (for §7 framing)
     uint16_t peerPort { 443 };
+
+    // Wave 29-499.349 — custom QUIC-TLS engine state. When ctEnabled, our own
+    // iPhone-exact TLS 1.3 drives the QUIC handshake (CH + key schedule + Finished)
+    // instead of BoringSSL, so the QUIC ClientHello fingerprint == real iPhone.
+    bool ctEnabled { false };
+    String ctSni;                            // SNI hostname for the CH
+    Vector<uint8_t> ctTranscript;            // CH, SH, EE, Cert, CV, server Fin, client Fin
+    Vector<uint8_t> ctX25519Priv;            // ephemeral X25519 private (for ECDH on SH)
+    MLKEM768Keypair ctMlkem;                 // ephemeral MLKEM768 (hybrid decap on SH)
+    Vector<uint8_t> ctTransportParams;       // encoded transport params (for CH ext 0x0039)
+    TLS13KeySchedule ctKeySchedule;          // RFC 8446 §7.1 traffic secrets
+    uint16_t ctCipher { 0 };                 // negotiated cipher (from ServerHello)
+    Vector<uint8_t> ctHsCryptoBuf;           // accumulate Handshake-level CRYPTO across fragments
+    Vector<uint8_t> ctRemoteTransportParams; // server's quic_transport_parameters (from EncryptedExtensions)
+    bool ctServerHelloProcessed { false };
+    bool ctFinishedSent { false };
+    // Wave .349 — h3 SETTINGS rewrite (iPhone: "1:16383;7:100;GREASE", no MAX_FIELD_SECTION_SIZE).
+    // nghttp3 can't omit setting 6 or add GREASE, so the control-stream SETTINGS frame is
+    // substituted on its first write with iPhone-exact bytes.
+    int64_t h3CtrlStreamId { -1 };
+    bool h3SettingsRewritten { false };
 };
 
 [[maybe_unused]] static int& quicConnExDataIndex()
@@ -957,8 +983,167 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
 // add_handshake_data quic_method callback → ngtcp2_conn_submit_crypto_data.
 // So this callback returns 0 immediately; the actual ClientHello flows
 // through the BoringSSL → ssl_quic_method bridge.
-[[maybe_unused]] static int driftstackNgtcp2ClientInitial(ngtcp2_conn* /*conn*/, void* /*user_data*/)
+// ============================================================================
+// Wave 29-499.349 — custom QUIC-TLS engine. When qc->ctEnabled, OUR iPhone-exact
+// TLS 1.3 drives the QUIC handshake (ClientHello + key schedule + Finished) instead
+// of BoringSSL, so the QUIC ClientHello fingerprint == real iPhone (V-QUIC-FP-DIFF).
+// Reuses: driftstackBuildIPhoneQuicClientHello (CH), TLS13KeySchedule (secrets),
+// installDirectionalQuicKey (ngtcp2 key install), driftstackParseServerHello + ECDH.
+// ============================================================================
+static Vector<uint8_t> ctTranscriptHash(DriftstackQuicConn* qc)
 {
+    if (qc->ctCipher == 0x1302)
+        return driftstackSHA384(qc->ctTranscript.span().data(), qc->ctTranscript.size());
+    return driftstackSHA256(qc->ctTranscript.span().data(), qc->ctTranscript.size());
+}
+
+static Vector<uint8_t> ctHkdfExpandLabel(uint16_t cipher, const Vector<uint8_t>& secret, const char* label, size_t outLen)
+{
+    Vector<uint8_t> emptyCtx;
+    if (cipher == 0x1302)
+        return driftstackHkdfExpandLabelSha384(secret, label, emptyCtx, outLen);
+    return driftstackHkdfExpandLabelSha256(secret, label, emptyCtx, outLen);
+}
+
+// Derive QUIC key/iv/hp from a TLS traffic secret + install into ngtcp2 (rx/tx, hs/1rtt).
+static bool ctDeriveAndInstall(DriftstackQuicConn* qc, bool isRx, bool isHandshake, const Vector<uint8_t>& secret)
+{
+    bool isAes256 = (qc->ctCipher == 0x1302);
+    bool isChacha20 = (qc->ctCipher == 0x1303);
+    size_t keyLen = (isAes256 || isChacha20) ? 32 : 16;
+    Vector<uint8_t> key = ctHkdfExpandLabel(qc->ctCipher, secret, "quic key", keyLen);
+    Vector<uint8_t> iv  = ctHkdfExpandLabel(qc->ctCipher, secret, "quic iv", 12);
+    Vector<uint8_t> hp  = ctHkdfExpandLabel(qc->ctCipher, secret, "quic hp", keyLen);
+    if (key.isEmpty() || iv.size() != 12 || hp.isEmpty())
+        return false;
+    int rv = installDirectionalQuicKey(isRx, isHandshake, key, iv, hp, isAes256, isChacha20,
+        secret.span().data(), secret.size(), qc->conn);
+    return rv == 0;
+}
+
+// client_initial (custom): build the iPhone QUIC ClientHello + submit at Initial level.
+static int driftstackCtClientInitial(DriftstackQuicConn* qc)
+{
+    Vector<uint8_t> x25519Pub;
+    if (!driftstackX25519GenerateKeypair(qc->ctX25519Priv, x25519Pub)) {
+        WTFLogAlways("[Wave29-499.349] CT client_initial: X25519 keygen FAILED"); return -1;
+    }
+    qc->ctMlkem = driftstackMLKEM768Generate();
+    if (!qc->ctMlkem.ok || qc->ctMlkem.publicKey.size() != 1184) {
+        WTFLogAlways("[Wave29-499.349] CT client_initial: MLKEM768 keygen FAILED"); return -1;
+    }
+    Vector<uint8_t> clientRandom;
+    Vector<uint8_t> ch = driftstackBuildIPhoneQuicClientHello(qc->ctSni, qc->ctMlkem.publicKey,
+        x25519Pub, qc->ctTransportParams, clientRandom);
+    qc->ctTranscript.append(ch.span());
+    int rv = ngtcp2Fns().conn_submit_crypto_data(qc->conn, 0 /*Initial*/, ch.span().data(), ch.size());
+    WTFLogAlways("[Wave29-499.349] CT client_initial: submitted iPhone QUIC ClientHello %zu bytes (Initial CRYPTO), rv=%d", ch.size(), rv);
+    return rv;
+}
+
+// recv_crypto_data (custom): drive the TLS 1.3 handshake from server CRYPTO.
+static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level*/, const uint8_t* data, size_t len)
+{
+    qc->ctHsCryptoBuf.append(std::span<const uint8_t>(data, len));
+    size_t off = 0;
+    while (off + 4 <= qc->ctHsCryptoBuf.size()) {
+        const uint8_t* b = qc->ctHsCryptoBuf.span().data();
+        uint8_t hsType = b[off];
+        uint32_t hsLen = (uint32_t(b[off + 1]) << 16) | (uint32_t(b[off + 2]) << 8) | b[off + 3];
+        if (off + 4 + hsLen > qc->ctHsCryptoBuf.size())
+            break; // incomplete handshake message — await more CRYPTO
+        size_t msgTotal = 4 + hsLen;
+        qc->ctTranscript.append(std::span<const uint8_t>(b + off, msgTotal));
+
+        if (hsType == 0x02) { // ServerHello → derive + install Handshake keys
+            TLS13ServerHello sh;
+            if (!driftstackParseServerHello(b + off + 4, hsLen, sh)) {
+                WTFLogAlways("[Wave29-499.349] CT: ServerHello parse FAILED"); return -1;
+            }
+            qc->ctCipher = sh.cipherSuite;
+            Vector<uint8_t> ecdhShared;
+            if (sh.keyShareGroup == 0x11EC && sh.keyShareKey.size() == 1120) {
+                Vector<uint8_t> ct; ct.append(std::span<const uint8_t>(sh.keyShareKey.span().data(), 1088));
+                Vector<uint8_t> mlkemShared = driftstackMLKEM768Decap(qc->ctMlkem, ct);
+                Vector<uint8_t> serverX; serverX.append(std::span<const uint8_t>(sh.keyShareKey.span().data() + 1088, 32));
+                Vector<uint8_t> xShared = driftstackX25519SharedSecret(qc->ctX25519Priv, serverX);
+                if (mlkemShared.size() != 32 || xShared.size() != 32) {
+                    WTFLogAlways("[Wave29-499.349] CT: hybrid ECDH FAILED"); return -1;
+                }
+                ecdhShared.append(mlkemShared.span()); ecdhShared.append(xShared.span());
+            } else if (sh.keyShareGroup == 0x001D && sh.keyShareKey.size() == 32) {
+                ecdhShared = driftstackX25519SharedSecret(qc->ctX25519Priv, sh.keyShareKey);
+            } else {
+                WTFLogAlways("[Wave29-499.349] CT: unsupported SH keyShareGroup=0x%04x size=%zu", sh.keyShareGroup, sh.keyShareKey.size());
+                return -1;
+            }
+            qc->ctKeySchedule.setCipherSuite(qc->ctCipher);
+            Vector<uint8_t> chSHHash = ctTranscriptHash(qc);
+            if (!qc->ctKeySchedule.initFromHandshake(ecdhShared, chSHHash)) {
+                WTFLogAlways("[Wave29-499.349] CT: keySchedule.initFromHandshake FAILED"); return -1;
+            }
+            bool ok = ctDeriveAndInstall(qc, /*isRx=*/false, /*isHandshake=*/true, qc->ctKeySchedule.clientHandshakeSecret())
+                   && ctDeriveAndInstall(qc, /*isRx=*/true,  /*isHandshake=*/true, qc->ctKeySchedule.serverHandshakeSecret());
+            qc->ctServerHelloProcessed = true;
+            WTFLogAlways("[Wave29-499.349] CT: ServerHello OK (cipher=0x%04x group=0x%04x) — Handshake keys installed=%d", qc->ctCipher, sh.keyShareGroup, ok);
+            if (!ok) return -1;
+        } else if (hsType == 0x08) { // EncryptedExtensions → extract server quic_transport_parameters (0x0039)
+            // EE body: extensions_len(2) + [ext_type(2) ext_len(2) ext_data]...
+            const uint8_t* ee = b + off + 4;
+            if (hsLen >= 2) {
+                size_t extTotal = (size_t(ee[0]) << 8) | ee[1];
+                size_t q = 2, eeEnd = 2 + extTotal;
+                if (eeEnd > hsLen) eeEnd = hsLen;
+                while (q + 4 <= eeEnd) {
+                    uint16_t et = (uint16_t(ee[q]) << 8) | ee[q + 1];
+                    uint16_t el = (uint16_t(ee[q + 2]) << 8) | ee[q + 3];
+                    if (q + 4 + el > eeEnd) break;
+                    if (et == 0x0039) {
+                        qc->ctRemoteTransportParams.clear();
+                        qc->ctRemoteTransportParams.append(std::span<const uint8_t>(ee + q + 4, el));
+                        WTFLogAlways("[Wave29-499.349] CT: EncryptedExtensions — server transport_params %u bytes captured", el);
+                    }
+                    q += 4 + el;
+                }
+            }
+        } else if (hsType == 0x14) { // server Finished → 1-RTT keys + client Finished
+            Vector<uint8_t> chSFHash = ctTranscriptHash(qc);  // hash through server Finished
+            if (!qc->ctKeySchedule.deriveApplicationSecrets(chSFHash)) {
+                WTFLogAlways("[Wave29-499.349] CT: deriveApplicationSecrets FAILED"); return -1;
+            }
+            bool ok = ctDeriveAndInstall(qc, /*isRx=*/false, /*isHandshake=*/false, qc->ctKeySchedule.clientApplicationSecret())
+                   && ctDeriveAndInstall(qc, /*isRx=*/true,  /*isHandshake=*/false, qc->ctKeySchedule.serverApplicationSecret());
+            if (!ok) { WTFLogAlways("[Wave29-499.349] CT: 1-RTT key install FAILED"); return -1; }
+            // Client Finished: HMAC(finished_key, transcript-through-server-Finished).
+            Vector<uint8_t> finishedKey = ctHkdfExpandLabel(qc->ctCipher, qc->ctKeySchedule.clientHandshakeSecret(), "finished", qc->ctKeySchedule.hashLen());
+            Vector<uint8_t> verifyData = (qc->ctCipher == 0x1302)
+                ? driftstackHmacSha384(finishedKey, chSFHash) : driftstackHmacSha256(finishedKey, chSFHash);
+            Vector<uint8_t> fin;
+            fin.append(0x14);
+            fin.append(static_cast<uint8_t>((verifyData.size() >> 16) & 0xFF));
+            fin.append(static_cast<uint8_t>((verifyData.size() >> 8) & 0xFF));
+            fin.append(static_cast<uint8_t>(verifyData.size() & 0xFF));
+            fin.append(verifyData.span());
+            int rv = ngtcp2Fns().conn_submit_crypto_data(qc->conn, 1 /*Handshake*/, fin.span().data(), fin.size());
+            qc->ctTranscript.append(fin.span());
+            qc->ctFinishedSent = true;
+            // Tell ngtcp2 the TLS handshake is complete so the QUIC handshake can finish
+            // (1-RTT keys are installed; the event loop's conn_read_pkt confirms via ACK).
+            if (ngtcp2Fns().conn_tls_handshake_completed)
+                ngtcp2Fns().conn_tls_handshake_completed(qc->conn);
+            WTFLogAlways("[Wave29-499.349] CT: server Finished OK → 1-RTT keys installed, client Finished submitted (%zu bytes) rv=%d, tls_handshake_completed()", fin.size(), rv);
+        }
+        off += msgTotal;
+    }
+    qc->ctHsCryptoBuf.removeAt(0, off);
+    return 0;
+}
+
+[[maybe_unused]] static int driftstackNgtcp2ClientInitial(ngtcp2_conn* /*conn*/, void* user_data)
+{
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
+    if (qc && qc->ctEnabled)
+        return driftstackCtClientInitial(qc);  // Wave .349 — our iPhone-exact CH
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
@@ -1041,7 +1226,10 @@ static int installDirectionalQuicKey(bool isRx, bool isHandshake,
     const uint8_t* data, size_t datalen, void* user_data)
 {
     DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
-    if (!qc || !qc->ssl) return -1;
+    if (!qc) return -1;
+    if (qc->ctEnabled)  // Wave .349 — our TLS engine drives the handshake
+        return driftstackCtRecvCrypto(qc, static_cast<uint32_t>(level), data, datalen);
+    if (!qc->ssl) return -1;
     auto& f = boringSslQuicFns();
     // Wave .314 — map ngtcp2 encryption level → BoringSSL level (enums differ).
     ssl_encryption_level_t sslLevel = ngtcp2LevelToSsl(static_cast<int>(level));
@@ -1605,9 +1793,20 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     delete qc;
 }
 
+// Wave 29-499.349 — gate for the custom QUIC-TLS engine (iPhone-exact QUIC CH).
+static bool driftstackQuicCustomTlsEnabled()
+{
+    static bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_QUIC_CUSTOM_TLS");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+
 [[maybe_unused]] static DriftstackQuicConn* connectQuic(void* ssl,
     const struct sockaddr* localAddr, socklen_t localAddrLen,
-    const struct sockaddr* remoteAddr, socklen_t remoteAddrLen)
+    const struct sockaddr* remoteAddr, socklen_t remoteAddrLen,
+    const String& sniHost)
 {
     auto& nf = ngtcp2Fns();
     auto& bsf = boringSslQuicFns();
@@ -1642,6 +1841,17 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     std::span<const uint8_t> scidSpan = unsafeMakeSpan(scid.data, scid.datalen);
     initIphoneNgtcp2TransportParams(&tp, scidSpan);
     WTFLogAlways("[Wave29-499.247c] transport_params init done");
+
+    // Wave 29-499.349 — enable the custom QUIC-TLS engine (iPhone-exact CH). Must be set
+    // BEFORE conn_client_new (which fires client_initial → our CH). Encode the SAME
+    // transport params for the CH's quic_transport_parameters (0x0039) extension.
+    if (driftstackQuicCustomTlsEnabled()) {
+        qc->ctEnabled = true;
+        qc->ctSni = sniHost;
+        qc->ctTransportParams = buildIphoneQuicTransportParams(scidSpan);
+        WTFLogAlways("[Wave29-499.349] custom QUIC-TLS ENABLED for sni=%s (transport_params %zuB) — our engine drives the handshake",
+            sniHost.utf8().data(), qc->ctTransportParams.size());
+    }
 
     // 3. Populate callbacks via .230-.232.
     ngtcp2_callbacks cb { };
@@ -2019,6 +2229,7 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
         WTFLogAlways("[Wave29-499.321] bind_control_stream FAILED");
         return false;
     }
+    qc->h3CtrlStreamId = ctrlStream;  // Wave .349 — for iPhone SETTINGS rewrite
     if (h.conn_bind_qpack_streams(h3, qpackEnc, qpackDec) != 0) {
         WTFLogAlways("[Wave29-499.321] bind_qpack_streams FAILED");
         return false;
@@ -2144,6 +2355,26 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
             return -1;
         }
 
+        // Wave .349 — iPhone-exact h3 SETTINGS. nghttp3 emits
+        // "6:<max>;1:16383;7:100" but real iPhone Safari sends "1:16383;7:100;GREASE"
+        // (omits MAX_FIELD_SECTION_SIZE, adds a GREASE setting). Substitute the
+        // control-stream SETTINGS frame on its first write with iPhone bytes:
+        //   00 (control stream type) 04 (SETTINGS) 08 (len) 01 7fff (qpack_max=16383)
+        //   07 4064 (blocked=100) 21 00 (GREASE id 0x21, val 0). nghttp3 stays in sync
+        //   by advancing its write offset by its ORIGINAL byte count.
+        static const uint8_t kIPhoneH3Settings[] = {
+            0x00, 0x04, 0x08, 0x01, 0x7f, 0xff, 0x07, 0x40, 0x64, 0x21, 0x00 };
+        bool substituteSettings = false;
+        size_t origSettingsLen = 0;
+        nghttp3_vec subVec { const_cast<uint8_t*>(kIPhoneH3Settings), sizeof(kIPhoneH3Settings) };
+        if (sid == qc->h3CtrlStreamId && !qc->h3SettingsRewritten && sveccnt > 0
+            && vec[0].len >= 2 && vec[0].base[0] == 0x00 && vec[0].base[1] == 0x04) {
+            for (int vi = 0; vi < sveccnt; ++vi) origSettingsLen += vec[vi].len;
+            substituteSettings = true;
+        }
+        const nghttp3_vec* useVec = substituteSettings ? &subVec : vec;
+        size_t useVecCnt = substituteSettings ? 1u : static_cast<size_t>(sveccnt);
+
         uint8_t pkt[1500];
         ngtcp2_ssize ndatalen = 0;
         // Set MORE only when nghttp3 handed us stream data (and might have more
@@ -2156,12 +2387,15 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
         ngtcp2_pkt_info pi { };
         ngtcp2_ssize n = nf.conn_writev_stream_versioned(qc->conn, /*path=*/nullptr,
             NGTCP2_PKT_INFO_VERSION, &pi, pkt, sizeof(pkt), &ndatalen, flags, sid,
-            reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(sveccnt),
+            reinterpret_cast<const ngtcp2_vec*>(useVec), useVecCnt,
             driftstackQuicTimestampNow());
         if (n < 0) {
             if (n == NGTCP2_ERR_WRITE_MORE) {
                 // ngtcp2 buffered the stream data; account for it and keep going.
-                if (sid >= 0 && ndatalen >= 0)
+                if (substituteSettings && ndatalen == static_cast<ngtcp2_ssize>(subVec.len)) {
+                    h.conn_add_write_offset(h3, sid, origSettingsLen);
+                    qc->h3SettingsRewritten = true;
+                } else if (sid >= 0 && ndatalen >= 0)
                     h.conn_add_write_offset(h3, sid, static_cast<size_t>(ndatalen));
                 continue;
             }
@@ -2172,7 +2406,13 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
             WTFLogAlways("[Wave29-499.321] conn_writev_stream rv=%zd", (ssize_t)n);
             return -1;
         }
-        if (sid >= 0 && ndatalen >= 0)
+        if (substituteSettings && ndatalen == static_cast<ngtcp2_ssize>(subVec.len)) {
+            h.conn_add_write_offset(h3, sid, origSettingsLen);  // consume nghttp3's original SETTINGS
+            qc->h3SettingsRewritten = true;
+            WTFLogAlways("[Wave29-499.349] h3 SETTINGS rewritten to iPhone bytes (sent %zu, nghttp3 orig %zu)", subVec.len, origSettingsLen);
+        } else if (substituteSettings)
+            WTFLogAlways("[Wave29-499.349] WARN h3 SETTINGS partial send (ndatalen=%zd subVec=%zu) — skipped rewrite", (ssize_t)ndatalen, subVec.len);
+        else if (sid >= 0 && ndatalen >= 0)
             h.conn_add_write_offset(h3, sid, static_cast<size_t>(ndatalen));
         if (n == 0)
             break; // nothing more to send
@@ -2205,8 +2445,21 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     ngtcp2_pkt_info pi { };
     int rv = static_cast<int>(nf.conn_read_pkt_versioned(qc->conn, &path,
         NGTCP2_PKT_INFO_VERSION, &pi, buf, buflen, driftstackQuicTimestampNow()));
-    if (rv != 0)
+    if (rv != 0) {
         WTFLogAlways("[Wave29-499.313] conn_read_pkt rv=%d (buflen=%zu)", rv, buflen);
+        // Wave .349 — on DRAINING/CLOSING, decode the CONNECTION_CLOSE so we know WHY the
+        // server rejected us (CRYPTO_ERROR 0x0100+alert = TLS-level CH reject; else transport).
+        if ((rv == -224 || rv == -223) && nf.conn_get_ccerr && qc && qc->conn) {
+            const ngtcp2_ccerr* ce = nf.conn_get_ccerr(qc->conn);
+            if (ce) {
+                char reason[128] = {0};
+                size_t rl = ce->reasonlen < 127 ? ce->reasonlen : 127;
+                if (ce->reason && rl) memcpy(reason, ce->reason, rl);
+                WTFLogAlways("[Wave29-499.349] CONNECTION_CLOSE: type=%d error_code=0x%llx (frame_type=0x%llx) reason='%s'",
+                    (int)ce->type, (unsigned long long)ce->error_code, (unsigned long long)ce->frame_type, reason);
+            }
+        }
+    }
     return rv;
 }
 
@@ -2964,7 +3217,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     WTFLogAlways("[Wave29-499.247] before connectQuic call");
     DriftstackQuicConn* qc = connectQuic(ssl,
         reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
-        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer));
+        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer), authHost);
     if (!qc) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] connectQuic returned nullptr");
         bsf.SSL_free(ssl);
@@ -2998,43 +3251,57 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     bool remoteTpApplied = false;  // Wave .321 — per-connection (NOT static)
     while (iters < kMaxIterations && !qc->handshakeCompleted) {
         ++iters;
-        // Drive TLS state machine. May fire quic_method.set_*_secret +
-        // add_handshake_data → ngtcp2_conn_submit_crypto_data.
-        int hsRv = bsf.SSL_do_handshake(ssl);
-        // Wave .321 — feed the server's QUIC transport parameters (from the TLS
-        // quic_transport_parameters extension) into ngtcp2 AS SOON AS available,
-        // every iteration until it succeeds. Without this, ngtcp2 keeps default
-        // remote limits (initial_max_streams_uni=0) and every
-        // ngtcp2_conn_open_uni_stream returns STREAM_ID_BLOCKED (-206), so the 3
-        // HTTP/3 control/QPACK streams can't open. Must happen BEFORE ngtcp2
-        // marks the handshake complete (which fires from conn_read_pkt, not from
-        // SSL_do_handshake==1). The ngtcp2_crypto helper does this automatically;
-        // our hand-rolled path must do it explicitly.
-        if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+        // Wave .349 — when our custom QUIC-TLS engine drives the handshake (ctEnabled),
+        // DO NOT call SSL_do_handshake: BoringSSL would emit its OWN ClientHello via
+        // add_handshake_data at crypto offset N (after ours at 0), so the server sees
+        // TWO ClientHellos → unexpected_message/internal_error. The CT engine drives
+        // everything from driftstackCtRecvCrypto (fired by conn_read_pkt below).
+        if (!qc->ctEnabled) {
+            // Drive TLS state machine. May fire quic_method.set_*_secret +
+            // add_handshake_data → ngtcp2_conn_submit_crypto_data.
+            int hsRv = bsf.SSL_do_handshake(ssl);
+            // Wave .321 — feed the server's QUIC transport parameters (from the TLS
+            // quic_transport_parameters extension) into ngtcp2 AS SOON AS available,
+            // every iteration until it succeeds. Without this, ngtcp2 keeps default
+            // remote limits (initial_max_streams_uni=0) and every
+            // ngtcp2_conn_open_uni_stream returns STREAM_ID_BLOCKED (-206), so the 3
+            // HTTP/3 control/QPACK streams can't open. Must happen BEFORE ngtcp2
+            // marks the handshake complete (which fires from conn_read_pkt, not from
+            // SSL_do_handshake==1). The ngtcp2_crypto helper does this automatically;
+            // our hand-rolled path must do it explicitly.
+            if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+                && nf.conn_decode_and_set_remote_transport_params) {
+                const uint8_t* tp = nullptr;
+                size_t tpLen = 0;
+                bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
+                if (tp && tpLen > 0) {
+                    int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen);
+                    remoteTpApplied = (tprv == 0);
+                    WTFLogAlways("[Wave29-499.321] applied server transport params (%zu bytes) rv=%d — uni-stream limits now available", tpLen, tprv);
+                }
+            }
+            if (hsRv == 1) {
+                // Wave .316 — TLS done; notify ngtcp2 so QUIC handshake can complete.
+                if (nf.conn_tls_handshake_completed && !qc->handshakeCompleted) {
+                    nf.conn_tls_handshake_completed(qc->conn);
+                    WTFLogAlways("[Wave29-499.316] (loop) SSL_do_handshake=1 → tls_handshake_completed()");
+                }
+            } else {
+                int sslErr = bsf.SSL_get_error ? bsf.SSL_get_error(ssl, hsRv) : -999;
+                // SSL_ERROR_WANT_READ=2 is normal (waiting for more crypto data).
+                static int s_hsLogCount = 0;
+                if (sslErr != 2 && s_hsLogCount < 6) {
+                    s_hsLogCount++;
+                    WTFLogAlways("[Wave29-499.313] iter=%d SSL_do_handshake rv=%d SSL_get_error=%d", iters, hsRv, sslErr);
+                }
+            }
+        } else if (!remoteTpApplied && qc->ctRemoteTransportParams.size() > 0
             && nf.conn_decode_and_set_remote_transport_params) {
-            const uint8_t* tp = nullptr;
-            size_t tpLen = 0;
-            bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
-            if (tp && tpLen > 0) {
-                int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen);
-                remoteTpApplied = (tprv == 0);
-                WTFLogAlways("[Wave29-499.321] applied server transport params (%zu bytes) rv=%d — uni-stream limits now available", tpLen, tprv);
-            }
-        }
-        if (hsRv == 1) {
-            // Wave .316 — TLS done; notify ngtcp2 so QUIC handshake can complete.
-            if (nf.conn_tls_handshake_completed && !qc->handshakeCompleted) {
-                nf.conn_tls_handshake_completed(qc->conn);
-                WTFLogAlways("[Wave29-499.316] (loop) SSL_do_handshake=1 → tls_handshake_completed()");
-            }
-        } else {
-            int sslErr = bsf.SSL_get_error ? bsf.SSL_get_error(ssl, hsRv) : -999;
-            // SSL_ERROR_WANT_READ=2 is normal (waiting for more crypto data).
-            static int s_hsLogCount = 0;
-            if (sslErr != 2 && s_hsLogCount < 6) {
-                s_hsLogCount++;
-                WTFLogAlways("[Wave29-499.313] iter=%d SSL_do_handshake rv=%d SSL_get_error=%d", iters, hsRv, sslErr);
-            }
+            // CT path — server transport params extracted from EncryptedExtensions.
+            int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn,
+                qc->ctRemoteTransportParams.span().data(), qc->ctRemoteTransportParams.size());
+            remoteTpApplied = (tprv == 0);
+            WTFLogAlways("[Wave29-499.349] CT applied server transport params (%zu bytes) rv=%d", qc->ctRemoteTransportParams.size(), tprv);
         }
 
         // Drain all packets ngtcp2 wants to send right now.
@@ -3436,7 +3703,7 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
 
     DriftstackQuicConn* qc = connectQuic(ssl,
         reinterpret_cast<const struct sockaddr*>(&local), sizeof(local),
-        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer));
+        reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer), authHost);
     if (!qc) {
         ::close(udpFd);
         cleanup();

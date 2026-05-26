@@ -328,6 +328,18 @@ Vector<uint8_t> makeExtSupportedVersions()
     return makeExtension(43, list);
 }
 
+// Wave .349 — QUIC supported_versions: GREASE + TLS 1.3 ONLY.
+// RFC 9001 §8.2: a QUIC client MUST NOT offer TLS versions older than 1.3;
+// offering 1.2 makes the server reject the CH (CRYPTO_ERROR alert).
+Vector<uint8_t> makeExtSupportedVersionsQuic()
+{
+    Vector<uint8_t> list;
+    list.append(static_cast<uint8_t>(0x04));  // versions list = 4 bytes (GREASE + 1.3)
+    appendU16(list, pickGreaseValue());
+    appendU16(list, 0x0304);  // TLS 1.3
+    return makeExtension(43, list);
+}
+
 // compress_certificate (27) — RFC 8879. iPhone: [zlib=0x0001]
 // Wave 29-499.199 — verified via default-mode peetprint capture: iPhone sends 1 (zlib), not 2 (brotli)
 Vector<uint8_t> makeExtCompressCertificate()
@@ -594,28 +606,32 @@ Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
         greaseSecondary = pickGreaseValue();
     uint16_t greaseGroup = pickGreaseValue();
 
-    // QUIC ciphers: GREASE + the 3 TLS 1.3 AEAD suites only.
+    // QUIC ciphers: GREASE + the 3 TLS 1.3 AEAD suites (iPhone offers no TLS 1.2 suites
+    // over QUIC). ja4 cipher hash 55b375c5d22e (GREASE excluded from the hash).
     Vector<uint8_t> ciphers;
     appendU16(ciphers, greasePrimary);
     appendU16(ciphers, 0x1301);  // TLS_AES_128_GCM_SHA256
     appendU16(ciphers, 0x1302);  // TLS_AES_256_GCM_SHA384
     appendU16(ciphers, 0x1303);  // TLS_CHACHA20_POLY1305_SHA256
 
-    // iPhone QUIC extension set (TCP set minus ec_point_formats/ext_master_secret/
-    // renegotiation_info, plus quic_transport_parameters).
+    // iPhone QUIC extension set — verified bit-identical to real iPhone Safari 26.4
+    // (quic.browserleaks.com/fp ja4 q13d0311h3_55b375c5d22e_f2a83c8e78ae, Wave .349):
+    // 9 non-GREASE/non-SNI/non-ALPN extensions + SNI + ALPN = 11. Drops the TCP-only
+    // ec_point_formats/extended_master_secret/renegotiation_info; adds
+    // quic_transport_parameters(0x0039); supported_versions is 1.3-only (RFC 9001 §8.2).
     Vector<uint8_t> extensions;
     extensions.append(makeExtGREASE(greasePrimary).span());
     extensions.append(makeExtServerName(sni).span());
-    extensions.append(makeExtSupportedGroups(greaseGroup).span());
-    extensions.append(makeExtALPNQuic().span());
-    extensions.append(makeExtStatusRequest().span());
-    extensions.append(makeExtSignatureAlgorithms().span());
-    extensions.append(makeExtSCT().span());
-    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span());
-    extensions.append(makeExtPSKKeyExchangeModes().span());
-    extensions.append(makeExtSupportedVersions().span());
-    extensions.append(makeExtCompressCertificate().span());
-    extensions.append(makeExtQuicTransportParams(transportParams).span());
+    extensions.append(makeExtSupportedGroups(greaseGroup).span());      // GREASE + 0x11EC + X25519 + P-256/384/521
+    extensions.append(makeExtALPNQuic().span());                        // h3
+    extensions.append(makeExtStatusRequest().span());                  // 0005
+    extensions.append(makeExtSignatureAlgorithms().span());            // 000d — incl. iPhone's dup 0805
+    extensions.append(makeExtSCT().span());                            // 0012
+    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span()); // GREASE + X25519MLKEM768 + X25519
+    extensions.append(makeExtPSKKeyExchangeModes().span());            // 002d
+    extensions.append(makeExtSupportedVersionsQuic().span());          // 002b — GREASE + TLS 1.3 only
+    extensions.append(makeExtCompressCertificate().span());            // 001b — zlib
+    extensions.append(makeExtQuicTransportParams(transportParams).span()); // 0039
     extensions.append(makeExtGREASE(greaseSecondary).span());
 
     Vector<uint8_t> body;
@@ -634,7 +650,7 @@ Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
     handshake.append(static_cast<uint8_t>(body.size() & 0xFF));
     handshake.append(body.span());
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.348] iPhone QUIC ClientHello built: %zu bytes (3 TLS1.3 ciphers, h3 ALPN, transport_params %zuB, hybrid keyshare)",
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.349] iPhone QUIC ClientHello built: %zu bytes (3 TLS1.3 ciphers, h3 ALPN, transport_params %zuB, X25519MLKEM768 hybrid keyshare) — ja4 q13d0311h3_55b375c5d22e_f2a83c8e78ae",
         handshake.size(), transportParams.size());
     return handshake;
 }
