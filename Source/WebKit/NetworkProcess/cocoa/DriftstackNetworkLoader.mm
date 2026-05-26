@@ -76,6 +76,7 @@
 #import <CFNetwork/CFNetwork.h>
 #import <WebCore/FormData.h>
 #import <WebCore/HTTPStatusCodes.h>
+#import <WebCore/HTTPHeaderNames.h>
 #import <WebCore/NetworkLoadMetrics.h>
 #import <WebCore/ResourceError.h>
 #import <WebCore/ResourceResponse.h>
@@ -793,6 +794,85 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     return h2req;
 }
 
+bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse& response)
+{
+    int statusCode = response.httpStatusCode();
+    // 3xx except 304 Not Modified (conditional GET, not a redirect) and 305/306 (deprecated).
+    if (statusCode < 300 || statusCode >= 400 || statusCode == 304 || statusCode == 305 || statusCode == 306)
+        return false;
+    String location = response.httpHeaderField(WebCore::HTTPHeaderName::Location);
+    if (location.isEmpty())
+        return false;
+
+    URL currentURL = m_request.url();
+    URL redirectURL { currentURL, location }; // resolves relative Location against the current URL
+    if (!redirectURL.isValid() || !redirectURL.protocolIsInHTTPFamily())
+        return false;
+
+    auto* clientPtr = m_task.client();
+    if (!clientPtr)
+        return false;
+
+    // Chain guard — match common browser cap; fail cleanly past it.
+    if (++m_redirectCount > 20) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.344] redirect chain exceeded 20 hops for %s — failing", currentURL.string().utf8().data());
+        if (tryBeginCompletion()) {
+            WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, currentURL, "too many redirects"_s, WebCore::ResourceError::Type::General);
+            callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                WebCore::NetworkLoadMetrics metrics;
+                clientPtr->didCompleteWithError(error, metrics);
+            });
+        }
+        return true;
+    }
+
+    // Build the redirected request (RFC 7231 §6.4): 307/308 preserve method+body;
+    // 301/302/303 become GET and drop the body (HEAD stays HEAD).
+    WebCore::ResourceRequest newRequest = m_request;
+    newRequest.setURL(URL { redirectURL });  // setURL takes URL&&; redirectURL reused below for origin checks
+    bool preserveBody = (statusCode == httpStatus307TemporaryRedirect || statusCode == httpStatus308PermanentRedirect);
+    if (!preserveBody) {
+        if (!equalLettersIgnoringASCIICase(m_request.httpMethod(), "head"_s))
+            newRequest.setHTTPMethod("GET"_s);
+        newRequest.setHTTPBody(nullptr);
+    }
+    // Cross-origin redirect → strip sensitive headers (parity with NetworkDataTaskCocoa).
+    bool sameOrigin = currentURL.protocol() == redirectURL.protocol()
+        && currentURL.host() == redirectURL.host()
+        && currentURL.port() == redirectURL.port();
+    if (!sameOrigin) {
+        newRequest.clearHTTPAuthorization();
+        newRequest.clearHTTPOrigin();
+    }
+    // Don't carry a Referer from https → http (downgrade).
+    if (currentURL.protocolIs("https"_s) && !redirectURL.protocolIs("https"_s))
+        newRequest.clearHTTPReferrer();
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.344] following %d redirect: %s → %s (hop %d)",
+        statusCode, currentURL.string().utf8().data(), redirectURL.string().utf8().data(), m_redirectCount);
+
+    Ref<DriftstackNetworkLoader> protectedThis { *this };
+    callOnMainRunLoop([this, protectedThis, clientPtr, redirectResponse = WebCore::ResourceResponse(response), newRequest = WebCore::ResourceRequest(newRequest)]() mutable {
+        clientPtr->willPerformHTTPRedirection(WTF::move(redirectResponse), WTF::move(newRequest),
+            [this, protectedThis](WebCore::ResourceRequest&& finalRequest) mutable {
+                if (m_cancelled)
+                    return;
+                if (finalRequest.isNull()) {
+                    // Policy (CSP/mixed-content/etc.) declined the redirect → cancel cleanly.
+                    auto* c = m_task.client();
+                    if (c && tryBeginCompletion()) {
+                        WebCore::NetworkLoadMetrics metrics;
+                        c->didCompleteWithError(WebCore::ResourceError { WebCore::ResourceError::Type::Cancellation }, metrics);
+                    }
+                    return;
+                }
+                m_request = WTF::move(finalRequest);
+                resume(); // load the redirect target on a fresh connection (re-uses pool if applicable)
+            });
+    });
+    return true;
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // Capture request data on the calling thread; do network work async.
@@ -1043,6 +1123,7 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h3resp.statusCode);
                     for (auto& [k, v] : h3resp.headers)
                         response.setHTTPHeaderField(k, v);
+                    if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
                     WebKit::driftstackDecodeContentEncoding(h3resp.body, h3resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
@@ -1118,6 +1199,7 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h2resp.statusCode);
                     for (auto& [k, v] : h2resp.headers)
                         response.setHTTPHeaderField(k, v);
+                    if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
                     WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
@@ -1520,6 +1602,7 @@ void DriftstackNetworkLoader::resume()
             // parallel HTTP/2 dispatches corrupted CFRunLoop hash sets and
             // crashed NetworkProcess (SIGTRAP in CFCheckCFInfoPACSignature_Bridged)
             // when loading 10+ subresource Angular apps like Twilio NT.
+            if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
             WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint — decode any encoding any h2 path missed
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
@@ -1728,6 +1811,7 @@ _Pragma("clang diagnostic pop")
             response.setHTTPHeaderField(String::fromUTF8([key UTF8String]), String::fromUTF8([val UTF8String]));
         }
 
+        if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
         // Dispatch callbacks. Use NSData spans for SharedBuffer.
         auto bodySpan = unsafeMakeSpan(static_cast<const uint8_t*>([bodyBytes bytes]), static_cast<size_t>([bodyBytes length]));
         auto bodyBuffer = WebCore::SharedBuffer::create(bodySpan);

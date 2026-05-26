@@ -50,6 +50,10 @@
 #include <wtf/RefCounted.h>
 #include <wtf/text/WTFString.h>
 
+namespace WebCore {
+class ResourceResponse;
+}
+
 namespace WebKit {
 
 class NetworkDataTaskCocoa;
@@ -76,6 +80,17 @@ private:
     bool m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
     int m_attempt { 0 };  // Wave 29-499.271 — retry counter for transient TLS/H2 failures
+    int m_redirectCount { 0 };  // Wave 29-499.344 — 3xx redirect-follow chain guard
+
+    // Wave 29-499.344 — HTTP redirect following (Phase 4, previously unimplemented).
+    // Our custom loader bypasses NSURLSession, which used to follow 3xx transparently;
+    // without this a 301/302 (e.g. http→https) was delivered as the FINAL response, so
+    // the browser rendered the "Moved Permanently" page instead of redirecting like
+    // Safari. Returns true if the response is a 3xx+Location and a redirect was
+    // dispatched (caller must NOT deliver the response); the client's
+    // willPerformHTTPRedirection applies policy + updates the URL, then we re-resume()
+    // on the returned request.
+    bool tryFollowRedirect(const WebCore::ResourceResponse&);
 
     // Wave 29-499.325 — single-completion guard. loaderQueue() is a CONCURRENT
     // dispatch queue and resume() has no re-entry guard, so overlapping attempts
