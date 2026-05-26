@@ -50,6 +50,16 @@ public:
     void setOption(int option, int value) final;
     void sendTo(std::span<const uint8_t>, const webrtc::SocketAddress&, const webrtc::AsyncSocketPacketOptions&) final;
 
+    // Wave 29-499.341 — ASYNC connect. The SOCKS5 CONNECT (+ TURN-TLS handshake)
+    // is ~1.2s+ to a remote proxy; doing it synchronously in create() blocks the
+    // RTC network thread so multiple TURN TCP/TLS sockets connect SERIALLY and miss
+    // Twilio NT's 5s deadline. beginAsyncConnect() runs the connect on a background
+    // queue (capturing config by value + a provider Ref + the identifier — never
+    // `this`), so sockets connect in PARALLEL; on completion the provider looks the
+    // socket up by identifier on the RTC thread and calls adoptConnectedTransport().
+    void beginAsyncConnect();
+    void adoptConnectedTransport(std::unique_ptr<DriftstackSocks5Client>&&, std::unique_ptr<DriftstackTLS13Client>&&);
+
 private:
     DriftstackRTCSocks5TCPSocket(WebCore::LibWebRTCSocketIdentifier, NetworkRTCProvider&, const webrtc::SocketAddress& remoteAddress, int options, Ref<IPC::Connection>&&);
 

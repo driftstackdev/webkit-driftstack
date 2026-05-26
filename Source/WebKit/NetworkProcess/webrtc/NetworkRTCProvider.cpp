@@ -50,6 +50,10 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackRTCSocks5Bridge.h"
 #include "DriftstackRTCSocks5TCPSocket.h"
+// NOTE: do NOT include DriftstackSocks5Client.h / DriftstackTLS13Client.h here —
+// they pull in Objective-C Foundation and this is a pure-C++ TU. finishDriftstackTCPConnect
+// takes the transport unique_ptrs by rvalue-REFERENCE and only forwards them; the owning
+// lambda (in DriftstackRTCSocks5TCPSocket.mm) destroys them where the types are complete.
 #include <arpa/inet.h>
 #endif
 #else // PLATFORM(COCOA)
@@ -381,18 +385,18 @@ void NetworkRTCProvider::createClientTCPSocket(LibWebRTCSocketIdentifier identif
     // socket that actually carries TURN TCP through the proxy.
     // TURN-TLS still refused at create() time (Phase 2 wrap pending).
     if (DriftstackRTC::isCustomSocks5Active()) {
+        // Wave 29-499.341 — construct + register the socket immediately, then connect
+        // ASYNC so the SOCKS5 CONNECT (+TURN-TLS handshake) doesn't block this thread
+        // and serialize across sockets (which made TURN TCP/TLS miss Twilio's 5s
+        // deadline). finishDriftstackTCPConnect adopts the transport (or closes) later.
         auto socket = DriftstackRTCSocks5TCPSocket::create(identifier, *this, remoteAddress.rtcAddress(), options, m_ipcConnection.copyRef());
-        if (socket) {
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] TURN TCP via SOCKS5 CONNECT — socket created (id=%" PRIu64 ", dest=%s:%d)",
-                identifier.toUInt64(),
-                remoteAddress.rtcAddress().hostname().c_str(),
-                remoteAddress.rtcAddress().port());
-            addSocket(identifier, WTF::move(socket));
-        } else {
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] DriftstackRTCSocks5TCPSocket::create returned null (id=%" PRIu64 ") — signaling closed",
-                identifier.toUInt64());
-            signalSocketIsClosed(identifier);
-        }
+        auto* rawSocket = static_cast<DriftstackRTCSocks5TCPSocket*>(socket.get());
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.341] TURN TCP via SOCKS5 CONNECT — socket registered (id=%" PRIu64 ", dest=%s:%d), connecting async",
+            identifier.toUInt64(),
+            remoteAddress.rtcAddress().hostname().c_str(),
+            remoteAddress.rtcAddress().port());
+        addSocket(identifier, WTF::move(socket));
+        rawSocket->beginAsyncConnect();
         return;
     }
 #endif
@@ -403,6 +407,27 @@ void NetworkRTCProvider::createClientTCPSocket(LibWebRTCSocketIdentifier identif
     else
         signalSocketIsClosed(identifier);
 }
+
+#if PLATFORM(DRIFTSTACK)
+void NetworkRTCProvider::finishDriftstackTCPConnect(LibWebRTCSocketIdentifier identifier, bool ok,
+    std::unique_ptr<DriftstackSocks5Client>&& client, std::unique_ptr<DriftstackTLS13Client>&& tls)
+{
+    assertIsRTCNetworkThread();
+    auto iterator = m_sockets.find(identifier);
+    if (iterator == m_sockets.end()) {
+        // Socket already closed/destroyed during the async connect — drop the
+        // transport (unique_ptr dtors close the fd). libwebrtc already tore it down.
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.341] async connect for id=%" PRIu64 " completed but socket gone — dropping transport", identifier.toUInt64());
+        return;
+    }
+    if (!ok) {
+        signalSocketIsClosed(identifier);
+        auto dead = takeSocket(identifier); // unlinks from map first; destroyed at scope end
+        return;
+    }
+    static_cast<DriftstackRTCSocks5TCPSocket*>(iterator->second.get())->adoptConnectedTransport(WTF::move(client), WTF::move(tls));
+}
+#endif
 
 void NetworkRTCProvider::getInterfaceName(URL&& url, WebPageProxyIdentifier pageIdentifier, RTCSocketCreationFlags flags, WebCore::RegistrableDomain&& domain, CompletionHandler<void(String&&)>&& completionHandler)
 {

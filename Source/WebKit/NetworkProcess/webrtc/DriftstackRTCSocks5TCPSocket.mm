@@ -19,6 +19,7 @@
 #import <WebCore/STUNMessageParsing.h>
 #import <unistd.h>
 #import <sys/socket.h>
+#import <wtf/BlockPtr.h>
 #import <wtf/Locker.h>
 #import <wtf/TZoneMallocInlines.h>
 
@@ -51,53 +52,119 @@ std::unique_ptr<NetworkRTCProvider::Socket> DriftstackRTCSocks5TCPSocket::create
     int options,
     Ref<IPC::Connection>&& connection)
 {
-    auto socket = std::unique_ptr<DriftstackRTCSocks5TCPSocket>(
+    // Wave 29-499.341 — construct only; the SOCKS5 CONNECT (+TLS) runs async via
+    // beginAsyncConnect() so it doesn't serialize on the RTC network thread.
+    return std::unique_ptr<DriftstackRTCSocks5TCPSocket>(
         new DriftstackRTCSocks5TCPSocket(identifier, rtcProvider, remoteAddress, options, WTF::move(connection)));
+}
 
-    auto host = remoteAddress.hostname();
-    if (host.empty())
-        host = remoteAddress.ipaddr().ToString();
-
-    if (!socket->connectViaSocks5(host, remoteAddress.port())) {
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] SOCKS5 CONNECT to %s:%u FAILED — signaling closed",
-            host.c_str(), remoteAddress.port());
-        return nullptr;
-    }
-
-    int currentFd;
+// Background-thread connect: builds a SOCKS5 client + (optionally) the TURN-TLS
+// client locally, touching NO socket members. Returns the connected transport via
+// out-params. Safe to run after the owning socket may have been destroyed.
+static bool connectSocks5TransportStatic(const std::string& host, uint16_t port, bool isTLS,
+    std::unique_ptr<DriftstackSocks5Client>& outClient, std::unique_ptr<DriftstackTLS13Client>& outTls)
+{
+    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+    if (!proxyEnv || !proxyEnv[0])
+        return false;
+    String proxyEnvStr = String::fromUTF8(proxyEnv);
+    size_t colon = proxyEnvStr.find(':');
+    if (colon == notFound)
+        return false;
+    Socks5Endpoint proxy;
+    proxy.host = proxyEnvStr.left(colon);
+    int proxyPort = 0;
     {
-        Locker locker { socket->m_lock };
-        currentFd = socket->m_fd;
+        auto portStr = proxyEnvStr.substring(colon + 1);
+        for (unsigned i = 0; i < portStr.length(); ++i) {
+            UChar c = portStr[i];
+            if (c < '0' || c > '9') { proxyPort = 0; break; }
+            proxyPort = proxyPort * 10 + (c - '0');
+        }
+    }
+    if (proxyPort == 0)
+        return false;
+    proxy.port = static_cast<uint16_t>(proxyPort);
+
+    Socks5Credentials creds;
+    if (const char* u = getenv("DRIFTSTACK_SOCKS5_USER")) {
+        if (const char* p = getenv("DRIFTSTACK_SOCKS5_PASS")) {
+            if (u[0]) { creds.username = String::fromUTF8(u); creds.password = String::fromUTF8(p); }
+        }
     }
 
-    if (socket->m_isTLS) {
-        // Wave 29-499.279 — TURN-TLS Phase 2: wrap fd with iPhone-byte-exact
-        // TLS 1.3 ClientHello via DriftstackTLS13Client. Matches the TLS
-        // identity our HTTP/2 PathB v2 already proves bit-identical to iPhone
-        // Safari 26.4 (per V-PEET-JA3 + V-AKAMAI).
-        socket->m_tls = std::make_unique<DriftstackTLS13Client>();
+    auto client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
+    if (client->performHandshake() != Socks5Result::Success)
+        return false;
+    Socks5Endpoint dest;
+    dest.host = String::fromUTF8(host.c_str());
+    dest.port = port;
+    Socks5Endpoint bnd;
+    if (client->tcpConnect(dest, bnd) != Socks5Result::Success)
+        return false;
+
+    int fd = client->socketFileDescriptor();
+    if (fd < 0)
+        return false;
+
+    if (isTLS) {
+        auto tls = std::make_unique<DriftstackTLS13Client>();
         String sni = String::fromUTF8(host.c_str());
-        if (!socket->m_tls->connect(currentFd, sni)) {
+        if (!tls->connect(fd, sni)) {
             WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.279] TURN-TLS handshake FAILED for %s:%u — %s",
-                host.c_str(), remoteAddress.port(),
-                socket->m_tls->errorMessage().utf8().data());
-            return nullptr;
+                host.c_str(), port, tls->errorMessage().utf8().data());
+            return false;
         }
         WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.279] TURN-TLS handshake COMPLETE for %s:%u (ALPN=%s) — iPhone-byte-exact ClientHello",
-            host.c_str(), remoteAddress.port(),
-            socket->m_tls->selectedALPN().utf8().data());
+            host.c_str(), port, tls->selectedALPN().utf8().data());
+        outTls = WTF::move(tls);
     }
+    outClient = WTF::move(client);
+    return true;
+}
 
-    socket->startReadLoop();
+void DriftstackRTCSocks5TCPSocket::beginAsyncConnect()
+{
+    std::string host = m_remoteAddress.hostname();
+    if (host.empty())
+        host = m_remoteAddress.ipaddr().ToString();
+    uint16_t port = m_remoteAddress.port();
+    bool isTLS = m_isTLS;
+    auto identifier = m_identifier;
+    Ref<NetworkRTCProvider> provider = m_rtcProvider.get();
 
-    // Signal libwebrtc that the connection is ready (matches what
-    // NetworkRTCTCPSocketCocoa's nw_connection_state_ready handler does).
-    socket->m_connection->send(Messages::LibWebRTCNetwork::SignalConnect(identifier), 0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), makeBlockPtr([provider, identifier, host, port, isTLS]() mutable {
+        std::unique_ptr<DriftstackSocks5Client> client;
+        std::unique_ptr<DriftstackTLS13Client> tls;
+        bool ok = connectSocks5TransportStatic(host, port, isTLS, client, tls);
+        if (!ok)
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.341] async SOCKS5 CONNECT to %s:%u FAILED (isTLS=%d) — will signal closed", host.c_str(), port, isTLS);
+        // Hand the connected transport back on the RTC network thread, where the
+        // socket lives and is torn down — so the lookup + adopt is race-free and the
+        // background thread never touches the (possibly-freed) socket object.
+        provider->callOnRTCNetworkThread([provider, identifier, ok, client = WTF::move(client), tls = WTF::move(tls)]() mutable {
+            provider->finishDriftstackTCPConnect(identifier, ok, WTF::move(client), WTF::move(tls));
+        });
+    }).get());
+}
 
-    WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.275] DriftstackRTCSocks5TCPSocket ESTABLISHED to %s:%u (fd=%d, isSTUN=%d, isTLS=%d)",
-        host.c_str(), remoteAddress.port(), currentFd, socket->m_isSTUN ? 1 : 0, socket->m_isTLS ? 1 : 0);
-
-    return socket;
+void DriftstackRTCSocks5TCPSocket::adoptConnectedTransport(
+    std::unique_ptr<DriftstackSocks5Client>&& client, std::unique_ptr<DriftstackTLS13Client>&& tls)
+{
+    int fd;
+    {
+        Locker locker { m_lock };
+        if (m_closed)
+            return; // socket closed during connect — drop the transport (fd closed by client dtor)
+        m_socks5Client = WTF::move(client);
+        m_tls = WTF::move(tls);
+        m_fd = m_socks5Client->socketFileDescriptor();
+        fd = m_fd;
+    }
+    startReadLoop();
+    m_connection->send(Messages::LibWebRTCNetwork::SignalConnect(m_identifier), 0);
+    WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.341] DriftstackRTCSocks5TCPSocket ESTABLISHED (async) to %s:%u (fd=%d, isSTUN=%d, isTLS=%d)",
+        m_remoteAddress.hostname().c_str(), m_remoteAddress.port(), fd, m_isSTUN ? 1 : 0, m_isTLS ? 1 : 0);
 }
 
 DriftstackRTCSocks5TCPSocket::DriftstackRTCSocks5TCPSocket(

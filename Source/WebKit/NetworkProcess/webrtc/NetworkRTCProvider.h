@@ -67,6 +67,10 @@ class FragmentedSharedBuffer;
 namespace WebKit {
 class NetworkConnectionToWebProcess;
 class NetworkSession;
+#if PLATFORM(DRIFTSTACK)
+class DriftstackSocks5Client;  // fwd — used by finishDriftstackTCPConnect (async TURN TCP/TLS)
+class DriftstackTLS13Client;
+#endif
 struct RTCPacketOptions;
 struct RTCSocketCreationFlags;
 
@@ -117,6 +121,14 @@ public:
     IPC::Connection& connection() { return m_ipcConnection.get(); }
 
     void closeSocket(WebCore::LibWebRTCSocketIdentifier);
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.341 — completion for DriftstackRTCSocks5TCPSocket::beginAsyncConnect.
+    // Runs on the RTC network thread: hands the connected transport to the socket if it
+    // still exists (looked up by identifier), else drops it / signals closed.
+    void finishDriftstackTCPConnect(WebCore::LibWebRTCSocketIdentifier, bool ok,
+        std::unique_ptr<DriftstackSocks5Client>&&, std::unique_ptr<DriftstackTLS13Client>&&);
+#endif
 
 #if PLATFORM(COCOA)
     bool NODELETE webRTCInterfaceMonitoringViaNWEnabled() const;
