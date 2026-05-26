@@ -119,11 +119,15 @@ public:
 
 private:
     DriftstackHttp3Session(void* qc, void* ssl);
+    void runPump();                       // background owner-thread loop (.mm)
 
-    Lock m_lock;                          // serializes execute() on the shared conn
+    Lock m_lock;                          // guards m_pumpState queue/inflight + m_alive
     void* m_qc { nullptr };                // owned DriftstackQuicConn* (opaque here;
                                            // real type is .mm-internal, anon namespace)
     void* m_ssl { nullptr };               // SSL* (owned; freed at session close)
+    void* m_pumpState { nullptr };         // owned H3PumpState* (.mm) — background pump
+                                           // thread + request queue + per-request slots
+                                           // for CONCURRENT multiplexing; nullptr = none
     bool m_alive { true };
 };
 

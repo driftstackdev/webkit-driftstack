@@ -3146,10 +3146,32 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
 // connection for pooling. create() does the one-time setup + handshake (mirrors
 // driftstackHttp3Execute's bring-up, reusing the same factored primitives —
 // connectQuic / driftstackQuicRawSocks5Associate / SetupConnection / etc. — so
-// the one-shot Execute path is left completely untouched). execute() reuses the
-// live connection for each request (no new handshake). SERIALIZED via m_lock.
-// Gated by DRIFTSTACK_H3_POOL.
+// the one-shot Execute path is left completely untouched). A background PUMP
+// thread owns the QUIC conn and services it continuously; execute() enqueues a
+// request + waits for its stream — so many requests multiplex CONCURRENTLY on the
+// one connection (one handshake/origin). ngtcp2/nghttp3 are NOT thread-safe, so
+// ALL conn ops (open_bidi_stream, submit, read_pkt, writev, expiry) run ONLY on
+// the pump thread; execute() never touches the conn. Gated by DRIFTSTACK_H3_POOL.
 // ===========================================================================
+namespace {
+// One in-flight request: submitted by the pump on a fresh bidi stream; execute()
+// waits on the session condvar until done, then reads response.
+struct H3PendingReq {
+    DriftstackHttp3Request request;
+    int64_t streamId { -1 };
+    bool done { false };
+    DriftstackHttp3Response response;
+};
+// Per-session pump state (PIMPL behind DriftstackHttp3Session::m_pumpState).
+struct H3PumpState {
+    Condition cond;                                              // signalled on enqueue + completion
+    bool stop { false };
+    Vector<std::shared_ptr<H3PendingReq>> queue;                // awaiting submit (guarded by m_lock)
+    HashMap<int64_t, std::shared_ptr<H3PendingReq>> inflight;    // (streamId+1) → req (guarded by m_lock)
+    RefPtr<Thread> thread;
+};
+} // namespace
+
 bool driftstackHttp3PoolEnabled()
 {
     static const char* e = getenv("DRIFTSTACK_H3_POOL");
@@ -3164,6 +3186,19 @@ DriftstackHttp3Session::DriftstackHttp3Session(void* qc, void* ssl)
 
 DriftstackHttp3Session::~DriftstackHttp3Session()
 {
+    // Stop + join the pump thread FIRST so no conn ops race the teardown below.
+    if (m_pumpState) {
+        auto* st = static_cast<H3PumpState*>(m_pumpState);
+        {
+            Locker l { m_lock };
+            st->stop = true;
+            st->cond.notifyAll();
+        }
+        if (st->thread)
+            st->thread->waitForCompletion();
+        delete st;
+        m_pumpState = nullptr;
+    }
     if (!m_qc)
         return;
     DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(m_qc);
@@ -3376,90 +3411,149 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
 
     WTFLogAlways("[Wave29-499.322/H3POOL] session ESTABLISHED for %s (peer=%s:%u, handshake OK, h3 streams bound)",
         authority.utf8().data(), peerIpStr.utf8().data(), authPort);
-    return adoptRef(new DriftstackHttp3Session(qc, ssl));
+    auto session = adoptRef(new DriftstackHttp3Session(qc, ssl));
+    // Start the owner pump thread (services the conn + drains the request queue).
+    auto* st = new H3PumpState;
+    session->m_pumpState = st;
+    DriftstackHttp3Session* raw = session.get(); // dtor joins before freeing → raw stays valid
+    st->thread = Thread::create("driftstack-h3-pump"_s, [raw] { raw->runPump(); });
+    return session;
+}
+
+void DriftstackHttp3Session::runPump()
+{
+    auto* st = static_cast<H3PumpState*>(m_pumpState);
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(m_qc);
+    auto& nf = ngtcp2Fns();
+    Socks5Framing::Endpoint peerEp { qc->peerIp, qc->peerPort };
+    while (true) {
+        // 1. take queued requests + check stop.
+        Vector<std::shared_ptr<H3PendingReq>> toSubmit;
+        {
+            Locker l { m_lock };
+            if (st->stop)
+                break;
+            toSubmit = std::move(st->queue);
+            st->queue.clear();
+        }
+        // 2. submit each on a fresh bidi stream (conn ops — pump thread ONLY).
+        bool anyFailed = false;
+        for (auto& p : toSubmit) {
+            if (!driftstackHttp3SubmitRequest(qc, p->request)) {
+                Locker l { m_lock };
+                p->response.failed = true;
+                p->response.errorMessage = "h3 submit failed"_s;
+                p->done = true;
+                anyFailed = true;
+                continue;
+            }
+            int64_t sid = qc->h3RequestStreamId; // SubmitRequest set this to the new stream
+            Locker l { m_lock };
+            p->streamId = sid;
+            st->inflight.set(sid + 1, p); // key +1 to match the per-stream map (stream 0 → key 1)
+        }
+        if (anyFailed)
+            st->cond.notifyAll();
+        // 3. service the QUIC conn: flush writes, read inbound (fires nghttp3
+        //    callbacks → per-stream map), drive loss recovery, flush ACKs.
+        driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
+        struct timeval tv { 0, 20 * 1000 }; // 20ms — responsive to new requests + inbound
+        fd_set rs;
+        FD_ZERO(&rs);
+        FD_SET(qc->udpFd, &rs);
+        int sel = select(qc->udpFd + 1, &rs, nullptr, nullptr, &tv);
+        if (sel > 0) {
+            for (;;) {
+                uint8_t inbound[2048];
+                ssize_t r = recvfrom(qc->udpFd, inbound, sizeof(inbound), MSG_DONTWAIT, nullptr, nullptr);
+                if (r <= 0)
+                    break;
+                Socks5Framing::Endpoint src;
+                Vector<uint8_t> payload;
+                if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
+                    continue;
+                driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+                    reinterpret_cast<struct sockaddr*>(&qc->peerSa), sizeof(qc->peerSa),
+                    reinterpret_cast<struct sockaddr*>(&qc->localSa), sizeof(qc->localSa));
+            }
+        } else if (nf.conn_handle_expiry)
+            nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+        driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
+        // 4. harvest completed streams from the per-stream map (written by the
+        //    callbacks above, on THIS thread) into their pending-request slots.
+        bool anyDone = false;
+        {
+            Locker sl { qc->h3StreamsLock };
+            Locker l { m_lock };
+            Vector<int64_t> doneKeys;
+            for (auto& entry : st->inflight) {
+                int64_t key = entry.key; // streamId + 1
+                auto it = qc->h3Streams.find(key);
+                if (it == qc->h3Streams.end() || !it->value->complete)
+                    continue;
+                auto& p = entry.value;
+                auto* str = it->value.get();
+                p->response.failed = false;
+                p->response.statusCode = str->status ? str->status : 200;
+                p->response.body = std::move(str->body);
+                for (auto& kv : str->headers) {
+                    p->response.headers.append({
+                        String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.first.span().data()), kv.first.size() }),
+                        String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
+                }
+                p->done = true;
+                doneKeys.append(key);
+                anyDone = true;
+            }
+            for (int64_t k : doneKeys) {
+                st->inflight.remove(k);
+                qc->h3Streams.remove(k);
+            }
+        }
+        if (anyDone)
+            st->cond.notifyAll();
+    }
 }
 
 DriftstackHttp3Response DriftstackHttp3Session::execute(const DriftstackHttp3Request& request)
 {
     DriftstackHttp3Response resp;
-    Locker locker { m_lock };
-    if (!m_alive || !m_qc) {
+    auto* st = static_cast<H3PumpState*>(m_pumpState);
+    if (!st) {
         resp.failed = true;
-        resp.errorMessage = "h3 session not alive"_s;
+        resp.errorMessage = "h3 session has no pump"_s;
         return resp;
     }
-    auto& nf = ngtcp2Fns();
-    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(m_qc);
-    Socks5Framing::Endpoint peerEp { qc->peerIp, qc->peerPort };
-
-    // Pre-pump: service expiry + flush any pending writes so a briefly-idle
-    // connection is healthy before we submit the new request.
-    if (nf.conn_handle_expiry)
-        nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
-    driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
-
-    if (!driftstackHttp3SubmitRequest(qc, request)) {
-        m_alive = false;
-        resp.failed = true;
-        resp.errorMessage = "h3 submit on pooled connection failed"_s;
-        return resp;
-    }
-
-    constexpr int kH3MaxIterations = 200;
-    constexpr int kPerRecvTimeoutMs = 300;
-    int h3iters = 0;
-    while (h3iters < kH3MaxIterations && !qc->h3ResponseComplete) {
-        ++h3iters;
-        int w = driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
-        if (w < 0)
-            break;
-        struct timeval tv { 0, kPerRecvTimeoutMs * 1000 };
-        fd_set rs;
-        FD_ZERO(&rs);
-        FD_SET(qc->udpFd, &rs);
-        int sel = select(qc->udpFd + 1, &rs, nullptr, nullptr, &tv);
-        if (sel <= 0) {
-            if (nf.conn_handle_expiry)
-                nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
-            continue;
+    // Enqueue the request for the pump thread + wait for ITS stream to complete.
+    // execute() NEVER touches the QUIC conn (only the pump does) — so concurrent
+    // callers multiplex over the one connection.
+    auto p = std::make_shared<H3PendingReq>();
+    p->request = request;
+    {
+        Locker l { m_lock };
+        if (!m_alive) {
+            resp.failed = true;
+            resp.errorMessage = "h3 session not alive"_s;
+            return resp;
         }
-        for (;;) {
-            uint8_t inbound[2048];
-            ssize_t r = recvfrom(qc->udpFd, inbound, sizeof(inbound), MSG_DONTWAIT, nullptr, nullptr);
-            if (r <= 0)
-                break;
-            Socks5Framing::Endpoint src;
-            Vector<uint8_t> payload;
-            if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
-                continue;
-            driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
-                reinterpret_cast<struct sockaddr*>(&qc->peerSa), sizeof(qc->peerSa),
-                reinterpret_cast<struct sockaddr*>(&qc->localSa), sizeof(qc->localSa));
-            if (qc->h3ResponseComplete)
-                break;
+        st->queue.append(p);
+        st->cond.notifyAll(); // wake the pump to submit promptly
+        MonotonicTime deadline = MonotonicTime::now() + Seconds(30);
+        while (!p->done) {
+            if (!st->cond.waitUntil(m_lock, deadline))
+                break; // timeout
         }
     }
-    driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
-
-    if (!qc->h3ResponseComplete) {
-        resp.failed = true;
-        resp.errorMessage = "h3 pooled response incomplete (budget exhausted)"_s;
-        WTFLogAlways("[Wave29-499.322/H3POOL] response INCOMPLETE iters=%d status=%d bodyLen=%zu",
-            h3iters, qc->h3Status, qc->h3ResponseBody.size());
-        return resp;
+    if (!p->done) {
+        p->response.failed = true;
+        if (p->response.errorMessage.isEmpty())
+            p->response.errorMessage = "h3 pooled request timeout"_s;
+        WTFLogAlways("[Wave29-499.322/H3POOL] pooled request TIMEOUT (stream=%lld)", (long long)p->streamId);
+        return p->response;
     }
-
-    resp.failed = false;
-    resp.statusCode = qc->h3Status ? qc->h3Status : 200;
-    resp.body = std::move(qc->h3ResponseBody);
-    for (auto& kv : qc->h3ResponseHeaders) {
-        resp.headers.append({
-            String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.first.span().data()), kv.first.size() }),
-            String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
-    }
-    WTFLogAlways("[Wave29-499.322/H3POOL] pooled request COMPLETE status=%d bodyLen=%zu (REUSED conn, iters=%d)",
-        resp.statusCode, resp.body.size(), h3iters);
-    return resp;
+    WTFLogAlways("[Wave29-499.322/H3POOL] pooled request COMPLETE status=%d bodyLen=%zu (concurrent, stream=%lld)",
+        p->response.statusCode, p->response.body.size(), (long long)p->streamId);
+    return p->response;
 }
 
 // Wave 29-499.240 — C-linkage smoke trigger callable from
