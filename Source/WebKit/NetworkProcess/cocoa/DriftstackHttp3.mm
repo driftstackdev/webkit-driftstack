@@ -2028,14 +2028,16 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
     Vector<std::pair<CString, CString>> store;
     auto add = [&](const char* n, CString v) { store.append({ CString(n), std::move(v) }); };
 
+    // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — matches the
+    // corrected h2 order from the BS akamai capture (Wave .323).
     add(":method", request.method.isEmpty() ? CString("GET") : request.method.utf8());
     add(":scheme", request.scheme.isEmpty() ? CString("https") : request.scheme.utf8());
-    add(":path", request.path.isEmpty() ? CString("/") : request.path.utf8());
     // :authority — strip the default :443 (real Safari omits it).
     String authStr = request.authority;
     if (authStr.endsWith(":443"_s))
         authStr = authStr.left(authStr.length() - 4);
     add(":authority", authStr.utf8());
+    add(":path", request.path.isEmpty() ? CString("/") : request.path.utf8());
     // Forward every non-pseudo, non-connection-specific request header verbatim.
     for (auto& kv : request.extraHeaders) {
         String lname = kv.first.convertToASCIILowercase();

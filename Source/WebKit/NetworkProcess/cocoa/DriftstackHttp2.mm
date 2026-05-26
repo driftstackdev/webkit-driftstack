@@ -552,13 +552,14 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
         settingsPayload.append(static_cast<uint8_t>((val >> 8) & 0xff));
         settingsPayload.append(static_cast<uint8_t>(val & 0xff));
     };
-    // iPhone Safari 26.0 SETTINGS order (from real iPhone tls.peet.ws):
-    //   ENABLE_PUSH = 0, INITIAL_WINDOW_SIZE = 4194304,
-    //   MAX_CONCURRENT_STREAMS = 100, NO_RFC7540_PRIORITIES = 1
-    pushSetting(kSettingEnablePush, 0);
-    pushSetting(kSettingInitialWindowSize, 4194304);
-    pushSetting(kSettingMaxConcurrentStreams, 100);
-    pushSetting(kSettingNoRfc7540Priorities, 1);
+    // iPhone 17 / Safari 26.4 SETTINGS — order + values from a real-device BS
+    // capture against tls.peet.ws (Wave .323): akamai = 2:0;3:100;4:2097152;9:1.
+    // ORDER is 2,3,4,9 (MAX_CONCURRENT_STREAMS BEFORE INITIAL_WINDOW_SIZE) and
+    // INITIAL_WINDOW_SIZE = 2097152 (2MB, NOT 4194304 — that was a stale value).
+    pushSetting(kSettingEnablePush, 0);              // 2:0
+    pushSetting(kSettingMaxConcurrentStreams, 100);  // 3:100
+    pushSetting(kSettingInitialWindowSize, 2097152); // 4:2097152
+    pushSetting(kSettingNoRfc7540Priorities, 1);     // 9:1
 
     uint8_t settingsHeader[9];
     encodeFrameHeader(settingsHeader, settingsPayload.size(), kFrameSettings, 0, 0);
@@ -568,10 +569,11 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
         return resp;
     }
 
-    // 3. Send WINDOW_UPDATE for connection (stream 0) = +10485760
+    // 3. Send WINDOW_UPDATE for connection (stream 0). Real iPhone 17 sends
+    //    +10420225 (= target 10485760 - default initial 65535), per BS capture.
     uint8_t windowUpdate[13];
     encodeFrameHeader(windowUpdate, 4, kFrameWindowUpdate, 0, 0);
-    uint32_t inc = 10485760;
+    uint32_t inc = 10420225;
     windowUpdate[9] = (inc >> 24) & 0xff;
     windowUpdate[10] = (inc >> 16) & 0xff;
     windowUpdate[11] = (inc >> 8) & 0xff;
@@ -585,10 +587,11 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     // 4. Send HEADERS frame for stream 1 (client-initiated streams are odd).
     // iPhone Safari pseudo-header order: m,s,p,a (method, scheme, path, authority)
     Vector<uint8_t> headersBlock;
+    // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — BS capture Wave .323.
     hpackEncodeHeader(headersBlock, ":method"_s, request.method);
     hpackEncodeHeader(headersBlock, ":scheme"_s, request.scheme);
-    hpackEncodeHeader(headersBlock, ":path"_s, request.path);
     hpackEncodeHeader(headersBlock, ":authority"_s, request.authority);
+    hpackEncodeHeader(headersBlock, ":path"_s, request.path);
     for (auto& [key, val] : request.extraHeaders) {
         hpackEncodeHeader(headersBlock, key.convertToASCIILowercase(), val);
     }
@@ -1045,17 +1048,18 @@ bool DriftstackHttp2Session::sendPrefaceAndSettings()
         sp.append(static_cast<uint8_t>((val >> 24) & 0xff)); sp.append(static_cast<uint8_t>((val >> 16) & 0xff));
         sp.append(static_cast<uint8_t>((val >> 8) & 0xff)); sp.append(static_cast<uint8_t>(val & 0xff));
     };
-    pushSetting(kSettingEnablePush, 0);
-    pushSetting(kSettingInitialWindowSize, 4194304);
-    pushSetting(kSettingMaxConcurrentStreams, 100);
-    pushSetting(kSettingNoRfc7540Priorities, 1);
+    // iPhone 17 / Safari 26.4 order+values (BS capture Wave .323): 2:0;3:100;4:2097152;9:1
+    pushSetting(kSettingEnablePush, 0);              // 2:0
+    pushSetting(kSettingMaxConcurrentStreams, 100);  // 3:100
+    pushSetting(kSettingInitialWindowSize, 2097152); // 4:2097152
+    pushSetting(kSettingNoRfc7540Priorities, 1);     // 9:1
     uint8_t sh[9];
     encodeFrameHeader(sh, sp.size(), kFrameSettings, 0, 0);
     if (!transportWriteAll(m_transport, sh, 9) || !transportWriteAll(m_transport, sp.span().data(), sp.size()))
         return false;
     uint8_t wu[13];
     encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
-    uint32_t inc = 10485760;
+    uint32_t inc = 10420225;
     wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
     return transportWriteAll(m_transport, wu, 13);
 }
@@ -1191,10 +1195,11 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     // Build HEADERS (iPhone pseudo-header order m,s,p,a) + optional DATA, send
     // under the write lock so frames from concurrent streams don't interleave.
     Vector<uint8_t> hb;
+    // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — BS capture Wave .323.
     hpackEncodeHeader(hb, ":method"_s, request.method);
     hpackEncodeHeader(hb, ":scheme"_s, request.scheme);
-    hpackEncodeHeader(hb, ":path"_s, request.path);
     hpackEncodeHeader(hb, ":authority"_s, request.authority);
+    hpackEncodeHeader(hb, ":path"_s, request.path);
     for (auto& [k, v] : request.extraHeaders)
         hpackEncodeHeader(hb, k.convertToASCIILowercase(), v);
 

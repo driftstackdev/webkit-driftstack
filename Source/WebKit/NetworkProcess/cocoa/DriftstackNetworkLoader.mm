@@ -1070,6 +1070,9 @@ void DriftstackNetworkLoader::resume()
                         }
                     }
                     if (expectedLength < 0) expectedLength = static_cast<long long>(h2resp.body.size());
+                    // Wave .323 DEBUG (removable) — log the peet.ws print (h2 fast-path).
+                    if (url.host().toString().endsWith("peet.ws"_s))
+                        WTFLogAlways("[PEET-PRINT-BEGIN]%.*s[PEET-PRINT-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
                     WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
                     response.setHTTPStatusCode(h2resp.statusCode);
                     for (auto& [k, v] : h2resp.headers)
@@ -1452,6 +1455,11 @@ void DriftstackNetworkLoader::resume()
             // Body size known post-decompression; use it if Content-Length absent/stripped
             if (expectedLength < 0)
                 expectedLength = static_cast<long long>(h2resp.body.size());
+
+            // Wave .323 DEBUG (removable) — log peet.ws print (adopt/one-shot h2 path);
+            // NetworkProcess sandbox blocks /tmp writes, so emit to stderr.
+            if (url.host().toString().endsWith("peet.ws"_s))
+                WTFLogAlways("[PEET-PRINT-BEGIN]%.*s[PEET-PRINT-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
 
             WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
             response.setHTTPStatusCode(h2resp.statusCode);
