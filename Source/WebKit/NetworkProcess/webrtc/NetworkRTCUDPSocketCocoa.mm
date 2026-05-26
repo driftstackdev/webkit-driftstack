@@ -690,12 +690,28 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket { identifier, unwrapped.payload.span(), RTCNetwork::IPAddress(remappedIp), unwrapped.sourcePort, webrtc::TimeMicros(), ecn }, 0);
     });
 
-    nw_connection_start(m_relayConnection.get());
+    // Wave 29-499.333 — DO NOT start the nw_connection by default. It and the BSD
+    // socket (below) both bind to the SAME per-socket relay BND; whichever sends first
+    // is the one the proxy associates the UDP ASSOCIATE with. With both started, inbound
+    // responses split between the two readers — the BSD socket got only some datagrams
+    // and TURN CreatePermission/data responses never returned to the right socket
+    // (Twilio TURN tests failed after allocate). Leaving the nw_connection created-but-
+    // unstarted makes the BSD socket the SOLE sender+receiver, so the proxy binds to it
+    // and every TURN response returns on the BSD path. m_relayConnection stays non-null
+    // so existing relayReady/relayConn gates pass; the BSD socket does all the work.
+    // Reversible: DRIFTSTACK_WEBRTC_NWCONN_RELAY=1 restores the old dual-path behavior.
+    static const bool s_startNwConnRelay = [] {
+        const char* e = getenv("DRIFTSTACK_WEBRTC_NWCONN_RELAY");
+        return e && e[0] == '1';
+    }();
+    if (s_startNwConnRelay)
+        nw_connection_start(m_relayConnection.get());
 
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] m_relayConnection STARTED — bound to relay %s:%u.",
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.333] m_relayConnection %s — relay %s:%u (BSD socket is sole sender/receiver unless NWCONN_RELAY=1).",
+            s_startNwConnRelay ? "STARTED (legacy dual-path)" : "created-unstarted (BSD-only)",
             relayHostUtf8.data(), channel.relayPort);
     }
 
