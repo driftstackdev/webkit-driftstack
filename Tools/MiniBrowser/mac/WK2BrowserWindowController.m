@@ -599,7 +599,20 @@ static BOOL areEssentiallyEqual(double a, double b)
     preferences._serviceControlsEnabled = settings.dataDetectorsEnabled;
     preferences._telephoneNumberDetectionIsEnabled = settings.dataDetectorsEnabled;
 
-    _webView.configuration.defaultWebpagePreferences.securityRestrictionMode = settings.enhancedSecurityEnabled ? WKSecurityRestrictionModeMaximizeCompatibility : WKSecurityRestrictionModeNone;
+    // Wave 29-499.326 — guard a header-declared-but-unimplemented SPI. In this
+    // fork build WKWebpagePreferences.securityRestrictionMode (macOS 26.4) is
+    // declared in the headers MiniBrowser compiles against but its setter is not
+    // implemented in WKWebpagePreferences.mm. Calling it threw
+    // "-[WKWebpagePreferences setSecurityRestrictionMode:]: unrecognized selector"
+    // inside awakeFromNib; AppKit swallowed the exception, so the browser window
+    // was never created — the app launched with no window and no crash/error.
+    // respondsToSelector keeps window creation alive and reports the missing SPI
+    // loudly instead of failing silently.
+    WKWebpagePreferences *defaultWebpagePreferences = _webView.configuration.defaultWebpagePreferences;
+    if ([defaultWebpagePreferences respondsToSelector:@selector(setSecurityRestrictionMode:)])
+        defaultWebpagePreferences.securityRestrictionMode = settings.enhancedSecurityEnabled ? WKSecurityRestrictionModeMaximizeCompatibility : WKSecurityRestrictionModeNone;
+    else
+        NSLog(@"[Driftstack/MiniBrowser] WKWebpagePreferences has no -setSecurityRestrictionMode: in this WebKit build; skipping the enhancedSecurity setting so the window still opens. Implement it in WKWebpagePreferences.mm to restore the setting.");
     _webView.configuration.websiteDataStore._resourceLoadStatisticsEnabled = settings.resourceLoadStatisticsEnabled;
 
     [self setWebViewFillsWindow:settings.webViewFillsWindow];
