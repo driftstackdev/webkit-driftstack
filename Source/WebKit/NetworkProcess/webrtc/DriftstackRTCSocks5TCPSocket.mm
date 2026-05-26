@@ -230,11 +230,22 @@ void DriftstackRTCSocks5TCPSocket::onIncomingData(std::span<const uint8_t> chunk
 {
     m_rxBuffer.append(chunk);
 
+    // Wave 29-499.339 — log raw inbound on the TCP tunnel + each extracted message
+    // type, so we can see whether TURN-over-TCP Allocate responses actually arrive
+    // and frame correctly (the UDP path's "no response" turned out to be a logging
+    // gap; verify the TCP path the same way before concluding anything).
+    unsigned extractedCount = 0;
+    size_t rxBefore = m_rxBuffer.size();
+
     // STUN/TURN framing: extract messages via Apple's existing helper.
     Vector<uint8_t> moved = std::exchange(m_rxBuffer, Vector<uint8_t>());
     auto remaining = WebCore::WebRTC::extractMessages(WTF::move(moved),
         m_isSTUN ? WebCore::WebRTC::MessageType::STUN : WebCore::WebRTC::MessageType::Data,
         [&](auto data) {
+            uint16_t mt = data.size() >= 2 ? ((static_cast<uint16_t>(data[0]) << 8) | data[1]) : 0;
+            ++extractedCount;
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.339] TCP recv: extracted TURN msgType=0x%04x len=%zu ← %s:%u",
+                mt, data.size(), m_remoteAddress.hostname().c_str(), m_remoteAddress.port());
             m_connection->send(Messages::LibWebRTCNetwork::SignalReadPacket {
                 m_identifier,
                 data,
@@ -245,6 +256,9 @@ void DriftstackRTCSocks5TCPSocket::onIncomingData(std::span<const uint8_t> chunk
             }, 0);
         });
     m_rxBuffer = WTF::move(remaining);
+    WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.339] TCP onIncomingData: %zu raw bytes (rxBuf %zu→%zu), extracted %u STUN/TURN msg(s) from %s:%u",
+        chunk.size(), rxBefore, m_rxBuffer.size(), extractedCount,
+        m_remoteAddress.hostname().c_str(), m_remoteAddress.port());
 }
 
 void DriftstackRTCSocks5TCPSocket::close()
@@ -302,6 +316,15 @@ void DriftstackRTCSocks5TCPSocket::sendTo(std::span<const uint8_t> data,
         fd = m_fd;
     }
     if (fd < 0) return;
+
+    // Wave 29-499.339 — log outgoing TURN/STUN message type over the TCP tunnel
+    // (TURN TCP/TLS path; mirrors the UDP §7 catch-all that proved UDP works).
+    if (data.size() >= 2) {
+        uint16_t mt = (static_cast<uint16_t>(data[0]) << 8) | data[1];
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.339] TCP sendTo: TURN msgType=0x%04x payload=%zu framed=%zu (isSTUN=%d isTLS=%d) → %s:%u",
+            mt, data.size(), buffer.size(), m_isSTUN, m_tls ? 1 : 0,
+            m_remoteAddress.hostname().c_str(), m_remoteAddress.port());
+    }
 
     // Wave 29-499.279 — if TLS-wrapped (TURN-TLS), route through
     // DriftstackTLS13Client::write which encrypts + frames per TLS 1.3.
