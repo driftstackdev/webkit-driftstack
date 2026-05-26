@@ -3718,17 +3718,27 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
     bool remoteTpApplied = false;
     while (iters < kMaxIterations && !qc->handshakeCompleted) {
         ++iters;
-        int hsRv = bsf.SSL_do_handshake(ssl);
-        if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+        // Wave .349 — when the custom QUIC-TLS engine drives (ctEnabled), DO NOT call
+        // SSL_do_handshake: BoringSSL would emit a SECOND ClientHello after ours → server
+        // CRYPTO_ERROR (unexpected_message). The CT engine self-drives from recv_crypto;
+        // server transport params come from EncryptedExtensions, not the SSL object.
+        if (!qc->ctEnabled) {
+            int hsRv = bsf.SSL_do_handshake(ssl);
+            if (!remoteTpApplied && bsf.SSL_get_peer_quic_transport_params
+                && nf.conn_decode_and_set_remote_transport_params) {
+                const uint8_t* tp = nullptr;
+                size_t tpLen = 0;
+                bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
+                if (tp && tpLen > 0)
+                    remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen) == 0);
+            }
+            if (hsRv == 1 && nf.conn_tls_handshake_completed && !qc->handshakeCompleted)
+                nf.conn_tls_handshake_completed(qc->conn);
+        } else if (!remoteTpApplied && qc->ctRemoteTransportParams.size() > 0
             && nf.conn_decode_and_set_remote_transport_params) {
-            const uint8_t* tp = nullptr;
-            size_t tpLen = 0;
-            bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
-            if (tp && tpLen > 0)
-                remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen) == 0);
+            remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn,
+                qc->ctRemoteTransportParams.span().data(), qc->ctRemoteTransportParams.size()) == 0);
         }
-        if (hsRv == 1 && nf.conn_tls_handshake_completed && !qc->handshakeCompleted)
-            nf.conn_tls_handshake_completed(qc->conn);
         for (;;) {
             uint8_t pkt[1500];
             ssize_t n = driftstackQuicWritePacket(qc, pkt, sizeof(pkt));
