@@ -376,14 +376,18 @@ static Vector<std::unique_ptr<DriftstackSocks5Client>>& perSocketRelayClients()
     return v.get();
 }
 
-BridgeResult establishPerSocketRelay(RelayChannel& out)
+// Shared core: open ONE fresh SOCKS5 UDP ASSOCIATE (its own TCP control conn,
+// stashed process-lifetime for the association's lifetime per RFC 1928 §6) and
+// return its BND endpoint. Used by both the synchronous establishPerSocketRelay
+// and the background pre-warm (Wave .338).
+static BridgeResult establishOneRelay(RelayChannel& out)
 {
     if (!isCustomSocks5Active())
         return BridgeResult::Socks5Disabled;
 
     Socks5Endpoint proxy;
     if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
-        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
+        WTFLogAlways("[Wave29-499.332] establishOneRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
         return BridgeResult::ProtocolError;
     }
     Socks5Credentials creds;
@@ -394,12 +398,12 @@ BridgeResult establishPerSocketRelay(RelayChannel& out)
 
     auto client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
     if (client->performHandshake() != Socks5Result::Success) {
-        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: SOCKS5 handshake FAILED");
+        WTFLogAlways("[Wave29-499.332] establishOneRelay: SOCKS5 handshake FAILED");
         return BridgeResult::NetworkError;
     }
     Socks5UdpRelayChannel channel;
     if (client->udpAssociate(channel) != Socks5Result::Success) {
-        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: UDP ASSOCIATE FAILED");
+        WTFLogAlways("[Wave29-499.332] establishOneRelay: UDP ASSOCIATE FAILED");
         return BridgeResult::UdpAssociateFailed;
     }
     out.relayHost = channel.relayHost;
@@ -408,9 +412,61 @@ BridgeResult establishPerSocketRelay(RelayChannel& out)
         Locker locker { perSocketRelayClientsLock() };
         perSocketRelayClients().append(std::move(client)); // keep control conn alive
     }
-    WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: SUCCESS — FRESH relay %s:%u (distinct 5-tuple; total per-socket relays=%zu)",
-        out.relayHost.utf8().data(), out.relayPort, perSocketRelayClients().size());
     return BridgeResult::Success;
+}
+
+BridgeResult establishPerSocketRelay(RelayChannel& out)
+{
+    BridgeResult r = establishOneRelay(out);
+    if (r == BridgeResult::Success) {
+        Locker locker { perSocketRelayClientsLock() };
+        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: SUCCESS — FRESH relay %s:%u (distinct 5-tuple; total per-socket relays=%zu)",
+            out.relayHost.utf8().data(), out.relayPort, perSocketRelayClients().size());
+    }
+    return r;
+}
+
+// Wave 29-499.338 — PRE-WARM POOL. establishOneRelay does a synchronous SOCKS5
+// handshake + UDP ASSOCIATE (~1 TCP RTT + auth ≈ 400ms to a remote proxy). On
+// the ICE critical path that serial cost — ×N sockets ×2 peers — pushes Twilio
+// NT's hard 5s connectivity deadline over the edge even though the relay round-
+// trip itself works (allocate/createperm/channelbind/data all verified). Warm a
+// pool of associates IN PARALLEL on a background queue so per-socket relay
+// assignment becomes instant. The handshakes overlap (≈400ms total, not N×400ms).
+static Lock& prewarmPoolLock() { static NeverDestroyed<Lock> l; return l.get(); }
+static Vector<RelayChannel>& prewarmPool() { static NeverDestroyed<Vector<RelayChannel>> v; return v.get(); }
+
+void prewarmPerSocketRelays(unsigned count)
+{
+    if (!isCustomSocks5Active() || !count)
+        return;
+    for (unsigned i = 0; i < count; ++i) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            RelayChannel ch;
+            if (establishOneRelay(ch) == BridgeResult::Success && !ch.relayHost.isEmpty() && ch.relayPort > 0) {
+                size_t poolSize;
+                {
+                    Locker locker { prewarmPoolLock() };
+                    prewarmPool().append(ch);
+                    poolSize = prewarmPool().size();
+                }
+                WTFLogAlways("[Wave29-499.338] prewarmPerSocketRelays: warmed relay %s:%u (pool ready=%zu)",
+                    ch.relayHost.utf8().data(), ch.relayPort, poolSize);
+            }
+        });
+    }
+    WTFLogAlways("[Wave29-499.338] prewarmPerSocketRelays: dispatched %u parallel UDP ASSOCIATE handshakes (off ICE critical path)", count);
+}
+
+bool acquirePrewarmedRelay(RelayChannel& out)
+{
+    Locker locker { prewarmPoolLock() };
+    if (prewarmPool().isEmpty())
+        return false;
+    out = prewarmPool().takeLast();
+    WTFLogAlways("[Wave29-499.338] acquirePrewarmedRelay: HIT %s:%u (pool remaining=%zu) — relay setup OFF critical path",
+        out.relayHost.utf8().data(), out.relayPort, prewarmPool().size());
+    return true;
 }
 
 BridgeResult establishRelayChannel(RelayChannel& out)

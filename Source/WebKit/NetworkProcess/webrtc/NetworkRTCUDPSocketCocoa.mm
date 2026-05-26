@@ -293,6 +293,19 @@ NetworkRTCUDPSocketCocoaConnections::NetworkRTCUDPSocketCocoaConnections(WebCore
     , m_sourceApplicationAuditToken(rtcProvider.sourceApplicationAuditToken())
     , m_attributedBundleIdentifier(WTF::move(attributedBundleIdentifier))
 {
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.338 — on the FIRST WebRTC UDP socket of the process, warm a pool
+    // of SOCKS5 UDP ASSOCIATE relays in parallel. ICE host-candidate gathering +
+    // the first STUN exchange overlap the ~400ms warm-up, so by the time TURN
+    // allocate needs distinct-5-tuple relays they're already established — keeping
+    // the serial handshake cost off Twilio NT's 5s connectivity deadline.
+    if (DriftstackRTC::isCustomSocks5Active()) {
+        static std::once_flag prewarmOnce;
+        std::call_once(prewarmOnce, [] {
+            DriftstackRTC::prewarmPerSocketRelays(6);
+        });
+    }
+#endif
     auto parameters = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
     {
         auto hostAddress = computeHostAddress(address);
@@ -366,12 +379,20 @@ bool NetworkRTCUDPSocketCocoaConnections::ensurePerSocketRelay(DriftstackRTC::Re
         out = m_perSocketRelay;
         return true;
     }
+    // Wave 29-499.338 — prefer a pre-warmed relay (instant); only pay the ~400ms
+    // remote-proxy handshake synchronously if the pool is empty. Either way kick a
+    // background refill so the next socket / peer stays off the critical path.
     DriftstackRTC::RelayChannel ch;
-    if (DriftstackRTC::establishPerSocketRelay(ch) == DriftstackRTC::BridgeResult::Success
-        && !ch.relayHost.isEmpty() && ch.relayPort > 0) {
+    bool got = DriftstackRTC::acquirePrewarmedRelay(ch) && !ch.relayHost.isEmpty() && ch.relayPort > 0;
+    if (!got) {
+        got = DriftstackRTC::establishPerSocketRelay(ch) == DriftstackRTC::BridgeResult::Success
+            && !ch.relayHost.isEmpty() && ch.relayPort > 0;
+    }
+    if (got) {
         m_perSocketRelay = ch;
         m_perSocketRelayReady = true;
         out = ch;
+        DriftstackRTC::prewarmPerSocketRelays(2); // refill pool for subsequent sockets/peer
         return true;
     }
     return false;

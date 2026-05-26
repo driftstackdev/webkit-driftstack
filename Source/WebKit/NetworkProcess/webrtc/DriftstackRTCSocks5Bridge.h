@@ -94,6 +94,15 @@ BridgeResult establishDedicatedQuicRelay(RelayChannel& out);
 // with error 437 "Mismatched allocation". Caller caches the returned BND per socket.
 BridgeResult establishPerSocketRelay(RelayChannel& out);
 
+// Wave 29-499.338 — PRE-WARM POOL. prewarmPerSocketRelays dispatches `count`
+// parallel UDP ASSOCIATE handshakes on a background queue (off the ICE critical
+// path); acquirePrewarmedRelay pops a ready one instantly (returns false if the
+// pool is empty, in which case the caller falls back to synchronous
+// establishPerSocketRelay). This keeps the ~400ms remote-proxy handshake from
+// serializing on the path to Twilio NT's 5s connectivity deadline.
+void prewarmPerSocketRelays(unsigned count);
+bool acquirePrewarmedRelay(RelayChannel& out);
+
 // Phase C: wrap an outgoing UDP datagram in RFC 1928 §7 framing.
 // dest = peer the application wants to reach; payload = original UDP bytes.
 // out = SOCKS5-framed bytes the caller sends to the relayPort.
