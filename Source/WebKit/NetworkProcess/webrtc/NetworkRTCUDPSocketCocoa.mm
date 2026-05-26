@@ -161,6 +161,16 @@ private:
     OSObjectPtr<dispatch_source_t> m_relayBsdReadSource WTF_GUARDED_BY_LOCK(m_nwConnectionsLock);
     String m_relayBndHost; // BND.ADDR — copy out so dispatch handler doesn't need the lock.
     uint16_t m_relayBndPort { 0 };
+
+    // Wave 29-499.332 — ONE per-socket SOCKS5 UDP ASSOCIATE for THIS socket, established
+    // lazily and shared by both setListeningPort (ICE candidate address) and
+    // ensureRelayConnection (send/recv). Each socket thus egresses from a distinct relay
+    // 5-tuple, so concurrent TURN allocations (Twilio UDP/TCP/TLS tests) don't collide
+    // with error 437. Replaces the process-wide shared relay for WebRTC.
+    Lock m_perSocketRelayLock;
+    bool m_perSocketRelayReady WTF_GUARDED_BY_LOCK(m_perSocketRelayLock) { false };
+    DriftstackRTC::RelayChannel m_perSocketRelay WTF_GUARDED_BY_LOCK(m_perSocketRelayLock);
+    bool ensurePerSocketRelay(DriftstackRTC::RelayChannel& out);
 #endif
 };
 
@@ -345,6 +355,29 @@ NetworkRTCUDPSocketCocoaConnections::~NetworkRTCUDPSocketCocoaConnections()
     ASSERT(m_isClosed);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Wave 29-499.332 — establish (once) and return THIS socket's own SOCKS5 UDP ASSOCIATE.
+// Both the ICE-address path (setListeningPort) and the send/recv path (ensureRelayConnection)
+// call this so they agree on one per-socket relay endpoint with a unique 5-tuple.
+bool NetworkRTCUDPSocketCocoaConnections::ensurePerSocketRelay(DriftstackRTC::RelayChannel& out)
+{
+    Locker locker { m_perSocketRelayLock };
+    if (m_perSocketRelayReady) {
+        out = m_perSocketRelay;
+        return true;
+    }
+    DriftstackRTC::RelayChannel ch;
+    if (DriftstackRTC::establishPerSocketRelay(ch) == DriftstackRTC::BridgeResult::Success
+        && !ch.relayHost.isEmpty() && ch.relayPort > 0) {
+        m_perSocketRelay = ch;
+        m_perSocketRelayReady = true;
+        out = ch;
+        return true;
+    }
+    return false;
+}
+#endif
+
 void NetworkRTCUDPSocketCocoaConnections::setListeningPort(int port)
 {
     m_address.SetPort(port);
@@ -362,8 +395,9 @@ void NetworkRTCUDPSocketCocoaConnections::setListeningPort(int port)
     // src of all datagrams; Mac fleet IP never reaches the ICE wire.
     if (DriftstackRTC::isCustomSocks5Active()) {
         DriftstackRTC::RelayChannel channel;
-        DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
-        if (r == DriftstackRTC::BridgeResult::Success && !channel.relayHost.isEmpty() && channel.relayPort > 0) {
+        bool relayOk = ensurePerSocketRelay(channel); // Wave .332 — per-socket relay (unique 5-tuple)
+        DriftstackRTC::BridgeResult r = relayOk ? DriftstackRTC::BridgeResult::Success : DriftstackRTC::BridgeResult::UdpAssociateFailed;
+        if (relayOk && !channel.relayHost.isEmpty() && channel.relayPort > 0) {
             auto relayHostUtf8 = channel.relayHost.utf8();
             webrtc::SocketAddress relayAddr(relayHostUtf8.data(), channel.relayPort);
             static bool loggedOnce = false;
@@ -493,12 +527,12 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         return m_relayConnection != nullptr;
     }
 
-    WTFLogAlways("[Wave29-499.89] ensureRelayConnection: about to call DriftstackRTC::establishRelayChannel...");
+    WTFLogAlways("[Wave29-499.332] ensureRelayConnection: about to establish PER-SOCKET relay...");
     DriftstackRTC::RelayChannel channel;
-    DriftstackRTC::BridgeResult r = DriftstackRTC::establishRelayChannel(channel);
-    WTFLogAlways("[Wave29-499.89] ensureRelayConnection: establishRelayChannel returned result=%d, relayHost=%s, relayPort=%u",
-        static_cast<int>(r), channel.relayHost.utf8().data(), channel.relayPort);
-    if (r != DriftstackRTC::BridgeResult::Success) {
+    bool relayOk = ensurePerSocketRelay(channel); // Wave .332 — same per-socket relay as setListeningPort
+    WTFLogAlways("[Wave29-499.332] ensureRelayConnection: per-socket relay ok=%d, relayHost=%s, relayPort=%u",
+        relayOk ? 1 : 0, channel.relayHost.utf8().data(), channel.relayPort);
+    if (!relayOk) {
         m_relayStarted = true;
         return false;
     }

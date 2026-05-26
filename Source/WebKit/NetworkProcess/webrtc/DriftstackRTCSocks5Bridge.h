@@ -85,6 +85,15 @@ BridgeResult establishRelayChannel(RelayChannel& out);
 // The dedicated client's TCP control connection is kept alive process-lifetime.
 BridgeResult establishDedicatedQuicRelay(RelayChannel& out);
 
+// Wave 29-499.332 — PER-SOCKET UDP ASSOCIATE. Each call opens a FRESH SOCKS5 UDP
+// associate (its own TCP control connection, kept alive process-lifetime in a bridge
+// container) so the proxy allocates a DISTINCT relay BND port → a distinct source
+// 5-tuple at the destination. WebRTC must use this (not the shared relay) so each TURN
+// allocation has a unique 5-tuple: Twilio's UDP/TCP/TLS TURN tests otherwise all egress
+// from one shared relay 5-tuple and the TURN server rejects the colliding allocations
+// with error 437 "Mismatched allocation". Caller caches the returned BND per socket.
+BridgeResult establishPerSocketRelay(RelayChannel& out);
+
 // Phase C: wrap an outgoing UDP datagram in RFC 1928 §7 framing.
 // dest = peer the application wants to reach; payload = original UDP bytes.
 // out = SOCKS5-framed bytes the caller sends to the relayPort.

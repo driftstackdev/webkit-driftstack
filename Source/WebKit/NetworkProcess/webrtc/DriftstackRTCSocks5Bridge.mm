@@ -333,6 +333,60 @@ BridgeResult establishDedicatedQuicRelay(RelayChannel& out)
     return BridgeResult::Success;
 }
 
+// Wave 29-499.332 — per-socket relay: fresh UDP ASSOCIATE per call. The control
+// connection (DriftstackSocks5Client) MUST stay open for the association's lifetime
+// (RFC 1928 §6), so we stash each client in a process-lifetime container. Each fresh
+// associate gets its own proxy-allocated BND port → distinct source 5-tuple, which is
+// what lets multiple concurrent TURN allocations (Twilio UDP/TCP/TLS) coexist without
+// error 437. Note: not freed per-socket (bounded by sockets/session); cleanup TODO.
+static Lock& perSocketRelayClientsLock()
+{
+    static NeverDestroyed<Lock> l;
+    return l.get();
+}
+static Vector<std::unique_ptr<DriftstackSocks5Client>>& perSocketRelayClients()
+{
+    static NeverDestroyed<Vector<std::unique_ptr<DriftstackSocks5Client>>> v;
+    return v.get();
+}
+
+BridgeResult establishPerSocketRelay(RelayChannel& out)
+{
+    if (!isCustomSocks5Active())
+        return BridgeResult::Socks5Disabled;
+
+    Socks5Endpoint proxy;
+    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
+        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
+        return BridgeResult::ProtocolError;
+    }
+    Socks5Credentials creds;
+    if (const char* u = getenv("DRIFTSTACK_SOCKS5_USER"))
+        creds.username = String::fromUTF8(u);
+    if (const char* p = getenv("DRIFTSTACK_SOCKS5_PASS"))
+        creds.password = String::fromUTF8(p);
+
+    auto client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
+    if (client->performHandshake() != Socks5Result::Success) {
+        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: SOCKS5 handshake FAILED");
+        return BridgeResult::NetworkError;
+    }
+    Socks5UdpRelayChannel channel;
+    if (client->udpAssociate(channel) != Socks5Result::Success) {
+        WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: UDP ASSOCIATE FAILED");
+        return BridgeResult::UdpAssociateFailed;
+    }
+    out.relayHost = channel.relayHost;
+    out.relayPort = channel.relayPort;
+    {
+        Locker locker { perSocketRelayClientsLock() };
+        perSocketRelayClients().append(std::move(client)); // keep control conn alive
+    }
+    WTFLogAlways("[Wave29-499.332] establishPerSocketRelay: SUCCESS — FRESH relay %s:%u (distinct 5-tuple; total per-socket relays=%zu)",
+        out.relayHost.utf8().data(), out.relayPort, perSocketRelayClients().size());
+    return BridgeResult::Success;
+}
+
 BridgeResult establishRelayChannel(RelayChannel& out)
 {
     if (!isCustomSocks5Active())
