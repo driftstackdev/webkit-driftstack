@@ -85,6 +85,15 @@ struct SentinelMapState {
     // sentinel and apply Wave 29-499.102 remap. Without this Twilio TURN
     // responses are rejected by libwebrtc StunPort source-validation.
     HashMap<uint16_t, Vector<String>> pendingSentinelsByPort WTF_GUARDED_BY_LOCK(lock);
+    // Wave 29-499.334 — sentinel → learned real IP (reverse of realIpToSentinel),
+    // for OUTBOUND pinning. global.turn.twilio.com is round-robin DNS; once an
+    // Allocate-Success arrives from a specific Twilio IP we learn it here, and every
+    // subsequent message for that allocation (CreatePermission, Send, ChannelData)
+    // is sent to THAT pinned IP via ATYP=0x01 instead of re-emitting the hostname
+    // (ATYP=0x03), which the proxy would re-resolve round-robin to a different server
+    // that holds no allocation → silently dropped (TURN tests timed out after a
+    // successful Allocate because CreatePermission got no response).
+    HashMap<String, String> sentinelToRealIp WTF_GUARDED_BY_LOCK(lock);
     unsigned nextOctet WTF_GUARDED_BY_LOCK(lock) { 2 };
 };
 
@@ -153,6 +162,7 @@ void rememberRealIpForSentinel(const String& realIp, const String& sentinel)
     auto& state = sentinelMapState();
     Locker locker { state.lock };
     state.realIpToSentinel.set(realIp, sentinel);
+    state.sentinelToRealIp.set(sentinel, realIp); // Wave .334 — for outbound pinning
 }
 
 String lookupSentinelForRealIp(const String& realIp)
@@ -163,6 +173,21 @@ String lookupSentinelForRealIp(const String& realIp)
     Locker locker { state.lock };
     auto it = state.realIpToSentinel.find(realIp);
     if (it == state.realIpToSentinel.end())
+        return String();
+    return it->value;
+}
+
+// Wave 29-499.334 — the real IP we LEARNED for this sentinel from the first response.
+// Used by endpointFromSocketAddress to PIN all subsequent outbound datagrams of an
+// allocation to the same server (round-robin TURN fix).
+static String lookupRealIpForSentinel(const String& sentinel)
+{
+    if (sentinel.isEmpty())
+        return String();
+    auto& state = sentinelMapState();
+    Locker locker { state.lock };
+    auto it = state.sentinelToRealIp.find(sentinel);
+    if (it == state.sentinelToRealIp.end())
         return String();
     return it->value;
 }
@@ -215,6 +240,7 @@ String learnRealIpFromPendingPort(const String& realIp, uint16_t srcPort)
     String sentinel = portIt->value.first();
     portIt->value.removeAt(0);
     state.realIpToSentinel.set(realIp, sentinel);
+    state.sentinelToRealIp.set(sentinel, realIp); // Wave .334 — pin outbound to this learned server
     return sentinel;
 }
 
@@ -627,6 +653,24 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
         // Sidecar consult (Slice 2.7.b.4): translate sentinel back to hostname.
         String hostname = lookupHostnameForSentinel(ipString);
         if (!hostname.isEmpty()) {
+            // Wave 29-499.334 — PIN to the real IP we learned from this sentinel's first
+            // response. Round-robin TURN hosts (global.turn.twilio.com) resolve to a
+            // different IP per datagram; once an Allocate-Success arrives from a specific
+            // server we MUST send every later message (CreatePermission/Send/ChannelData)
+            // to THAT server (ATYP=0x01) or it lands on a server with no allocation and is
+            // dropped. This is the fix for "Allocate succeeds but CreatePermission times out".
+            String learnedIp = lookupRealIpForSentinel(ipString);
+            if (!learnedIp.isEmpty()) {
+                endpoint.host = learnedIp;
+                endpoint.port = address.port();
+                static bool loggedPinOnce = false;
+                if (!loggedPinOnce) {
+                    loggedPinOnce = true;
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.334] endpointFromSocketAddress: PINNED sentinel %s → learned real IP %s:%u (ATYP=0x01) — keeps TURN allocation on one server across round-robin DNS.",
+                        ipString.utf8().data(), learnedIp.utf8().data(), address.port());
+                }
+                return endpoint;
+            }
             // Wave 29-499.93 — pre-resolve hostname to IPv4 (ATYP=0x01) ONLY when
             // the gost-compat gate is set; otherwise resolvedIp stays empty so we
             // take the proven ATYP=0x03 domain-form + recordPendingSentinelForPort

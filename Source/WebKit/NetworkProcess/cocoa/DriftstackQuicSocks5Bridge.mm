@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <wtf/Assertions.h>
 #include <wtf/HashMap.h>
+#include <wtf/text/StringHash.h>  // Wave 29-499.334 — DefaultHash<String> for the resolve cache
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/cocoa/SpanCocoa.h>
@@ -292,27 +293,47 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
         auto hostUtf8 = destinationHost.utf8();
         struct in_addr probe { };
         if (inet_pton(AF_INET, hostUtf8.data(), &probe) != 1) {
-            // Not already an IPv4 literal — resolve.
-            struct addrinfo hints { };
-            hints.ai_family = AF_INET;
-            hints.ai_socktype = SOCK_DGRAM;
-            struct addrinfo* res = nullptr;
-            if (getaddrinfo(hostUtf8.data(), nullptr, &hints, &res) == 0 && res) {
-                char ipBuf[INET_ADDRSTRLEN] = { };
-                auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
-                if (inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf))) {
-                    destination.host = String::fromUTF8(ipBuf);
-                    static bool loggedResolveOnce = false;
-                    if (!loggedResolveOnce) {
-                        loggedResolveOnce = true;
-                        WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve: %s → %s (ATYP=0x01 for gost)",
+            // Not already an IPv4 literal — resolve, but PIN the result per hostname.
+            // Wave 29-499.334 — global.turn.twilio.com (and other TURN/anycast hosts)
+            // are round-robin DNS: getaddrinfo returns a DIFFERENT IP per call. TURN
+            // requires every message of an allocation (Allocate → CreatePermission →
+            // Send/ChannelData) to hit the SAME server IP, or the later messages land on
+            // a server with no allocation and are silently dropped (the Twilio TURN tests
+            // got Allocate-Success but ZERO CreatePermission responses). Cache the first
+            // resolution per hostname so all datagrams to it use one pinned IP.
+            static NeverDestroyed<HashMap<String, String>> s_resolveCache;
+            static NeverDestroyed<Lock> s_resolveCacheLock;
+            String cached;
+            {
+                Locker locker { s_resolveCacheLock.get() };
+                auto it = s_resolveCache.get().find(destinationHost);
+                if (it != s_resolveCache.get().end())
+                    cached = it->value;
+            }
+            if (!cached.isEmpty())
+                destination.host = cached;
+            else {
+                struct addrinfo hints { };
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_DGRAM;
+                struct addrinfo* res = nullptr;
+                if (getaddrinfo(hostUtf8.data(), nullptr, &hints, &res) == 0 && res) {
+                    char ipBuf[INET_ADDRSTRLEN] = { };
+                    auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
+                    if (inet_ntop(AF_INET, &sin->sin_addr, ipBuf, sizeof(ipBuf))) {
+                        destination.host = String::fromUTF8(ipBuf);
+                        {
+                            Locker locker { s_resolveCacheLock.get() };
+                            s_resolveCache.get().set(destinationHost, destination.host);
+                        }
+                        WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.334] QUIC/UDP §7 pre-resolve PINNED: %s → %s (ATYP=0x01; all datagrams to this host now use this IP — fixes TURN allocation consistency)",
                             hostUtf8.data(), ipBuf);
                     }
+                    freeaddrinfo(res);
+                } else {
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve FAILED for %s — falling back to ATYP=0x03 (gost may drop)",
+                        hostUtf8.data());
                 }
-                freeaddrinfo(res);
-            } else {
-                WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve FAILED for %s — falling back to ATYP=0x03 (gost may drop)",
-                    hostUtf8.data());
             }
         }
     }

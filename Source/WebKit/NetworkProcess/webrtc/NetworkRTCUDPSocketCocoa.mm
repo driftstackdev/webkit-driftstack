@@ -522,9 +522,12 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         m_relayStarted ? 1 : 0, m_relayConnection.get());
 
     if (m_relayStarted) {
-        WTFLogAlways("[Wave29-499.89] ensureRelayConnection: EXIT-EARLY (m_relayStarted=true, returning %d)",
-            m_relayConnection != nullptr ? 1 : 0);
-        return m_relayConnection != nullptr;
+        // Wave .335 — readiness keys on the BSD socket (the default sole relay path),
+        // not m_relayConnection (created only under the legacy NWCONN_RELAY=1 flag).
+        bool ready = m_relayBsdSocket >= 0 || m_relayConnection != nullptr;
+        WTFLogAlways("[Wave29-499.89] ensureRelayConnection: EXIT-EARLY (m_relayStarted=true, ready=%d, bsdFd=%d)",
+            ready ? 1 : 0, m_relayBsdSocket);
+        return ready;
     }
 
     WTFLogAlways("[Wave29-499.332] ensureRelayConnection: about to establish PER-SOCKET relay...");
@@ -537,12 +540,26 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         return false;
     }
 
+    auto relayHostUtf8 = channel.relayHost.utf8(); // needed by both the nw_connection + BSD paths
+
+    // Wave 29-499.335 — by DEFAULT do not create the nw_connection relay at all. Creating
+    // m_relayConnection (a UDP nw_connection to the relay BND) triggers the Task#16
+    // interpose, which builds its OWN relay connection that RECEIVES inbound — splitting
+    // the relay: WebRTC SENDS via the BSD socket (sendTo) but the interpose STEALS inbound,
+    // so TURN CreatePermission/data responses never reach the BSD socket and TURN times out
+    // after a successful Allocate. Skipping m_relayConnection makes the BSD socket the SOLE
+    // send+receive path (one source 5-tuple, one inbound reader). Reversible:
+    // DRIFTSTACK_WEBRTC_NWCONN_RELAY=1 restores the legacy nw_connection relay.
+    static const bool s_startNwConnRelay = [] {
+        const char* e = getenv("DRIFTSTACK_WEBRTC_NWCONN_RELAY");
+        return e && e[0] == '1';
+    }();
+    if (s_startNwConnRelay) {
     auto parameters = adoptNS(nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION));
     configureParameters(parameters.get(), nw_ip_version_4);
     if (m_trafficClass)
         nw_parameters_set_traffic_class(parameters.get(), *m_trafficClass);
 
-    auto relayHostUtf8 = channel.relayHost.utf8();
     auto endpoint = adoptNS(nw_endpoint_create_host(relayHostUtf8.data(), String::number(channel.relayPort).utf8().data()));
     m_relayConnection = adoptNS(nw_connection_create(endpoint.get(), parameters.get()));
     m_relayTracker = ConnectionStateTracker::create();
@@ -690,30 +707,14 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         SUPPRESS_MEMORY_UNSAFE_CAST ipcConnection->send(Messages::LibWebRTCNetwork::SignalReadPacket { identifier, unwrapped.payload.span(), RTCNetwork::IPAddress(remappedIp), unwrapped.sourcePort, webrtc::TimeMicros(), ecn }, 0);
     });
 
-    // Wave 29-499.333 — DO NOT start the nw_connection by default. It and the BSD
-    // socket (below) both bind to the SAME per-socket relay BND; whichever sends first
-    // is the one the proxy associates the UDP ASSOCIATE with. With both started, inbound
-    // responses split between the two readers — the BSD socket got only some datagrams
-    // and TURN CreatePermission/data responses never returned to the right socket
-    // (Twilio TURN tests failed after allocate). Leaving the nw_connection created-but-
-    // unstarted makes the BSD socket the SOLE sender+receiver, so the proxy binds to it
-    // and every TURN response returns on the BSD path. m_relayConnection stays non-null
-    // so existing relayReady/relayConn gates pass; the BSD socket does all the work.
-    // Reversible: DRIFTSTACK_WEBRTC_NWCONN_RELAY=1 restores the old dual-path behavior.
-    static const bool s_startNwConnRelay = [] {
-        const char* e = getenv("DRIFTSTACK_WEBRTC_NWCONN_RELAY");
-        return e && e[0] == '1';
-    }();
-    if (s_startNwConnRelay)
-        nw_connection_start(m_relayConnection.get());
+    nw_connection_start(m_relayConnection.get());
 
     static bool loggedOnce = false;
     if (!loggedOnce) {
         loggedOnce = true;
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.333] m_relayConnection %s — relay %s:%u (BSD socket is sole sender/receiver unless NWCONN_RELAY=1).",
-            s_startNwConnRelay ? "STARTED (legacy dual-path)" : "created-unstarted (BSD-only)",
-            relayHostUtf8.data(), channel.relayPort);
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.335] m_relayConnection STARTED (legacy nw_connection relay path; default is BSD-only).");
     }
+    } // end if (s_startNwConnRelay) — Wave .335: BSD socket is the sole relay path by default
 
     // Wave 29-499.99 — also set up a raw BSD UDP socket as PARALLEL path.
     // Per V-2026-05-21-W29-499.98 empirical finding, Apple's nw_connection_t
@@ -832,7 +833,7 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
     }
 
     m_relayStarted = true;
-    return true;
+    return m_relayBsdSocket >= 0 || m_relayConnection != nullptr; // Wave .335 — BSD is the default relay
 }
 #endif
 
@@ -953,7 +954,7 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
             WTFLogAlways("[Wave29-499.88] sendTo call#%u: ensureRelayConnection returned relayReady=%d, relayConn=%p",
                 thisCall, relayReady ? 1 : 0, relayConn.get());
 
-        if (relayReady && relayConn) {
+        if (relayReady) { // Wave .335 — BSD-only default: don't require relayConn (nw_connection)
             Vector<uint8_t> framed;
             DriftstackRTC::BridgeResult wr = DriftstackRTC::wrapOutgoingDatagram(remoteAddress, data, framed);
             if (traceThisCall)
@@ -1012,7 +1013,14 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
                         m_identifier, options.packet_id, webrtc::TimeMillis() }, 0);
                     return;
                 }
-                // Fallback to nw_connection_send (legacy path).
+                // Fallback to nw_connection_send (legacy path) — only when the BSD socket
+                // isn't available AND the nw_connection relay exists (NWCONN_RELAY=1).
+                // Wave .335 — in BSD-only default, relayConn is null; if the BSD send above
+                // didn't fire, drop the datagram rather than deref a null relay connection.
+                if (!relayConn || !relayTracker) {
+                    WTFLogAlways("[Wave29-499.335] sendTo: BSD relay socket unavailable and no nw_connection relay — dropping datagram (proxy egress not ready).");
+                    return;
+                }
                 Ref<ConnectionStateTracker> trackerRef = relayTracker.releaseNonNull();
                 trackerRef->incrementPendingSendCount();
                 OSObjectPtr framedValue = adoptOSObject(dispatch_data_create(framed.span().data(), framed.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT));
