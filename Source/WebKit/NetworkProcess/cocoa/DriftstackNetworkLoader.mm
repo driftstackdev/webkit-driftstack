@@ -720,6 +720,15 @@ static HashSet<String>& driftstackH2PoolPending()
     driftstackH3PoolPending().remove(origin);
     driftstackH3PoolCond().notifyAll();
 }
+// Wave 29-499.330 — drop a pooled session whose QUIC connection turned out dead. isAlive()
+// is a LOCAL check and can't see a server-side idle close, so a reused session can fail its
+// first request after the page sat idle (the "refresh shows no QUIC" case). Evicting lets the
+// next claim re-establish a fresh connection instead of silently falling back to TCP.
+[[maybe_unused]] static void driftstackH3PoolEvict(const String& origin)
+{
+    Locker locker { driftstackH3PoolLock() };
+    driftstackH3Pool().remove(origin);
+}
 
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
 // (pseudo-header order m,s,p,a + canonical real-header order + cookies + cache-
@@ -969,20 +978,36 @@ void DriftstackNetworkLoader::resume()
                 bool h3PoolHandled = false;
                 if (WebKit::driftstackHttp3PoolEnabled()) {
                     String h3origin = h3req.authority;
-                    auto claim = driftstackH3PoolClaim(h3origin);
-                    RefPtr<WebKit::DriftstackHttp3Session> session = claim.first;
-                    if (!session && claim.second) {
-                        // Winner: establish the connection, publish it, wake waiters.
-                        session = WebKit::DriftstackHttp3Session::create(h3req.authority);
-                        if (session)
-                            driftstackH3PoolSet(h3origin, RefPtr<WebKit::DriftstackHttp3Session>(session));
-                        driftstackH3PoolFinishPending(h3origin);
-                    }
-                    if (session) {
+                    // Wave 29-499.330 — up to 2 attempts: if a REUSED pooled session fails its
+                    // request (server idle-closed the QUIC connection between page loads — the
+                    // "refresh shows no QUIC" case), evict it and retry ONCE on a fresh
+                    // connection rather than silently dropping to TCP h2 (which loses QUIC).
+                    for (int h3attempt = 0; h3attempt < 2; ++h3attempt) {
+                        auto claim = driftstackH3PoolClaim(h3origin);
+                        RefPtr<WebKit::DriftstackHttp3Session> session = claim.first;
+                        bool reused = session != nullptr; // claim.first set ⇒ live-reused session
+                        if (!session && claim.second) {
+                            // Winner: establish the connection, publish it, wake waiters.
+                            session = WebKit::DriftstackHttp3Session::create(h3req.authority);
+                            if (session)
+                                driftstackH3PoolSet(h3origin, RefPtr<WebKit::DriftstackHttp3Session>(session));
+                            driftstackH3PoolFinishPending(h3origin);
+                        }
+                        if (!session)
+                            break; // claim timed out → one-shot fallback below
                         h3resp = session->execute(h3req);
                         h3PoolHandled = true;
-                        WTFLogAlways("[Wave29-499.322/LOADER/H3POOL] pooled h3 execute for %s status=%d failed=%d",
-                            h3origin.utf8().data(), h3resp.statusCode, h3resp.failed);
+                        WTFLogAlways("[Wave29-499.322/LOADER/H3POOL] pooled h3 execute for %s status=%d failed=%d (reused=%d attempt=%d)",
+                            h3origin.utf8().data(), h3resp.statusCode, h3resp.failed, reused, h3attempt);
+                        if (!h3resp.failed && h3resp.statusCode)
+                            break; // success
+                        if (reused && !h3attempt) {
+                            WTFLogAlways("[Wave29-499.330/LOADER/H3POOL] reused h3 session for %s failed — evicting + re-establishing fresh QUIC connection",
+                                h3origin.utf8().data());
+                            driftstackH3PoolEvict(h3origin);
+                            continue; // retry with a fresh connection
+                        }
+                        break; // fresh attempt also failed → fall through to TCP h2
                     }
                 }
                 if (!h3PoolHandled)
