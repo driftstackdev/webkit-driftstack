@@ -1145,8 +1145,13 @@ void DriftstackHttp2Session::readerLoop()
         Locker locker { m_lock };
         m_alive = false;
         for (auto& [id, s] : m_streams) {
-            s->failed = true;
-            s->complete = true;
+            // Don't clobber a stream that already completed successfully but whose
+            // execute() hasn't removed it from the map yet (race: reader hits EOF
+            // right after delivering END_STREAM). Only fail still-in-flight streams.
+            if (!s->complete) {
+                s->failed = true;
+                s->complete = true;
+            }
         }
         m_cond.notifyAll();
     };
@@ -1179,12 +1184,35 @@ void DriftstackHttp2Session::readerLoop()
                 transportWriteAll(m_transport, pong, sizeof(pong));
             }
             break;
-        case kFrameGoaway:
-            markDeadAndFailAll();
-            return;
+        case kFrameGoaway: {
+            uint32_t lastSid = payload.size() >= 4 ? ((uint32_t(payload[0]) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3]) : 0;
+            uint32_t errCode = payload.size() >= 8 ? ((uint32_t(payload[4]) << 24) | (uint32_t(payload[5]) << 16) | (uint32_t(payload[6]) << 8) | payload[7]) : 0;
+            // RFC 7540 §6.8 — GOAWAY means "no NEW streams", but streams with id <= lastStreamId
+            // MAY still be completed by the server. Failing them all (the old behavior) loses the
+            // response for an in-flight request whenever a server gracefully closes after serving
+            // it (e.g. tls.browserleaks.com sends GOAWAY lastStreamId=1 errorCode=0 right around
+            // the response → ja3/ja4 rendered N/A). So: retire the session for reuse, fail ONLY
+            // streams > lastStreamId, and keep reading so streams <= lastStreamId can complete.
+            bool anyInflight = false;
+            {
+                Locker locker { m_lock };
+                m_alive = false;
+                for (auto& [id, s] : m_streams) {
+                    if (id > lastSid) { s->failed = true; s->complete = true; }
+                    else if (!s->complete) anyInflight = true;
+                }
+                m_cond.notifyAll();
+            }
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.342] h2 GOAWAY: lastStreamId=%u errorCode=%u — session retired; %s",
+                lastSid, errCode, anyInflight ? "draining in-flight streams <= lastStreamId" : "no in-flight streams, closing");
+            if (!anyInflight) { markDeadAndFailAll(); return; }
+            break; // keep reading until the in-flight (<= lastStreamId) streams finish, then EOF closes us
+        }
         case kFrameWindowUpdate:
             break; // we replenish our own receive window in the DATA path
         case kFrameRstStream: {
+            uint32_t errCode = payload.size() >= 4 ? ((uint32_t(payload[0]) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3]) : 0;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.342] h2 RST_STREAM on stream %u errorCode=%u — failing stream (session stays alive)", sid, errCode);
             Locker locker { m_lock };
             if (auto it = m_streams.find(sid); it != m_streams.end()) {
                 it->value->failed = true;
