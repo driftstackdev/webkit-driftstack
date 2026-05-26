@@ -799,8 +799,20 @@ void DriftstackNetworkLoader::resume()
     // flatten() omits file/blob parts — covers the common form/JSON/urlencoded
     // POST case; multipart-with-files is a follow-up.
     Vector<uint8_t> requestBody;
-    if (RefPtr<WebCore::FormData> fd = m_request.httpBody())
+    bool hasRequestBody = false;
+    if (RefPtr<WebCore::FormData> fd = m_request.httpBody()) {
         requestBody = fd->flatten();
+        hasRequestBody = true;
+    }
+    // Wave 29-499.324 — capture the request URL once on the calling (main) thread.
+    // The async block below + retries MUST NOT touch m_request: WebCore::ResourceRequest
+    // is not thread-safe, and its Cocoa accessors (url()/httpHeaderFields()) lazily run
+    // updateResourceRequest() which *mutates* the HTTPHeaderMap Vector on first access.
+    // A prior attempt's block reallocating that Vector on loaderQueue concurrently with a
+    // retry resume() copying it on the main thread tore the Vector (size>0, buffer=null) →
+    // SIGSEGV in CommonHeader copy-ctor (crash 2026-05-26-054306). Capture-then-use-locals
+    // removes the shared mutable access entirely. All in-block uses reference the
+    // captured `url` / `hasRequestBody` locals instead of m_request.
 
     // Wave 29-499.271 / .323 — flaky-proxy resilience via retry, each attempt on a
     // FRESH SOCKS5 connection (new exit). Our ClientHello is byte-identical to a
@@ -828,7 +840,7 @@ void DriftstackNetworkLoader::resume()
         if (!proxyEnv || !proxyEnv[0]) {
             auto* clientPtr = m_task.client();
             if (clientPtr) {
-                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "DRIFTSTACK_SOCKS5_PROXY not set"_s, WebCore::ResourceError::Type::General);
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY not set"_s, WebCore::ResourceError::Type::General);
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -887,7 +899,7 @@ void DriftstackNetworkLoader::resume()
             // fall through to the proven TCP h2/h1 path until h3 body support
             // (nghttp3 data_reader) lands. GET/HEAD have no body.
             bool h3bodyless = (equalIgnoringASCIICase(httpMethod, "GET"_s)
-                || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !m_request.httpBody();
+                || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !hasRequestBody;
             // Wave 29-499.321 — FIRST-CONTACT h3 via DNS HTTPS RR (RFC 9460 type
             // 65), matching real Safari (which queries the HTTPS record and goes
             // straight to h3, before any Alt-Svc response). Alt-Svc only upgrades
@@ -1001,7 +1013,7 @@ void DriftstackNetworkLoader::resume()
                         }
                     }
                     if (expectedLength < 0) expectedLength = static_cast<long long>(h3resp.body.size());
-                    WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
+                    WebCore::ResourceResponse response { URL(url), std::move(mimeType), expectedLength, std::move(charset) };
                     response.setHTTPStatusCode(h3resp.statusCode);
                     for (auto& [k, v] : h3resp.headers)
                         response.setHTTPHeaderField(k, v);
@@ -1074,7 +1086,7 @@ void DriftstackNetworkLoader::resume()
                     // Wave .323 DEBUG (removable) — log the peet.ws print (h2 fast-path).
                     if (url.host().toString().endsWith("peet.ws"_s))
                         WTFLogAlways("[PEET-PRINT-BEGIN]%.*s[PEET-PRINT-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
-                    WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
+                    WebCore::ResourceResponse response { URL(url), std::move(mimeType), expectedLength, std::move(charset) };
                     response.setHTTPStatusCode(h2resp.statusCode);
                     for (auto& [k, v] : h2resp.headers)
                         response.setHTTPHeaderField(k, v);
@@ -1110,7 +1122,7 @@ void DriftstackNetworkLoader::resume()
         if (handshakeResult != Socks5Result::Success) {
             auto* clientPtr = m_task.client();
             if (clientPtr) {
-                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "SOCKS5 handshake failed"_s, WebCore::ResourceError::Type::General);
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 handshake failed"_s, WebCore::ResourceError::Type::General);
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1142,7 +1154,7 @@ void DriftstackNetworkLoader::resume()
             }
             auto* clientPtr = m_task.client();
             if (clientPtr) {
-                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1172,7 +1184,7 @@ void DriftstackNetworkLoader::resume()
                 }
                 auto* clientPtr = m_task.client();
                 if (clientPtr) {
-                    WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
+                    WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
                     callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                         WebCore::NetworkLoadMetrics metrics;
                         clientPtr->didCompleteWithError(error, metrics);
@@ -1402,7 +1414,7 @@ void DriftstackNetworkLoader::resume()
                         });
                     return;
                 }
-                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(m_request.url()), h2resp.errorMessage, WebCore::ResourceError::Type::General);
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), h2resp.errorMessage, WebCore::ResourceError::Type::General);
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1462,7 +1474,7 @@ void DriftstackNetworkLoader::resume()
             if (url.host().toString().endsWith("peet.ws"_s))
                 WTFLogAlways("[PEET-PRINT-BEGIN]%.*s[PEET-PRINT-END]", (int)h2resp.body.size(), reinterpret_cast<const char*>(h2resp.body.span().data()));
 
-            WebCore::ResourceResponse response { URL(m_request.url()), std::move(mimeType), expectedLength, std::move(charset) };
+            WebCore::ResourceResponse response { URL(url), std::move(mimeType), expectedLength, std::move(charset) };
             response.setHTTPStatusCode(h2resp.statusCode);
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);
@@ -1668,7 +1680,7 @@ _Pragma("clang diagnostic pop")
         NSArray<NSString*>* statusParts = [statusLine componentsSeparatedByString:@" "];
         int statusCode = ([statusParts count] >= 2) ? [statusParts[1] intValue] : 0;
 
-        WebCore::ResourceResponse response { URL(m_request.url()), String("text/html"_s), -1, String("UTF-8"_s) };
+        WebCore::ResourceResponse response { URL(url), String("text/html"_s), -1, String("UTF-8"_s) };
         response.setHTTPStatusCode(statusCode);
 
         for (NSUInteger i = 1; i < [headerLines count]; i++) {
