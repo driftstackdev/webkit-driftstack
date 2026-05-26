@@ -173,6 +173,25 @@ Vector<uint8_t> makeExtALPN()
     return makeExtension(16, body);
 }
 
+// Wave 29-499.348 — ALPN (16) for QUIC: iPhone HTTP/3 advertises ONLY "h3".
+Vector<uint8_t> makeExtALPNQuic()
+{
+    Vector<uint8_t> list;
+    list.append(0x02); list.append('h'); list.append('3');
+    Vector<uint8_t> body;
+    appendVecU16Len(body, list);
+    return makeExtension(16, body);
+}
+
+// Wave 29-499.348 — quic_transport_parameters (0x0039). Body = the already-encoded
+// iPhone transport-parameters TLV blob (built by buildIphoneQuicTransportParams).
+Vector<uint8_t> makeExtQuicTransportParams(const Vector<uint8_t>& tpBlob)
+{
+    Vector<uint8_t> body;
+    body.append(tpBlob.span());
+    return makeExtension(0x0039, body);
+}
+
 // status_request (5) — OCSP, iPhone always sends with cert_status_type=ocsp,
 // responder_id_list empty, request_extensions empty
 Vector<uint8_t> makeExtStatusRequest()
@@ -549,6 +568,75 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.216] CH2 (HRR retry, P-256 keyshare) built: %zu bytes",
         record.size());
     return record;
+}
+
+// Wave 29-499.348 — iPhone-exact QUIC ClientHello (for the custom QUIC-TLS backend that
+// replaces BoringSSL as ngtcp2's driver). Differs from the TCP CH: (1) only the 3 TLS 1.3
+// AEAD ciphers (QUIC is TLS-1.3-only) + GREASE; (2) ALPN = h3; (3) quic_transport_parameters
+// (0x0039) carrying the encoded transport params; (4) DROPS the TCP-only extensions
+// ec_point_formats/extended_master_secret/renegotiation_info; (5) NO TLS record header —
+// the handshake message goes directly into the QUIC Initial CRYPTO frame; (6) empty
+// legacy_session_id per QUIC convention (RFC 9001 §8.4). Target ja4 == iPhone
+// q13d0311h3_55b375c5d22e_f2a83c8e78ae (ext set 0005,000a,000d,0012,001b,002b,002d,0033,0039
+// + SNI + ALPN; sigalg list incl dup 0805 via makeExtSignatureAlgorithms).
+Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
+    const Vector<uint8_t>& mlkemPubKey,
+    const Vector<uint8_t>& x25519PubKey,
+    const Vector<uint8_t>& transportParams,
+    Vector<uint8_t>& outClientRandom)
+{
+    outClientRandom.resize(32);
+    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
+
+    uint16_t greasePrimary = pickGreaseValue();
+    uint16_t greaseSecondary = pickGreaseValue();
+    while (greaseSecondary == greasePrimary)
+        greaseSecondary = pickGreaseValue();
+    uint16_t greaseGroup = pickGreaseValue();
+
+    // QUIC ciphers: GREASE + the 3 TLS 1.3 AEAD suites only.
+    Vector<uint8_t> ciphers;
+    appendU16(ciphers, greasePrimary);
+    appendU16(ciphers, 0x1301);  // TLS_AES_128_GCM_SHA256
+    appendU16(ciphers, 0x1302);  // TLS_AES_256_GCM_SHA384
+    appendU16(ciphers, 0x1303);  // TLS_CHACHA20_POLY1305_SHA256
+
+    // iPhone QUIC extension set (TCP set minus ec_point_formats/ext_master_secret/
+    // renegotiation_info, plus quic_transport_parameters).
+    Vector<uint8_t> extensions;
+    extensions.append(makeExtGREASE(greasePrimary).span());
+    extensions.append(makeExtServerName(sni).span());
+    extensions.append(makeExtSupportedGroups(greaseGroup).span());
+    extensions.append(makeExtALPNQuic().span());
+    extensions.append(makeExtStatusRequest().span());
+    extensions.append(makeExtSignatureAlgorithms().span());
+    extensions.append(makeExtSCT().span());
+    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span());
+    extensions.append(makeExtPSKKeyExchangeModes().span());
+    extensions.append(makeExtSupportedVersions().span());
+    extensions.append(makeExtCompressCertificate().span());
+    extensions.append(makeExtQuicTransportParams(transportParams).span());
+    extensions.append(makeExtGREASE(greaseSecondary).span());
+
+    Vector<uint8_t> body;
+    appendU16(body, kTLSVersionTLS12);          // legacy_version
+    body.append(outClientRandom.span());
+    appendU8LenBlob(body, nullptr, 0);          // empty legacy_session_id (QUIC)
+    appendVecU16Len(body, ciphers);
+    body.append(0x01); body.append(0x00);       // compression methods: null
+    appendVecU16Len(body, extensions);
+
+    // QUIC carries the raw handshake message in CRYPTO — NO TLS record header.
+    Vector<uint8_t> handshake;
+    handshake.append(kTLSHandshakeTypeClientHello);
+    handshake.append(static_cast<uint8_t>((body.size() >> 16) & 0xFF));
+    handshake.append(static_cast<uint8_t>((body.size() >> 8) & 0xFF));
+    handshake.append(static_cast<uint8_t>(body.size() & 0xFF));
+    handshake.append(body.span());
+
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.348] iPhone QUIC ClientHello built: %zu bytes (3 TLS1.3 ciphers, h3 ALPN, transport_params %zuB, hybrid keyshare)",
+        handshake.size(), transportParams.size());
+    return handshake;
 }
 
 bool driftstackCustomTlsEnabled()

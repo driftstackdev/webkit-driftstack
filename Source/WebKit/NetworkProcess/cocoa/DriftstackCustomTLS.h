@@ -94,6 +94,16 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     const Vector<uint8_t>& p256PublicKey,      // 65 bytes uncompressed
     Vector<uint8_t>& outClientRandom);
 
+// Wave 29-499.348 — iPhone-exact QUIC ClientHello (raw handshake msg for the Initial
+// CRYPTO frame; no TLS record header). For the custom QUIC-TLS backend (replaces
+// BoringSSL as ngtcp2's driver). h3 ALPN + quic_transport_parameters(0x0039) + 3 TLS1.3
+// ciphers; drops TCP-only exts. Target ja4 == iPhone q13d0311h3_55b375c5d22e_f2a83c8e78ae.
+Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
+    const Vector<uint8_t>& mlkemPubKey,
+    const Vector<uint8_t>& x25519PubKey,
+    const Vector<uint8_t>& transportParams,
+    Vector<uint8_t>& outClientRandom);
+
 // Phase 1.5e gate (DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1).
 bool driftstackCustomTlsEnabled();
 
