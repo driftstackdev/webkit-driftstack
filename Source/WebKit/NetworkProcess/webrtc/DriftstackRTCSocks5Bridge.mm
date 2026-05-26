@@ -544,6 +544,25 @@ static String resolveHostnameToIPv4(const String& hostname)
     return ipString;
 }
 
+// Wave 29-499.325 — DNS pre-resolve gate. DEFAULT OFF = leak-free ATYP=0x03
+// domain-form: the SOCKS5 proxy resolves the STUN/TURN hostname server-side.
+// This (a) satisfies the founder-locked EG-WK-1.9 proxy-only-DNS requirement at
+// v1.0 (no Mac-side getaddrinfo leak), and (b) lets GeoDNS-routed TURN (e.g.
+// Twilio anycast) resolve to the correct region — the hardcoded-IP pre-resolve
+// path mis-routed those (see hardcodedSTUNHostnameLookup .110-revert note).
+// Empirically validated 2026-05-26: STUN Binding + TURN Allocate via ATYP=0x03
+// through the customer proxy both succeed (V-CUSTOMER-PROXY-ATYP03-OK).
+// Set DRIFTSTACK_SOCKS5_PRERESOLVE=1 ONLY for a proxy with the gost ATYP=0x03
+// server-side-resolution bug (then we pre-resolve + emit ATYP=0x01 IPv4).
+static bool shouldPreResolveDns()
+{
+    static bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_SOCKS5_PRERESOLVE");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+
 static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& address)
 {
     Socks5Endpoint endpoint;
@@ -554,9 +573,11 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
         // Sidecar consult (Slice 2.7.b.4): translate sentinel back to hostname.
         String hostname = lookupHostnameForSentinel(ipString);
         if (!hostname.isEmpty()) {
-            // Wave 29-499.93 — pre-resolve hostname to IPv4 instead of using
-            // ATYP=0x03 domain form (gost bug).
-            String resolvedIp = resolveHostnameToIPv4(hostname);
+            // Wave 29-499.93 — pre-resolve hostname to IPv4 (ATYP=0x01) ONLY when
+            // the gost-compat gate is set; otherwise resolvedIp stays empty so we
+            // take the proven ATYP=0x03 domain-form + recordPendingSentinelForPort
+            // path below (.325 leak-free default).
+            String resolvedIp = shouldPreResolveDns() ? resolveHostnameToIPv4(hostname) : String();
             if (!resolvedIp.isEmpty()) {
                 endpoint.host = resolvedIp;
                 // Wave 29-499.102 — remember the realIp → sentinel mapping
@@ -591,8 +612,9 @@ static Socks5Endpoint endpointFromSocketAddress(const webrtc::SocketAddress& add
     } else {
         auto host = address.hostname();
         String hostString = String::fromUTF8(host.c_str());
-        // Wave 29-499.93 — pre-resolve hostname when address is hostname-only.
-        String resolvedIp = resolveHostnameToIPv4(hostString);
+        // Wave 29-499.93/.325 — pre-resolve only under the gost-compat gate;
+        // default emits ATYP=0x03 domain form (proxy resolves server-side).
+        String resolvedIp = shouldPreResolveDns() ? resolveHostnameToIPv4(hostString) : String();
         endpoint.host = resolvedIp.isEmpty() ? hostString : resolvedIp;
     }
     endpoint.port = address.port();

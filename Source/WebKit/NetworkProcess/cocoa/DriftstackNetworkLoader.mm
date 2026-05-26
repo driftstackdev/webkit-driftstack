@@ -841,6 +841,7 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY not set"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1018,6 +1019,7 @@ void DriftstackNetworkLoader::resume()
                     for (auto& [k, v] : h3resp.headers)
                         response.setHTTPHeaderField(k, v);
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
+                    if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
                         clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                             [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
@@ -1091,6 +1093,7 @@ void DriftstackNetworkLoader::resume()
                     for (auto& [k, v] : h2resp.headers)
                         response.setHTTPHeaderField(k, v);
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
+                    if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
                         clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                             [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
@@ -1123,6 +1126,7 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 handshake failed"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1155,6 +1159,7 @@ void DriftstackNetworkLoader::resume()
             auto* clientPtr = m_task.client();
             if (clientPtr) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1185,6 +1190,7 @@ void DriftstackNetworkLoader::resume()
                 auto* clientPtr = m_task.client();
                 if (clientPtr) {
                     WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
+                    if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                         WebCore::NetworkLoadMetrics metrics;
                         clientPtr->didCompleteWithError(error, metrics);
@@ -1415,6 +1421,7 @@ void DriftstackNetworkLoader::resume()
                     return;
                 }
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), h2resp.errorMessage, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                 callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
                     WebCore::NetworkLoadMetrics metrics;
                     clientPtr->didCompleteWithError(error, metrics);
@@ -1488,6 +1495,7 @@ void DriftstackNetworkLoader::resume()
             // when loading 10+ subresource Angular apps like Twilio NT.
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
+            if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
             callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse), bodyBuffer = std::move(bodyBuffer)]() mutable {
                 clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                     [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
@@ -1701,6 +1709,7 @@ _Pragma("clang diagnostic pop")
 
         // Wave 29-499.269b — CFStream fallback also marshalled via main runloop
         auto deliveryResponse2 = WebCore::ResourceResponse(response);
+        if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
         callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse2), bodyBuffer = std::move(bodyBuffer)]() mutable {
             clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                 [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {

@@ -44,6 +44,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #include <WebCore/ResourceRequest.h>
+#include <atomic>
 #include <wtf/CompletionHandler.h>
 #include <wtf/Forward.h>
 #include <wtf/RefCounted.h>
@@ -75,6 +76,17 @@ private:
     bool m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
     int m_attempt { 0 };  // Wave 29-499.271 — retry counter for transient TLS/H2 failures
+
+    // Wave 29-499.325 — single-completion guard. loaderQueue() is a CONCURRENT
+    // dispatch queue and resume() has no re-entry guard, so overlapping attempts
+    // (e.g. a cookie-version re-resume creating a second loader) could each deliver
+    // a full didReceiveResponse/didReceiveData/didCompleteWithError sequence to the
+    // same client — a second response after completion is use-after-complete on
+    // NetworkLoad (crash/corruption). tryBeginCompletion() lets exactly the first
+    // terminal path through; all others no-op. Atomic because deliveries originate
+    // on loaderQueue (concurrent) before being marshalled to the main runloop.
+    std::atomic<bool> m_completionStarted { false };
+    bool tryBeginCompletion() { bool expected = false; return m_completionStarted.compare_exchange_strong(expected, true); }
 };
 
 } // namespace WebKit
