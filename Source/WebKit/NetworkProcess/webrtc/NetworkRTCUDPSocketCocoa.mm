@@ -929,7 +929,21 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
     //   - relay establish failed AND DRIFTSTACK_REQUIRE_PROXY != 1
     //     (Slice 2.5.b hard-blocks REQUIRE_PROXY=1 at createUDPSocket
     //     time so this fall-through should be unreachable in that mode).
-    if (DriftstackRTC::isCustomSocks5Active()) {
+    // Wave 29-499.336 — INTERPOSE-ONLY routing test. When set, skip the bridge/BSD
+    // relay entirely so sendTo falls through to the per-peer nw_connection path, which
+    // the Task#16 interpose redirects through createRelayConnectionForQuic + nw_framer §7
+    // (the SAME relay that carries QUIC end-to-end). This unifies WebRTC onto ONE §7
+    // relay: per-peer connection to one TURN server = one coherent relay/5-tuple for the
+    // whole Allocate→CreatePermission→Send/Data lifecycle, instead of splitting between
+    // the bridge BSD socket and the interpose (which lost CreatePermission responses).
+    static const bool s_interposeOnly = [] {
+        const char* e = getenv("DRIFTSTACK_WEBRTC_INTERPOSE_ONLY");
+        return e && e[0] == '1'; // DEFAULT OFF — interpose-only drops all inbound (per-peer
+                                  // recv not wired to libwebrtc); keep the bridge/BSD path
+                                  // (allocate + STUN work). Both paths proven incomplete →
+                                  // unifying rewrite required (see V-log .336).
+    }();
+    if (DriftstackRTC::isCustomSocks5Active() && !s_interposeOnly) {
         // Wave 29-499.88 — unconditional first-call trace through the SOCKS5
         // redirect block so we know exactly which sub-branch is taken (the
         // existing loggedXOnce statics gave a misleading silent trace).
