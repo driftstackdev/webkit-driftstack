@@ -133,10 +133,15 @@ Vector<uint8_t> makeExtRenegotiationInfo()
 }
 
 // supported_groups (10) — iPhone: GREASE + X25519MLKEM768 + X25519 + P-256/384/521
-Vector<uint8_t> makeExtSupportedGroups()
+// Wave 29-499.328 — the GREASE group MUST be the SAME value used in key_share's GREASE
+// entry (RFC 8446 §4.2.8: every key_share group must appear in supported_groups; RFC 8701
+// §3.1: the GREASE value must match across both). Caller passes one greaseGroup so they
+// agree; previously each extension picked its own random GREASE → mismatch → strict edges
+// (e.g. browserleaks's Cloudflare) abort the handshake with illegal_parameter.
+Vector<uint8_t> makeExtSupportedGroups(uint16_t greaseGroup)
 {
     Vector<uint8_t> list;
-    appendU16(list, pickGreaseValue());  // GREASE
+    appendU16(list, greaseGroup);  // GREASE (must match key_share)
     appendU16(list, 0x11EC);  // X25519MLKEM768 (assigned IANA code)
     appendU16(list, 0x001D);  // X25519
     appendU16(list, 0x0017);  // P-256 (secp256r1)
@@ -232,11 +237,14 @@ Vector<uint8_t> makeExtKeyShareP256(const Vector<uint8_t>& p256PubKey)
 //   group: 0x11EC (X25519MLKEM768)
 //   key_exchange (1216 bytes): MLKEM768_pubkey (1184) || X25519_pubkey (32)
 //   ORDER: MLKEM first, X25519 second (per draft + iPhone Safari)
-Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const Vector<uint8_t>& x25519PubKey)
+Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const Vector<uint8_t>& x25519PubKey, uint16_t greaseGroup)
 {
     Vector<uint8_t> list;
-    // GREASE entry (1-byte placeholder for keyshare list slot 0)
-    appendU16(list, pickGreaseValue());
+    // GREASE entry (1-byte placeholder for keyshare list slot 0).
+    // Wave 29-499.328 — greaseGroup MUST equal the supported_groups GREASE value, else
+    // the key_share offers a group not in supported_groups → illegal_parameter on strict
+    // servers. Caller threads the same value into makeExtSupportedGroups.
+    appendU16(list, greaseGroup);
     appendU16(list, 0x0001);
     list.append(0x00);
 
@@ -256,12 +264,13 @@ Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const 
     return makeExtension(51, body);
 }
 
-Vector<uint8_t> makeExtKeyShare(const Vector<uint8_t>& x25519PubKey)
+Vector<uint8_t> makeExtKeyShare(const Vector<uint8_t>& x25519PubKey, uint16_t greaseGroup)
 {
     Vector<uint8_t> list;
 
-    // GREASE entry (empty key_exchange — iPhone uses this pattern)
-    appendU16(list, pickGreaseValue());
+    // GREASE entry (empty key_exchange — iPhone uses this pattern).
+    // Wave 29-499.328 — greaseGroup MUST match supported_groups' GREASE.
+    appendU16(list, greaseGroup);
     appendU16(list, 0x0001);  // length = 1
     list.append(0x00);  // 1-byte placeholder
 
@@ -338,6 +347,9 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     uint16_t greaseSecondary = pickGreaseValue();
     while (greaseSecondary == greasePrimary)
         greaseSecondary = pickGreaseValue();
+    // Wave 29-499.328 — shared GREASE group for supported_groups + key_share (RFC 8446
+    // §4.2.8 / RFC 8701); independent picks caused illegal_parameter on strict edges.
+    uint16_t greaseGroup = pickGreaseValue();
 
     // Build cipher_suites (40 bytes content + 2-byte length = 42 bytes)
     Vector<uint8_t> ciphers;
@@ -351,13 +363,13 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     extensions.append(makeExtServerName(sni).span());              // server_name (0)
     extensions.append(makeExtExtendedMasterSecret().span());       // extended_master_secret (23)
     extensions.append(makeExtRenegotiationInfo().span());          // renegotiation_info (65281)
-    extensions.append(makeExtSupportedGroups().span());            // supported_groups (10)
+    extensions.append(makeExtSupportedGroups(greaseGroup).span()); // supported_groups (10)
     extensions.append(makeExtEcPointFormats().span());             // ec_point_formats (11)
     extensions.append(makeExtALPN().span());                       // ALPN (16)
     extensions.append(makeExtStatusRequest().span());              // status_request (5)
     extensions.append(makeExtSignatureAlgorithms().span());        // signature_algorithms (13)
     extensions.append(makeExtSCT().span());                        // signed_certificate_timestamp (18)
-    extensions.append(makeExtKeyShare(x25519Pub).span());          // key_share (51)
+    extensions.append(makeExtKeyShare(x25519Pub, greaseGroup).span()); // key_share (51)
     extensions.append(makeExtPSKKeyExchangeModes().span());        // psk_key_exchange_modes (45)
     extensions.append(makeExtSupportedVersions().span());          // supported_versions (43)
     extensions.append(makeExtCompressCertificate().span());        // compress_certificate (27)
@@ -418,6 +430,10 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     uint16_t greaseSecondary = pickGreaseValue();
     while (greaseSecondary == greasePrimary)
         greaseSecondary = pickGreaseValue();
+    // Wave 29-499.328 — one GREASE value shared by supported_groups + key_share so the
+    // key_share GREASE group is present in supported_groups (RFC 8446 §4.2.8 / RFC 8701).
+    // Independent picks here caused intermittent illegal_parameter aborts on strict edges.
+    uint16_t greaseGroup = pickGreaseValue();
 
     Vector<uint8_t> ciphers;
     appendU16(ciphers, greasePrimary);
@@ -429,14 +445,14 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     extensions.append(makeExtServerName(sni).span());
     extensions.append(makeExtExtendedMasterSecret().span());
     extensions.append(makeExtRenegotiationInfo().span());
-    extensions.append(makeExtSupportedGroups().span());
+    extensions.append(makeExtSupportedGroups(greaseGroup).span());
     extensions.append(makeExtEcPointFormats().span());
     extensions.append(makeExtALPN().span());
     extensions.append(makeExtStatusRequest().span());
     extensions.append(makeExtSignatureAlgorithms().span());
     extensions.append(makeExtSCT().span());
-    // ← HYBRID keyshare: GREASE + X25519MLKEM768 + X25519
-    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey).span());
+    // ← HYBRID keyshare: GREASE + X25519MLKEM768 + X25519 (GREASE matches supported_groups)
+    extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span());
     extensions.append(makeExtPSKKeyExchangeModes().span());
     extensions.append(makeExtSupportedVersions().span());
     extensions.append(makeExtCompressCertificate().span());
@@ -483,6 +499,9 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     uint16_t greaseSecondary = pickGreaseValue();
     while (greaseSecondary == greasePrimary)
         greaseSecondary = pickGreaseValue();
+    // Wave 29-499.328 — HRR CH2 key_share (P-256) carries no GREASE, so supported_groups'
+    // GREASE is standalone here; still use a valid GREASE value.
+    uint16_t greaseGroup = pickGreaseValue();
 
     Vector<uint8_t> ciphers;
     appendU16(ciphers, greasePrimary);
@@ -494,7 +513,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     extensions.append(makeExtServerName(sni).span());
     extensions.append(makeExtExtendedMasterSecret().span());
     extensions.append(makeExtRenegotiationInfo().span());
-    extensions.append(makeExtSupportedGroups().span());
+    extensions.append(makeExtSupportedGroups(greaseGroup).span());
     extensions.append(makeExtEcPointFormats().span());
     extensions.append(makeExtALPN().span());
     extensions.append(makeExtStatusRequest().span());

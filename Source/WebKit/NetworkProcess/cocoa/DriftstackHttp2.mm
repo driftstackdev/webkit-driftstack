@@ -518,6 +518,76 @@ static bool hpackDecodeOneHeader(const uint8_t* data, size_t len, size_t& cursor
 
 } // anonymous namespace
 
+// Wave 29-499.328 — shared Content-Encoding decompressor. iPhone Safari decompresses
+// transparently; our custom delivery path does not, so the body must be decoded here or
+// WebKit renders raw compressed bytes (garbled page). The single-request path
+// (driftstackHttp2Execute) decodes inline; the POOLED path (DriftstackHttp2Session::execute)
+// did NOT — browserleaks served brotli over a pooled stream → garbage. Handles gzip/deflate
+// (zlib, window 15+32 auto-detect) and br (Apple libcompression), with grow loops so
+// large/high-ratio bodies aren't truncated. Strips content-encoding/content-length after.
+static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
+{
+    if (resp.body.isEmpty())
+        return;
+    String enc;
+    for (auto& [k, v] : resp.headers) {
+        if (equalIgnoringASCIICase(k, "content-encoding"_s)) { enc = v.convertToASCIILowercase(); break; }
+    }
+    if (enc.isEmpty())
+        return;
+
+    Vector<uint8_t> out;
+    bool ok = false;
+
+    if (enc == "gzip"_s || enc == "deflate"_s) {
+        z_stream zs;
+        memset(&zs, 0, sizeof(zs));
+        if (inflateInit2(&zs, 15 + 32) == Z_OK) {  // 15+32 = auto-detect gzip vs zlib
+            zs.next_in = const_cast<Bytef*>(resp.body.span().data());
+            zs.avail_in = static_cast<uInt>(resp.body.size());
+            size_t cap = std::max<size_t>(resp.body.size() * 4, 64 * 1024);
+            out.resize(cap);
+            for (;;) {
+                zs.next_out = out.mutableSpan().data() + zs.total_out;
+                zs.avail_out = static_cast<uInt>(cap - zs.total_out);
+                int rv = inflate(&zs, Z_FINISH);
+                if (rv == Z_STREAM_END) { ok = true; break; }
+                if (rv == Z_OK || (rv == Z_BUF_ERROR && zs.avail_out == 0)) {
+                    if (zs.avail_out == 0) { cap *= 2; out.resize(cap); continue; }  // grow + retry
+                }
+                break;  // real error or stalled
+            }
+            if (ok) out.resize(zs.total_out);
+            inflateEnd(&zs);
+        }
+    } else if (enc == "br"_s) {
+        size_t cap = std::max<size_t>(resp.body.size() * 8, 64 * 1024);
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            out.resize(cap);
+            size_t n = compression_decode_buffer(out.mutableSpan().data(), cap,
+                resp.body.span().data(), resp.body.size(), nullptr, COMPRESSION_BROTLI);
+            if (n > 0 && n < cap) { out.resize(n); ok = true; break; }  // n<cap ⇒ complete
+            if (!n) break;                                              // hard failure
+            cap *= 2;                                                   // n==cap ⇒ maybe truncated, grow
+        }
+    } else
+        return;  // unknown encoding (e.g. zstd) — we never advertise it; leave as-is
+
+    if (!ok) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.328] decompress FAILED enc=%s in=%zu", enc.utf8().data(), resp.body.size());
+        return;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.328] decompressed enc=%s %zu -> %zu", enc.utf8().data(), resp.body.size(), out.size());
+    resp.body = std::move(out);
+    Vector<std::pair<String, String>> filtered;
+    for (auto& [k, v] : resp.headers) {
+        String kl = k.convertToASCIILowercase();
+        if (kl != "content-encoding"_s && kl != "content-length"_s)
+            filtered.append({ k, v });
+    }
+    resp.headers = std::move(filtered);
+}
+
 DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2Request& request)
 {
     DriftstackHttp2Response resp;
@@ -1242,6 +1312,11 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     } else {
         resp.failed = true; resp.errorMessage = "h2 stream lost"_s;
     }
+    // Wave 29-499.328 — the pooled path delivers the raw body; decompress Content-Encoding
+    // here (gzip/deflate/br) exactly like the single-request path, or WebKit renders the raw
+    // compressed bytes (the browserleaks brotli "garbage page").
+    if (!resp.failed)
+        driftstackDecompressHttp2Body(resp);
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] HTTP/2 pooled stream %u completed: status=%d, body=%zu bytes (failed=%d)",
         streamId, resp.statusCode, resp.body.size(), resp.failed ? 1 : 0);
     return resp;

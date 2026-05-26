@@ -29,10 +29,12 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <arpa/inet.h>
+#import <compression.h>  // Wave 29-499.329 — br (Content-Encoding) decode for h3 responses
 #import <dlfcn.h>
 #import <netinet/in.h>
 #import <stdlib.h>
 #import <string.h>
+#import <zlib.h>  // Wave 29-499.329 — gzip/deflate decode for h3 responses
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
 #import <wtf/Assertions.h>
@@ -2614,6 +2616,71 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
     return h3;
 }
 
+// Wave 29-499.329 — decompress the h3 response body per Content-Encoding. Same gap as the
+// h2 pool path (.328): iPhone Safari decodes transparently; our custom delivery does not, so
+// without this the response (e.g. browserleaks's QUIC test JSON, served Content-Encoding: br)
+// reaches the page as raw brotli → the QUIC test can't read it → "no QUIC". Handles
+// gzip/deflate (zlib 15+32) + br (Apple libcompression), strips content-encoding/length.
+static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
+{
+    if (resp.body.isEmpty())
+        return;
+    String enc;
+    for (auto& [k, v] : resp.headers) {
+        if (equalIgnoringASCIICase(k, "content-encoding"_s)) { enc = v.convertToASCIILowercase(); break; }
+    }
+    if (enc.isEmpty())
+        return;
+
+    Vector<uint8_t> out;
+    bool ok = false;
+    if (enc == "gzip"_s || enc == "deflate"_s) {
+        z_stream zs;
+        memset(&zs, 0, sizeof(zs));
+        if (inflateInit2(&zs, 15 + 32) == Z_OK) {
+            zs.next_in = const_cast<Bytef*>(resp.body.span().data());
+            zs.avail_in = static_cast<uInt>(resp.body.size());
+            size_t cap = std::max<size_t>(resp.body.size() * 4, 64 * 1024);
+            out.resize(cap);
+            for (;;) {
+                zs.next_out = out.mutableSpan().data() + zs.total_out;
+                zs.avail_out = static_cast<uInt>(cap - zs.total_out);
+                int rv = inflate(&zs, Z_FINISH);
+                if (rv == Z_STREAM_END) { ok = true; break; }
+                if ((rv == Z_OK || rv == Z_BUF_ERROR) && zs.avail_out == 0) { cap *= 2; out.resize(cap); continue; }
+                break;
+            }
+            if (ok) out.resize(zs.total_out);
+            inflateEnd(&zs);
+        }
+    } else if (enc == "br"_s) {
+        size_t cap = std::max<size_t>(resp.body.size() * 8, 64 * 1024);
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            out.resize(cap);
+            size_t n = compression_decode_buffer(out.mutableSpan().data(), cap,
+                resp.body.span().data(), resp.body.size(), nullptr, COMPRESSION_BROTLI);
+            if (n > 0 && n < cap) { out.resize(n); ok = true; break; }
+            if (!n) break;
+            cap *= 2;
+        }
+    } else
+        return;
+
+    if (!ok) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.329] h3 decompress FAILED enc=%s in=%zu", enc.utf8().data(), resp.body.size());
+        return;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.329] h3 decompressed enc=%s %zu -> %zu", enc.utf8().data(), resp.body.size(), out.size());
+    resp.body = std::move(out);
+    Vector<std::pair<String, String>> filtered;
+    for (auto& [k, v] : resp.headers) {
+        String kl = k.convertToASCIILowercase();
+        if (kl != "content-encoding"_s && kl != "content-length"_s)
+            filtered.append({ k, v });
+    }
+    resp.headers = std::move(filtered);
+}
+
 DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const DriftstackHttp3Request& request)
 {
     DriftstackHttp3Response resp;
@@ -3121,6 +3188,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
                 String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
         }
         resp.errorMessage = ""_s;
+        driftstackDecompressHttp3Body(resp);  // Wave .329 — decode Content-Encoding (br/gzip)
         WTFLogAlways("[Wave29-499.321] HTTP/3 REQUEST COMPLETE — status=%d bodyLen=%zu headers=%zu via SOCKS5 §7",
             resp.statusCode, resp.body.size(), resp.headers.size());
         return resp;
@@ -3503,6 +3571,7 @@ void DriftstackHttp3Session::runPump()
                         String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.first.span().data()), kv.first.size() }),
                         String::fromUTF8(std::span<const char8_t> { reinterpret_cast<const char8_t*>(kv.second.span().data()), kv.second.size() }) });
                 }
+                driftstackDecompressHttp3Body(p->response);  // Wave .329 — decode Content-Encoding (br/gzip)
                 p->done = true;
                 doneKeys.append(key);
                 anyDone = true;
