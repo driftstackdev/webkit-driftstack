@@ -116,6 +116,14 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ClientHello + ServerHello complete; JA3 should match iPhone Safari 26.0.");
 
+    // Wave 29-499.340 — the TLS 1.2 path completes the ENTIRE handshake inside
+    // receiveServerHello → doTLS12Handshake (cert/SKE/SHD + CKE/CCS/Finished +
+    // server CCS/Finished). The 1.3-specific steps below don't apply.
+    if (m_isTLS12) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS 1.2 handshake COMPLETE — iPhone-byte-exact ClientHello + ECDHE + AES-128-GCM app keys ready");
+        return true;
+    }
+
     // Wave 29-499.179 — full handshake completion:
     //   Step 3: Read + decrypt encrypted handshake messages (.178)
     //   Step 4: Send Client Finished (.179)
@@ -165,6 +173,10 @@ bool DriftstackTLS13Client::sendClientHello()
         m_errorMessage = "send ClientHello failed"_s;
         return false;
     }
+
+    // Wave 29-499.340 — save client_random for the TLS 1.2 PRF (master secret +
+    // key expansion). The builder filled it; it's also embedded in the CH bytes.
+    m_clientRandom = clientRandom;
 
     // Save handshake bytes (skip 5-byte record header) for transcript hash
     if (chRecord.size() > 5)
@@ -218,6 +230,13 @@ bool DriftstackTLS13Client::receiveServerHello()
     // Append ServerHello handshake bytes to transcript
     m_transcriptBytes.append(std::span<const uint8_t>(body.span().data(), 4 + hsLen));
 
+    // Wave 29-499.340 — extract server_random (SH body: legacy_version(2) +
+    // random(32) + ...). Offset within `body`: 4 (hs header) + 2 (version) = 6.
+    if (body.size() >= 6 + 32) {
+        m_serverRandom.clear();
+        m_serverRandom.append(std::span<const uint8_t>(body.span().data() + 6, 32));
+    }
+
     // Parse ServerHello body (after 4-byte handshake header)
     TLS13ServerHello sh;
     if (!driftstackParseServerHello(body.span().data() + 4, hsLen, sh)) {
@@ -227,6 +246,47 @@ bool DriftstackTLS13Client::receiveServerHello()
 
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.175] ServerHello: cipher=0x%04x selectedVersion=0x%04x keyShareGroup=0x%04x keyLen=%zu HRR=%d",
         sh.cipherSuite, sh.selectedVersion, sh.keyShareGroup, sh.keyShareKey.size(), sh.isHelloRetryRequest);
+
+    // Wave 29-499.340 — TLS 1.2 detection. A 1.3 server signals via the
+    // supported_versions extension (selectedVersion == 0x0304). If that's absent
+    // (selectedVersion 0x0000) and this isn't an HRR, the server chose TLS 1.2
+    // (e.g. Twilio turns: :443, cipher 0xc02f). Run the 1.2 ECDHE handshake — the
+    // iPhone-byte-exact ClientHello already offered 1.2 ciphers + supported_groups.
+    if (!sh.isHelloRetryRequest && sh.selectedVersion != 0x0304) {
+        // Scan ServerHello extensions for extended_master_secret (0x0017, RFC 7627).
+        // SH body: legacy_version(2)+random(32)+sid_len(1)+sid+cipher(2)+comp(1)+ext_len(2)+exts.
+        // `body` = 4-byte hs header + SH body. iPhone always offers EMS, so a modern
+        // server mirrors it → we must use the EMS master-secret derivation.
+        m_t12EMS = false;
+        {
+            const uint8_t* b = body.span().data();
+            size_t bn = body.size();
+            size_t p = 4 + 2 + 32; // hs header + version + random
+            if (p + 1 <= bn) {
+                uint8_t sidLen = b[p]; p += 1 + sidLen;
+                p += 2 + 1; // cipher + compression
+                if (p + 2 <= bn) {
+                    uint16_t extLen = (static_cast<uint16_t>(b[p]) << 8) | b[p + 1]; p += 2;
+                    size_t extEnd = p + extLen;
+                    while (p + 4 <= extEnd && p + 4 <= bn) {
+                        uint16_t et = (static_cast<uint16_t>(b[p]) << 8) | b[p + 1];
+                        uint16_t el = (static_cast<uint16_t>(b[p + 2]) << 8) | b[p + 3];
+                        if (et == 0x0017) { m_t12EMS = true; break; }
+                        p += 4 + el;
+                    }
+                }
+            }
+        }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] Server negotiated TLS 1.2 (cipher=0x%04x, no key_share, EMS=%d) — entering hand-rolled iPhone-exact TLS 1.2 ECDHE handshake.",
+            sh.cipherSuite, m_t12EMS);
+        m_isTLS12 = true;
+        m_negotiatedCipher = sh.cipherSuite;
+        if (m_serverRandom.size() != 32) {
+            m_errorMessage = "TLS 1.2: server_random not captured"_s;
+            return false;
+        }
+        return doTLS12Handshake(sh);
+    }
 
     // Wave 29-499.215 — HRR handling (RFC 8446 §4.1.4) for P-256
     if (sh.isHelloRetryRequest) {
@@ -404,11 +464,24 @@ bool DriftstackTLS13Client::receiveServerHello()
 
 int DriftstackTLS13Client::write(const uint8_t* data, size_t len)
 {
+    if (m_isTLS12)
+        return writeTLS12Record(data, len);
     return writeApplicationRecord(data, len);
 }
 
 int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
 {
+    if (m_isTLS12) {
+        if (m_t12ReadBuffer.isEmpty()) {
+            auto pt = readTLS12Record();
+            if (pt.isEmpty()) return 0;
+            m_t12ReadBuffer = std::move(pt);
+        }
+        size_t n = std::min(m_t12ReadBuffer.size(), maxLen);
+        memcpy(buf, m_t12ReadBuffer.span().data(), n);
+        m_t12ReadBuffer.removeAt(0, n);
+        return static_cast<int>(n);
+    }
     // Wave 29-499.195 — drain buffer first; only read new record when empty
     if (m_readBuffer.isEmpty()) {
         auto pt = readApplicationRecord();
@@ -756,6 +829,251 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
         return {};
     }
     return {};
+}
+
+// ===========================================================================
+// Wave 29-499.340 — TLS 1.2 (RFC 5246 + RFC 5288 AEAD) ECDHE handshake + record
+// layer for endpoints that negotiate 1.2 (e.g. Twilio turns: :443, cipher 0xc02f
+// TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256). The iPhone-byte-exact ClientHello
+// already advertises 1.2 ciphers + supported_groups; this completes the 1.2 flow
+// so TURN-TLS works "like a real iPhone". No cert validation (matches the 1.3
+// path; TURN authenticity is enforced by the TURN long-term credential, not PKI).
+// ===========================================================================
+namespace {
+// TLS 1.2 PRF = P_SHA256 (RFC 5246 §5). P_hash(secret, seed):
+//   A(0)=seed; A(i)=HMAC(secret,A(i-1)); out += HMAC(secret, A(i) || seed).
+Vector<uint8_t> tls12PrfSha256(const Vector<uint8_t>& secret, const char* label,
+    const Vector<uint8_t>& seed, size_t outLen)
+{
+    Vector<uint8_t> labelSeed;
+    labelSeed.append(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(label), strlen(label)));
+    labelSeed.append(seed.span());
+
+    Vector<uint8_t> out;
+    Vector<uint8_t> a = driftstackHmacSha256(secret, labelSeed); // A(1)
+    while (out.size() < outLen) {
+        Vector<uint8_t> input = a;
+        input.append(labelSeed.span());
+        out.append(driftstackHmacSha256(secret, input).span());
+        a = driftstackHmacSha256(secret, a); // A(i+1)
+    }
+    out.shrink(outLen);
+    return out;
+}
+Vector<uint8_t> slice(const Vector<uint8_t>& v, size_t off, size_t len)
+{
+    Vector<uint8_t> r;
+    if (off + len <= v.size())
+        r.append(std::span<const uint8_t>(v.span().data() + off, len));
+    return r;
+}
+} // namespace
+
+bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
+{
+    // This record layer + PRF assume AES-128-GCM with the SHA256 PRF
+    // (TLS_ECDHE_{RSA,ECDSA}_WITH_AES_128_GCM_SHA256 = 0xc02f / 0xc02b). iPhone's
+    // cipher order makes Twilio pick 0xc02f. Reject anything else loudly rather than
+    // derive wrong-length keys (AES-256-GCM/SHA384 would need a SHA384 PRF + 32B keys).
+    if (sh.cipherSuite != 0xc02f && sh.cipherSuite != 0xc02b) {
+        m_errorMessage = makeString("TLS1.2: cipher 0x"_s, hex(sh.cipherSuite, 4), " not supported (only AES_128_GCM_SHA256)"_s);
+        return false;
+    }
+    // 1.2 servers send (plaintext): Certificate, ServerKeyExchange, [CertificateRequest],
+    // ServerHelloDone. Read records (each may hold several / partial messages) until SHD.
+    uint16_t serverCurve = 0;
+    Vector<uint8_t> serverEcPub;
+    bool gotSKE = false, gotSHD = false;
+    Vector<uint8_t> acc;
+
+    while (!gotSHD) {
+        uint8_t recType; uint16_t recVer; Vector<uint8_t> recBody;
+        if (!driftstackReadTLSRecord(m_fd, recType, recVer, recBody)) {
+            m_errorMessage = "TLS1.2: read handshake record failed"_s; return false;
+        }
+        if (recType == 0x15) { m_errorMessage = "TLS1.2: alert during handshake"_s; return false; }
+        if (recType != 0x16) {
+            m_errorMessage = makeString("TLS1.2: expected handshake(0x16), got 0x"_s, hex(recType, 2)); return false;
+        }
+        acc.append(recBody.span());
+        size_t off = 0;
+        while (off + 4 <= acc.size()) {
+            uint8_t t = acc[off];
+            uint32_t l = (static_cast<uint32_t>(acc[off + 1]) << 16) | (static_cast<uint32_t>(acc[off + 2]) << 8) | acc[off + 3];
+            if (off + 4 + l > acc.size()) break; // incomplete — await next record
+            m_transcriptBytes.append(std::span<const uint8_t>(acc.span().data() + off, 4 + l));
+            const uint8_t* mb = acc.span().data() + off + 4;
+            if (t == 0x0c && l >= 4 && mb[0] == 0x03) { // ServerKeyExchange, named_curve
+                serverCurve = (static_cast<uint16_t>(mb[1]) << 8) | mb[2];
+                uint8_t pubLen = mb[3];
+                if (static_cast<uint32_t>(4) + pubLen <= l) {
+                    serverEcPub.clear();
+                    serverEcPub.append(std::span<const uint8_t>(mb + 4, pubLen));
+                    gotSKE = true;
+                }
+            } else if (t == 0x0e)
+                gotSHD = true;
+            off += 4 + l;
+        }
+        acc.removeAt(0, off);
+    }
+    if (!gotSKE) { m_errorMessage = "TLS1.2: no ServerKeyExchange (need ECDHE)"_s; return false; }
+
+    // Client ephemeral on the server's curve → pre_master_secret.
+    Vector<uint8_t> clientEcPub, preMaster;
+    if (serverCurve == 0x001D) { // X25519
+        Vector<uint8_t> priv, pub;
+        if (!driftstackX25519GenerateKeypair(priv, pub)) { m_errorMessage = "TLS1.2 X25519 gen failed"_s; return false; }
+        clientEcPub = pub;
+        preMaster = driftstackX25519SharedSecret(priv, serverEcPub);
+    } else if (serverCurve == 0x0017) { // secp256r1
+        P256Keypair kp = driftstackP256Generate();
+        if (!kp.ok) { m_errorMessage = "TLS1.2 P-256 gen failed"_s; return false; }
+        clientEcPub = kp.publicKey;
+        preMaster = driftstackP256ComputeShared(kp, serverEcPub);
+        driftstackP256Free(kp);
+    } else {
+        m_errorMessage = makeString("TLS1.2: unsupported ECDHE curve 0x"_s, hex(serverCurve, 4)); return false;
+    }
+    if (preMaster.isEmpty()) { m_errorMessage = "TLS1.2: ECDH produced empty shared secret"_s; return false; }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS1.2 ECDHE curve=0x%04x serverPub=%zuB clientPub=%zuB preMaster=%zuB",
+        serverCurve, serverEcPub.size(), clientEcPub.size(), preMaster.size());
+
+    // ClientKeyExchange (0x10): ECDHE public = pub_len(1) + pub. Build + send + add to
+    // transcript FIRST, because with extended_master_secret (RFC 7627) the master secret
+    // is derived from the session hash through ClientKeyExchange — not client/server random.
+    Vector<uint8_t> cke;
+    cke.append(0x10);
+    uint32_t ckeBody = 1 + clientEcPub.size();
+    cke.append(static_cast<uint8_t>((ckeBody >> 16) & 0xFF));
+    cke.append(static_cast<uint8_t>((ckeBody >> 8) & 0xFF));
+    cke.append(static_cast<uint8_t>(ckeBody & 0xFF));
+    cke.append(static_cast<uint8_t>(clientEcPub.size()));
+    cke.append(clientEcPub.span());
+    {
+        Vector<uint8_t> rec; rec.append(0x16); rec.append(0x03); rec.append(0x03);
+        rec.append(static_cast<uint8_t>((cke.size() >> 8) & 0xFF));
+        rec.append(static_cast<uint8_t>(cke.size() & 0xFF));
+        rec.append(cke.span());
+        if (!writeAll(m_fd, rec.span().data(), rec.size())) { m_errorMessage = "TLS1.2 send CKE failed"_s; return false; }
+    }
+    m_transcriptBytes.append(cke.span());
+
+    // session_hash = Hash(ClientHello .. ClientKeyExchange) — also reused for the Finished.
+    Vector<uint8_t> sessionHash = driftstackSHA256(m_transcriptBytes.span().data(), m_transcriptBytes.size());
+
+    // master_secret: EMS (RFC 7627) → PRF(preMaster,"extended master secret",session_hash);
+    // else classic PRF(preMaster,"master secret",client_random+server_random).
+    if (m_t12EMS)
+        m_t12MasterSecret = tls12PrfSha256(preMaster, "extended master secret", sessionHash, 48);
+    else {
+        Vector<uint8_t> crSr; crSr.append(m_clientRandom.span()); crSr.append(m_serverRandom.span());
+        m_t12MasterSecret = tls12PrfSha256(preMaster, "master secret", crSr, 48);
+    }
+    // key_block = PRF(master,"key expansion",server_random+client_random,40) — AEAD: no MAC keys.
+    Vector<uint8_t> srCr; srCr.append(m_serverRandom.span()); srCr.append(m_clientRandom.span());
+    Vector<uint8_t> keyBlock = tls12PrfSha256(m_t12MasterSecret, "key expansion", srCr, 40);
+    m_t12ClientKey = slice(keyBlock, 0, 16);
+    m_t12ServerKey = slice(keyBlock, 16, 16);
+    m_t12ClientFixedIV = slice(keyBlock, 32, 4);
+    m_t12ServerFixedIV = slice(keyBlock, 36, 4);
+    if (m_t12ClientKey.size() != 16 || m_t12ServerKey.size() != 16) { m_errorMessage = "TLS1.2 key_block too short"_s; return false; }
+
+    // ChangeCipherSpec (record type 0x14, payload 0x01)
+    { uint8_t ccs[6] = { 0x14, 0x03, 0x03, 0x00, 0x01, 0x01 };
+      if (!writeAll(m_fd, ccs, 6)) { m_errorMessage = "TLS1.2 send CCS failed"_s; return false; } }
+
+    // Client Finished: verify_data = PRF(master, "client finished", session_hash, 12),
+    // sent as an ENCRYPTED handshake record (content type 0x16) with client seq 0.
+    Vector<uint8_t> verifyData = tls12PrfSha256(m_t12MasterSecret, "client finished", sessionHash, 12);
+    Vector<uint8_t> fin; fin.append(0x14); fin.append(0x00); fin.append(0x00); fin.append(0x0c); fin.append(verifyData.span());
+    if (writeTLS12Record(fin.span().data(), fin.size(), 0x16) < 0) { m_errorMessage = "TLS1.2 send Finished failed"_s; return false; }
+    m_transcriptBytes.append(fin.span());
+
+    // Read server [NewSessionTicket] CCS Finished. Decrypting the server Finished
+    // (type 0x16, encrypted) with our derived server keys proves the key schedule.
+    bool serverCcs = false, serverFinished = false;
+    int guard = 0;
+    while (!serverFinished && guard++ < 8) {
+        uint8_t recType; uint16_t recVer; Vector<uint8_t> recBody;
+        if (!driftstackReadTLSRecord(m_fd, recType, recVer, recBody)) { m_errorMessage = "TLS1.2: read server finish record failed"_s; return false; }
+        if (recType == 0x14) { serverCcs = true; continue; }
+        if (recType == 0x15) {
+            int lvl = recBody.size() >= 1 ? recBody[0] : -1;
+            int desc = recBody.size() >= 2 ? recBody[1] : -1;
+            m_errorMessage = makeString("TLS1.2: server alert level="_s, String::number(lvl), " desc="_s, String::number(desc));
+            return false;
+        }
+        if (recType == 0x16 && !serverCcs) { m_transcriptBytes.append(recBody.span()); continue; } // plaintext NewSessionTicket
+        if (recType == 0x16 && serverCcs) {
+            // explicit_nonce(8) || ciphertext || tag(16)
+            if (recBody.size() < 8 + 16) { m_errorMessage = "TLS1.2: short server Finished"_s; return false; }
+            Vector<uint8_t> nonce; nonce.append(m_t12ServerFixedIV.span()); nonce.append(slice(recBody, 0, 8).span());
+            Vector<uint8_t> ct = slice(recBody, 8, recBody.size() - 8);
+            size_t ptLen = ct.size() - 16;
+            Vector<uint8_t> aad;
+            for (int i = 7; i >= 0; --i) aad.append(static_cast<uint8_t>((m_t12ServerSeq >> (i * 8)) & 0xFF));
+            aad.append(0x16); aad.append(0x03); aad.append(0x03);
+            aad.append(static_cast<uint8_t>((ptLen >> 8) & 0xFF)); aad.append(static_cast<uint8_t>(ptLen & 0xFF));
+            Vector<uint8_t> pt = driftstackAes128GcmDecrypt(m_t12ServerKey, nonce, ct, aad);
+            m_t12ServerSeq++;
+            if (pt.isEmpty()) { m_errorMessage = "TLS1.2: server Finished decrypt failed (key schedule wrong)"_s; return false; }
+            serverFinished = true;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS1.2 server Finished decrypted OK (%zuB) — handshake verified, keys correct.", pt.size());
+        }
+    }
+    if (!serverFinished) { m_errorMessage = "TLS1.2: never received server Finished"_s; return false; }
+    return true;
+}
+
+int DriftstackTLS13Client::writeTLS12Record(const uint8_t* data, size_t len, uint8_t contentType)
+{
+    // RFC 5288: nonce = client_fixed_IV(4) || explicit_nonce(8); explicit_nonce = seq.
+    // Wire payload = explicit_nonce(8) || AES-128-GCM(plaintext)+tag. AAD = seq || type || ver || ptlen.
+    Vector<uint8_t> explicitNonce;
+    for (int i = 7; i >= 0; --i) explicitNonce.append(static_cast<uint8_t>((m_t12ClientSeq >> (i * 8)) & 0xFF));
+    Vector<uint8_t> nonce; nonce.append(m_t12ClientFixedIV.span()); nonce.append(explicitNonce.span());
+
+    Vector<uint8_t> aad;
+    for (int i = 7; i >= 0; --i) aad.append(static_cast<uint8_t>((m_t12ClientSeq >> (i * 8)) & 0xFF));
+    aad.append(contentType); aad.append(0x03); aad.append(0x03);
+    aad.append(static_cast<uint8_t>((len >> 8) & 0xFF)); aad.append(static_cast<uint8_t>(len & 0xFF));
+
+    Vector<uint8_t> pt; pt.append(std::span<const uint8_t>(data, len));
+    Vector<uint8_t> ct = driftstackAes128GcmEncrypt(m_t12ClientKey, nonce, pt, aad);
+    if (ct.isEmpty()) return -1;
+    m_t12ClientSeq++;
+
+    Vector<uint8_t> payload; payload.append(explicitNonce.span()); payload.append(ct.span());
+    Vector<uint8_t> rec; rec.append(contentType); rec.append(0x03); rec.append(0x03);
+    rec.append(static_cast<uint8_t>((payload.size() >> 8) & 0xFF));
+    rec.append(static_cast<uint8_t>(payload.size() & 0xFF));
+    rec.append(payload.span());
+    if (!writeAll(m_fd, rec.span().data(), rec.size())) return -1;
+    return static_cast<int>(len);
+}
+
+Vector<uint8_t> DriftstackTLS13Client::readTLS12Record()
+{
+    uint8_t recType; uint16_t recVer; Vector<uint8_t> body;
+    if (!driftstackReadTLSRecord(m_fd, recType, recVer, body)) return {};
+    if (recType == 0x15) return {}; // alert (incl. close_notify)
+    if (recType != 0x17) {
+        // ChangeCipherSpec / handshake (e.g. post-handshake NewSessionTicket): skip, read next.
+        if (recType == 0x14 || recType == 0x16) return readTLS12Record();
+        return {};
+    }
+    if (body.size() < 8 + 16) return {};
+    Vector<uint8_t> nonce; nonce.append(m_t12ServerFixedIV.span()); nonce.append(slice(body, 0, 8).span());
+    Vector<uint8_t> ct = slice(body, 8, body.size() - 8);
+    size_t ptLen = ct.size() - 16;
+    Vector<uint8_t> aad;
+    for (int i = 7; i >= 0; --i) aad.append(static_cast<uint8_t>((m_t12ServerSeq >> (i * 8)) & 0xFF));
+    aad.append(0x17); aad.append(0x03); aad.append(0x03);
+    aad.append(static_cast<uint8_t>((ptLen >> 8) & 0xFF)); aad.append(static_cast<uint8_t>(ptLen & 0xFF));
+    Vector<uint8_t> pt = driftstackAes128GcmDecrypt(m_t12ServerKey, nonce, ct, aad);
+    m_t12ServerSeq++;
+    return pt;
 }
 
 } // namespace WebKit

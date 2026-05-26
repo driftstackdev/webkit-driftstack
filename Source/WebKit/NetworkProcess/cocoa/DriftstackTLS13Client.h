@@ -35,6 +35,7 @@
 namespace WebKit {
 
 struct SHA384Ctx;  // forward (from DriftstackCrypto)
+struct TLS13ServerHello;  // forward (from DriftstackTLS13) — used by the TLS 1.2 path
 
 class DriftstackTLS13Client {
 public:
@@ -99,6 +100,25 @@ private:
     // discard bytes that don't fit in caller's maxLen.
     Vector<uint8_t> m_readBuffer;
 
+    // Wave 29-499.340 — TLS 1.2 fallback path. Twilio's TURN turns: :443 endpoint
+    // negotiates TLS 1.2 (cipher 0xc02f ECDHE_RSA_AES128GCM, no key_share), so a
+    // real iPhone completes a 1.2 handshake there. The iPhone-byte-exact ClientHello
+    // already offers TLS 1.2 cipher suites + supported_versions[1.3,1.2]; when the
+    // server picks 1.2 we run the full 1.2 ECDHE handshake here (RFC 5246 + RFC 5288
+    // AEAD). Kept entirely separate from the 1.3 state machine above.
+    bool m_isTLS12 { false };
+    bool m_t12EMS { false };                   // extended_master_secret negotiated (RFC 7627)
+    Vector<uint8_t> m_clientRandom;            // 32 bytes, saved from ClientHello
+    Vector<uint8_t> m_serverRandom;            // 32 bytes, from ServerHello
+    Vector<uint8_t> m_t12MasterSecret;         // 48 bytes
+    Vector<uint8_t> m_t12ClientKey;            // 16 (AES-128)
+    Vector<uint8_t> m_t12ServerKey;            // 16
+    Vector<uint8_t> m_t12ClientFixedIV;        // 4 (implicit nonce prefix)
+    Vector<uint8_t> m_t12ServerFixedIV;        // 4
+    uint64_t m_t12ClientSeq { 0 };
+    uint64_t m_t12ServerSeq { 0 };
+    Vector<uint8_t> m_t12ReadBuffer;           // leftover decrypted app bytes
+
     // Internal helpers
     bool sendClientHello();
     bool receiveServerHello();
@@ -106,6 +126,11 @@ private:
     bool sendClientFinished();
     int writeApplicationRecord(const uint8_t* data, size_t len);
     Vector<uint8_t> readApplicationRecord();
+
+    // Wave 29-499.340 — TLS 1.2 handshake + record layer.
+    bool doTLS12Handshake(const TLS13ServerHello& sh);
+    int writeTLS12Record(const uint8_t* data, size_t len, uint8_t contentType = 0x17);
+    Vector<uint8_t> readTLS12Record();
 };
 
 } // namespace WebKit
