@@ -525,13 +525,13 @@ static bool hpackDecodeOneHeader(const uint8_t* data, size_t len, size_t& cursor
 // did NOT — browserleaks served brotli over a pooled stream → garbage. Handles gzip/deflate
 // (zlib, window 15+32 auto-detect) and br (Apple libcompression), with grow loops so
 // large/high-ratio bodies aren't truncated. Strips content-encoding/content-length after.
-static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
+void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<String, String>>& headers)
 {
-    if (resp.body.isEmpty())
+    if (body.isEmpty())
         return;
     String enc;
-    for (auto& [k, v] : resp.headers) {
-        if (equalIgnoringASCIICase(k, "content-encoding"_s)) { enc = v.convertToASCIILowercase(); break; }
+    for (auto& [k, v] : headers) {
+        if (equalIgnoringASCIICase(k, "content-encoding"_s)) { enc = v.convertToASCIILowercase().trim(deprecatedIsSpaceOrNewline); break; }
     }
     if (enc.isEmpty())
         return;
@@ -539,13 +539,13 @@ static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
     Vector<uint8_t> out;
     bool ok = false;
 
-    if (enc == "gzip"_s || enc == "deflate"_s) {
+    if (enc == "gzip"_s || enc == "deflate"_s || enc == "x-gzip"_s) {
         z_stream zs;
         memset(&zs, 0, sizeof(zs));
         if (inflateInit2(&zs, 15 + 32) == Z_OK) {  // 15+32 = auto-detect gzip vs zlib
-            zs.next_in = const_cast<Bytef*>(resp.body.span().data());
-            zs.avail_in = static_cast<uInt>(resp.body.size());
-            size_t cap = std::max<size_t>(resp.body.size() * 4, 64 * 1024);
+            zs.next_in = const_cast<Bytef*>(body.span().data());
+            zs.avail_in = static_cast<uInt>(body.size());
+            size_t cap = std::max<size_t>(body.size() * 4, 64 * 1024);
             out.resize(cap);
             for (;;) {
                 zs.next_out = out.mutableSpan().data() + zs.total_out;
@@ -561,11 +561,11 @@ static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
             inflateEnd(&zs);
         }
     } else if (enc == "br"_s) {
-        size_t cap = std::max<size_t>(resp.body.size() * 8, 64 * 1024);
+        size_t cap = std::max<size_t>(body.size() * 8, 64 * 1024);
         for (int attempt = 0; attempt < 6; ++attempt) {
             out.resize(cap);
             size_t n = compression_decode_buffer(out.mutableSpan().data(), cap,
-                resp.body.span().data(), resp.body.size(), nullptr, COMPRESSION_BROTLI);
+                body.span().data(), body.size(), nullptr, COMPRESSION_BROTLI);
             if (n > 0 && n < cap) { out.resize(n); ok = true; break; }  // n<cap ⇒ complete
             if (!n) break;                                              // hard failure
             cap *= 2;                                                   // n==cap ⇒ maybe truncated, grow
@@ -574,18 +574,23 @@ static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
         return;  // unknown encoding (e.g. zstd) — we never advertise it; leave as-is
 
     if (!ok) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.328] decompress FAILED enc=%s in=%zu", enc.utf8().data(), resp.body.size());
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.331] decode FAILED enc=%s in=%zu first=0x%02x", enc.utf8().data(), body.size(), body.isEmpty() ? 0 : body[0]);
         return;
     }
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.328] decompressed enc=%s %zu -> %zu", enc.utf8().data(), resp.body.size(), out.size());
-    resp.body = std::move(out);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.331] decoded enc=%s %zu -> %zu", enc.utf8().data(), body.size(), out.size());
+    body = std::move(out);
     Vector<std::pair<String, String>> filtered;
-    for (auto& [k, v] : resp.headers) {
+    for (auto& [k, v] : headers) {
         String kl = k.convertToASCIILowercase();
         if (kl != "content-encoding"_s && kl != "content-length"_s)
             filtered.append({ k, v });
     }
-    resp.headers = std::move(filtered);
+    headers = std::move(filtered);
+}
+
+static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
+{
+    driftstackDecodeContentEncoding(resp.body, resp.headers);
 }
 
 DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2Request& request)

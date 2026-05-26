@@ -1043,6 +1043,7 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h3resp.statusCode);
                     for (auto& [k, v] : h3resp.headers)
                         response.setHTTPHeaderField(k, v);
+                    WebKit::driftstackDecodeContentEncoding(h3resp.body, h3resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
@@ -1117,6 +1118,7 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h2resp.statusCode);
                     for (auto& [k, v] : h2resp.headers)
                         response.setHTTPHeaderField(k, v);
+                    WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                     callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
@@ -1518,6 +1520,7 @@ void DriftstackNetworkLoader::resume()
             // parallel HTTP/2 dispatches corrupted CFRunLoop hash sets and
             // crashed NetworkProcess (SIGTRAP in CFCheckCFInfoPACSignature_Bridged)
             // when loading 10+ subresource Angular apps like Twilio NT.
+            WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint — decode any encoding any h2 path missed
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
             if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard

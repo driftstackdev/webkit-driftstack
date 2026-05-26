@@ -84,6 +84,14 @@ struct DriftstackHttp2Transport {
 DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
                                                   const DriftstackHttp2Request& request);
 
+// Wave 29-499.331 — decode Content-Encoding (gzip/deflate/br) in body IN-PLACE and strip the
+// content-encoding/content-length headers. Idempotent: a no-op when there's no content-encoding
+// header (so it's safe to call again after an engine path already decoded). Exposed so the loader
+// can run it at the single delivery chokepoint, guaranteeing NO raw-compressed body ever reaches
+// WebKit regardless of which h2/h3 path produced the response (the Twilio controllers.js/directives.js
+// "" gzip-magic SyntaxError came from a path that skipped decode).
+void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<String, String>>& headers);
+
 // Wave 29-499.321 (Phase 2.5) — PERSISTENT, MULTIPLEXED HTTP/2 session for
 // connection pooling. One session per origin owns the established h2 transport
 // (preface + SETTINGS sent once) and a background reader thread that demuxes
