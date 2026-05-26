@@ -554,6 +554,18 @@ struct DriftstackQuicConn {
     Vector<uint8_t> h3ReqPath;
     Vector<uint8_t> h3ReqAuthority;
 
+    // Wave .322 BISECT — per-stream members ONLY (no callback edits yet). Testing
+    // whether merely embedding these non-trivial members in the ngtcp2 user_data
+    // struct breaks the QUIC read path (attempt-1 hypothesis). UNUSED for now.
+    struct H3Stream {
+        int status { 0 };
+        Vector<std::pair<Vector<uint8_t>, Vector<uint8_t>>> headers;
+        Vector<uint8_t> body;
+        bool complete { false };
+    };
+    Lock h3StreamsLock;
+    HashMap<int64_t, std::unique_ptr<H3Stream>> h3Streams WTF_GUARDED_BY_LOCK(h3StreamsLock);
+
     // Wave .322 — transport state a persistent DriftstackHttp3Session needs to
     // keep so execute() can pump the SAME connection for many sequential
     // requests (the one-shot driftstackHttp3Execute keeps these as locals).
@@ -1316,6 +1328,7 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
     Vector<uint8_t> nameBuf; nameBuf.append(std::span<const uint8_t> { nv.base, nv.len });
     Vector<uint8_t> valBuf; valBuf.append(std::span<const uint8_t> { vv.base, vv.len });
     // :status pseudo-header → numeric status code.
+    int statusCode = -1;
     if (nv.len == 7 && !memcmp(nv.base, ":status", 7)) {
         int code = 0;
         for (size_t i = 0; i < vv.len; ++i) {
@@ -1323,6 +1336,19 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
             code = code * 10 + (vv.base[i] - '0');
         }
         qc->h3Status = code;
+        statusCode = code;
+    }
+    // Wave .322 — per-stream population (additive). KEY = streamId + 1: the h3
+    // request bidi stream is stream id 0, and WTF::HashMap<int64_t> reserves 0 as
+    // the empty-bucket sentinel — inserting key 0 corrupts the table (this was the
+    // attempt-1 break: recv_header crashed on stream 0). +1 keeps every key ≥ 1.
+    // Copy because the singular append moves below.
+    {
+        Locker l { qc->h3StreamsLock };
+        auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
+        if (statusCode >= 0)
+            slot->status = statusCode;
+        slot->headers.append({ Vector<uint8_t>(nameBuf), Vector<uint8_t>(valBuf) });
     }
     qc->h3ResponseHeaders.append({ std::move(nameBuf), std::move(valBuf) });
     if (qc->h3ResponseHeaders.size() <= 16) {
@@ -1332,11 +1358,17 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
     return 0;
 }
 
-static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t /*streamId*/,
+static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t streamId,
     const uint8_t* data, size_t datalen, void* connUserData, void* /*streamUserData*/)
 {
     auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
     qc->h3ResponseBody.append(std::span<const uint8_t> { data, datalen });
+    // Wave .322 — per-stream body (additive; key = streamId + 1, see recv_header).
+    {
+        Locker l { qc->h3StreamsLock };
+        auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
+        slot->body.append(std::span<const uint8_t> { data, datalen });
+    }
     return 0;
 }
 
@@ -1349,6 +1381,13 @@ static int driftstackH3EndStream(nghttp3_conn* /*conn*/, int64_t streamId,
         WTFLogAlways("[Wave29-499.321] H3 end_stream stream=%lld status=%d bodyLen=%zu",
             (long long)streamId, qc->h3Status, qc->h3ResponseBody.size());
     }
+    // Wave .322 — mark the per-stream entry complete (additive; key = streamId + 1).
+    {
+        Locker l { qc->h3StreamsLock };
+        auto it = qc->h3Streams.find(streamId + 1);
+        if (it != qc->h3Streams.end())
+            it->value->complete = true;
+    }
     return 0;
 }
 
@@ -1358,6 +1397,13 @@ static int driftstackH3StreamClose(nghttp3_conn* /*conn*/, int64_t streamId,
     auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
     if (streamId == qc->h3RequestStreamId)
         qc->h3ResponseComplete = true;
+    // Wave .322 — mark the per-stream entry complete (additive; key = streamId + 1).
+    {
+        Locker l { qc->h3StreamsLock };
+        auto it = qc->h3Streams.find(streamId + 1);
+        if (it != qc->h3Streams.end())
+            it->value->complete = true;
+    }
     return 0;
 }
 
