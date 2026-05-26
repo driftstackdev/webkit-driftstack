@@ -1,11 +1,12 @@
 #!/usr/bin/env zsh
 # Driftstack MiniBrowser launcher.
-# Uses Tools/Scripts/run-minibrowser, which sets DYLD_FRAMEWORK_PATH to the local
-# WebKit build AND forwards it to the WebContent/GPU/Networking XPC processes.
-# Launching the raw MiniBrowser binary directly does NOT forward that env, so the
-# web processes can't load the local framework and every page renders white.
-# Proxy creds (DRIFTSTACK_SOCKS5_*) are auto-sourced from ~/.driftstack-secrets.env
-# via ~/.zshenv; this enables the SOCKS5 customer-proxy path.
+# Sources the canonical production env (Path B v2 loader + custom QUIC engine + h3 +
+# DNSRR + iPhone TLS) then launches via run-minibrowser (forwards DYLD_FRAMEWORK_PATH to
+# the web processes so they load the local build — raw-binary launch renders white).
+# DRIFTSTACK_PATHB_V2=1 is what activates DriftstackNetworkLoader, whose driftstackHttp3Execute
+# tunnels HTTP/3 through the SOCKS5 §7 UDP relay. Without it the browser uses CFNetwork's
+# native QUIC, which can't use SOCKS5 UDP → no QUIC through the proxy.
+# Proxy creds auto-source from ~/.driftstack-secrets.env via ~/.zshenv.
 cd "${0:A:h}"
-export DRIFTSTACK_CUSTOM_SOCKS5=1
+source ~/code/driftstack/operations/scripts/production-env/launch-env-v1.sh
 exec Tools/Scripts/run-minibrowser --release "${@:-https://example.com/}"
