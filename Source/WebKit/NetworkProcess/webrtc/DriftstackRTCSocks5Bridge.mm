@@ -845,6 +845,36 @@ BridgeResult unwrapIncomingDatagram(std::span<const uint8_t> frame, UnwrappedDat
                 WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.278] unwrapIncoming TURN %s (0x%04x) ← %s:%u (payload=%zu, msgLen=%u)",
                     tn, msgType, source.host.utf8().data(), source.port, p.size(), msgLen);
             }
+        } else if (isStun) {
+            // Wave 29-499.337 — CATCH-ALL inbound STUN/TURN logging. Prior code
+            // only logged allocate/refresh (0x0103/0x0113/0x0117), so every grep
+            // for createperm-success (0x0108) / channelbind-success (0x0109) /
+            // DATA-indication (0x0017) returned 0 — a MEASUREMENT ARTIFACT, not a
+            // genuine "no response". Log EVERY STUN type so we know what actually
+            // arrives on the relay channel.
+            const char* tn =
+                  msgType == 0x0001 ? "Binding-Req"
+                : msgType == 0x0101 ? "Binding-Success"
+                : msgType == 0x0111 ? "Binding-Error"
+                : msgType == 0x0003 ? "Allocate-Req"
+                : msgType == 0x0004 ? "Refresh-Req"
+                : msgType == 0x0104 ? "Refresh-Success"
+                : msgType == 0x0006 ? "Send-Indication"
+                : msgType == 0x0007 ? "Data-Indication"
+                : msgType == 0x0008 ? "CreatePerm-Req"
+                : msgType == 0x0108 ? "CreatePerm-Success"
+                : msgType == 0x0118 ? "CreatePerm-Error"
+                : msgType == 0x0009 ? "ChannelBind-Req"
+                : msgType == 0x0109 ? "ChannelBind-Success"
+                : msgType == 0x0119 ? "ChannelBind-Error"
+                : "OTHER-STUN";
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.337] unwrapIncoming TURN %s (0x%04x) ← %s:%u (payload=%zu, msgLen=%u)",
+                tn, msgType, source.host.utf8().data(), source.port, p.size(), msgLen);
+        } else if (p.size() >= 4 && (p[0] & 0xc0) == 0x40) {
+            // ChannelData (0x4000–0x7fff) — TURN media relay frames.
+            uint16_t chan = (static_cast<uint16_t>(p[0]) << 8) | p[1];
+            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.337] unwrapIncoming ChannelData chan=0x%04x ← %s:%u (payload=%zu)",
+                chan, source.host.utf8().data(), source.port, p.size());
         }
     }
     return BridgeResult::Success;

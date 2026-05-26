@@ -5,4 +5,10 @@
 cd "${0:A:h}"
 source ~/code/driftstack/operations/scripts/production-env/launch-env-v1.sh
 export DRIFTSTACK_H2_POOL=0 __XPC_DRIFTSTACK_H2_POOL=0 DRIFTSTACK_H3_POOL=0 __XPC_DRIFTSTACK_H3_POOL=0
-exec Tools/Scripts/run-minibrowser --release "${@:-https://networktest.twilio.com/}"
+# See drift-browse.sh: Homebrew python@3.14 broke run-minibrowser's expat import.
+DRIFT_PY=""
+for _py in /usr/bin/python3 /opt/homebrew/bin/python3.10; do
+  if "$_py" -c "import xml.parsers.expat" >/dev/null 2>&1; then DRIFT_PY="$_py"; break; fi
+done
+: ${DRIFT_PY:=python3}
+exec "$DRIFT_PY" Tools/Scripts/run-minibrowser --release "${@:-https://networktest.twilio.com/}"

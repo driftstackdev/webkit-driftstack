@@ -9,4 +9,13 @@
 # Proxy creds auto-source from ~/.driftstack-secrets.env via ~/.zshenv.
 cd "${0:A:h}"
 source ~/code/driftstack/operations/scripts/production-env/launch-env-v1.sh
-exec Tools/Scripts/run-minibrowser --release "${@:-https://example.com/}"
+# run-minibrowser's `#!/usr/bin/env python3` resolves to Homebrew python@3.14,
+# whose pyexpat can't link the system libexpat (missing _XML_SetAllocTracker…
+# symbol) → webkitpy's port factory crashes on import. Pin an interpreter whose
+# expat works: system /usr/bin/python3 (3.9) first, then Homebrew 3.10.
+DRIFT_PY=""
+for _py in /usr/bin/python3 /opt/homebrew/bin/python3.10; do
+  if "$_py" -c "import xml.parsers.expat" >/dev/null 2>&1; then DRIFT_PY="$_py"; break; fi
+done
+: ${DRIFT_PY:=python3}
+exec "$DRIFT_PY" Tools/Scripts/run-minibrowser --release "${@:-https://example.com/}"
