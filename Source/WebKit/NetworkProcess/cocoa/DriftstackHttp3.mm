@@ -253,6 +253,13 @@ struct BoringSslQuicFns {
     int (*SSL_do_handshake)(void* ssl) = nullptr;
     void (*SSL_set_connect_state)(void* ssl) = nullptr;
     int (*SSL_get_error)(const void* ssl, int rv) = nullptr;
+    // Wave 29-499.347 — iPhone-exact QUIC ClientHello: add the extensions/sigalgs the
+    // real iPhone (Apple QUIC) sends that BoringSSL omits by default: status_request
+    // (0x0005), signed_certificate_timestamp (0x0012), and the iPhone sigalg list.
+    int (*SSL_enable_ocsp_stapling)(void* ssl) = nullptr;           // → status_request ext
+    int (*SSL_enable_signed_cert_timestamps)(void* ssl) = nullptr;  // → SCT ext
+    // raw u16 codes, order + duplicates preserved → exact signature_algorithms ext
+    int (*SSL_set_verify_algorithm_prefs)(void* ssl, const uint16_t* prefs, size_t num) = nullptr;
     bool ready = false;
 };
 
@@ -260,6 +267,26 @@ static BoringSslQuicFns& boringSslQuicFns()
 {
     static BoringSslQuicFns s;
     return s;
+}
+
+// Wave 29-499.347 — make the QUIC ClientHello iPhone-exact. BoringSSL omits
+// status_request/SCT and uses its own sigalg list by default; iPhone (Apple QUIC)
+// sends both + a specific signature_algorithms list. Adds exts 0x0005 + 0x0012 and
+// sets the exact iPhone sigalg order (incl the duplicate 0805 that browserleaks shows).
+static void driftstackApplyIphoneQuicSslExt(void* ssl)
+{
+    auto& f = boringSslQuicFns();
+    if (f.SSL_enable_ocsp_stapling)
+        f.SSL_enable_ocsp_stapling(ssl);            // → status_request (0x0005)
+    if (f.SSL_enable_signed_cert_timestamps)
+        f.SSL_enable_signed_cert_timestamps(ssl);   // → signed_certificate_timestamp (0x0012)
+    if (f.SSL_set_verify_algorithm_prefs) {
+        // iPhone Safari signature_algorithms ext (order + dup preserved):
+        // 0403,0804,0401,0503,0805,0805,0501,0806,0601,0201
+        static const uint16_t prefs[] = { 0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0805, 0x0501, 0x0806, 0x0601, 0x0201 };
+        f.SSL_set_verify_algorithm_prefs(ssl, prefs, sizeof(prefs) / sizeof(prefs[0]));
+    }
+    WTFLogAlways("[Wave29-499.347] applied iPhone QUIC CH exts (status_request/SCT/sigalgs) to ssl=%p", ssl);
 }
 
 // Resolve BoringSSL QUIC API from libwebrtc.dylib (already loaded as
@@ -318,6 +345,12 @@ static bool resolveBoringSslQuic()
     RESOLVE_BQ(SSL_do_handshake, "SSL_do_handshake");
     RESOLVE_BQ(SSL_set_connect_state, "SSL_set_connect_state");
     RESOLVE_BQ(SSL_get_error, "SSL_get_error");
+    // Wave 29-499.347 — optional (iPhone-exact QUIC CH extensions/sigalgs); not in .ready.
+    RESOLVE_BQ(SSL_enable_ocsp_stapling, "SSL_enable_ocsp_stapling");
+    RESOLVE_BQ(SSL_enable_signed_cert_timestamps, "SSL_enable_signed_cert_timestamps");
+    RESOLVE_BQ(SSL_set_verify_algorithm_prefs, "SSL_set_verify_algorithm_prefs");
+    WTFLogAlways("[Wave29-499.347] QUIC CH ext fns: ocsp=%p sct=%p verify_prefs=%p",
+        (void*)f.SSL_enable_ocsp_stapling, (void*)f.SSL_enable_signed_cert_timestamps, (void*)f.SSL_set_verify_algorithm_prefs);
 #undef RESOLVE_BQ
     f.ready = f.SSL_set_quic_method && f.SSL_provide_quic_data
         && f.SSL_process_quic_post_handshake
@@ -1947,6 +1980,12 @@ static int driftstackNgtcp2StreamClose(ngtcp2_conn* /*conn*/, uint32_t /*flags*/
 
     nghttp3_settings settings;
     h.settings_default_versioned(NGHTTP3_SETTINGS_VERSION, &settings);
+    // Wave 29-499.347 — iPhone h3 SETTINGS: QPACK_MAX_TABLE_CAPACITY(0x1)=16383,
+    // QPACK_BLOCKED_STREAMS(0x7)=100 (real-iPhone quic.browserleaks.com/fp h3_text
+    // "1:16383;7:100;GREASE"). (GREASE setting + omitting MAX_FIELD_SECTION_SIZE(0x6)
+    // assessed empirically after capture — may need manual SETTINGS framing.)
+    settings.qpack_max_dtable_capacity = 16383;
+    settings.qpack_blocked_streams = 100;
 
     nghttp3_callbacks cb;
     memset(&cb, 0, sizeof(cb));
@@ -2786,6 +2825,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         return resp;
     }
     bsf.SSL_set_connect_state(ssl);
+    driftstackApplyIphoneQuicSslExt(ssl);  // Wave .347 — iPhone-exact QUIC CH exts/sigalgs
 
     // SNI hostname from request
     CString hostUtf8 = request.authority.utf8();
@@ -3317,6 +3357,7 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
         return nullptr;
     }
     bsf.SSL_set_connect_state(ssl);
+    driftstackApplyIphoneQuicSslExt(ssl);  // Wave .347 — iPhone-exact QUIC CH exts/sigalgs
 
     // Parse host[:port] from authority; set SNI.
     String authHost;
