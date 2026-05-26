@@ -1315,6 +1315,8 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
         if (!hasBody) flags |= kFlagEndStream;
         encodeFrameHeader(fh, hb.size(), kFrameHeaders, flags, streamId);
         sendOk = transportWriteAll(m_transport, fh, 9) && transportWriteAll(m_transport, hb.span().data(), hb.size());
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.343] pooled execute: sent HEADERS on stream %u (%s) sendOk=%d path=%s",
+            streamId, hasBody ? "with body" : "END_STREAM", sendOk ? 1 : 0, request.path.utf8().data());
         if (sendOk && hasBody) {
             uint8_t dh[9];
             encodeFrameHeader(dh, request.body.size(), kFrameData, kFlagEndStream, streamId);
@@ -1333,7 +1335,15 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     while (true) {
         auto it = m_streams.find(streamId);
         if (it == m_streams.end()) break;
-        if (it->value->complete || !m_alive) break;
+        // Wave 29-499.343 — wait for the STREAM to complete, not for the session to
+        // stay alive. A graceful GOAWAY sets m_alive=false (no NEW streams) but our
+        // in-flight stream (id <= lastStreamId) still gets its response a few frames
+        // later (e.g. tls.browserleaks.com sends GOAWAY then HEADERS+DATA). Breaking on
+        // !m_alive here abandoned that stream before the response arrived → status=0 /
+        // ja3 N/A. The reader marks the stream complete on either the response END_STREAM
+        // or a real connection close (markDeadAndFailAll on EOF), and the 30s deadline is
+        // the backstop, so this can't hang.
+        if (it->value->complete) break;
         if (!m_cond.waitUntil(m_lock, deadline)) break; // timeout
     }
     auto it = m_streams.find(streamId);
