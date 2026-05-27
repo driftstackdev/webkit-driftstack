@@ -412,7 +412,18 @@ static void initDriftstackSslCtx()
             return reinterpret_cast<SSL*>(&sentinel);
         }
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", client->errorMessage().utf8().data());
-        // client destroyed here on scope exit; fall through to LibreSSL.
+        // Wave 29-499.350 — do NOT fall back to LibreSSL when custom TLS is enabled.
+        // Two reasons: (1) CRASH — the LibreSSL fallback uses the shared global
+        // g_driftstackSslCtx; under the CONCURRENT loaderQueue (e.g. browserleaks.com/tls
+        // firing tls/tls10/tls11/tls12 fingerprint sub-fetches at once, several failing the
+        // flaky-proxy PQ-ClientHello handshake and falling back together) concurrent
+        // ssl_new/handshake/SSL_write on one SSL_CTX corrupts its shared state → SIGSEGV in
+        // libssl SSL_write (KERN_INVALID_ADDRESS), which crashes the WHOLE NetworkProcess →
+        // every in-flight fetch dies → the page shows ja3/ja4/extensions = "fetch error".
+        // (2) FINGERPRINT LIE — LibreSSL emits a non-iPhone ClientHello. Returning null here
+        // makes resume()'s retry (Wave .271) re-attempt CUSTOM TLS on a FRESH SOCKS5 exit,
+        // which is what actually fixes the intermittent flaky-proxy handshake failures.
+        return nullptr;
     }
 
     initDriftstackSslCtx();
