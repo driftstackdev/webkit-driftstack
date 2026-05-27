@@ -1397,20 +1397,32 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
         resp.failed = true; resp.errorMessage = "h2 stream write failed"_s;
         return resp;
     }
-    MonotonicTime deadline = MonotonicTime::now() + Seconds(30);
+    // Wave 29-499.343 — wait for the STREAM to complete, not for the session to stay
+    // alive (a graceful GOAWAY sets m_alive=false but our in-flight stream still gets its
+    // response a few frames later — breaking on !m_alive lost it → status=0 / ja3 N/A).
+    // Wave 29-499.353 — IDLE timeout instead of a fixed 30s total. The concurrent-fetch
+    // residual: the server completes the handshake + sends its SETTINGS but never sends the
+    // response → the stream gets NO frames. An 8s NO-PROGRESS timeout fails it fast so the
+    // loader retries on a FRESH connection (clears the per-connection concurrency wedge),
+    // BEFORE the page's own fetch() times out. A large/slow but PROGRESSING response (body
+    // grows / status arrives) resets the window each frame, so it is never cut off.
+    const Seconds kIdleTimeout = Seconds(8);
+    MonotonicTime idleDeadline = MonotonicTime::now() + kIdleTimeout;
+    size_t lastBody = 0; int lastStatus = 0; bool idleTimedOut = false;
     while (true) {
         auto it = m_streams.find(streamId);
         if (it == m_streams.end()) break;
-        // Wave 29-499.343 — wait for the STREAM to complete, not for the session to
-        // stay alive. A graceful GOAWAY sets m_alive=false (no NEW streams) but our
-        // in-flight stream (id <= lastStreamId) still gets its response a few frames
-        // later (e.g. tls.browserleaks.com sends GOAWAY then HEADERS+DATA). Breaking on
-        // !m_alive here abandoned that stream before the response arrived → status=0 /
-        // ja3 N/A. The reader marks the stream complete on either the response END_STREAM
-        // or a real connection close (markDeadAndFailAll on EOF), and the 30s deadline is
-        // the backstop, so this can't hang.
         if (it->value->complete) break;
-        if (!m_cond.waitUntil(m_lock, deadline)) break; // timeout
+        if (it->value->resp.body.size() != lastBody || it->value->resp.statusCode != lastStatus) {
+            lastBody = it->value->resp.body.size(); lastStatus = it->value->resp.statusCode;
+            idleDeadline = MonotonicTime::now() + kIdleTimeout; // progress → extend the window
+        }
+        if (!m_cond.waitUntil(m_lock, idleDeadline)) {
+            auto it2 = m_streams.find(streamId);
+            if (it2 == m_streams.end() || it2->value->complete) break;
+            if (it2->value->resp.body.size() == lastBody && it2->value->resp.statusCode == lastStatus) { idleTimedOut = true; break; }
+            // else: progress raced in just as we timed out — loop resets the window
+        }
     }
     auto it = m_streams.find(streamId);
     if (it != m_streams.end()) {
@@ -1420,6 +1432,12 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
         if (failed && !resp.statusCode) { resp.failed = true; if (resp.errorMessage.isEmpty()) resp.errorMessage = "h2 stream incomplete"_s; }
     } else {
         resp.failed = true; resp.errorMessage = "h2 stream lost"_s;
+    }
+    // A stalled stream means this connection is wedged — retire it so the loader's retry
+    // builds a FRESH connection instead of re-claiming this dead session from the pool.
+    if (idleTimedOut) {
+        m_alive = false;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.353] pooled stream %u IDLE-timeout (8s no progress) — retiring session for fresh retry", streamId);
     }
     // Wave 29-499.328 — the pooled path delivers the raw body; decompress Content-Encoding
     // here (gzip/deflate/br) exactly like the single-request path, or WebKit renders the raw
