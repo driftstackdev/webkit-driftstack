@@ -21,6 +21,7 @@
 #import <errno.h>
 #import <string.h>
 #import <sys/socket.h>
+#import <sys/time.h>
 #import <unistd.h>
 #import <wtf/Assertions.h>
 
@@ -96,6 +97,19 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
     m_fd = socketFd;
     m_sniHostname = sniHostname;
     m_errorMessage = String();
+
+    // Wave 29-499.352 — bound HANDSHAKE reads with a recv timeout. Without it, a stalled
+    // ServerHello (a flaky proxy exit not delivering the response to our multi-segment PQ
+    // ClientHello) blocks driftstackReadTLSRecord FOREVER → the load hangs with no failure →
+    // resume()'s retry never fires → the page's fetch() times out → "fetch error"
+    // (e.g. browserleaks.com/tls ja3/ja4 never populate). A timeout turns the hang into a
+    // clean failure → connect() returns false → retry on a FRESH SOCKS5 exit (which works).
+    // read() restores blocking mode for the app-data (h2) phase so slow/large responses and
+    // idle pooled connections aren't cut off.
+    {
+        struct timeval tv { .tv_sec = 6, .tv_usec = 0 };
+        setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
 
     if (!driftstackCryptoInit()) {
         m_errorMessage = "LibreSSL crypto init failed"_s;
@@ -471,6 +485,14 @@ int DriftstackTLS13Client::write(const uint8_t* data, size_t len)
 
 int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
 {
+    // Wave 29-499.352 — handshake done; restore BLOCKING reads for the app-data (h2) phase.
+    // The 6s handshake recv-timeout (set in connect()) must not cut off slow/large responses
+    // or make the pooled session's reader thread spuriously time out on an idle connection.
+    if (!m_appReadBlockingRestored) {
+        m_appReadBlockingRestored = true;
+        struct timeval tv { .tv_sec = 0, .tv_usec = 0 };
+        setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
     if (m_isTLS12) {
         if (m_t12ReadBuffer.isEmpty()) {
             auto pt = readTLS12Record();

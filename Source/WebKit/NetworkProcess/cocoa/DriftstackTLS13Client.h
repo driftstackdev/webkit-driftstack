@@ -62,6 +62,7 @@ public:
 
 private:
     int m_fd { -1 };
+    bool m_appReadBlockingRestored { false };  // Wave .352 — reset handshake recv-timeout once on first app read
     String m_sniHostname;
     String m_selectedALPN;
     String m_errorMessage;
