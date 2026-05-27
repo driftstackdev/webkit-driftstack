@@ -1763,7 +1763,35 @@ _Pragma("clang diagnostic pop")
 
         NSData* responseBytes = nil;
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
-        if (useBoringSSL) {
+        if (customTLSClient) {
+            // Wave 29-499.355 — HTTP/1.1 over the CUSTOM TLS client. When PathB v2
+            // custom TLS is active (production), `ssl` is a sentinel — the real TLS
+            // connection is DriftstackTLS13Client. Any TLS-1.2+http/1.1-only server
+            // (tls12.browserleaks.com and other older HTTPS stacks — a real iPhone
+            // loads these fine) negotiates useHttp2=0 and lands here. Previously this
+            // path only knew the BoringSSL `ssl` handle or CFStream, so it sent over a
+            // handle that never did the handshake → empty response → the load failed
+            // (internallyFailedLoadTimerFired). Send/recv over the custom client's
+            // read/write, exactly like the h2 transport adapter above.
+            const uint8_t* writeBytes = (const uint8_t*)[reqData bytes];
+            size_t writeRemaining = [reqData length];
+            while (writeRemaining > 0) {
+                int n = customTLSClient->write(writeBytes, writeRemaining);
+                if (n <= 0) break;
+                writeBytes += n;
+                writeRemaining -= static_cast<size_t>(n);
+            }
+            // Connection: close (set above) → server closes after the full response;
+            // read() returns <= 0 on close_notify / FIN, terminating the loop.
+            NSMutableData* respMutable = [NSMutableData data];
+            uint8_t readBuf[4096];
+            while (true) {
+                int n = customTLSClient->read(readBuf, sizeof(readBuf));
+                if (n <= 0) break;
+                [respMutable appendBytes:readBuf length:static_cast<NSUInteger>(n)];
+            }
+            responseBytes = respMutable;
+        } else if (useBoringSSL) {
             auto& f = boringSSLFns();
             const uint8_t* writeBytes = (const uint8_t*)[reqData bytes];
             NSUInteger writeRemaining = [reqData length];
@@ -1827,6 +1855,10 @@ _Pragma("clang diagnostic pop")
         NSString* statusLine = headerLines[0];
         NSArray<NSString*>* statusParts = [statusLine componentsSeparatedByString:@" "];
         int statusCode = ([statusParts count] >= 2) ? [statusParts[1] intValue] : 0;
+        // Wave 29-499.355 — HTTP/1.1 path observability (mirrors the h2 path's
+        // "completed: status=N, body=N"). Confirms the custom-TLS h1 send/recv path.
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.355] HTTP/1.1 response: status=%d body=%lu bytes (customTLS=%d)",
+            statusCode, static_cast<unsigned long>([bodyBytes length]), customTLSClient ? 1 : 0);
 
         WebCore::ResourceResponse response { URL(url), String("text/html"_s), -1, String("UTF-8"_s) };
         response.setHTTPStatusCode(statusCode);
