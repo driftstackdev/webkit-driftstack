@@ -921,7 +921,17 @@ void DriftstackNetworkLoader::resume()
 
     Ref protectedThis { *this };
     dispatch_async(loaderQueue(), ^{
-        if (m_cancelled)
+        // Wave .349 — CRITICAL UAF FIX. Previously `protectedThis` was declared but
+        // NEVER referenced inside this block, so the ObjC block did not capture it →
+        // the loader was retained only for the (synchronous) duration of resume(), NOT
+        // for this async block. Under rapid connection churn (e.g. browserleaks's
+        // DNS-leak test fires many short-lived loads) the loader could be destroyed
+        // before/while this block ran on loaderQueue → use-after-free → NetworkProcess
+        // SIGSEGV (NULL deref in _dispatch_call_block_and_release), which then breaks
+        // ALL subsequent navigation (every new load fails with internalError).
+        // Referencing protectedThis here (same idiom as the retry blocks' retryRef->)
+        // forces the block to capture it (retain) so the loader outlives the work.
+        if (protectedThis->m_cancelled)
             return;
 
         // Read proxy + creds from env (same path as DriftstackSocks5URLProtocol)
