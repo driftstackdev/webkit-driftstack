@@ -269,10 +269,14 @@ bool DriftstackTLS13Client::receiveServerHello()
     // (e.g. Twilio turns: :443, cipher 0xc02f). Run the 1.2 ECDHE handshake — the
     // iPhone-byte-exact ClientHello already offered 1.2 ciphers + supported_groups.
     if (!sh.isHelloRetryRequest && sh.selectedVersion != 0x0304) {
-        // Scan ServerHello extensions for extended_master_secret (0x0017, RFC 7627).
-        // SH body: legacy_version(2)+random(32)+sid_len(1)+sid+cipher(2)+comp(1)+ext_len(2)+exts.
-        // `body` = 4-byte hs header + SH body. iPhone always offers EMS, so a modern
-        // server mirrors it → we must use the EMS master-secret derivation.
+        // Scan ServerHello extensions for extended_master_secret (0x0017, RFC 7627)
+        // AND ALPN (0x0010, RFC 7301). SH body: legacy_version(2)+random(32)+sid_len(1)
+        // +sid+cipher(2)+comp(1)+ext_len(2)+exts. `body` = 4-byte hs header + SH body.
+        // iPhone always offers EMS + ALPN[h2,http/1.1], so a modern server mirrors them.
+        // Wave 29-499.341 — TLS 1.2 ALPN: over 1.2 the negotiated protocol lives in the
+        // CLEARTEXT ServerHello extensions (not the 1.3 EncryptedExtensions). Without this
+        // a TLS-1.2+h2 server (httpbin.org, many older CDNs — curl/iPhone get h2 there)
+        // returned ALPN='' → we wrongly fell back to HTTP/1.1 and the load failed.
         m_t12EMS = false;
         {
             const uint8_t* b = body.span().data();
@@ -287,7 +291,17 @@ bool DriftstackTLS13Client::receiveServerHello()
                     while (p + 4 <= extEnd && p + 4 <= bn) {
                         uint16_t et = (static_cast<uint16_t>(b[p]) << 8) | b[p + 1];
                         uint16_t el = (static_cast<uint16_t>(b[p + 2]) << 8) | b[p + 3];
-                        if (et == 0x0017) { m_t12EMS = true; break; }
+                        if (et == 0x0017)
+                            m_t12EMS = true;
+                        else if (et == 0x0010 /*ALPN*/ && el >= 3 && p + 4 + el <= bn) {
+                            // ext data: u16 list_length + u8 proto_len + proto bytes
+                            uint8_t protoLen = b[p + 4 + 2];
+                            if (protoLen && p + 4 + 3 + protoLen <= bn) {
+                                m_selectedALPN = String::fromUTF8(unsafeMakeSpan(
+                                    reinterpret_cast<const char*>(b + p + 4 + 3), protoLen));
+                                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.341] TLS1.2 SH: negotiated ALPN='%s'", m_selectedALPN.utf8().data());
+                            }
+                        }
                         p += 4 + el;
                     }
                 }
