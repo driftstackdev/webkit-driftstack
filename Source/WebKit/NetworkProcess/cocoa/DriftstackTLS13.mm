@@ -43,12 +43,17 @@ bool readExact(int fd, uint8_t* buf, size_t n)
 
 bool driftstackReadTLSRecord(int fd, uint8_t& outType, uint16_t& outVersion, Vector<uint8_t>& outBody)
 {
+    static const bool trace = getenv("DRIFTSTACK_RTR_TRACE") != nullptr;
+    if (trace) WTFLogAlways("[RTR fd=%d] ENTER (blocking on 5-byte header)", fd);
     uint8_t header[5];
-    if (!readExact(fd, header, 5))
+    if (!readExact(fd, header, 5)) {
+        if (trace) WTFLogAlways("[RTR fd=%d] header read FAILED (EOF/err)", fd);
         return false;
+    }
     outType = header[0];
     outVersion = static_cast<uint16_t>((header[1] << 8) | header[2]);
     uint16_t bodyLen = static_cast<uint16_t>((header[3] << 8) | header[4]);
+    if (trace) WTFLogAlways("[RTR fd=%d] record type=0x%02x len=%u", fd, outType, bodyLen);
     outBody.resize(bodyLen);
     if (bodyLen == 0) return true;
     return readExact(fd, outBody.mutableSpan().data(), bodyLen);

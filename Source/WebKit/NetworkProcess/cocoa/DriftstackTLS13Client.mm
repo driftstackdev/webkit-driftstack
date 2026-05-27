@@ -110,6 +110,8 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
         struct timeval tv { .tv_sec = 6, .tv_usec = 0 };
         setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }
+    if (getenv("DRIFTSTACK_RTR_TRACE"))
+        WTFLogAlways("[RTR fd=%d] host=%s connect()", m_fd, sniHostname.utf8().data());
 
     if (!driftstackCryptoInit()) {
         m_errorMessage = "LibreSSL crypto init failed"_s;
