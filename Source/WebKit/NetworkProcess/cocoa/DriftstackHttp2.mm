@@ -1402,11 +1402,17 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     // response a few frames later — breaking on !m_alive lost it → status=0 / ja3 N/A).
     // Wave 29-499.353 — IDLE timeout instead of a fixed 30s total. The concurrent-fetch
     // residual: the server completes the handshake + sends its SETTINGS but never sends the
-    // response → the stream gets NO frames. An 8s NO-PROGRESS timeout fails it fast so the
-    // loader retries on a FRESH connection (clears the per-connection concurrency wedge),
-    // BEFORE the page's own fetch() times out. A large/slow but PROGRESSING response (body
-    // grows / status arrives) resets the window each frame, so it is never cut off.
-    const Seconds kIdleTimeout = Seconds(8);
+    // response → the stream gets NO frames. A NO-PROGRESS timeout retires a truly-dead session
+    // so the loader retries on a FRESH connection (clears the per-connection concurrency wedge).
+    // A large/slow but PROGRESSING response (body grows / status arrives) resets the window each
+    // frame, so it is never cut off.
+    // Wave 29-499.354 — the timeout MUST match iPhone: iOS NSURLSession.timeoutIntervalForRequest
+    // defaults to 60s and means exactly "fail if no additional data for N seconds" — the same
+    // no-progress semantic as this loop. The earlier 8s value was a behavioral DIVERGENCE: a real
+    // iPhone WAITS for a slow-first-byte endpoint (e.g. httpbin.org/delay/12, slow APIs, heavy
+    // queries — curl/iPhone get 200 in ~12s) but 8s cut it off → retry → re-cut → page FAILED on a
+    // request iOS would complete. 60s recovers from a genuine permanent stall on iPhone's timeline.
+    const Seconds kIdleTimeout = Seconds(60);
     MonotonicTime idleDeadline = MonotonicTime::now() + kIdleTimeout;
     size_t lastBody = 0; int lastStatus = 0; bool idleTimedOut = false;
     static const bool h2wtrace = getenv("DRIFTSTACK_RTR_TRACE") != nullptr;
@@ -1443,7 +1449,7 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     // builds a FRESH connection instead of re-claiming this dead session from the pool.
     if (idleTimedOut) {
         m_alive = false;
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.353] pooled stream %u IDLE-timeout (8s no progress) — retiring session for fresh retry", streamId);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.354] pooled stream %u IDLE-timeout (60s no progress, iOS timeoutIntervalForRequest) — retiring session for fresh retry", streamId);
     }
     // Wave 29-499.328 — the pooled path delivers the raw body; decompress Content-Encoding
     // here (gzip/deflate/br) exactly like the single-request path, or WebKit renders the raw
