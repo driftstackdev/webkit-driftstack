@@ -1016,7 +1016,16 @@ void DriftstackNetworkLoader::resume()
                 const char* e = getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR");
                 return e && e[0] == '1';
             }();
-            if (s_dnsRrEnabled && h3enabled && h3https && h3bodyless && !h3forced && !driftstackLoaderHostKnownH3(h3host)) {
+            // Wave .349 — do the BLOCKING DNS-HTTPS-RR h3 probe ONLY for the main-frame
+            // document navigation. It blocks the worker up to 800ms; a page fires many
+            // concurrent subresource fetches (e.g. browserleaks's ja3/tls1x probes), and
+            // blocking each one's RR lookup stalls them past the page's own fetch timeout
+            // → "fetch error"/N/A. Subresources skip the blocking probe and use h2
+            // immediately (h3 still kicks in via Alt-Svc, or the per-host cache once the
+            // main-frame navigation populated it). Matches Safari more closely too: its OS
+            // resolver does RR async, never blocking a subresource on a per-host lookup.
+            if (s_dnsRrEnabled && h3enabled && h3https && h3bodyless && !h3forced
+                && m_task.isTopLevelNavigation() && !driftstackLoaderHostKnownH3(h3host)) {
                 if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
                     driftstackLoaderRememberH3Host(h3host);
             }
