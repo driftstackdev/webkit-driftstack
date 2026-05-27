@@ -2814,6 +2814,18 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
             return it->value;
     }
 
+    // Wave .349 — bound concurrent blocking RR lookups. Each uncached lookup blocks the
+    // calling loaderQueue worker for up to 800ms; loaderQueue is CONCURRENT, so a flood of
+    // new hosts (browserleaks's DNS-leak test fires many unique subdomains) blocks every
+    // worker → GCD thread-pool starvation → unrelated loads (e.g. the ja3/tls12 probe
+    // fetches) never get a thread → never connect → browserleaks shows ja3/TLS-1.2 as
+    // N/A/Disabled. Over the cap, skip RR and let the caller use h2 (Alt-Svc upgrades h3
+    // on a later request) — non-blocking, and closer to Safari's async OS-resolver
+    // behaviour than a per-request 800ms stall. Cached hosts above never reach here.
+    static dispatch_semaphore_t s_rrConcurrency = dispatch_semaphore_create(6);
+    if (dispatch_semaphore_wait(s_rrConcurrency, DISPATCH_TIME_NOW) != 0)
+        return false; // at capacity → don't block this worker; use h2
+
     bool h3 = false;
     uint16_t txid = 0;
     bool sent = false;
@@ -2903,6 +2915,7 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
         g_dnsHostCache().set(host, h3);
     }
 
+    dispatch_semaphore_signal(s_rrConcurrency); // Wave .349 — release the RR-lookup slot
     if (h3)
         WTFLogAlways("[Wave29-499.321] DNS HTTPS RR: %s advertises h3 (first-contact h3, no local leak)", host.utf8().data());
     return h3;
