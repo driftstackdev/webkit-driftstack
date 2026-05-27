@@ -473,45 +473,100 @@ static String hpackDecodeString(const uint8_t* data, size_t len, size_t& cursor)
     return String::fromUTF8(byteCast<char>(decoded.span()));
 }
 
-// HPACK decode one header field representation. Appends to out.
-// Returns true on success, false on parse error.
+// Wave 29-499.351 — HPACK DYNAMIC TABLE (RFC 7541 §2.3.2 / §4). Previously absent:
+// the decoder only handled the static table (idx 1..61) and bailed on any dynamic
+// reference (idx >= 62) → it dropped every header the server emitted by dynamic
+// index. On a REUSED (pooled) h2 connection the server progressively moves headers
+// into its dynamic table and references them by index — so later responses lost
+// headers, including access-control-allow-origin → WebKit CORS-blocked the cross-
+// origin fetch → browserleaks.com/tls showed ja3/ja4/extensions = "fetch error".
+// HPACK decode state is PER-CONNECTION + order-dependent: one instance per h2
+// connection, fed every HEADERS block in arrival order (the pooled session holds it
+// as a member; the one-shot path uses a fresh local).
+struct HpackDecoderState {
+    Vector<std::pair<String, String>> dynTable; // index 0 = most recent (HPACK index kHpackStaticCount)
+    size_t dynSize { 0 };
+    size_t maxDynSize { 4096 }; // SETTINGS_HEADER_TABLE_SIZE default
+
+    void evict() {
+        while (dynSize > maxDynSize && !dynTable.isEmpty()) {
+            auto& back = dynTable.last();
+            dynSize -= back.first.length() + back.second.length() + 32;
+            dynTable.removeLast();
+        }
+    }
+    void add(const String& name, const String& value) {
+        size_t entrySize = name.length() + value.length() + 32; // RFC 7541 §4.1
+        if (entrySize > maxDynSize) { dynTable.clear(); dynSize = 0; return; }
+        dynTable.insert(0, { name, value });
+        dynSize += entrySize;
+        evict();
+    }
+    // hpackIdx: 1..(kHpackStaticCount-1) static; >= kHpackStaticCount dynamic.
+    bool lookup(uint32_t hpackIdx, String& name, String& value) const {
+        if (!hpackIdx) return false;
+        if (hpackIdx < kHpackStaticCount) {
+            name = String::fromUTF8(kHpackStatic[hpackIdx].first);
+            value = String::fromUTF8(kHpackStatic[hpackIdx].second);
+            return true;
+        }
+        size_t di = hpackIdx - kHpackStaticCount; // kHpackStaticCount -> 0 (most recent)
+        if (di >= dynTable.size()) return false;
+        name = dynTable[di].first; value = dynTable[di].second;
+        return true;
+    }
+    bool lookupName(uint32_t nameIdx, String& name) const {
+        String v;
+        return lookup(nameIdx, name, v);
+    }
+};
+
+// HPACK decode one header field representation. Appends to out. Updates `dyn`
+// (dynamic table) per RFC 7541. Returns true on success, false on parse error.
 static bool hpackDecodeOneHeader(const uint8_t* data, size_t len, size_t& cursor,
-    Vector<std::pair<String, String>>& out)
+    Vector<std::pair<String, String>>& out, HpackDecoderState& dyn)
 {
     if (cursor >= len) return false;
     uint8_t firstByte = data[cursor];
 
     if (firstByte & 0x80) {
-        // 1xxxxxxx — Indexed Header Field
+        // 1xxxxxxx — Indexed Header Field (static OR dynamic)
         uint32_t idx = 0;
-        if (!hpackDecodeInteger(data, len, cursor, 7, idx) || idx == 0 || idx >= kHpackStaticCount)
+        if (!hpackDecodeInteger(data, len, cursor, 7, idx) || idx == 0)
             return false;
-        out.append({ String::fromUTF8(kHpackStatic[idx].first),
-                     String::fromUTF8(kHpackStatic[idx].second) });
+        String name, value;
+        if (!dyn.lookup(idx, name, value))
+            return false;
+        out.append({ name, value });
         return true;
     } else if ((firstByte & 0xc0) == 0x40) {
-        // 01xxxxxx — Literal with Incremental Indexing
+        // 01xxxxxx — Literal with Incremental Indexing (ADD to dynamic table)
         uint32_t nameIdx = 0;
         if (!hpackDecodeInteger(data, len, cursor, 6, nameIdx))
             return false;
-        String name = nameIdx > 0 && nameIdx < kHpackStaticCount
-            ? String::fromUTF8(kHpackStatic[nameIdx].first)
-            : hpackDecodeString(data, len, cursor);
+        String name;
+        if (nameIdx > 0) { if (!dyn.lookupName(nameIdx, name)) return false; }
+        else name = hpackDecodeString(data, len, cursor);
         String value = hpackDecodeString(data, len, cursor);
+        dyn.add(name, value);
         out.append({ name, value });
         return true;
     } else if ((firstByte & 0xe0) == 0x20) {
-        // 001xxxxx — Dynamic Table Size Update; we use size 0, ignore
+        // 001xxxxx — Dynamic Table Size Update
         uint32_t newSize = 0;
-        return hpackDecodeInteger(data, len, cursor, 5, newSize);
+        if (!hpackDecodeInteger(data, len, cursor, 5, newSize))
+            return false;
+        dyn.maxDynSize = newSize;
+        dyn.evict();
+        return true;
     } else {
-        // 0000xxxx or 0001xxxx — Literal w/o or never indexing
+        // 0000xxxx or 0001xxxx — Literal w/o or never indexing (NOT added to table)
         uint32_t nameIdx = 0;
         if (!hpackDecodeInteger(data, len, cursor, 4, nameIdx))
             return false;
-        String name = nameIdx > 0 && nameIdx < kHpackStaticCount
-            ? String::fromUTF8(kHpackStatic[nameIdx].first)
-            : hpackDecodeString(data, len, cursor);
+        String name;
+        if (nameIdx > 0) { if (!dyn.lookupName(nameIdx, name)) return false; }
+        else name = hpackDecodeString(data, len, cursor);
         String value = hpackDecodeString(data, len, cursor);
         out.append({ name, value });
         return true;
@@ -707,6 +762,7 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     // CFNetwork (Wave .321 streaming-bypass).
     constexpr int kMaxFrames = 500000;
     constexpr size_t kMaxBodyBytes = 128 * 1024 * 1024; // 128 MB safety cap
+    HpackDecoderState hpackDyn; // one-shot: one connection, fresh decode state
     while (!streamComplete && frameCount < kMaxFrames) {
         ++frameCount;
         uint8_t hdr[9];
@@ -754,7 +810,7 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                 }
                 cursor = payloadStart;
                 while (cursor < payload.size()) {
-                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded))
+                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
@@ -1145,6 +1201,12 @@ bool DriftstackHttp2Session::sendPrefaceAndSettings()
 
 void DriftstackHttp2Session::readerLoop()
 {
+    // HPACK decode state for THIS connection — persists across every HEADERS block
+    // for the whole session lifetime (HPACK is stateful + order-dependent; the
+    // reader thread is the single decoder). This is what makes dynamic-indexed
+    // response headers (e.g. access-control-allow-origin on reused connections)
+    // decode correctly instead of being dropped.
+    HpackDecoderState hpackDyn;
     auto markDeadAndFailAll = [&] {
         Locker locker { m_lock };
         m_alive = false;
@@ -1232,7 +1294,7 @@ void DriftstackHttp2Session::readerLoop()
             if (frameFlags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
             size_t cursor = start;
             while (cursor < payload.size()) {
-                if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded))
+                if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
                     break;
             }
             Locker locker { m_lock };
