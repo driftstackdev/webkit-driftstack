@@ -1409,6 +1409,9 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     const Seconds kIdleTimeout = Seconds(8);
     MonotonicTime idleDeadline = MonotonicTime::now() + kIdleTimeout;
     size_t lastBody = 0; int lastStatus = 0; bool idleTimedOut = false;
+    static const bool h2wtrace = getenv("DRIFTSTACK_RTR_TRACE") != nullptr;
+    int waitIters = 0;
+    if (h2wtrace) WTFLogAlways("[H2WAIT] stream=%u REACHED wait-loop (alive=%d)", streamId, m_alive ? 1 : 0);
     while (true) {
         auto it = m_streams.find(streamId);
         if (it == m_streams.end()) break;
@@ -1417,13 +1420,16 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
             lastBody = it->value->resp.body.size(); lastStatus = it->value->resp.statusCode;
             idleDeadline = MonotonicTime::now() + kIdleTimeout; // progress → extend the window
         }
-        if (!m_cond.waitUntil(m_lock, idleDeadline)) {
+        bool signaled = m_cond.waitUntil(m_lock, idleDeadline);
+        if (h2wtrace) WTFLogAlways("[H2WAIT] stream=%u iter=%d waitUntil signaled=%d body=%zu status=%d", streamId, ++waitIters, signaled ? 1 : 0, m_streams.contains(streamId) ? m_streams.get(streamId)->resp.body.size() : 0, m_streams.contains(streamId) ? m_streams.get(streamId)->resp.statusCode : -1);
+        if (!signaled) {
             auto it2 = m_streams.find(streamId);
             if (it2 == m_streams.end() || it2->value->complete) break;
             if (it2->value->resp.body.size() == lastBody && it2->value->resp.statusCode == lastStatus) { idleTimedOut = true; break; }
             // else: progress raced in just as we timed out — loop resets the window
         }
     }
+    if (h2wtrace) WTFLogAlways("[H2WAIT] stream=%u EXIT loop (idleTimedOut=%d iters=%d)", streamId, idleTimedOut ? 1 : 0, waitIters);
     auto it = m_streams.find(streamId);
     if (it != m_streams.end()) {
         resp = std::move(it->value->resp);
