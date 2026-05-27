@@ -266,9 +266,10 @@ static bool resolveBoringSSL()
 
 static SSL_CTX* g_driftstackSslCtx = nullptr;
 
-// Wave 29-499.193 — persist DriftstackTLS13Client across handshake → app data.
-// Use raw pointer to avoid exit-time destructor warning.
-static thread_local DriftstackTLS13Client* g_customTLSClient = nullptr;
+// Wave 29-499.349 — the custom TLS client is no longer a thread_local global;
+// it's owned per-connection by a stack-local in resume() and handed back from
+// driftstackTLSConnect via an out-param (fixes V-XORIGIN-FETCH-CONCURRENCY-RACE
+// where concurrent loads on reused GCD threads clobbered each other's client).
 static dispatch_once_t g_driftstackSslCtxOnce;
 
 static void initDriftstackSslCtx()
@@ -387,7 +388,7 @@ static void initDriftstackSslCtx()
     });
 }
 
-[[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8)
+[[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8, std::unique_ptr<DriftstackTLS13Client>& outCustomClient)
 {
     // Wave 29-499.176 — if DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1, send iPhone-
     // byte-exact ClientHello via DriftstackTLS13Client BEFORE the library
@@ -398,18 +399,20 @@ static void initDriftstackSslCtx()
     bool useCustomTLS = customTlsEnv && customTlsEnv[0] == '1';
 
     if (useCustomTLS) {
-        // Wave 29-499.193 — persist client past handshake so HTTP/2 layer
-        // can route reads/writes through our custom TLS instead of LibreSSL.
-        g_customTLSClient = new DriftstackTLS13Client();
-        if (g_customTLSClient->connect(fd, String::fromUTF8(hostUtf8))) {
+        // Wave 29-499.193 — persist client past handshake so HTTP/2 layer can
+        // route reads/writes through our custom TLS instead of LibreSSL.
+        // Wave 29-499.349 — hand the client back to the CALLER (per-connection
+        // local, owned on its stack) instead of a thread_local, so concurrent
+        // loads can't clobber each other's TLS client.
+        std::unique_ptr<DriftstackTLS13Client> client(new DriftstackTLS13Client());
+        if (client->connect(fd, String::fromUTF8(hostUtf8))) {
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS 1.3 handshake COMPLETE. Returning sentinel.");
+            outCustomClient = std::move(client);
             static uint8_t sentinel = 0xCC;
             return reinterpret_cast<SSL*>(&sentinel);
-        } else {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", g_customTLSClient->errorMessage().utf8().data());
-            delete g_customTLSClient;
-            g_customTLSClient = nullptr;
         }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", client->errorMessage().utf8().data());
+        // client destroyed here on scope exit; fall through to LibreSSL.
     }
 
     initDriftstackSslCtx();
@@ -1301,8 +1304,12 @@ void DriftstackNetworkLoader::resume()
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
         // Wave 29-499.137 — BoringSSL TLS 1.3 wrap for HTTPS (iPhone-identical fingerprint)
         SSL* ssl = nullptr;
+        // Wave 29-499.349 — per-connection owner for the custom TLS client (was a
+        // thread_local). Lives for this resume() invocation only; moved into the
+        // h2 session on the pooled path, reset on the one-shot path.
+        std::unique_ptr<DriftstackTLS13Client> customTLSClient;
         if (isHttps) {
-            ssl = driftstackTLSConnect(socketFd, host.utf8().data());
+            ssl = driftstackTLSConnect(socketFd, host.utf8().data(), customTLSClient);
             if (!ssl) {
                 if (canRetry) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for TLS handshake to %s",
@@ -1332,11 +1339,11 @@ void DriftstackNetworkLoader::resume()
         // custom HTTP/2 client (DriftstackHttp2) when h2 negotiated.
         // Added explicit logging to trace why dispatch wasn't firing.
         bool useHttp2 = false;
-        if (g_customTLSClient) {
+        if (customTLSClient) {
             // Wave 29-499.209 — use ACTUAL ALPN parsed from EncryptedExtensions
-            useHttp2 = g_customTLSClient->selectedALPN() == "h2"_s;
+            useHttp2 = customTLSClient->selectedALPN() == "h2"_s;
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.209] Custom TLS ALPN='%s' useHttp2=%d",
-                g_customTLSClient->selectedALPN().utf8().data(), useHttp2);
+                customTLSClient->selectedALPN().utf8().data(), useHttp2);
         } else if (ssl) {
             auto& f = boringSSLFns();
             const uint8_t* alpnSel = nullptr;
@@ -1365,7 +1372,7 @@ void DriftstackNetworkLoader::resume()
         // DriftstackHttp2 (iPhone-matched SETTINGS + WINDOW_UPDATE +
         // HEADERS HPACK). Otherwise fall through to HTTP/1.1 path.
         if (useHttp2) {
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] Entering HTTP/2 dispatch path (custom_tls=%d ssl=%p)", g_customTLSClient ? 1 : 0, ssl);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] Entering HTTP/2 dispatch path (custom_tls=%d ssl=%p)", customTLSClient ? 1 : 0, ssl);
             DriftstackHttp2Request h2req;
             h2req.method = httpMethod;
             h2req.scheme = "https"_s;
@@ -1485,10 +1492,9 @@ void DriftstackNetworkLoader::resume()
             // failed session's destruction already freed them).
             DriftstackHttp2Response h2resp;
             bool handledConnection = false;
-            if (driftstackH2PoolEnabled() && g_customTLSClient) {
+            if (driftstackH2PoolEnabled() && customTLSClient) {
                 handledConnection = true;
-                auto tlsOwned = std::unique_ptr<DriftstackTLS13Client>(g_customTLSClient);
-                g_customTLSClient = nullptr;
+                auto tlsOwned = std::move(customTLSClient);
                 RefPtr<WebKit::DriftstackHttp2Session> session = WebKit::DriftstackHttp2Session::create(std::move(tlsOwned), std::move(socks5Client));
                 if (session) {
                     String origin = makeString(host, ':', static_cast<unsigned>(url.port().value_or(443)));
@@ -1502,9 +1508,9 @@ void DriftstackNetworkLoader::resume()
                     h2resp.failed = true;
                     h2resp.errorMessage = "h2 session adopt/create failed"_s;
                 }
-            } else if (g_customTLSClient) {
+            } else if (customTLSClient) {
                 DriftstackHttp2Transport transport;
-                transport.ctx = g_customTLSClient;
+                transport.ctx = customTLSClient.get();
                 transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
                     return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
                 };
@@ -1522,13 +1528,12 @@ void DriftstackNetworkLoader::resume()
             // Wave .321 — also skip entirely if we adopted the connection into a
             // pooled session (the session owns the clients now).
             if (!handledConnection) {
-                if (!g_customTLSClient) {
+                if (!customTLSClient) {
                     auto& f = boringSSLFns();
                     if (f.ssl_shutdown) f.ssl_shutdown(ssl);
                     if (f.ssl_free) f.ssl_free(ssl);
                 } else {
-                    delete g_customTLSClient;
-                    g_customTLSClient = nullptr;
+                    customTLSClient.reset();
                 }
             }
 #endif

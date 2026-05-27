@@ -111,19 +111,21 @@ static SSLFns& sslFns()
     return s;
 }
 
-// Wave 29-499.193 — thread_local transport override. When set,
-// sslReadExact/sslWriteAll dispatch via transport callbacks instead
-// of SSL_read/SSL_write. Used by driftstackHttp2ExecuteVia for the
-// custom-TLS path (DriftstackTLS13Client) where ssl=nullptr.
-static thread_local const DriftstackHttp2Transport* g_activeTransport = nullptr;
+// Wave 29-499.349 — per-connection transport routing. When `transport` is
+// non-null (custom-TLS path, DriftstackTLS13Client, ssl==sentinel) reads/writes
+// dispatch through its callbacks; otherwise via SSL_read/SSL_write on `ssl`.
+// Passed EXPLICITLY (no thread_local) so concurrent cross-origin requests on
+// reused GCD threads can't clobber each other's routing — root fix for
+// V-XORIGIN-FETCH-CONCURRENCY-RACE (6 concurrent fetches completed TLS but
+// 0 delivered, erratic by run, because the bridge routed via thread_local).
 
-// Read N bytes from SSL connection; returns false on error/EOF.
-static bool sslReadExact(void* ssl, uint8_t* buf, size_t n)
+// Read N bytes from the connection; returns false on error/EOF.
+static bool sslReadExact(void* ssl, const DriftstackHttp2Transport* transport, uint8_t* buf, size_t n)
 {
-    if (g_activeTransport && g_activeTransport->readFn) {
+    if (transport && transport->readFn) {
         size_t got = 0;
         while (got < n) {
-            int rc = g_activeTransport->readFn(g_activeTransport->ctx, buf + got, n - got);
+            int rc = transport->readFn(transport->ctx, buf + got, n - got);
             if (rc <= 0) return false;
             got += rc;
         }
@@ -140,12 +142,12 @@ static bool sslReadExact(void* ssl, uint8_t* buf, size_t n)
     return true;
 }
 
-static bool sslWriteAll(void* ssl, const uint8_t* buf, size_t n)
+static bool sslWriteAll(void* ssl, const DriftstackHttp2Transport* transport, const uint8_t* buf, size_t n)
 {
-    if (g_activeTransport && g_activeTransport->writeFn) {
+    if (transport && transport->writeFn) {
         size_t sent = 0;
         while (sent < n) {
-            int rc = g_activeTransport->writeFn(g_activeTransport->ctx, buf + sent, n - sent);
+            int rc = transport->writeFn(transport->ctx, buf + sent, n - sent);
             if (rc <= 0) return false;
             sent += rc;
         }
@@ -593,24 +595,24 @@ static void driftstackDecompressHttp2Body(DriftstackHttp2Response& resp)
     driftstackDecodeContentEncoding(resp.body, resp.headers);
 }
 
-DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2Request& request)
+static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const DriftstackHttp2Transport* transport, const DriftstackHttp2Request& request)
 {
     DriftstackHttp2Response resp;
 
-    if (!ssl && !g_activeTransport) {
+    if (!ssl && !transport) {
         resp.failed = true;
         resp.errorMessage = "null SSL and no transport"_s;
         return resp;
     }
     auto& f = sslFns();
-    if (!g_activeTransport && !f.ready) {
+    if (!transport && !f.ready) {
         resp.failed = true;
         resp.errorMessage = "SSL_read/write dlsym not resolved"_s;
         return resp;
     }
 
     // 1. Send connection preface
-    if (!sslWriteAll(ssl, (const uint8_t*)kHttp2Preface, sizeof(kHttp2Preface) - 1)) {
+    if (!sslWriteAll(ssl, transport,(const uint8_t*)kHttp2Preface, sizeof(kHttp2Preface) - 1)) {
         resp.failed = true;
         resp.errorMessage = "preface write failed"_s;
         return resp;
@@ -638,7 +640,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 
     uint8_t settingsHeader[9];
     encodeFrameHeader(settingsHeader, settingsPayload.size(), kFrameSettings, 0, 0);
-    if (!sslWriteAll(ssl, settingsHeader, 9) || !sslWriteAll(ssl, settingsPayload.span().data(), settingsPayload.size())) {
+    if (!sslWriteAll(ssl, transport,settingsHeader, 9) || !sslWriteAll(ssl, transport,settingsPayload.span().data(), settingsPayload.size())) {
         resp.failed = true;
         resp.errorMessage = "SETTINGS write failed"_s;
         return resp;
@@ -653,7 +655,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     windowUpdate[10] = (inc >> 16) & 0xff;
     windowUpdate[11] = (inc >> 8) & 0xff;
     windowUpdate[12] = inc & 0xff;
-    if (!sslWriteAll(ssl, windowUpdate, 13)) {
+    if (!sslWriteAll(ssl, transport,windowUpdate, 13)) {
         resp.failed = true;
         resp.errorMessage = "WINDOW_UPDATE write failed"_s;
         return resp;
@@ -676,7 +678,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     uint8_t flags = kFlagEndHeaders;
     if (!hasBody) flags |= kFlagEndStream;
     encodeFrameHeader(headersFrameHeader, headersBlock.size(), kFrameHeaders, flags, 1);
-    if (!sslWriteAll(ssl, headersFrameHeader, 9) || !sslWriteAll(ssl, headersBlock.span().data(), headersBlock.size())) {
+    if (!sslWriteAll(ssl, transport,headersFrameHeader, 9) || !sslWriteAll(ssl, transport,headersBlock.span().data(), headersBlock.size())) {
         resp.failed = true;
         resp.errorMessage = "HEADERS write failed"_s;
         return resp;
@@ -686,7 +688,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     if (hasBody) {
         uint8_t dataHeader[9];
         encodeFrameHeader(dataHeader, request.body.size(), kFrameData, kFlagEndStream, 1);
-        if (!sslWriteAll(ssl, dataHeader, 9) || !sslWriteAll(ssl, request.body.span().data(), request.body.size())) {
+        if (!sslWriteAll(ssl, transport,dataHeader, 9) || !sslWriteAll(ssl, transport,request.body.span().data(), request.body.size())) {
             resp.failed = true;
             resp.errorMessage = "DATA write failed"_s;
             return resp;
@@ -708,7 +710,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     while (!streamComplete && frameCount < kMaxFrames) {
         ++frameCount;
         uint8_t hdr[9];
-        if (!sslReadExact(ssl, hdr, 9)) {
+        if (!sslReadExact(ssl, transport,hdr, 9)) {
             resp.failed = true;
             resp.errorMessage = "frame header read failed"_s;
             return resp;
@@ -720,7 +722,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
 
         Vector<uint8_t> payload;
         payload.resize(length);
-        if (length > 0 && !sslReadExact(ssl, payload.mutableSpan().data(), length)) {
+        if (length > 0 && !sslReadExact(ssl, transport,payload.mutableSpan().data(), length)) {
             resp.failed = true;
             resp.errorMessage = "frame payload read failed"_s;
             return resp;
@@ -732,7 +734,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                 // Send ACK
                 uint8_t ack[9];
                 encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
-                sslWriteAll(ssl, ack, 9);
+                sslWriteAll(ssl, transport,ack, 9);
             }
             break;
         case kFrameHeaders:
@@ -808,7 +810,7 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
                 uint8_t pingResp[9 + 8];
                 encodeFrameHeader(pingResp, 8, kFramePing, kFlagAck, 0);
                 memcpy(pingResp + 9, payload.span().data(), 8);
-                sslWriteAll(ssl, pingResp, sizeof(pingResp));
+                sslWriteAll(ssl, transport,pingResp, sizeof(pingResp));
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.210] PING received + ACK sent");
             }
             break;
@@ -1026,19 +1028,21 @@ DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2R
     return resp;
 }
 
-// Wave 29-499.193 — transport-based execute (for custom TLS path)
+// SSL*-based execute (LibreSSL/BoringSSL path; no custom transport).
+DriftstackHttp2Response driftstackHttp2Execute(void* ssl, const DriftstackHttp2Request& request)
+{
+    return driftstackHttp2ExecuteImpl(ssl, nullptr, request);
+}
+
+// Wave 29-499.193 — transport-based execute (for custom TLS path).
+// Wave 29-499.349 — route the transport EXPLICITLY through the impl instead of
+// a thread_local. The ssl arg is a non-null sentinel only so the null-guard
+// passes; it is never dereferenced (transport routes every read/write).
 DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
                                                   const DriftstackHttp2Request& request)
 {
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] driftstackHttp2ExecuteVia: transport.ctx=%p readFn=%p writeFn=%p",
-        transport.ctx, (void*)transport.readFn, (void*)transport.writeFn);
-    g_activeTransport = &transport;
-    // Call existing Execute with dummy non-null ssl (won't be used —
-    // sslReadExact/sslWriteAll check g_activeTransport first).
     static uint8_t dummySsl;
-    auto resp = driftstackHttp2Execute(&dummySsl, request);
-    g_activeTransport = nullptr;
-    return resp;
+    return driftstackHttp2ExecuteImpl(&dummySsl, &transport, request);
 }
 
 // ============================================================================
