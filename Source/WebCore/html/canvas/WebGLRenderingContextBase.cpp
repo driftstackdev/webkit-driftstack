@@ -32,6 +32,7 @@
 #include "DriftstackWebGLReadPixelsOverride.h"
 #include <wtf/Logging.h>
 #include <wtf/StdLibExtras.h>
+#include <wtf/WallTime.h>
 #endif
 
 #include "ANGLEInstancedArrays.h"
@@ -3101,6 +3102,76 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
                     return;
                 }
             }
+        }
+    }
+#endif
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 §10 WebGL readPixels chokepoint (founder verdict 2026-05-28).
+    // Reaching here = V-375 atlas MISS, which previously leaked real Mac-GPU
+    // pixels (GPU rendering differs hugely Mac vs iPhone — a glaring tell).
+    // WebGL has no 2D op-sequence to replay, so:
+    //   (1) §2 ProbeSig emission keyed POSITIONALLY on (drawingBufferW, H,
+    //       format, type) — the V-375 table key — so the Path-3 crawler knows to
+    //       capture this page's WebGL output on a real iPhone and populate the
+    //       table (opSeqBytesB64=<webgl-path3>: not op-replayable).
+    //   (2) §1 AFP-on-miss: fill the readback with a salt-derived pattern
+    //       (mirrors the 2D createImageForNoiseInjection minimum-viable AFP) so
+    //       the cold read is non-Mac-GPU; bit-identical once V-375 is populated.
+    // Both env-gated (default OFF → cumrig unaffected; cumrig sets neither).
+    {
+        const auto fullW = drawingBufferWidth();
+        const auto fullH = drawingBufferHeight();
+        static bool s_emitReadPixels = []() {
+            const char* env = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT");
+            return env && env[0] == '1';
+        }();
+        if (s_emitReadPixels) {
+            char keyBuf[33];
+            snprintf(keyBuf, sizeof(keyBuf), "%08x%08x%08x%08x",
+                static_cast<unsigned>(fullW), static_cast<unsigned>(fullH),
+                static_cast<unsigned>(format), static_cast<unsigned>(type));
+            static const char* s_archetype = []() {
+                const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+                return env ? env : "iphone17_ios18_7_safari26_4";
+            }();
+            static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
+            static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
+            RefPtr ctx = canvasBase().scriptExecutionContext();
+            String pageURL = ctx ? ctx->url().string() : String();
+            WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-readPixels] "
+                "w=%d h=%d opSeqSha=%s lastFillText=\"%s\" "
+                "archetype=%s ts=%lld mime=%s mac_len=%u "
+                "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
+                fullW, fullH, keyBuf, "<webgl>",
+                s_archetype,
+                static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+                "webgl-readpixels",
+                static_cast<unsigned>(data.size_bytes()),
+                "<webgl-path3>",
+                s_sessionId ? s_sessionId : "<unset>",
+                s_customerId ? s_customerId : "<unset>",
+                pageURL.left(256).utf8().data());
+        }
+        static bool s_afpReadPixels = []() {
+            const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+            return env && env[0] == '1';
+        }();
+        if (s_afpReadPixels && data.size_bytes() >= 4) {
+            RefPtr ctx = canvasBase().scriptExecutionContext();
+            uint64_t salt = (ctx && ctx->noiseInjectionHashSalt()) ? *ctx->noiseInjectionHashSalt() : 0;
+            uint64_t m = salt ^ 0x9E3779B97F4A7C15ull;
+            m ^= m >> 29; m *= 0xBF58476D1CE4E5B9ull; m ^= m >> 32;
+            const uint8_t rgba[4] = {
+                static_cast<uint8_t>(m & 0xff), static_cast<uint8_t>((m >> 8) & 0xff),
+                static_cast<uint8_t>((m >> 16) & 0xff), static_cast<uint8_t>((m >> 24) & 0xff) };
+            size_t i = 0;
+            for (; i + 4 <= data.size_bytes(); i += 4) {
+                data[i] = rgba[0]; data[i + 1] = rgba[1]; data[i + 2] = rgba[2]; data[i + 3] = rgba[3];
+            }
+            WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=readPixels atlas-miss FIRED (%dx%d format=0x%x type=0x%x bytes=%zu salt-present=%d)",
+                fullW, fullH, static_cast<unsigned>(format), static_cast<unsigned>(type),
+                data.size_bytes(), (ctx && ctx->noiseInjectionHashSalt()) ? 1 : 0);
+            return;
         }
     }
 #endif
