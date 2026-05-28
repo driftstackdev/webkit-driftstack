@@ -850,6 +850,60 @@ RefPtr<ByteArrayPixelBuffer> WebGLRenderingContextBase::drawingBufferToPixelBuff
             memcpySpan(top, temp.span());
         }
     }
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 §10 WebGL drawingBuffer chokepoint (founder 2026-05-28). This
+    // funnel is read by HTMLCanvasElement::getImageData(WebGL) + toVideoFrame +
+    // captureStream — none pass through WebGLRenderingContextBase::readPixels, so
+    // they bypassed the V-375 hook and leaked Mac-GPU pixels. Reuse the V-375
+    // table (key w,h,RGBA,UNSIGNED_BYTE) for bit-identical substitution; else
+    // §2 emission + §1 AFP-on-miss. Env-gated; cumrig unaffected gate-off.
+    {
+        const uint32_t w = static_cast<uint32_t>(size.width());
+        const uint32_t h = static_cast<uint32_t>(size.height());
+        auto bytes = pixelBuffer->bytes();
+        std::span<const uint8_t> fullBytes;
+        if (Driftstack::isWebGLReadPixelsOverrideEnabled()
+            && Driftstack::getWebGLReadPixelsOverrideBytes(w, h,
+                   static_cast<uint32_t>(GraphicsContextGL::RGBA),
+                   static_cast<uint32_t>(GraphicsContextGL::UNSIGNED_BYTE), fullBytes)) {
+            size_t n = std::min(bytes.size(), fullBytes.size());
+            if (n) {
+                memcpySpan(bytes.first(n), fullBytes.first(n));
+                WTFLogAlways("[Driftstack-V375-drawingBuffer] substitution FIRED (%ux%u bytes=%zu)", w, h, n);
+                return pixelBuffer;
+            }
+        }
+        static bool s_emitDB = []() { const char* e = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT"); return e && e[0] == '1'; }();
+        if (s_emitDB) {
+            char keyBuf[33];
+            snprintf(keyBuf, sizeof(keyBuf), "%08x%08x%08x%08x", w, h,
+                static_cast<unsigned>(GraphicsContextGL::RGBA), static_cast<unsigned>(GraphicsContextGL::UNSIGNED_BYTE));
+            static const char* s_archDB = []() { const char* e = getenv("DRIFTSTACK_ARCHETYPE"); return e ? e : "iphone17_ios18_7_safari26_4"; }();
+            static const char* s_sidDB = getenv("DRIFTSTACK_SESSION_ID");
+            static const char* s_cidDB = getenv("DRIFTSTACK_CUSTOMER_ID");
+            RefPtr ctxDB = canvasBase().scriptExecutionContext();
+            String pageURLDB = ctxDB ? ctxDB->url().string() : String();
+            WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-drawingBuffer] "
+                "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" archetype=%s ts=%lld mime=%s mac_len=%u "
+                "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
+                w, h, keyBuf, "<webgl>", s_archDB,
+                static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+                "webgl-drawingbuffer", static_cast<unsigned>(bytes.size()), "<webgl-path3>",
+                s_sidDB ? s_sidDB : "<unset>", s_cidDB ? s_cidDB : "<unset>", pageURLDB.left(256).utf8().data());
+        }
+        static bool s_afpDB = []() { const char* e = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED"); return e && e[0] == '1'; }();
+        if (s_afpDB && bytes.size() >= 4) {
+            RefPtr ctxDB = canvasBase().scriptExecutionContext();
+            uint64_t salt = (ctxDB && ctxDB->noiseInjectionHashSalt()) ? *ctxDB->noiseInjectionHashSalt() : 0;
+            uint64_t mix = salt ^ 0x9E3779B97F4A7C15ull; mix ^= mix >> 29; mix *= 0xBF58476D1CE4E5B9ull; mix ^= mix >> 32;
+            const uint8_t rgba[4] = { static_cast<uint8_t>(mix & 0xff), static_cast<uint8_t>((mix >> 8) & 0xff),
+                static_cast<uint8_t>((mix >> 16) & 0xff), static_cast<uint8_t>((mix >> 24) & 0xff) };
+            for (size_t i = 0; i + 4 <= bytes.size(); i += 4) { bytes[i] = rgba[0]; bytes[i + 1] = rgba[1]; bytes[i + 2] = rgba[2]; bytes[i + 3] = rgba[3]; }
+            WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=drawingBuffer atlas-miss FIRED (%ux%u bytes=%zu salt-present=%d)",
+                w, h, bytes.size(), (ctxDB && ctxDB->noiseInjectionHashSalt()) ? 1 : 0);
+        }
+    }
+#endif
     return pixelBuffer;
 }
 
