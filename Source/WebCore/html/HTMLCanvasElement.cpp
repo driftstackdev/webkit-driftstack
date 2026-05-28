@@ -31,6 +31,7 @@
 #include "BitmapImage.h"
 #include "Blob.h"
 #include "BlobCallback.h"
+#include "ByteArrayPixelBuffer.h"
 #include "CanvasGradient.h"
 #include "CanvasPattern.h"
 #include "CanvasRenderingContext2D.h"
@@ -1764,6 +1765,54 @@ RefPtr<VideoFrame> HTMLCanvasElement::toVideoFrame()
     auto pixelBuffer = imageBuffer->getPixelBuffer({ AlphaPremultiplication::Unpremultiplied, PixelFormat::BGRA8, DestinationColorSpace::SRGB() }, { { }, imageBuffer->truncatedLogicalSize() });
     if (!pixelBuffer)
         return nullptr;
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 §10 2D toVideoFrame chokepoint (founder 2026-05-28): captureStream /
+    // WebCodecs read the 2D canvas as a VideoFrame here (getPixelBuffer above),
+    // bypassing the toDataURL/getImageData hooks → leaked Mac-CG pixels. §2 emission
+    // (2D op-sequence key) + §1 AFP-on-miss salt fill. Env-gated, cumrig-safe.
+    {
+        static bool s_emitVF = []() { const char* e = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT"); return e && e[0] == '1'; }();
+        if (s_emitVF) {
+            String opSeqShaVF, opSeqBytesVF;
+            if (RefPtr ctx2D = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+                uint16_t wS = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+                uint16_t hS = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+                opSeqShaVF = ctx2D->driftstackOpSequenceSHA256(wS, hS);
+                opSeqBytesVF = ctx2D->driftstackOpSequenceBytesBase64(wS, hS);
+            }
+            static const char* s_archVF = []() { const char* e = getenv("DRIFTSTACK_ARCHETYPE"); return e ? e : "iphone17_ios18_7_safari26_4"; }();
+            static const char* s_sidVF = getenv("DRIFTSTACK_SESSION_ID");
+            static const char* s_cidVF = getenv("DRIFTSTACK_CUSTOMER_ID");
+            WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toVideoFrame] "
+                "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" archetype=%s ts=%lld mime=%s mac_len=%u "
+                "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
+                width(), height(),
+                opSeqShaVF.isEmpty() ? "<empty>" : opSeqShaVF.utf8().data(),
+                lastFillText().left(80).utf8().data(), s_archVF,
+                static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+                "videoframe/bgra8", static_cast<unsigned>(width() * height() * 4),
+                opSeqBytesVF.isEmpty() ? "<empty>" : opSeqBytesVF.utf8().data(),
+                s_sidVF ? s_sidVF : "<unset>", s_cidVF ? s_cidVF : "<unset>",
+                document->url().string().left(256).utf8().data());
+        }
+        static bool s_afpVF = []() { const char* e = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED"); return e && e[0] == '1'; }();
+        if (s_afpVF) {
+            if (RefPtr bapVF = dynamicDowncast<ByteArrayPixelBuffer>(pixelBuffer.get())) {
+                auto bytesVF = bapVF->bytes();
+                if (bytesVF.size() >= 4) {
+                    RefPtr sctxVF = canvasBaseScriptExecutionContext();
+                    uint64_t salt = (sctxVF && sctxVF->noiseInjectionHashSalt()) ? *sctxVF->noiseInjectionHashSalt() : 0;
+                    uint64_t mix = salt ^ 0x9E3779B97F4A7C15ull; mix ^= mix >> 29; mix *= 0xBF58476D1CE4E5B9ull; mix ^= mix >> 32;
+                    const uint8_t v[4] = { static_cast<uint8_t>(mix & 0xff), static_cast<uint8_t>((mix >> 8) & 0xff),
+                        static_cast<uint8_t>((mix >> 16) & 0xff), static_cast<uint8_t>((mix >> 24) & 0xff) };
+                    for (size_t i = 0; i + 4 <= bytesVF.size(); i += 4) { bytesVF[i] = v[0]; bytesVF[i + 1] = v[1]; bytesVF[i + 2] = v[2]; bytesVF[i + 3] = v[3]; }
+                    WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=toVideoFrame atlas-miss FIRED (%ux%u)", width(), height());
+                }
+            }
+        }
+    }
+#endif
 
     // FIXME: Set color space.
     return VideoFrame::createFromPixelBuffer(pixelBuffer.releaseNonNull());

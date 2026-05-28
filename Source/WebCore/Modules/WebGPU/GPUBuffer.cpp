@@ -200,6 +200,7 @@ ExceptionOr<Ref<JSC::ArrayBuffer>> GPUBuffer::getMappedRange(GPUSize64 offset, s
         // Env-var-gated: DRIFTSTACK_WEBGPU_ATLAS=1 (with __XPC_ mirror
         // for WebContent XPC sandbox propagation). Default OFF — when
         // env var unset, atlas is loaded but dispatch hook doesn't fire.
+        bool dswaHit = false;
         static bool s_dswaEnabled = []() {
             const char* env = getenv("DRIFTSTACK_WEBGPU_ATLAS");
             return env && env[0] == '1';
@@ -212,6 +213,7 @@ ExceptionOr<Ref<JSC::ArrayBuffer>> GPUBuffer::getMappedRange(GPUSize64 offset, s
                 // mappedRange is the host-mapped GPU buffer span, writeable.
                 auto destByteSpan = mappedRange.first(size);
                 memcpySpan(destByteSpan, bytes);
+                dswaHit = true;
                 static unsigned dswaSubstitutions = 0;
                 if (++dswaSubstitutions <= 8) {
                     WTFLogAlways("[Driftstack-DSWA] substituted iPhone bytes for size=%llu (substitution #%u)",
@@ -224,6 +226,26 @@ ExceptionOr<Ref<JSC::ArrayBuffer>> GPUBuffer::getMappedRange(GPUSize64 offset, s
                         (unsigned long long)size, atlas.numEntries());
                 }
             }
+        }
+        // Wave 29-402 §10 WebGPU readback chokepoint (founder 2026-05-28): on a
+        // DSWA miss the mapped range still holds Mac-GPU bytes (a fingerprint
+        // leak). §1 AFP-on-miss fills it with a size-derived non-Mac pattern
+        // (the DSWA-miss log above already records the size for atlas growth).
+        // Env-gated DRIFTSTACK_AFP_FALLBACK_ENABLED; cumrig unaffected gate-off.
+        static bool s_afpGPU = []() {
+            const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+            return env && env[0] == '1';
+        }();
+        if (!dswaHit && s_afpGPU && size > 0 && size <= UINT32_MAX) {
+            auto dest = mappedRange.first(size);
+            uint64_t mix = static_cast<uint64_t>(size) ^ 0x9E3779B97F4A7C15ull;
+            mix ^= mix >> 29; mix *= 0xBF58476D1CE4E5B9ull; mix ^= mix >> 32;
+            const uint8_t v[4] = { static_cast<uint8_t>(mix & 0xff), static_cast<uint8_t>((mix >> 8) & 0xff),
+                static_cast<uint8_t>((mix >> 16) & 0xff), static_cast<uint8_t>((mix >> 24) & 0xff) };
+            for (size_t i = 0; i + 4 <= dest.size(); i += 4) { dest[i] = v[0]; dest[i + 1] = v[1]; dest[i + 2] = v[2]; dest[i + 3] = v[3]; }
+            static unsigned afpGPUFires = 0;
+            if (++afpGPUFires <= 8)
+                WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=webgpuBuffer atlas-miss FIRED (size=%llu)", (unsigned long long)size);
         }
 #endif
 
