@@ -1449,15 +1449,19 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // is WebKit glyph baseline position.
     bool didTextAtlasPath = false;
     // V-583.K-text Phase 3c dispatch is OPT-IN via DRIFTSTACK_TEXT_ATLAS=1.
-    // Captured PNGs encode an OPAQUE white background (`c.fillStyle = '#fff';
-    // c.fillRect(...)` in v583k-comprehensive-glyph.html), so stamping each
-    // PNG over a non-white canvas overpaints the surrounding test pattern with
-    // white — verified empirically (atlas-ON L1 distance -166% to -5938%
-    // vs atlas-OFF baseline on V-405 text seeds). Fix path: recapture atlas
-    // with `c.clearRect` for transparent background, OR post-process existing
-    // PNGs to convert white→alpha=0. Until either lands, dispatch stays off
-    // by default; flag preserved so the path can be exercised once atlas is
-    // alpha-correct.
+    // HISTORY: early captured PNGs encoded an OPAQUE white background, so
+    // stamping each PNG over a non-white canvas overpainted the surrounding
+    // pattern with white (atlas-ON L1 distance -166% to -5938% vs atlas-OFF on
+    // V-405 text seeds) — the "black/filled corners" artifact.
+    // RESOLVED 2026-05-28: every current atlas .bin is now a transparent-bg
+    // anti-aliased coverage mask — empirically decoded (per-glyph + all 3
+    // text-run atlases: alpha 0..216, zero white-opaque px; see V-TEXT-
+    // BLACKCORNERS RESOLVED in operations/verification-log.md). The white-bg
+    // defect no longer exists in the data. Dispatch nonetheless stays default-
+    // OFF pending a fresh atlas-ON cumrig re-score (to confirm the
+    // -166%..-5938% divergence is gone now that the data is alpha-correct) plus
+    // founder sign-off on the V-405 Text-surface closure. Do NOT flip this gate
+    // without that re-score.
     static const bool textAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
         && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
     // V-790.Q (wave 29-170): UNCONDITIONAL diag log to verify dispatch entry.
