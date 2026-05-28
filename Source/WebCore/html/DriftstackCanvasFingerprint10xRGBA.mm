@@ -187,6 +187,30 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const String& lastF
     return true;
 }
 
+bool getV510AtlasRGBAForOpSeq(const String& opSequenceSHA256Hex, int width, int height, Vector<uint8_t>& outRGBA)
+{
+    if (width <= 0 || height <= 0 || opSequenceSHA256Hex.length() < 32)
+        return false;
+    // V-510 atlas lookup (priority slot first, then main) keyed on op-seq sha.
+    // Empty macForkDataURL: v3/v4 entries key on opSeqSha only (the §4 auto-learn
+    // priority entries are v4). A hit returns the iPhone-canonical PNG dataURL.
+    String hit = v510AtlasLookupPublic(String(), opSequenceSHA256Hex);
+    if (hit.isEmpty())
+        return false;
+    auto utf8 = hit.utf8();
+    // decodeOnce (file-local) decodes the PNG dataURL to non-premultiplied RGBA
+    // with the same CG round-trip as the V-373 path; copy out (caller-owned).
+    RefPtr<DecodedRGBABuffer> decoded = decodeOnce(utf8.data());
+    if (!decoded)
+        return false;
+    if (decoded->width != width || decoded->height != height)
+        return false;
+    if (decoded->rgba.size() != static_cast<size_t>(width) * height * 4)
+        return false;
+    outRGBA = decoded->rgba;
+    return true;
+}
+
 } // namespace Driftstack
 } // namespace WebCore
 

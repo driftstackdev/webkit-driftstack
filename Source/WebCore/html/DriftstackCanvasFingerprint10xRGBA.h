@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <span>
+#include <wtf/Vector.h>
 
 namespace WTF {
 class String;
@@ -52,6 +53,15 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& 
 // (OffscreenCanvas::convertToBlob, HTMLCanvasElement::toBlob) substitute via
 // V-510 atlas when probe doesn't match a V-241 canonical shape entry.
 WTF::String v510AtlasLookupPublic(const WTF::String& macForkDataURL, const WTF::String& opSequenceSHA256Hex);
+
+// Task #8 (2026-05-28): getImageData serve from the V-510 auto-learn atlas.
+// Looks up the V-510 atlas (incl. the §4 priority slot) by op-sequence sha;
+// on hit, decodes the iPhone-canonical PNG to non-premultiplied RGBA copied
+// into outRGBA (caller-owned — no dangling span). Returns true on a
+// dimension-matching hit. Lets getImageData serve the same bit-identical
+// bytes toDataURL/toBlob already do (toDataURL↔getImageData cross-context
+// coherence). Gated caller-side via DRIFTSTACK_GETIMAGEDATA_ATLAS.
+bool getV510AtlasRGBAForOpSeq(const WTF::String& opSequenceSHA256Hex, int width, int height, WTF::Vector<uint8_t>& outRGBA);
 
 } // namespace Driftstack
 } // namespace WebCore

@@ -424,6 +424,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_TEXT_RUN_ATLAS_DIAG", getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") },
             { "DRIFTSTACK_CANVAS_FUZZ_ATLAS", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS") },
             { "DRIFTSTACK_CANVAS_FP10X_OVERRIDE", getenv("DRIFTSTACK_CANVAS_FP10X_OVERRIDE") },
+            { "DRIFTSTACK_GETIMAGEDATA_ATLAS", getenv("DRIFTSTACK_GETIMAGEDATA_ATLAS") },
             // Wave 29-390 (production launch gap closure): forward atlas
             // path + SOCKS5 env vars to WebContent/Network child processes.
             // The harness sets these at MiniBrowser launch; WebContent XPC

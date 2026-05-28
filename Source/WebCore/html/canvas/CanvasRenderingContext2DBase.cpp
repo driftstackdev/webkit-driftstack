@@ -42,10 +42,13 @@
 #include <cstdint>
 #include <span>
 #include <wtf/Logging.h>
+#include <wtf/Vector.h>
 namespace WTF { class String; }
 namespace WebCore { namespace Driftstack {
 bool isCanvasFp10xOverrideEnabled();
 bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& lastFillText, std::span<const uint8_t>& outRGBA);
+// Task #8: getImageData serve from the V-510 auto-learn atlas (op-seq keyed).
+bool getV510AtlasRGBAForOpSeq(const WTF::String& opSequenceSHA256Hex, int width, int height, WTF::Vector<uint8_t>& outRGBA);
 } }
 #endif
 
@@ -2828,6 +2831,40 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                 PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
                 IntSize substSize { sw, sh };
                 if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
+                    return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+            }
+        }
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // Task #8 (2026-05-28): getImageData serve from the V-510 auto-learn atlas.
+    // After the V-373 (V-185 table) miss above, try the op-seq-keyed V-510 atlas
+    // (incl. the §4 auto-learn priority slot) so a getImageData-only readback gets
+    // the same bit-identical iPhone bytes toDataURL/toBlob serve (toDataURL↔
+    // getImageData cross-context coherence). Full-canvas reads only (the common
+    // FP case). Env-gated DRIFTSTACK_GETIMAGEDATA_ATLAS=1 (default OFF, NOT in
+    // launch-env until the served RGBA is verified bit-identical).
+    {
+        static bool s_getImageDataAtlas = []() {
+            const char* env = getenv("DRIFTSTACK_GETIMAGEDATA_ATLAS");
+            return env && env[0] == '1';
+        }();
+        if (s_getImageDataAtlas
+            && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
+            && sx == 0 && sy == 0
+            && static_cast<unsigned>(sw) == canvasBase().width()
+            && static_cast<unsigned>(sh) == canvasBase().height()) {
+            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().width(), 0xffff));
+            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().height(), 0xffff));
+            String opSeqSha = driftstackOpSequenceSHA256(wSig, hSig);
+            Vector<uint8_t> v510RGBA;
+            if (Driftstack::getV510AtlasRGBAForOpSeq(opSeqSha, sw, sh, v510RGBA)) {
+                WTFLogAlways("[Driftstack-V510-getImageData] HIT (%dx%d opSeq=%s)", sw, sh,
+                    opSeqSha.left(12).utf8().data());
+                PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
+                IntSize substSize { sw, sh };
+                if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, v510RGBA.span()))
                     return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
             }
         }
