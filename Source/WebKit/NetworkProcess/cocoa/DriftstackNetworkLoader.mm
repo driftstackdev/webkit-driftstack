@@ -1030,16 +1030,21 @@ void DriftstackNetworkLoader::resume()
                 const char* e = getenv("DRIFTSTACK_PATHB_V2_H3_DNSRR");
                 return e && e[0] == '1';
             }();
-            // Wave .349 — do the BLOCKING DNS-HTTPS-RR h3 probe ONLY for the main-frame
-            // document navigation. It blocks the worker up to 800ms; a page fires many
-            // concurrent subresource fetches (e.g. browserleaks's ja3/tls1x probes), and
-            // blocking each one's RR lookup stalls them past the page's own fetch timeout
-            // → "fetch error"/N/A. Subresources skip the blocking probe and use h2
-            // immediately (h3 still kicks in via Alt-Svc, or the per-host cache once the
-            // main-frame navigation populated it). Matches Safari more closely too: its OS
-            // resolver does RR async, never blocking a subresource on a per-host lookup.
+            // Wave 29-499.356 — first-contact DNS-HTTPS-RR h3 probe for the main-frame
+            // navigation AND cross-origin subresources. The earlier .349 gate restricted
+            // this to top-level navigations only (to stop many concurrent subresource RR
+            // lookups from stalling a page → ja3/tls1x "N/A"). But that BROKE QUIC on
+            // cross-origin endpoints whose fp is measured ON FIRST CONTACT — e.g.
+            // quic.browserleaks.com is a SUBRESOURCE fetch, never a top-level nav, so it
+            // went h2/TCP and browserleaks.com/quic reported "no QUIC" (Alt-Svc upgrades
+            // too late — the connection is already h2). The original stall is now bounded
+            // by two mechanisms already in driftstackHostAdvertisesH3ViaDns: (1) ONE shared
+            // §7 DNS relay + background reader + txid demux → responses arrive in ~one
+            // proxy-RTT (~120ms), not the 800ms cap; (2) a 6-way concurrency semaphore that
+            // returns immediately (h2) when saturated. So subresource probes no longer
+            // starve the worker pool. Per-host cache means each origin is probed at most once.
             if (s_dnsRrEnabled && h3enabled && h3https && h3bodyless && !h3forced
-                && m_task.isTopLevelNavigation() && !driftstackLoaderHostKnownH3(h3host)) {
+                && !driftstackLoaderHostKnownH3(h3host)) {
                 if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
                     driftstackLoaderRememberH3Host(h3host);
             }
