@@ -1431,7 +1431,8 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             const char* env = getenv("DRIFTSTACK_ARCHETYPE");
             return env ? env : "iphone17_ios18_7_safari26_4";
         }();
-        auto pageURL = document->url().string();
+        RefPtr mainDocDU = document->mainFrameDocument();
+        auto pageURL = (mainDocDU ? mainDocDU->url() : document->url()).string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toDataURL] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
             "archetype=%s ts=%lld mime=%s mac_len=%u "
@@ -1650,7 +1651,8 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
             const char* env = getenv("DRIFTSTACK_ARCHETYPE");
             return env ? env : "iphone17_ios18_7_safari26_4";
         }();
-        auto pageURLBlob = document->url().string();
+        RefPtr mainDocBlob = document->mainFrameDocument();
+        auto pageURLBlob = (mainDocBlob ? mainDocBlob->url() : document->url()).string();
         WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toBlob] "
             "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
             "archetype=%s ts=%lld mime=%s mac_len=%zu "
@@ -1784,6 +1786,8 @@ RefPtr<VideoFrame> HTMLCanvasElement::toVideoFrame()
             static const char* s_archVF = []() { const char* e = getenv("DRIFTSTACK_ARCHETYPE"); return e ? e : "iphone17_ios18_7_safari26_4"; }();
             static const char* s_sidVF = getenv("DRIFTSTACK_SESSION_ID");
             static const char* s_cidVF = getenv("DRIFTSTACK_CUSTOMER_ID");
+            RefPtr mainDocVF = document->mainFrameDocument();
+            String pageURLVF = (mainDocVF ? mainDocVF->url() : document->url()).string();
             WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-toVideoFrame] "
                 "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" archetype=%s ts=%lld mime=%s mac_len=%u "
                 "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
@@ -1794,7 +1798,7 @@ RefPtr<VideoFrame> HTMLCanvasElement::toVideoFrame()
                 "videoframe/bgra8", static_cast<unsigned>(width() * height() * 4),
                 opSeqBytesVF.isEmpty() ? "<empty>" : opSeqBytesVF.utf8().data(),
                 s_sidVF ? s_sidVF : "<unset>", s_cidVF ? s_cidVF : "<unset>",
-                document->url().string().left(256).utf8().data());
+                pageURLVF.left(256).utf8().data());
         }
         static bool s_afpVF = []() { const char* e = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED"); return e && e[0] == '1'; }();
         if (s_afpVF) {

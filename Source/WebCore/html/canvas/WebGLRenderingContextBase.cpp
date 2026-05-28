@@ -882,7 +882,9 @@ RefPtr<ByteArrayPixelBuffer> WebGLRenderingContextBase::drawingBufferToPixelBuff
             static const char* s_sidDB = getenv("DRIFTSTACK_SESSION_ID");
             static const char* s_cidDB = getenv("DRIFTSTACK_CUSTOMER_ID");
             RefPtr ctxDB = canvasBase().scriptExecutionContext();
-            String pageURLDB = ctxDB ? ctxDB->url().string() : String();
+            RefPtr ctxDocDB = dynamicDowncast<Document>(ctxDB.get());
+            RefPtr mainDocDB = ctxDocDB ? ctxDocDB->mainFrameDocument() : nullptr;
+            String pageURLDB = mainDocDB ? mainDocDB->url().string() : (ctxDB ? ctxDB->url().string() : String());
             WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-drawingBuffer] "
                 "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" archetype=%s ts=%lld mime=%s mac_len=%u "
                 "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
@@ -3191,7 +3193,9 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
             static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
             static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
             RefPtr ctx = canvasBase().scriptExecutionContext();
-            String pageURL = ctx ? ctx->url().string() : String();
+            RefPtr ctxDocRP = dynamicDowncast<Document>(ctx.get());
+            RefPtr mainDocRP = ctxDocRP ? ctxDocRP->mainFrameDocument() : nullptr;
+            String pageURL = mainDocRP ? mainDocRP->url().string() : (ctx ? ctx->url().string() : String());
             WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-readPixels] "
                 "w=%d h=%d opSeqSha=%s lastFillText=\"%s\" "
                 "archetype=%s ts=%lld mime=%s mac_len=%u "

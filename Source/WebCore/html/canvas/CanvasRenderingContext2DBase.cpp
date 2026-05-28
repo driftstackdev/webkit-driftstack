@@ -69,6 +69,7 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& 
 #include "ColorConversion.h"
 #include "ColorSerialization.h"
 #include "DOMMatrix.h"
+#include "Document.h"
 #include "DOMMatrix2DInit.h"
 #include "FloatQuad.h"
 #include "FontCascadeFonts.h"
@@ -2874,7 +2875,9 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             }();
             static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
             static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
-            String pageURL = scriptContext ? scriptContext->url().string() : String();
+            RefPtr ctxDocGID = dynamicDowncast<Document>(scriptContext.get());
+            RefPtr mainDocGID = ctxDocGID ? ctxDocGID->mainFrameDocument() : nullptr;
+            String pageURL = mainDocGID ? mainDocGID->url().string() : (scriptContext ? scriptContext->url().string() : String());
             WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-getImageData] "
                 "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
                 "archetype=%s ts=%lld mime=%s mac_len=%u "
