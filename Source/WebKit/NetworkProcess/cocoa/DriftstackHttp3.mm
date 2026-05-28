@@ -632,6 +632,11 @@ struct DriftstackQuicConn {
     Vector<uint8_t> ctRemoteTransportParams; // server's quic_transport_parameters (from EncryptedExtensions)
     bool ctServerHelloProcessed { false };
     bool ctFinishedSent { false };
+    // Wave 29-499.358 — true once the server's remote transport params are decoded + applied
+    // to ngtcp2. ngtcp2_conn_open_bidi_stream ASSERTS (abort → NetworkProcess crash) if remote
+    // TP isn't set, so callers MUST check this before opening a stream and fall back to h2
+    // otherwise. Set by the handshake event loop at the TP-apply sites.
+    bool remoteTpApplied { false };
     // Wave .349 — h3 SETTINGS rewrite (iPhone: "1:16383;7:100;GREASE", no MAX_FIELD_SECTION_SIZE).
     // nghttp3 can't omit setting 6 or add GREASE, so the control-stream SETTINGS frame is
     // substituted on its first write with iPhone-exact bytes.
@@ -2257,6 +2262,15 @@ static bool driftstackQuicCustomTlsEnabled()
     qc->h3ResponseBody.clear();
     qc->h3ResponseComplete = false;
 
+    // Wave 29-499.358 — ngtcp2_conn_open_bidi_stream ASSERTS (abort → NetworkProcess
+    // crash) if the server's remote transport params were never applied. Real servers
+    // always supply them, but a malformed/unusual server (or a future edge) would crash
+    // the process. Guard: if remote TP isn't applied, fail the QUIC request cleanly so the
+    // loader falls back to h2 (iPhone-exact, no leak) instead of aborting.
+    if (!qc->remoteTpApplied) {
+        WTFLogAlways("[Wave29-499.358] sendH3Request: remote transport params NOT applied — refusing open_bidi (would assert); failing QUIC → h2 fallback");
+        return false;
+    }
     // Open the request bidi stream and submit GET <path>.
     int64_t reqStream = -1;
     if (nf.conn_open_bidi_stream(qc->conn, &reqStream, nullptr) != 0) {
@@ -3290,6 +3304,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
                 if (tp && tpLen > 0) {
                     int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen);
                     remoteTpApplied = (tprv == 0);
+                    if (remoteTpApplied) qc->remoteTpApplied = true; // Wave .358 — gate stream-open
                     WTFLogAlways("[Wave29-499.321] applied server transport params (%zu bytes) rv=%d — uni-stream limits now available", tpLen, tprv);
                 }
             }
@@ -3314,6 +3329,7 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
             int tprv = nf.conn_decode_and_set_remote_transport_params(qc->conn,
                 qc->ctRemoteTransportParams.span().data(), qc->ctRemoteTransportParams.size());
             remoteTpApplied = (tprv == 0);
+            if (remoteTpApplied) qc->remoteTpApplied = true; // Wave .358 — gate stream-open
             WTFLogAlways("[Wave29-499.349] CT applied server transport params (%zu bytes) rv=%d", qc->ctRemoteTransportParams.size(), tprv);
         }
 
@@ -3744,6 +3760,7 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
                 bsf.SSL_get_peer_quic_transport_params(ssl, &tp, &tpLen);
                 if (tp && tpLen > 0)
                     remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn, tp, tpLen) == 0);
+                if (remoteTpApplied) qc->remoteTpApplied = true; // Wave .358 — gate stream-open
             }
             if (hsRv == 1 && nf.conn_tls_handshake_completed && !qc->handshakeCompleted)
                 nf.conn_tls_handshake_completed(qc->conn);
@@ -3751,6 +3768,7 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
             && nf.conn_decode_and_set_remote_transport_params) {
             remoteTpApplied = (nf.conn_decode_and_set_remote_transport_params(qc->conn,
                 qc->ctRemoteTransportParams.span().data(), qc->ctRemoteTransportParams.size()) == 0);
+            if (remoteTpApplied) qc->remoteTpApplied = true; // Wave .358 — gate stream-open
         }
         for (;;) {
             uint8_t pkt[1500];
