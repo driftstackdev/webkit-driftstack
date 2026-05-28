@@ -232,8 +232,13 @@ ExceptionOr<Ref<JSC::ArrayBuffer>> GPUBuffer::getMappedRange(GPUSize64 offset, s
         // leak). §1 AFP-on-miss fills it with a size-derived non-Mac pattern
         // (the DSWA-miss log above already records the size for atlas growth).
         // Env-gated DRIFTSTACK_AFP_FALLBACK_ENABLED; cumrig unaffected gate-off.
+        // GPU-readback AFP gated SEPARATELY (DRIFTSTACK_AFP_GPU_ENABLED, default
+        // OFF, NOT in launch-env): unverified whether Mac WebGPU readback diverges
+        // from iPhone (may be bit-identical / vary per iOS version). Don't corrupt
+        // a possibly-correct readback; the DSWA-miss log already records the size.
+        // Enable only after a real-iPhone WebGPU capture confirms divergence.
         static bool s_afpGPU = []() {
-            const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+            const char* env = getenv("DRIFTSTACK_AFP_GPU_ENABLED");
             return env && env[0] == '1';
         }();
         if (!dswaHit && s_afpGPU && size > 0 && size <= UINT32_MAX) {

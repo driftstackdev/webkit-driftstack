@@ -891,7 +891,7 @@ RefPtr<ByteArrayPixelBuffer> WebGLRenderingContextBase::drawingBufferToPixelBuff
                 "webgl-drawingbuffer", static_cast<unsigned>(bytes.size()), "<webgl-path3>",
                 s_sidDB ? s_sidDB : "<unset>", s_cidDB ? s_cidDB : "<unset>", pageURLDB.left(256).utf8().data());
         }
-        static bool s_afpDB = []() { const char* e = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED"); return e && e[0] == '1'; }();
+        static bool s_afpDB = []() { const char* e = getenv("DRIFTSTACK_AFP_GPU_ENABLED"); return e && e[0] == '1'; }(); // GPU: separate gate, default off (see readPixels note — don't corrupt a possibly-bit-identical readback)
         if (s_afpDB && bytes.size() >= 4) {
             RefPtr ctxDB = canvasBase().scriptExecutionContext();
             uint64_t salt = (ctxDB && ctxDB->noiseInjectionHashSalt()) ? *ctxDB->noiseInjectionHashSalt() : 0;
@@ -3206,8 +3206,16 @@ void WebGLRenderingContextBase::readPixels(GCGLint x, GCGLint y, GCGLsizei width
                 s_customerId ? s_customerId : "<unset>",
                 pageURL.left(256).utf8().data());
         }
+        // GPU-readback AFP gated SEPARATELY from 2D (DRIFTSTACK_AFP_GPU_ENABLED,
+        // default OFF, NOT in launch-env): it is unverified whether Mac WebGL
+        // output diverges from iPhone (and it may vary per iOS version). Unlike
+        // 2D CoreGraphics text (proven ~1-22% divergent), GPU readback may be
+        // bit-identical — AFP-randomizing a correct value would make a clean
+        // surface detectable. Emission above still learns the shape for later
+        // verification. Enable only after a real-iPhone WebGL capture confirms
+        // divergence for the target iOS version.
         static bool s_afpReadPixels = []() {
-            const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+            const char* env = getenv("DRIFTSTACK_AFP_GPU_ENABLED");
             return env && env[0] == '1';
         }();
         if (s_afpReadPixels && data.size_bytes() >= 4) {
