@@ -114,6 +114,7 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const WTF::String& 
 #include <JavaScriptCore/ConsoleTypes.h>
 #include <wtf/CheckedArithmetic.h>
 #include <wtf/NeverDestroyed.h>
+#include <wtf/WallTime.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/text/MakeString.h>
 #include <wtf/text/StringBuilder.h>
@@ -2845,6 +2846,66 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
     }
 
     ASSERT(pixelBuffer->format().colorSpace == toDestinationColorSpace(computedColorSpace));
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-402 §10 getImageData chokepoint (founder verdict 2026-05-28
+    // "cover ANY kind of canvas"): V-373 above did not substitute → this is an
+    // atlas-MISS on the getImageData readback path, which previously leaked
+    // Mac-CG-native RGBA. Mirror the toDataURL/toBlob hooks:
+    //   (1) §2 ProbeSig emission so the auto-learn harvester queues this canvas
+    //       for BS iPhone replay (context=getImageData, mime=imagedata/rgba8).
+    //   (2) §1 AFP-on-miss: return AFP-randomized RGBA (indistinguishable from a
+    //       real iPhone with anti-fingerprinting enabled) instead of detectable
+    //       Mac-native pixels; goes bit-identical once the atlas is populated.
+    // Both env-gated (default OFF → cumrig 1595/0 preserved; cumrig sets neither).
+    {
+        static bool s_emitGetImageData = []() {
+            const char* env = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT");
+            return env && env[0] == '1';
+        }();
+        if (s_emitGetImageData) {
+            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().width(), 0xffff));
+            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().height(), 0xffff));
+            String opSeqShaSig = driftstackOpSequenceSHA256(wSig, hSig);
+            String opSeqBytesB64Sig = driftstackOpSequenceBytesBase64(wSig, hSig);
+            static const char* s_archetype = []() {
+                const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+                return env ? env : "iphone17_ios18_7_safari26_4";
+            }();
+            static const char* s_sessionId = getenv("DRIFTSTACK_SESSION_ID");
+            static const char* s_customerId = getenv("DRIFTSTACK_CUSTOMER_ID");
+            String pageURL = scriptContext ? scriptContext->url().string() : String();
+            WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-getImageData] "
+                "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
+                "archetype=%s ts=%lld mime=%s mac_len=%u "
+                "opSeqBytesB64=%s session_id=%s customer_id=%s page_url=\"%s\"",
+                canvasBase().width(), canvasBase().height(),
+                opSeqShaSig.isEmpty() ? "<empty>" : opSeqShaSig.utf8().data(),
+                canvasBase().lastFillTextForDispatch().left(80).utf8().data(),
+                s_archetype,
+                static_cast<long long>(WTF::WallTime::now().secondsSinceEpoch().milliseconds()),
+                "imagedata/rgba8",
+                static_cast<unsigned>(sw * sh * 4),
+                opSeqBytesB64Sig.isEmpty() ? "<empty>" : opSeqBytesB64Sig.utf8().data(),
+                s_sessionId ? s_sessionId : "<unset>",
+                s_customerId ? s_customerId : "<unset>",
+                pageURL.left(256).utf8().data());
+        }
+        static bool s_afpGetImageData = []() {
+            const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
+            return env && env[0] == '1';
+        }();
+        if (s_afpGetImageData) {
+            if (RefPtr afpBuffer = canvasBase().createImageForNoiseInjection()) {
+                auto afpFormat = PixelBufferFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, afpBuffer->colorSpace() };
+                if (RefPtr afpPixels = dynamicDowncast<ByteArrayPixelBuffer>(afpBuffer->getPixelBuffer(afpFormat, imageDataRect))) {
+                    WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=getImageData atlas-miss FIRED (%dx%d)", sw, sh);
+                    return { { ImageData::create(afpPixels.releaseNonNull(), outputImageDataPixelFormat) } };
+                }
+            }
+        }
+    }
+#endif
 
     if (RefPtr imageData = ImageData::create(pixelBuffer.releaseNonNull(), outputImageDataPixelFormat))
         return { { imageData.releaseNonNull() } };
