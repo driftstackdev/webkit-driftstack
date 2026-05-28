@@ -63,7 +63,21 @@ NavigatorWebDriver* NavigatorWebDriver::from(Navigator* navigator)
 
 bool NavigatorWebDriver::webdriver(const Navigator& navigator)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-WEBDRIVER-FALSE (2026-05-28): a customer session impersonates a real iPhone
+    // Safari USER, which is never automated → navigator.webdriver MUST be false. The
+    // harness drives the fork via the WebDriver server (--enable-webdriver), which
+    // sets isControlledByAutomation()→true; returning that here would expose
+    // navigator.webdriver=true — a P0 automation/bot tell every detector checks
+    // (CreepJS / FingerprintJS / Cloudflare / BotD). The iPhone reference is false
+    // ("webdriver": false in the canonical recapture). cumrig is NOT WebDriver-driven
+    // so it already read false (1690/0); this forces the prod-harness (WebDriver-
+    // driven) path to the same iPhone-correct false, closing a leak cumrig can't see.
+    UNUSED_PARAM(navigator);
+    return false;
+#else
     return NavigatorWebDriver::isControlledByAutomation(navigator);
+#endif
 }
 
 } // namespace WebCore
