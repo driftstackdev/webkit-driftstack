@@ -52,17 +52,33 @@
     // Enable tabbing - group regular windows together
     self.window.tabbingIdentifier = @"MiniBrowserMainWindow";
 
-    // Driftstack wave-3-13-extension: force iPhone 16 Pro / iOS 26.4.1
-    // content size (402×714) so the CSS layout viewport matches what
-    // wave-3-13 forces JS-side via window.innerWidth/innerHeight.
-    // Without this, CSS sees Mac's NSWindow content size (varies by user)
-    // and the rig page renders into a viewport whose dimensions don't
-    // match the JS-reported values. Result: pageYOffset/scrollY != 0
-    // because the page content is taller than the actual viewport.
-    // This fork is always Driftstack — MiniBrowser doesn't include
-    // wtf/Platform.h so we don't gate on PLATFORM(DRIFTSTACK).
-    // NSUserDefault override removed; content size is always 402×714.
-    [self.window setContentSize:NSMakeSize(402, 714)];
+    // Driftstack: size the window content to the ACTIVE ARCHETYPE's viewport so
+    // the physical render (and screenshots/streams) match the chosen device, and
+    // the CSS layout viewport agrees with the JS-reported screen/inner dims.
+    // NOT hardcoded — multi-device by design (iPhone 17 / 16 Pro / Pro Max / various
+    // iOS). The launch wrapper exports DRIFTSTACK_VIEWPORT_WIDTH/HEIGHT from the
+    // active archetype config (operations/archetypes/<archetype>.json screen dims);
+    // if unset, the nib default is kept. frameAutosaveName was removed from the nib
+    // so a previously user-resized frame can no longer override this.
+    const char* vpw = getenv("DRIFTSTACK_VIEWPORT_WIDTH");
+    const char* vph = getenv("DRIFTSTACK_VIEWPORT_HEIGHT");
+    if (vpw && vph) {
+        int w = atoi(vpw);
+        int h = atoi(vph);
+        if (w > 0 && h > 0) {
+            NSSize vpSize = NSMakeSize(w, h);
+            // Disable AppKit window state restoration (it restores a previously
+            // displayed frame DURING window display, after windowDidLoad, which
+            // would override this). Re-assert the size on the next runloop turn
+            // (after display) so the archetype viewport always wins.
+            self.window.restorable = NO;
+            [self.window setContentSize:vpSize];
+            __weak NSWindow *weakWindow = self.window;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakWindow setContentSize:vpSize];
+            });
+        }
+    }
 
     [share sendActionOn:NSEventMaskLeftMouseDown];
     [super windowDidLoad];
