@@ -1397,8 +1397,14 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // exact RGBA8 premultiplied, then plain DrawImage
                         // (V-090 emoji proven flush path on GPU canvas).
                         static bool v655UseV666 = []() {
+                            // V-TEXT-BLACKCORNERS (2026-05-28): V-666 is the only composition that
+                            // masks the alpha correctly — the V-627.B DestinationIn default and the
+                            // V-633.D ClipToMask alternative both fill the whole glyph rect (solid
+                            // fill, empirically 2486 vs 5 opaque). So V-666 is default-ON; opt OUT
+                            // with DRIFTSTACK_V666=0. (Whole path is gated on DRIFTSTACK_TEXT_ATLAS,
+                            // OFF in prod, so this cannot affect the atlas-OFF 1690/0 baseline.)
                             const char* env = getenv("DRIFTSTACK_V666");
-                            return env && env[0] == '1';
+                            return !env || env[0] != '0';
                         }();
                         CGContextSaveGState(cgContext.get());
                         CGContextTranslateCTM(cgContext.get(), drawX, drawY);
@@ -1629,8 +1635,14 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // pre-tint alpha-mask in CPU bitmap context, then
                         // plain DrawImage. See helper comment.
                         static bool s_v666Enabled = []() {
+                            // V-TEXT-BLACKCORNERS (2026-05-28): V-666 is the only composition that
+                            // masks the alpha correctly — the V-627.B DestinationIn default and the
+                            // V-633.D ClipToMask alternative both fill the whole glyph rect (solid
+                            // fill, empirically 2486 vs 5 opaque). So V-666 is default-ON; opt OUT
+                            // with DRIFTSTACK_V666=0. (Whole path is gated on DRIFTSTACK_TEXT_ATLAS,
+                            // OFF in prod, so this cannot affect the atlas-OFF 1690/0 baseline.)
                             const char* env = getenv("DRIFTSTACK_V666");
-                            return env && env[0] == '1';
+                            return !env || env[0] != '0';
                         }();
                         if (s_v666Enabled) {
                             auto [fr, fg, fb, fa] = context.fillColor()
