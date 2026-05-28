@@ -1351,20 +1351,13 @@ void DriftstackHttp2Session::readerLoop()
 DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Request& request)
 {
     DriftstackHttp2Response resp;
-    uint32_t streamId;
-    {
-        Locker locker { m_lock };
-        if (!m_alive) { resp.failed = true; resp.errorMessage = "h2 session not alive"_s; return resp; }
-        streamId = m_nextStreamId;
-        m_nextStreamId += 2;
-        if (m_nextStreamId >= 0x7FFFFFFF) m_alive = false; // stream-id space nearly exhausted; retire after this
-        m_streams.set(streamId, makeUniqueWithoutFastMallocCheck<Stream>());
-    }
 
-    // Build HEADERS (iPhone pseudo-header order m,s,p,a) + optional DATA, send
-    // under the write lock so frames from concurrent streams don't interleave.
-    Vector<uint8_t> hb;
+    // Build the HEADERS block FIRST — the HPACK encoder is static-table-only (literal
+    // WITHOUT indexing; no dynamic table mutation) and writes to this per-call buffer, so it
+    // is stateless and needs no lock. The stream id lives in the FRAME header, not the block,
+    // so the block is id-independent.
     // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — BS capture Wave .323.
+    Vector<uint8_t> hb;
     hpackEncodeHeader(hb, ":method"_s, request.method);
     hpackEncodeHeader(hb, ":scheme"_s, request.scheme);
     hpackEncodeHeader(hb, ":authority"_s, request.authority);
@@ -1374,8 +1367,29 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
 
     bool hasBody = !request.body.isEmpty();
     bool sendOk = true;
+    uint32_t streamId = 0;
     {
+        // Wave 29-499.357 — allocate the stream id AND write its HEADERS ATOMICALLY under the
+        // write lock, so concurrent execute() calls emit HEADERS in STRICTLY INCREASING
+        // stream-id order. RFC 7540 §5.1.1: opening a higher stream id implicitly closes lower
+        // idle streams. The old split-lock path allocated the id under m_lock, RELEASED it, then
+        // contended separately for m_writeLock — so stream 5's HEADERS could race ahead of
+        // stream 3's. The server then saw a HEADERS frame on the now-implicitly-closed stream 3
+        // → connection error GOAWAY STREAM_CLOSED (errorCode 5), which failed EVERY in-flight
+        // stream on that connection (the concurrent-subresource stall: github.githubassets.com
+        // et al. dropped 6 streams at once, page subresources never loaded). curl never hit this
+        // because it serializes HEADERS in id order. Holding m_writeLock across alloc+send fixes
+        // the ordering; m_lock is taken briefly inside for m_streams/m_nextStreamId (the reader
+        // never nests m_lock→m_writeLock, so no deadlock).
         Locker w { m_writeLock };
+        {
+            Locker locker { m_lock };
+            if (!m_alive) { resp.failed = true; resp.errorMessage = "h2 session not alive"_s; return resp; }
+            streamId = m_nextStreamId;
+            m_nextStreamId += 2;
+            if (m_nextStreamId >= 0x7FFFFFFF) m_alive = false; // stream-id space nearly exhausted; retire after this
+            m_streams.set(streamId, makeUniqueWithoutFastMallocCheck<Stream>());
+        }
         uint8_t fh[9];
         uint8_t flags = kFlagEndHeaders;
         if (!hasBody) flags |= kFlagEndStream;
