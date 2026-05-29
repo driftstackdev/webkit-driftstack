@@ -1727,12 +1727,33 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // capture follow-up.
             double xFrac = point.x() - std::floor(point.x());
             double yFrac = point.y() - std::floor(point.y());
-            int xBin = static_cast<int>(std::floor(xFrac * 16.0));
-            int yBin = static_cast<int>(std::floor(yFrac * 16.0));
-            if (xBin > 15) xBin = 15;
-            if (yBin > 15) yBin = 15;
-            if (xBin < 0) xBin = 0;
-            if (yBin < 0) yBin = 0;
+            int xBin, yBin;
+            // V-TEXT-PHASE-THIRDS (2026-05-29): CoreGraphics quantizes glyph
+            // sub-pixel positioning to a SMALL FINITE set — empirically (BS iPhone
+            // 17/Safari 26.4 vs the Mac fork, glyph-phase-match probe) the x render
+            // switches at exactly 1/3 and 2/3 (3 x-phases), and y has just 2 phases
+            // (integer-y vs any fractional-y). The legacy 16×16 binning over-
+            // segments this (256 classes for ~6 real renders) so runtime keys almost
+            // never equal the captured classes → fallback to pos_class=0 → wrong-phase
+            // service. The thirds scheme aligns the atlas key with the actual CG
+            // render bucket on BOTH platforms (6 classes: {0x00,0x01,0x02,0x10,0x11,
+            // 0x12}). Gated default-OFF; activated together with a thirds-keyed atlas
+            // rebuild + recapture (the encoding change invalidates 16-bin atlas keys).
+            static const bool s_posClassThirds = []() {
+                const char* e = std::getenv("DRIFTSTACK_POSCLASS_THIRDS");
+                return e && e[0] == '1';
+            }();
+            if (s_posClassThirds) {
+                xBin = static_cast<int>(std::floor(std::min(xFrac, 0.99999) * 3.0)); // 0,1,2 at 1/3,2/3
+                yBin = (yFrac > 1e-4) ? 1 : 0;                                        // integer-y vs fractional-y
+            } else {
+                xBin = static_cast<int>(std::floor(xFrac * 16.0));
+                yBin = static_cast<int>(std::floor(yFrac * 16.0));
+                if (xBin > 15) xBin = 15;
+                if (yBin > 15) yBin = 15;
+                if (xBin < 0) xBin = 0;
+                if (yBin < 0) yBin = 0;
+            }
             uint8_t positionClass = static_cast<uint8_t>((yBin << 4) | xBin);
 
             uint64_t textRunHash = driftstackComputeTextRunHash(
