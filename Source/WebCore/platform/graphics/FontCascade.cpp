@@ -2192,8 +2192,22 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // V-198: V-127 Path 2 root closure — 16-bucket sub-pixel
             // quantization matching iPhone CT. Per platform-precision-
             // rules.md §2.1 round-half-away-from-zero (roundf semantics).
-            int q = static_cast<int>(roundf(fracX * 16.0f)) & 15;
-            return static_cast<uint8_t>(q);
+            //
+            // V-CANVAS-THIRDS (2026-05-29): round(fracX*16) puts the phase
+            // boundaries at 0.344 / 0.656 and WRAPS at 0.969, but a 32-step
+            // sub-pixel sweep vs real iPhone 17/Safari 26.4 proved iPhone CG
+            // quantizes glyph sub-pixel x to exactly 3 thirds-phases with
+            // boundaries at 1/3 and 2/3 and NO wrap until 1.0 (3 distinct
+            // renders across 32 offsets; fork matched 30/32, mismatching only
+            // the 2 boundary offsets 0.65625 + 0.96875). The 16-slot atlas
+            // stores those 3 distinct renders duplicated across slot groups
+            // [0-5]=phase0, [6-10]=phase1, [11-15]=phase2. So select by iPhone's
+            // EXACT thirds boundaries and return a representative mid-slot per
+            // phase. (snapX stays floor — the ceil/wrap branch below is now
+            // dead since quant is never 0 for fracX>0.5.)
+            if (fracX < (1.0f / 3.0f)) return 3;   // phase 0 → slot group [0-5]
+            if (fracX < (2.0f / 3.0f)) return 8;   // phase 1 → slot group [6-10]
+            return 13;                              // phase 2 → slot group [11-15]
         }
         return 0;
     };
