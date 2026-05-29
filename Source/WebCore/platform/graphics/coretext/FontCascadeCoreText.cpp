@@ -1096,7 +1096,21 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
         auto& v655TextAtlas = DriftstackTextGlyphAtlas::singleton();
         const bool v655UseText = v655TextAtlasEnabled && v655TextAtlas.isAvailable();
-        if (emojiAtlas.isAvailable()) {
+        // V-CANVAS-EMOJI-CG (2026-05-29): the standalone per-glyph DriftstackEmojiAtlas
+        // is DEPRECATED + DISABLED by default. Its captured PNGs have OPAQUE WHITE
+        // backgrounds (not transparent) and the glyph fills the whole 2*strike+8 canvas,
+        // so the composite draws an oversized emoji inside a white box (empirically
+        // 2060px divergence vs real iPhone, ~1.5x oversize + white halo). Letting CG
+        // render the emoji natively from the iOS AppleColorEmoji font is the CORRECT
+        // size/design (bbox within 1px of iPhone, 805px residual = color-glyph bitmap
+        // downscale AA — the same class as the text-AA limit). True bit-identical emoji
+        // comes from the op-seq whole-canvas auto-learn atlas (V-510), exactly like text
+        // and the rest of canvas — not this brittle per-glyph subsystem. Re-enable the
+        // legacy path with DRIFTSTACK_PERGLYPH_EMOJI=1 only if the atlas is re-captured
+        // with transparent backgrounds + correct glyph metrics.
+        static const bool s_perGlyphEmojiEnabled = std::getenv("DRIFTSTACK_PERGLYPH_EMOJI")
+            && std::getenv("DRIFTSTACK_PERGLYPH_EMOJI")[0] == '1';
+        if (emojiAtlas.isAvailable() && (s_perGlyphEmojiEnabled || v655UseText)) {
             const float ptSize = font.platformData().size();
             const uint32_t strike = emojiAtlas.pickStrikeForPointSize(ptSize);
             const uint16_t ptSizeRound = static_cast<uint16_t>(std::round(ptSize));
@@ -1140,7 +1154,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // (text or color, whatever CT shaped) — matches iPhone for
                     // bare-codepoint case. BMP+VS-16 sequences are routed
                     // through the composite atlas (F.1.B-5/6), not this path.
-                    if (cp > 0xFFFF) {
+                    if (s_perGlyphEmojiEnabled && cp > 0xFFFF) {
                         auto entry = emojiAtlas.entryForCodepointAndStrike(static_cast<uint32_t>(cp), strike);
                         if (!entry.empty()) {
                             p.atlasHit = true;
