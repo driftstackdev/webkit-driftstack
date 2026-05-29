@@ -853,16 +853,35 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
 
                 auto& v790lPglyphAtlas = DriftstackPerGlyphAtlas::singleton();
                 unsigned v790lHits = 0;
+                // V-790.L Task #16: PER-GLYPH sub-pixel phase. Each glyph in the run
+                // sits at a DIFFERENT cursor position → different sub-pixel phase, so
+                // look up each at its OWN cursor's THIRDS phase (xBin=floor(xfrac*3) at
+                // 1/3,2/3; yBin=integer-vs-fractional) rather than the per-run anchor
+                // phase. The anchor-phase-for-all bug (+ pos=0-only atlas) is why the
+                // wave-29-175 N≥2 substitution worsened byte-delta and was disabled;
+                // composition is proven EXACT (compose==run, iPhone+fork) with the
+                // correct per-glyph phase. Self-contained to this loop; the substitution
+                // stays gated behind DRIFTSTACK_V790L_MULTI_SUB (default OFF).
+                CGAffineTransform v790lCtm = CGContextGetCTM(context.platformContext());
+                FloatPoint v790lCursor = anchorPoint;
+                auto v790lPhaseAt = [&](const FloatPoint& pt) -> uint32_t {
+                    CGPoint dev = CGPointApplyAffineTransform(CGPointMake(pt.x(), pt.y()), v790lCtm);
+                    double xf = dev.x - std::floor(dev.x), yf = dev.y - std::floor(dev.y);
+                    int xb = static_cast<int>(std::floor(std::min(xf, 0.99999) * 3.0)); // thirds: 0,1,2
+                    int yb = (yf > 1e-4) ? 1 : 0;                                        // integer-y vs fractional-y
+                    return static_cast<uint32_t>((yb << 4) | xb);
+                };
                 for (size_t i = 0; i < glyphs.size(); ++i) {
                     V790LPlan p { false, 0, nullptr };
                     p.cp = decodeNextCp();
+                    uint32_t pgPos = v790lPhaseAt(v790lCursor);
                     if (p.cp > 0) {
                         auto hit = v790lPglyphAtlas.lookup(
                             fontId,
                             static_cast<uint16_t>(ptSize * 16),
                             p.cp,
-                            static_cast<uint32_t>(positionClass));
-                        if (!hit && positionClass != 0) {
+                            pgPos);
+                        if (!hit && pgPos != 0) {
                             hit = v790lPglyphAtlas.lookup(
                                 fontId,
                                 static_cast<uint16_t>(ptSize * 16),
@@ -876,6 +895,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         }
                     }
                     v790lPlans.append(p);
+                    v790lCursor.move(advances[i].width, advances[i].height);
                 }
 
                 static unsigned v790lMultiLog = 0;
