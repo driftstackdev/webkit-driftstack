@@ -1058,7 +1058,22 @@ WebPage::WebPage(PageIdentifier pageID, WebPageCreationParameters&& parameters)
     WebCore::provideMediaKeySystemTo(page, WebMediaKeySystemClient::create(*this));
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // V-AUTOMATION-TELL-CHOKEPOINT: a real iPhone is never automation-controlled.
+    // WebContent must always observe Page::isControlledByAutomation()==false so the
+    // entire web-observable automation-tell surface collapses to the normal-browser
+    // branch in one place: navigator.webdriver (NavigatorWebDriver.cpp), navigator.share
+    // (Navigator.cpp), window.print (LocalDOMWindow.cpp), focus relinquish
+    // (FocusController.cpp), scroll-to-text-fragment indicator (LocalFrameView.cpp),
+    // and the editor smart-substitution toggles in WebEditorClientMac.mm (automatic
+    // quote/dash/text-replacement/smart-lists/spelling-correction — all forced off
+    // under automation, an observable iOS-divergence in editable text). The UIProcess
+    // WebPageProxy keeps its own m_controlledByAutomation, so automation driving (input
+    // simulation, dialog handling) is unaffected.
+    page->setControlledByAutomation(false);
+#else
     page->setControlledByAutomation(parameters.controlledByAutomation);
+#endif
     page->setHasResourceLoadClient(parameters.hasResourceLoadClient);
 
     page->setCanStartMedia(false);
@@ -4254,7 +4269,16 @@ bool WebPage::isControlledByAutomation() const
 
 void WebPage::setControlledByAutomation(bool controlled)
 {
+#if PLATFORM(DRIFTSTACK)
+    // V-AUTOMATION-TELL-CHOKEPOINT (see WebPage construction): WebContent's Page must
+    // never observe automation control, regardless of later UIProcess toggles, so the
+    // web-observable automation-tell surface stays neutralized. UIProcess automation
+    // state (WebPageProxy::m_controlledByAutomation) is tracked separately.
+    UNUSED_PARAM(controlled);
+    m_page->setControlledByAutomation(false);
+#else
     m_page->setControlledByAutomation(controlled);
+#endif
 }
 
 CheckedRef<PageInspectorTarget> WebPage::ensureInspectorTarget()
