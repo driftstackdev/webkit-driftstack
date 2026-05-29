@@ -41,7 +41,6 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
-#include "../platform/graphics/coreml/DriftstackLayerB.h"
 // V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
 // (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
 // in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).
@@ -1341,51 +1340,13 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             return UncachedString { substitute };
         }
     }
-    // V-790.V2 §3.1.3 Layer B v2 ML canvas-level RGBA substitution
-    // (wave 29-398). Fires only AFTER V-510 atlas + V-241 canonical miss
-    // (last resort before Mac fork natural output). Gated on
-    // DRIFTSTACK_LAYER_B_V2_ENABLED=1 env var + Rule Q canary detector
-    // (canary fingerprint vendor hosts BYPASS Layer B v2 — atlas-only).
-    static bool s_layerBV2Enabled = []() {
-        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
-        WTFLogAlways("[V-790-DEBUG] toDataURL static init: DRIFTSTACK_LAYER_B_V2_ENABLED=%s",
-            env ? env : "(nullptr)");
-        return env && env[0] == '1';
-    }();
-    WTFLogAlways("[V-790-DEBUG] toDataURL hook entered s_layerBV2Enabled=%d mime-png=%d",
-        s_layerBV2Enabled, encodingMIMEType.containsIgnoringASCIICase("png"_s));
-    if (s_layerBV2Enabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        auto host = document->url().host().toString();
-        WTFLogAlways("[V-790-DEBUG] toDataURL host=%s", host.utf8().data());
-        if (!Driftstack::isCanaryFingerprintHost(host)) {
-            WTFLogAlways("[V-790-DEBUG] toDataURL calling macForkRGBAFromDataURL encoded.len=%u",
-                encoded.length());
-            auto macTile = Driftstack::macForkRGBAFromDataURL(encoded, width(), height());
-            WTFLogAlways("[V-790-DEBUG] toDataURL macForkRGBAFromDataURL returned: hasValue=%d",
-                macTile.has_value());
-            if (macTile) {
-                WTFLogAlways("[V-790-DEBUG] toDataURL calling predictV2");
-                auto pred = Driftstack::LayerB::shared().predictV2(*macTile);
-                WTFLogAlways("[V-790-DEBUG] toDataURL predictV2 returned: hasValue=%d",
-                    pred.has_value());
-                if (pred) {
-                    WTFLogAlways("[V-790-DEBUG] toDataURL calling dataURLFromIPhoneRGBA");
-                    auto substituted = Driftstack::dataURLFromIPhoneRGBA(pred->tile, width(), height());
-                    WTFLogAlways("[V-790-DEBUG] toDataURL dataURLFromIPhoneRGBA returned: len=%u",
-                        substituted.length());
-                    if (!substituted.isEmpty()) {
-                        WTFLogAlways("[Driftstack-LayerBV2] canvas-level RGBA substitution "
-                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
-                                     width(), height(), pred->inference_ms, pred->ane_routed);
-                        return UncachedString { substituted };
-                    }
-                }
-            }
-        } else {
-            WTFLogAlways("[Driftstack-LayerBV2] BYPASS canary host=%s (Rule Q atlas-only)",
-                host.utf8().data());
-        }
-    }
+    // Layer B v2 ML canvas substitution REMOVED 2026-05-29 (founder: "drop the
+    // ML"). Superseded by the finite-phase text atlas: BS-confirmed that CG
+    // quantizes glyph sub-pixel position to a SMALL FINITE set (3 x-phases at
+    // thirds + 2 y-phases) on both iPhone and the fork, so the "infinite phases"
+    // premise the ML existed to predict was false — a finite phase-keyed atlas
+    // closes it exactly, without approximate (and never-bit-exact) ML inference.
+    // See operations/verification-log.md V-TEXT-* (2026-05-28/29).
     // Wave 29-399 §2 probe signature emission (founder Tier-3 verdict
     // 2026-05-19) — atlas growth pipeline. Fires at atlas-miss point
     // (after V-510 post-encode check above). Mac-side log collector
@@ -1600,31 +1561,8 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
             }
         }
     }
-    // V-790.V2 §3.1.3 Layer B v2 ML toBlob hook (wave 29-398).
-    // Mirrors toDataURL dispatch: gated on env var + Rule Q canary bypass.
-    static bool s_layerBV2EnabledToBlob = []() {
-        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
-        return env && env[0] == '1';
-    }();
-    if (s_layerBV2EnabledToBlob && !blobData.isEmpty()
-        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        auto host = document->url().host().toString();
-        if (!Driftstack::isCanaryFingerprintHost(host)) {
-            auto blobSpan = blobData.span();
-            if (auto macTile = Driftstack::macForkRGBAFromPNGBytes(blobSpan, width(), height())) {
-                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
-                    auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
-                    if (!substituted.isEmpty()) {
-                        blobData = WTF::move(substituted);
-                        atlasSubstituted = true;  // §9: gate §1 AFP fallback below
-                        WTFLogAlways("[Driftstack-LayerBV2-toBlob] canvas-level RGBA substitution "
-                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
-                                     width(), height(), pred->inference_ms, pred->ane_routed);
-                    }
-                }
-            }
-        }
-    }
+    // Layer B v2 ML toBlob hook REMOVED 2026-05-29 (founder: "drop the ML";
+    // superseded by the finite-phase text atlas — see toDataURL note above).
     // Wave 29-399 §2 probe signature emission (toBlob) — mirrors toDataURL.
     static bool s_probeSigEmitEnabledToBlob = []() {
         const char* env = getenv("DRIFTSTACK_PROBE_SIGNATURE_EMIT");

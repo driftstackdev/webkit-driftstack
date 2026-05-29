@@ -32,7 +32,6 @@
 #include "CanvasRenderingContext2DBase.h"
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
-#include "../platform/graphics/coreml/DriftstackLayerB.h"
 #include <wtf/text/Base64.h>
 #endif
 #include "BitmapImage.h"
@@ -375,38 +374,8 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
             }
         }
     }
-    // V-790.V2 §3.1.3 Layer B v2 ML Worker-context hook (wave 29-398).
-    // Mirrors main-thread toDataURL/toBlob dispatch: gated on env var +
-    // Rule Q canary bypass. Layer B v2 is per-WebProcess singleton; same
-    // singleton serves Worker context (main thread + Workers share the
-    // WebContent process). Inference is synchronous; Worker thread
-    // blocks for ≤5ms which respects Rule O v2 HARD cap.
-    static bool s_layerBV2EnabledWorker = []() {
-        const char* env = getenv("DRIFTSTACK_LAYER_B_V2_ENABLED");
-        return env && env[0] == '1';
-    }();
-    if (s_layerBV2EnabledWorker && !blobData.isEmpty()
-        && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
-        // Worker context: document URL lookup is via ScriptExecutionContext.
-        WTF::String host;
-        if (context)
-            host = context->url().host().toString();
-        if (!Driftstack::isCanaryFingerprintHost(host)) {
-            auto blobSpan = blobData.span();
-            if (auto macTile = Driftstack::macForkRGBAFromPNGBytes(blobSpan, width(), height())) {
-                if (auto pred = Driftstack::LayerB::shared().predictV2(*macTile)) {
-                    auto substituted = Driftstack::pngBytesFromIPhoneRGBA(pred->tile, width(), height());
-                    if (!substituted.isEmpty()) {
-                        blobData = WTF::move(substituted);
-                        atlasSubstituted = true;  // §9: gate §1 AFP fallback below
-                        WTFLogAlways("[Driftstack-LayerBV2-Worker] canvas-level RGBA substitution "
-                                     "FIRED (%ux%u, inference_ms=%.3f, ane=%d)",
-                                     width(), height(), pred->inference_ms, pred->ane_routed);
-                    }
-                }
-            }
-        }
-    }
+    // Layer B v2 ML Worker-context hook REMOVED 2026-05-29 (founder: "drop the
+    // ML"; superseded by the finite-phase text atlas — see HTMLCanvasElement.cpp).
     // Wave 29-399 §2 probe signature emission (Worker context) — mirrors
     // toDataURL/toBlob.
     static bool s_probeSigEmitEnabledWorker = []() {

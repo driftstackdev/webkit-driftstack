@@ -773,4 +773,3 @@ platform/graphics/cg/DriftstackPerGlyphAtlas.cpp
 // (no manual retain/release except CFBridgingRetain to cross the
 // ARC↔C++ boundary for the singleton's m_model void*). Unifiable
 // with other ARC ObjC++ files.
-platform/graphics/coreml/DriftstackLayerB.mm
