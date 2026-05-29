@@ -76,9 +76,14 @@ public:
 
     // V-141: 5-key lookup with explicit colorIdx.
     // For v1/v2 atlases, only colorIdx == 0 returns entries (single slot).
+    // Task #17: styleCode selects weight/italic variant (0=regular, 1=bold,
+    // 2=italic, 3=bold-italic). Encoded as a fontId offset: effective
+    // fontId = baseFontId + numFonts*styleCode. Regular (styleCode=0) is the
+    // existing behavior; on a non-styled atlas, styleCode>0 misses → caller
+    // falls back to native CT. Default 0 keeps all existing call sites intact.
     std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx,
                                       uint32_t codepoint, uint8_t subpixelQuant,
-                                      uint8_t colorIdx) const;
+                                      uint8_t colorIdx, uint8_t styleCode = 0) const;
 
     // V-127 4-key lookup (back-compat — defaults colorIdx to 0).
     std::span<const uint8_t> entryFor(const String& fontCssName, uint16_t sizePx,

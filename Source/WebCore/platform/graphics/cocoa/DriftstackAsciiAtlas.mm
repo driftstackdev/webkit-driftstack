@@ -289,7 +289,7 @@ static DriftstackAsciiAtlas_IndexEntry readAsciiEntry(std::span<const uint8_t> i
 
 std::span<const uint8_t> DriftstackAsciiAtlas::entryFor(const String& fontCssName, uint16_t sizePx,
                                                        uint32_t codepoint, uint8_t subpixelQuant,
-                                                       uint8_t colorIdx) const
+                                                       uint8_t colorIdx, uint8_t styleCode) const
 {
     if (m_dataPayloadSpan.empty() || m_indexSpan.empty() || !m_numEntries)
         return { };
@@ -297,6 +297,15 @@ std::span<const uint8_t> DriftstackAsciiAtlas::entryFor(const String& fontCssNam
     uint16_t fontId = fontIdFor(fontCssName);
     if (fontId == std::numeric_limits<uint16_t>::max())
         return { };
+
+    // Task #17: weight/italic variants are keyed as a fontId offset
+    // (baseFontId + numFonts*styleCode). numFonts = base family count
+    // (m_fontNames.size(), always 12 — the font table holds only the base
+    // names; styled index entries carry fontIds 12..47). On a non-styled
+    // atlas this pushes styleCode>0 past the populated fontId range, so the
+    // search misses and the caller falls back to native CT.
+    if (styleCode)
+        fontId += static_cast<uint16_t>(m_fontNames.size()) * styleCode;
 
     // V-141: 5-key search (font_id, size_px, codepoint, subpixelQuant, colorIndex).
     // For v1/v2 atlases (entries have implicit colorIndex=0), only colorIdx==0

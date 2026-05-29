@@ -1868,6 +1868,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         uint32_t strikeOrSize; // strike (Composite) or sizePx (Ascii)
         String asciiCssFamily; // V-127: empty for Composite
         uint32_t asciiCodepoint; // V-127: 0 for Composite
+        uint8_t styleCode { 0 }; // Task #17: 0=regular,1=bold,2=italic,3=bold-italic
         // V-141: color slot resolved at pre-flight time from context.fillColor().
         // 0 for v1/v2 atlases (single implicit black slot) or for Composite hits.
         // Threaded to draw-time entryFor lookup so the matching pre-tinted glyph
@@ -2008,6 +2009,14 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             const float ptSize = primaryFont().platformData().size();
             const uint16_t sizePx = static_cast<uint16_t>(roundf(ptSize));
 
+            // Task #17: weight/italic style code (0=regular,1=bold,2=italic,
+            // 3=bold-italic) selecting the matching atlas variant. Mirrors the
+            // CSS "bold"/"italic" the capture probe rendered. On a non-styled
+            // atlas, styleCode>0 misses → native CT fallback (correct).
+            const bool dsBold = isFontWeightBold(m_fontDescription.weight());
+            const bool dsItalic = isItalic(m_fontDescription.fontStyleSlope());
+            const uint8_t driftstackStyleCode = (dsBold ? 1 : 0) | (dsItalic ? 2 : 0);
+
             // V-141: color-aware dispatch. For v3 atlas (colorVariantCount > 1),
             // resolve context.fillColor() to a colorIdx; on miss (color not in
             // captured set), abandon atlas dispatch so native CT renders and
@@ -2144,7 +2153,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     // V-141: probe at the resolved colorIdx (0 for v1/v2 atlas).
                     String winningKey;
                     for (const auto& key : familyKeysToTry) {
-                        auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0, resolvedColorIdx);
+                        auto entry = asciiAtlas.entryFor(key, sizePx, static_cast<uint32_t>(cp), 0, resolvedColorIdx, driftstackStyleCode);
                         if (!entry.empty()) {
                             winningKey = key;
                             break;
@@ -2160,6 +2169,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                     h.asciiCssFamily = winningKey;
                     h.asciiCodepoint = static_cast<uint32_t>(cp);
                     h.colorIdx = resolvedColorIdx; // V-141
+                    h.styleCode = driftstackStyleCode; // Task #17
                     atlasHits.append(std::move(h));
                 }
                 std::sort(atlasHits.begin(), atlasHits.end(),
@@ -2228,7 +2238,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
             // V-141: thread the colorIdx resolved at pre-flight (0 for v1/v2).
             pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
-                                            hit.asciiCodepoint, quant, hit.colorIdx);
+                                            hit.asciiCodepoint, quant, hit.colorIdx, hit.styleCode);
             if (pngBytes.empty()) {
                 // Fall back to subpixel-0 if the specific quant has no
                 // entry (atlas v1 or pre-V-127 atlas missing higher
@@ -2236,7 +2246,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                 // for v3 — that would draw black where caller asked for
                 // a different color).
                 pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
-                                                hit.asciiCodepoint, 0, hit.colorIdx);
+                                                hit.asciiCodepoint, 0, hit.colorIdx, hit.styleCode);
             }
         }
         WTFLogAlways("[Driftstack-Atlas] draw start kind=%s hit=[%zu,%zu) origin=(%.2f,%.2f) pngBytes=%zu strikeOrSize=%u",
