@@ -471,11 +471,23 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // V-583.B-DIAG: opt-in glyph trace via DRIFTSTACK_GLYPH_DIAG env var.
     // Off by default; for advance-mismatch root-cause analysis only.
     if (std::getenv("DRIFTSTACK_GLYPH_DIAG")) {
-        WTFLogAlways("[Driftstack-V583B-DIAG] drawGlyphs anchor=(%.3f,%.3f) ptSize=%.2f n=%zu g0=%u adv0=%.3f",
+        char psName[256] = {};
+        unsigned symTraits = 0;
+        if (CTFontRef ctf = platformData.ctFont()) {
+            if (RetainPtr<CFStringRef> ps = adoptCF(CTFontCopyPostScriptName(ctf)))
+                CFStringGetCString(ps.get(), psName, sizeof(psName), kCFStringEncodingUTF8);
+            symTraits = CTFontGetSymbolicTraits(ctf);
+        }
+        WTFLogAlways("[Driftstack-V583B-DIAG] drawGlyphs anchor=(%.3f,%.3f) ptSize=%.2f n=%zu g0=%u adv0=%.3f adv1=%.3f ps='%s' symTraits=0x%x bold=%d italic=%d synthBold=%.2f",
             (double)anchorPoint.x(), (double)anchorPoint.y(),
             (double)platformData.size(), glyphs.size(),
             glyphs.size() ? static_cast<unsigned>(glyphs[0]) : 0u,
-            glyphs.size() ? (double)advances[0].width : 0.0);
+            glyphs.size() ? (double)advances[0].width : 0.0,
+            glyphs.size() > 1 ? (double)advances[1].width : 0.0,
+            psName, symTraits,
+            (symTraits & kCTFontTraitBold) ? 1 : 0,
+            (symTraits & kCTFontTraitItalic) ? 1 : 0,
+            (double)font.syntheticBoldOffset());
     }
 
     // V-583.E: ComplexTextController.draw bypasses Font::widthForGlyph (it uses
