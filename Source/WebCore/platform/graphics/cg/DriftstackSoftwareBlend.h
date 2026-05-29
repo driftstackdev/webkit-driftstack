@@ -27,6 +27,14 @@ namespace WebCore {
 // iPhone CG by 1-LSB at certain pixel boundaries (V-583.K empirical).
 inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blendMode)
 {
+    // V-CANVAS-MULTIPLY-CG (2026-05-29): BlendMode::Multiply is DELIBERATELY NOT
+    // software-blended. CG's native multiply is bit-identical to iPhone on BOTH the
+    // accelerated and unaccelerated (willReadFrequently) paths (verified 0px vs real
+    // iPhone 17/Safari 26.4 on the FPJS geometry incl. the evenodd ring). The
+    // software-blend impl, by contrast, mis-composited the multiply-over-opaque
+    // evenodd-ring case (6490px divergence on the willReadFrequently path). So
+    // multiply is left to CG. The modes below are ones where CG genuinely diverges
+    // from iPhone and the software Porter-Duff impl matches bit-exactly.
     if (blendMode == BlendMode::Hue
         || blendMode == BlendMode::Color
         || blendMode == BlendMode::Saturation
@@ -36,7 +44,6 @@ inline bool driftstackSoftwareBlendApplies(CompositeOperator op, BlendMode blend
         || blendMode == BlendMode::HardLight
         || blendMode == BlendMode::SoftLight
         || blendMode == BlendMode::Exclusion
-        || blendMode == BlendMode::Multiply
         || blendMode == BlendMode::Difference)
         return true;
     if (op == CompositeOperator::XOR && blendMode == BlendMode::Normal)
