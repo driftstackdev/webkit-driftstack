@@ -1405,6 +1405,29 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     configuration.get().connectionProxyDictionary = parameters.proxyConfiguration ? RetainPtr { (NSDictionary *)parameters.proxyConfiguration.get() }.get() : proxyDictionary(parameters.httpProxy, parameters.httpsProxy).get();
 
 #if PLATFORM(DRIFTSTACK)
+    // Dev-browse direct mode (founder 2026-05-29): DRIFTSTACK_DIRECT_BROWSE=1
+    // forces clean stock direct egress — strips ALL proxy config and disables
+    // custom SOCKS5 routing — so the fork can browse the open internet without
+    // a customer proxy (for local inspection of fingerprint/canvas behavior).
+    // Off by default → production/cumrig egress posture unchanged.
+    static const char* s_directBrowseEnv = getenv("DRIFTSTACK_DIRECT_BROWSE");
+    bool driftstackDirectBrowse = s_directBrowseEnv && s_directBrowseEnv[0] == '1';
+    {
+        NSDictionary* preDict = configuration.get().connectionProxyDictionary;
+        static bool loggedProxyDiagOnce = false;
+        if (!loggedProxyDiagOnce) {
+            loggedProxyDiagOnce = true;
+            WTFLogAlways("[Driftstack-DIRECT-BROWSE/diag] initial connectionProxyDictionary=%s directBrowse=%d",
+                preDict ? [[preDict description] UTF8String] : "(nil)", driftstackDirectBrowse ? 1 : 0);
+        }
+        if (driftstackDirectBrowse && preDict) {
+            configuration.get().connectionProxyDictionary = nil;
+            WTFLogAlways("[Driftstack-DIRECT-BROWSE] proxy config CLEARED — clean stock direct egress for this session");
+        }
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
     // EG-WK-1.1 Wave 29-311: SOCKS5 proxy injection via env var.
     // DRIFTSTACK_SOCKS5_PROXY=host:port enables CFNetwork SOCKS5 routing
     // (kCFNetworkProxiesSOCKSEnable + Proxy + Port keys). Env wins on
@@ -1473,7 +1496,7 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     // CFNetwork fallback remains the actual transport.
     {
         const char* customEnv = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
-        bool customRequested = customEnv && customEnv[0] == '1';
+        bool customRequested = customEnv && customEnv[0] == '1' && !driftstackDirectBrowse;
         bool envFallbackSOCKS5 = !perSessionSOCKS5 && getenv("DRIFTSTACK_SOCKS5_PROXY") && getenv("DRIFTSTACK_SOCKS5_PROXY")[0];
         if (customRequested && (perSessionSOCKS5 || envFallbackSOCKS5)) {
             // Wave 29-396 sub-slice 1.6: set global flag.

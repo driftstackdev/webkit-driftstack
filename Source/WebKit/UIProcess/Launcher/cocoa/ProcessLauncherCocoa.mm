@@ -432,6 +432,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // cumrig (which uses __XPC_DRIFTSTACK_* shadow vars).
             { "DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH") },
             { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
+            { "DRIFTSTACK_DIRECT_BROWSE", getenv("DRIFTSTACK_DIRECT_BROWSE") },
             { "DRIFTSTACK_REQUIRE_PROXY", getenv("DRIFTSTACK_REQUIRE_PROXY") },
             { "DRIFTSTACK_CUSTOM_SOCKS5", getenv("DRIFTSTACK_CUSTOM_SOCKS5") },
             // Wave 29-396 sub-1.7.3: RFC 1929 user/pass for custom SOCKS5.

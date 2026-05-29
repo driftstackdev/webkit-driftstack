@@ -365,8 +365,20 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     // the majority of sessions (cumrig, dev sessions without SOCKS5). The
     // gate flag is cached at constructor time so the only hot-path cost
     // is one bool load + branch.
-    if (!g_driftstackCustomSocks5GatedAtLoad)
+    if (!g_driftstackCustomSocks5GatedAtLoad) {
+        // Dev-browse / cumrig diag: confirm the inert interpose actually
+        // passes the first connection through to stock Network.framework.
+        static bool loggedInertOnce = false;
+        if (!loggedInertOnce) {
+            loggedInertOnce = true;
+            const char* host = (endpoint && nw_endpoint_get_type(endpoint) == nw_endpoint_type_host)
+                ? nw_endpoint_get_hostname(endpoint) : nullptr;
+            fprintf(stderr, "[Driftstack-DIRECT-BROWSE/diag] interpose INERT pass-through — first nw_connection_create: endpoint_host=%s original=%p\n",
+                host ?: "(non-host)", (void*)originalNwConnectionCreate);
+            fflush(stderr);
+        }
         return originalNwConnectionCreate(endpoint, parameters);
+    }
 
     resolveBridgeSymbols();
     if (!bridgeIsActive || !bridgeParamsUseQuic || !bridgeCreateRelay)
