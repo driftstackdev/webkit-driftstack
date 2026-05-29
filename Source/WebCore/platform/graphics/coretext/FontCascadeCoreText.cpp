@@ -351,6 +351,13 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
         CTFontDrawGlyphs(ctFont.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
     } else {
         fillVectorWithHorizontalGlyphPositions(positions, context, advances, point);
+        // V-CANVAS-GLYPH-AS-PATH (2026-05-29): tested rendering glyphs as filled
+        // outline paths (CTFontCreatePathForGlyph) instead of CTFontDrawGlyphs —
+        // hypothesis that CG path-fill (which matches iPhone bit-identical for
+        // geometry) would also match iPhone's glyph edge-AA. DISPROVEN: ascii text
+        // went 121px→151px vs iPhone (worse). iPhone's glyph edge-AA is the font
+        // rasterizer's (hinted), NOT path-fill. So glyph edge-AA is the genuine
+        // macOS-CT≠iOS-CT rasterizer difference; closed via the per-glyph atlas, not native.
         CTFontDrawGlyphs(RetainPtr { platformData.ctFont() }.get(), glyphs.data(), positions.span().data(), glyphs.size(), context);
     }
 }
