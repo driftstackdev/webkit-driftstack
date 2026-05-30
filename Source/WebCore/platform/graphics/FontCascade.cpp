@@ -2120,7 +2120,11 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             for (size_t i = 0; i < glyphBuffer.size(); ++i) {
                 unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
                 char32_t cp = codePointAtOffset(offset);
-                if (cp >= 0x20 && cp <= 0x7E)
+                // Task #17 non-ASCII: ASCII (0x20-0x7E) + Latin-1 printable
+                // (0xA1-0xFF) are both atlas-covered → count as "ascii"
+                // (covered). Truly-uncovered codepoints (0x80-0xA0 controls,
+                // >= 0x100) still mark the run as mixed.
+                if ((cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA1 && cp <= 0xFF))
                     hasAscii = true;
                 else if (cp >= 0x80)
                     hasNonAscii = true;
@@ -2144,7 +2148,8 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                         continue;
                     unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
                     char32_t cp = codePointAtOffset(offset);
-                    if (cp < 0x20 || cp > 0x7E)
+                    // Task #17: ASCII (0x20-0x7E) + Latin-1 printable (0xA1-0xFF).
+                    if (cp < 0x20 || (cp > 0x7E && cp < 0xA1) || cp > 0xFF)
                         continue;
                     // V-127: probe atlas at quant=0 to verify (font, size, cp) is
                     // covered. If yes, store the WINNING key in the AtlasHit;
