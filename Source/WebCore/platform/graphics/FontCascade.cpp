@@ -2228,10 +2228,30 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // (bucket B) where iPhone draws bucket A → the residual. slot_phase puts
             // phase0=bucketA in [0-5], phase1=bucketB in [6-10], phase2 in [11-15];
             // return a representative mid-slot per selected bucket.
-            if (sizePx >= 18)
-                return fracX < 0.5f ? 3 : 8;        // 2 buckets at 1/2: A=slot3(p0), B=slot8(p1)
-            if (fracX < (1.0f / 3.0f)) return 3;   // phase 0 → slot group [0-5]
-            if (fracX < (2.0f / 3.0f)) return 8;   // phase 1 → slot group [6-10]
+            //
+            // The ≥18 and ≤16 paths quantize DIFFERENTLY at the frac→1.0 edge,
+            // so the wrap handling is size-gated (NOT applied before the split):
+            if (sizePx >= 18) {
+                // WRAP (measured 2026-05-30, threshold 0.99906): with only 2 buckets,
+                // when the sub-pixel frac is within ~0.001 of the next integer pixel
+                // iPhone CG renders bucket A at the NEXT pixel (== bucket A shifted +1px,
+                // verified bit-exact diffpx=0 at 18px AND 24px). Returning 0 is load-
+                // bearing: it is the ONLY path that re-arms the draw-site ceil branch
+                // (snapX = ceilf when quant==0 && fracX>0.5), placing the phase0/bucketA
+                // bitmap at ceil(origin) = the next pixel. Closes the boundary-1.0 sliver
+                // (e.g. 'i'@18px lands at frac 0.99902) the 2-bucket atlas otherwise
+                // mis-serves as bucket B at the current pixel.
+                if (fracX >= 0.99906f)
+                    return 0;
+                return fracX < 0.49906f ? 3 : 8;    // ≥18: 2 buckets, EXACT boundary 0.49906 (not 1/2)
+            }
+            // ≤16: 3 buckets; phase2 covers [0.66586, 1.0] INCLUDING the frac→1.0 edge
+            // (no separate wrap — applying the ≥18 wrap here regresses 12px by 1px).
+            // EXACT boundaries (fine 1/256 sweep vs iPhone Safari 26.4): iPhone CG flips
+            // ~0.001 BELOW the nice 1/3,2/3 — using 1/3,2/3 mis-buckets the sliver just
+            // below (e.g. 'i'@0.666 > 0.66586 is bucket2 on-device).
+            if (fracX < 0.33234f) return 3;        // ≤16: lower boundary 0.33234 (not 1/3)
+            if (fracX < 0.66586f) return 8;        //       upper boundary 0.66586 (not 2/3)
             return 13;                              // phase 2 → slot group [11-15]
         }
         return 0;
