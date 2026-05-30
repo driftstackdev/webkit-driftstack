@@ -2066,7 +2066,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // these canonical webkit-internal names.
             if (cssFamily == "-webkit-sans-serif"_s) familyKeysToTry.append("sans-serif"_s);
             else if (cssFamily == "-webkit-serif"_s) familyKeysToTry.append("serif"_s);
-            else if (cssFamily == "-webkit-monospace"_s) familyKeysToTry.append("monospace"_s);
+            else if (cssFamily == "-webkit-monospace"_s) { familyKeysToTry.append("monospace"_s); familyKeysToTry.append("Courier"_s); }
             else if (cssFamily == "-webkit-cursive"_s) familyKeysToTry.append("cursive"_s);
             else if (cssFamily == "-webkit-fantasy"_s) familyKeysToTry.append("fantasy"_s);
             if (firstFamily.kind == FontFamilyKind::Generic) {
