@@ -2187,7 +2187,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // (variants=3): 0.0 ≡ 0.25 (snap to integer) ≠ 0.5 ≠ 0.75. Verified
     // empirically on 9/10 codepoints in batch 0 of the V-127 capture.
     // Founder-required full-capture verification step before this commit.
-    auto quantizeSubpixel = [](float fracX, uint8_t variantCount) -> uint8_t {
+    auto quantizeSubpixel = [](float fracX, uint8_t variantCount, uint16_t sizePx) -> uint8_t {
         if (variantCount <= 1)
             return 0;
         if (variantCount == 4) {
@@ -2220,6 +2220,16 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // EXACT thirds boundaries and return a representative mid-slot per
             // phase. (snapX stays floor — the ceil/wrap branch below is now
             // dead since quant is never 0 for fracX>0.5.)
+            // SIZE-dependent boundaries (measured 2026-05-30 via 16-offset sweep vs
+            // real iPhone Safari 26.4; glyph/font-UNIFORM): sizes <=16 → 3 buckets at
+            // thirds (1/3, 2/3); sizes >=18 → 2 buckets at half (1/2). iOS CG quantizes
+            // glyph sub-pixel x to FEWER buckets at larger sizes. The prior code used
+            // thirds for ALL sizes, so >=18px glyphs landing in [1/3, 1/2) drew phase1
+            // (bucket B) where iPhone draws bucket A → the residual. slot_phase puts
+            // phase0=bucketA in [0-5], phase1=bucketB in [6-10], phase2 in [11-15];
+            // return a representative mid-slot per selected bucket.
+            if (sizePx >= 18)
+                return fracX < 0.5f ? 3 : 8;        // 2 buckets at 1/2: A=slot3(p0), B=slot8(p1)
             if (fracX < (1.0f / 3.0f)) return 3;   // phase 0 → slot group [0-5]
             if (fracX < (2.0f / 3.0f)) return 8;   // phase 1 → slot group [6-10]
             return 13;                              // phase 2 → slot group [11-15]
@@ -2240,7 +2250,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
             fracX = origin.x() - floorf(origin.x());
             if (fracX < 0.0f) fracX += 1.0f;
-            quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount());
+            quant = quantizeSubpixel(fracX, asciiAtlas.subpixelVariantCount(), static_cast<uint16_t>(hit.strikeOrSize));
             // V-141: thread the colorIdx resolved at pre-flight (0 for v1/v2).
             pngBytes = asciiAtlas.entryFor(hit.asciiCssFamily, static_cast<uint16_t>(hit.strikeOrSize),
                                             hit.asciiCodepoint, quant, hit.colorIdx, hit.styleCode);
