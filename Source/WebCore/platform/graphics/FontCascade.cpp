@@ -38,6 +38,7 @@
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
+#include "cg/DriftstackSoftwareBlend.h"
 #include "cg/DriftstackTelemetry.h"
 #include "cg/DriftstackTextRunAtlas.h"
 #include "cocoa/DriftstackAsciiAtlas.h"
@@ -2332,22 +2333,40 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             // directly via SourceOver; for v1/v2, keep the existing
             // stencil-and-tint pipeline.
             auto& asciiAtlasForDraw = DriftstackAsciiAtlas::singleton();
-            if (asciiAtlasForDraw.colorVariantCount() > 1) {
-                // v3: pre-tinted; direct draw.
+            // V-758 (canvas text native bit-identity): the legacy image-blit composites
+            // (drawNativeImage SourceOver for v3; transparency-layer stencil for v1/v2)
+            // both ROUND the 8-bit result where iPhone's NATIVE glyph fill TRUNCATES
+            // (floors) — a +1-LSB diff on any non-0/255-blend channel (measured: B off by
+            // 1 on 137/137 edge px of #f60-over-#069 text). iPhone renders text by clipping
+            // to the glyph coverage and FILLING the text color, and CG's solid fillRect
+            // matches iPhone bit-exactly (discriminator: 0px). Reproduce that: clip to the
+            // glyph's coverage and fillRect(fillColor). Works for BOTH v3 (pre-tinted:
+            // fillColor == captured colorIdx) and v1/v2 (black) since only the glyph's
+            // coverage is used. Recordable — survives the canvas display-list recorder
+            // (platformContext() is null at glyph-draw time, so raw CGBitmapContext access
+            // is impossible here; clipToImageBuffer + fillRect replay onto the real CG ctx).
+            bool didFloorComposite = false;
+            if (RefPtr<ImageBuffer> coverageBuffer = context.createImageBuffer(FloatSize(canvasDim, canvasDim))) {
+                // Build a coverage mask whose luminance == the glyph's iPhone-exact coverage:
+                // fill white, then DestinationIn the glyph alpha → premultiplied (255·cov).
+                FloatRect bufRect(0, 0, canvasDim, canvasDim);
+                coverageBuffer->context().fillRect(bufRect, Color::white);
+                coverageBuffer->context().drawNativeImage(*nativeImg, bufRect, srcRect, { CompositeOperator::DestinationIn });
+                context.save();
+                context.clipToImageBuffer(*coverageBuffer, destRect);
+                context.fillRect(destRect, context.fillColor());
+                context.restore();
+                didFloorComposite = true;
+            }
+            if (didFloorComposite) {
+                // Handled via clip-to-coverage + solid fill (iPhone-native floor source-over).
+            } else if (asciiAtlasForDraw.colorVariantCount() > 1) {
+                // v3: pre-tinted; direct draw (legacy fallback for accelerated ctx).
                 //
                 // V-171 Option C (V-182 founder Tier-2 ack 2026-05-04): atlas
-                // images are pixel-perfect captures of iPhone CT output (each
-                // pixel's RGBA is iPhone-canonical). Default CGContextDrawImage
-                // applies interpolation when destRect doesn't pixel-align with
-                // device pixels — this resamples iPhone's pixel-perfect atlas
-                // and produces AA-edge mixing that diverges from iPhone's
-                // pure native render. V-182 empirical: 79% exact match + 21%
-                // distributed RGB diff is consistent with interpolation re-
-                // sampling (each glyph edge has 2-4 px of mixed-color pixels).
-                // Fix: snap destRect to integer pixel coords (origin already
-                // floored/ceiled per V-127/V-140; round size dims too) AND
-                // set CGContext interpolation quality to None for this blit
-                // so atlas pixels copy 1:1 to dest pixels without resampling.
+                // images are pixel-perfect captures of iPhone CT output. Snap
+                // destRect to integer pixel coords + interpolation None so atlas
+                // pixels copy 1:1 to dest pixels without resampling.
                 CGContextRef cgCtx = context.platformContext();
                 CGInterpolationQuality savedQuality = CGContextGetInterpolationQuality(cgCtx);
                 CGContextSetInterpolationQuality(cgCtx, kCGInterpolationNone);
