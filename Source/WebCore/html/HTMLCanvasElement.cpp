@@ -1242,9 +1242,13 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             // simple — V-510 atlas hits short-circuit anyway.
         }
         auto fillText = lastFillText();
+        // Exact (dims + lastFillText) match ONLY. The dimension-only fallback
+        // substituted ANOTHER canvas's canonical for uncovered (width,height)
+        // states — a 100%-WRONG canvas (proven by the rigcanvas test: a 200x100
+        // 'cumrig-cr2d-0' canvas got a black-bg squiggle+circle). Under the
+        // bit-identical bar that's a detectable defect; native rendering is
+        // device-exact for uncovered content, so on a miss we fall through.
         const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), fillText);
-        if (!canonical)
-            canonical = lookupCanvasFp10xCanonical(width(), height());
         if (canonical) {
             WTFLogAlways("[Driftstack-V241] canvas-fp canonical substitution FIRED (%dx%d PNG, lastFillText=%d chars) — V-510 atlas miss",
                 width(), height(), fillText.length());
@@ -1544,9 +1548,9 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         auto substitute = v510AtlasLookup(macForkDataURL, opSeqSha);
         bool fromV510 = !substitute.isNull();
         if (substitute.isNull()) {
+            // Exact (dims+lastFillText) match only — dim-only fallback removed (it
+            // returned a wrong canvas for uncovered states; native is device-exact).
             const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
-            if (!canonical)
-                canonical = lookupCanvasFp10xCanonical(width(), height());
             if (canonical)
                 substitute = String::fromUTF8(canonical);
         }

@@ -357,9 +357,9 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         auto substitute = Driftstack::v510AtlasLookupPublic(macForkDataURL, opSeqSha);
         bool fromV510 = !substitute.isNull();
         if (substitute.isNull()) {
+            // Exact (dims+lastFillText) match only — dim-only fallback removed (it
+            // returned a wrong canvas for uncovered states; native is device-exact).
             const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
-            if (!canonical)
-                canonical = lookupCanvasFp10xCanonical(width(), height());
             if (canonical)
                 substitute = String::fromUTF8(canonical);
         }

@@ -170,9 +170,14 @@ bool getCanvasFp10xRGBAForCanvasState(int width, int height, const String& lastF
 {
     if (width <= 0 || height <= 0)
         return false;
+    // Exact (dims + lastFillText) match ONLY. The old dimension-only fallback
+    // (lookupCanvasFp10xCanonical(width,height)) substituted ANOTHER canvas's
+    // canonical for any uncovered (width,height) state — i.e. it returned a 100%-
+    // WRONG canvas (proven: a 200x100 'cumrig-cr2d-0' canvas got a black-bg
+    // squiggle+circle from some other state). Under the bit-identical bar that's a
+    // detectable defect; native rendering is device-exact for uncovered content, so
+    // on a miss we now fall through (return false) to the native path instead.
     const char* canonical = WebCore::lookupCanvasFp10xCanonicalWithText(width, height, lastFillText);
-    if (!canonical)
-        canonical = WebCore::lookupCanvasFp10xCanonical(width, height);
     if (!canonical)
         return false;
     int decW = 0, decH = 0;
