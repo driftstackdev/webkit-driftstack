@@ -1337,9 +1337,26 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                 if (it != m_driftstackAsciiReverseMap.end()) {
                     char32_t cp = it->value;
                     if (fontId != 0xFFFF) {
+                        // V-690 styled extension: bold/italic glyph bitmaps are
+                        // style-keyed in the DSAS glyph atlas, but advances were
+                        // family-only (fontId 0-12) so bold/italic text used the
+                        // regular (too-narrow) advance → progressive horizontal drift
+                        // (measured ~0.5px/char). Encode style into the advance fontId:
+                        // regular 0-12 unchanged; bold +100, italic +200, bold-italic
+                        // +300 (styled entries live in DriftstackAdvanceAtlas Tier 2).
+                        // Regular path is byte-identical (advFontId == fontId, Tier 1
+                        // unchanged) so cumrig schema baseline is preserved.
+                        uint16_t styleCode = 0;
+                        {
+                            CTFontSymbolicTraits dsTraits = CTFontGetSymbolicTraits(ctFont());
+                            bool dsBold = (dsTraits & kCTFontTraitBold) || m_platformData.syntheticBold();
+                            bool dsItalic = (dsTraits & kCTFontTraitItalic) || m_platformData.syntheticOblique();
+                            styleCode = static_cast<uint16_t>((dsBold ? 1 : 0) | (dsItalic ? 2 : 0));
+                        }
+                        uint16_t advFontId = static_cast<uint16_t>(fontId + 100 * styleCode);
                         bool isAscii = (cp <= 0x7E);
-                        // Tier 1: constexpr table (fast path, in CPU cache).
-                        if (isAscii) {
+                        // Tier 1: constexpr table (fast path, in CPU cache) — regular weight only.
+                        if (isAscii && styleCode == 0) {
                             for (const auto& e : kDriftstackAsciiAdvanceTable) {
                                 if (e.fontId > fontId)
                                     break;
@@ -1349,7 +1366,7 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                                     return e.widthPx;
                                 }
                             }
-                        } else {
+                        } else if (styleCode == 0) {
                             for (const auto& e : kDriftstackNonAsciiAdvanceTable) {
                                 if (e.fontId > fontId)
                                     break;
@@ -1366,7 +1383,7 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                         // Reached when constexpr tables miss. Covers the full V-405 fuzzer codepoint range.
                         const auto& atlas = DriftstackAdvanceAtlas::singleton();
                         if (atlas.isAvailable()) {
-                            float w = atlas.lookup(fontId, sizePx, static_cast<uint32_t>(cp));
+                            float w = atlas.lookup(advFontId, sizePx, static_cast<uint32_t>(cp));
                             if (w >= 0.0f) {
                                 static unsigned hits = 0;
                                 if (++hits <= 16)
