@@ -195,7 +195,27 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
             }
             WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: OUTBOUND estimate.quota=%llu (resolved=%d)",
                 static_cast<unsigned long long>(estimate.quota), resolved);
-            estimate.usage = 0;
+            // Founder factory-reset insight (BS-confirmed 2026-05-31): a real
+            // iPhone reports navigator.storage.estimate().usage = the origin's
+            // REAL stored bytes (fresh=0; after a 3 MB IndexedDB write -> ~3 MB).
+            // The fork persists storage across sessions, so a persistent profile
+            // that has browsed a site SHOULD report accrued usage — perpetually
+            // reporting 0 makes every profile look factory-fresh (a detection
+            // tell). So report the real usage. Two adjustments:
+            //  - DRIFTSTACK_FRESH_STORAGE=1 (set by the cumrig / fresh-capture
+            //    runs) forces 0 to simulate a fresh-cleared Safari session, so
+            //    bit-identity vs the fresh-iPhone reference is preserved.
+            //  - clamp the Mac's tiny per-origin baseline (~8 B; a real iPhone
+            //    fresh origin reports exactly 0) so a fresh profile matches.
+            static const bool s_freshStorage = []() {
+                const char* e = getenv("DRIFTSTACK_FRESH_STORAGE");
+                return e && e[0] == '1';
+            }();
+            constexpr uint64_t driftstackUsageBaselineClampBytes = 1024;
+            if (s_freshStorage || estimate.usage <= driftstackUsageBaselineClampBytes)
+                estimate.usage = 0;
+            WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: OUTBOUND estimate.usage=%llu (freshStorage=%d)",
+                static_cast<unsigned long long>(estimate.usage), s_freshStorage);
             promise.resolve(estimate);
             return;
         }
