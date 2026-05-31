@@ -72,6 +72,16 @@
             // would override this). Re-assert the size on the next runloop turn
             // (after display) so the archetype viewport always wins.
             self.window.restorable = NO;
+            // Lock the window to the archetype viewport: a real iPhone cannot be
+            // resized or maximized, and a larger/maximized window would leak the
+            // host viewport (CSS layout viewport, matchMedia, getBoundingClientRect
+            // all follow the real content size, not just the JS-overridden
+            // window.inner* values). Drop the resizable style so the size is fixed
+            // and the green button can't zoom/maximize.
+            self.window.styleMask &= ~NSWindowStyleMaskResizable;
+            NSButton *zoomButton = [self.window standardWindowButton:NSWindowZoomButton];
+            if (zoomButton)
+                zoomButton.enabled = NO;
             [self.window setContentSize:vpSize];
             __weak NSWindow *weakWindow = self.window;
             dispatch_async(dispatch_get_main_queue(), ^{
