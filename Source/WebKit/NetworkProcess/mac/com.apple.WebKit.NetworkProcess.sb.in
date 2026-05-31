@@ -517,9 +517,19 @@
 ;; Remaining outbound TCP/UDP allowed — needed for SOCKS5 proxy
 ;; connection itself. Subsequent slices add port-53/853/8853 denies
 ;; once Phase B/C custom SOCKS5 client is wired (Wave 29-369+).
-(deny network-outbound (literal "/private/var/run/mDNSResponder"))
-(deny mach-lookup (global-name "com.apple.dnssd.service"))
-(deny mach-lookup (global-name "com.apple.mDNSResponder"))
+;;
+;; Direct-browse exception (founder 2026-05-31): when the launcher passes
+;; DRIFTSTACK_DIRECT_BROWSE="1" (local dev / inspection, no proxy), these
+;; DNS denies are SKIPPED — otherwise EVERY external connection fails, even
+;; by literal IP, because Network.framework's nw_connection consults
+;; mDNSResponder for endpoint resolution regardless of whether a DNS name
+;; is involved. Production (param != "1") keeps the deny: direct egress is
+;; an intentional hard limitation — proxy/OpenVPN/WireGuard only. The
+;; parameter is set in AuxiliaryProcess::initializeSandbox from getenv.
+(when (not (equal? (param "DRIFTSTACK_DIRECT_BROWSE") "1"))
+    (deny network-outbound (literal "/private/var/run/mDNSResponder"))
+    (deny mach-lookup (global-name "com.apple.dnssd.service"))
+    (deny mach-lookup (global-name "com.apple.mDNSResponder")))
 #endif
 
 (with-filter (uid 0)

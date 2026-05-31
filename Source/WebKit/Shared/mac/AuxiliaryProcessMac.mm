@@ -718,6 +718,20 @@ void AuxiliaryProcess::initializeSandbox(const AuxiliaryProcessInitializationPar
 #endif
     sandboxParameters.addParameter("ENABLE_SANDBOX_MESSAGE_FILTER"_s, enableMessageFilter ? "YES"_span : "NO"_span);
 
+#if PLATFORM(DRIFTSTACK)
+    // EG-WK-1.9 Slice 4 direct-browse exception (founder 2026-05-31): expose the
+    // DRIFTSTACK_DIRECT_BROWSE env as a sandbox parameter so the NetworkProcess
+    // profile can SKIP the DNS-deny in local dev/inspection mode (no proxy).
+    // Without this, the deny breaks every external connection — even by literal
+    // IP — because nw_connection resolves all endpoints through mDNSResponder.
+    // Production (env unset/!="1") keeps the deny: direct egress stays an
+    // intentional hard limitation, proxy/OpenVPN/WireGuard only. Forwarded to the
+    // child env by ProcessLauncherCocoa; available via getenv at sandbox-init.
+    const char* driftstackDirectBrowse = getenv("DRIFTSTACK_DIRECT_BROWSE");
+    bool driftstackDirectBrowseOn = driftstackDirectBrowse && driftstackDirectBrowse[0] == '1';
+    sandboxParameters.addParameter("DRIFTSTACK_DIRECT_BROWSE"_s, driftstackDirectBrowseOn ? "1"_span : "0"_span);
+#endif
+
     if (sandboxParameters.userDirectorySuffix().isNull())
         sandboxParameters.setUserDirectorySuffix(getUserDirectorySuffix(parameters));
 
