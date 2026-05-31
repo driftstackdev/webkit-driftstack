@@ -84,8 +84,41 @@
                 zoomButton.enabled = NO;
             [self.window setContentSize:vpSize];
             __weak NSWindow *weakWindow = self.window;
+            // The web content view (mainContentView) sits below the URL bar, so
+            // its height = window-content-height - chrome. A real iPhone reports
+            // documentElement.clientHeight == window.innerHeight (the layout
+            // viewport, e.g. 714 for iPhone 16/17). If the webView height does
+            // not equal that, clientHeight/matchMedia leak the wrong value even
+            // though window.innerHeight is JS-overridden. When
+            // DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT is set, resize the window so the
+            // webView height == the layout viewport (measure the chrome, add it).
+            const char* lvhEnv = getenv("DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT");
+            int layoutViewportHeight = lvhEnv ? atoi(lvhEnv) : 0;
             dispatch_async(dispatch_get_main_queue(), ^{
                 [weakWindow setContentSize:vpSize];
+                if (layoutViewportHeight > 0) {
+                    // The webView's final height (content - URL-bar chrome) only
+                    // settles after the window displays + lays out, several
+                    // runloop turns later. Correct on a short delay: measure the
+                    // real webView height, derive the chrome, and resize so the
+                    // webView == the layout viewport (clientHeight == innerHeight).
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        // The web layout viewport (documentElement.clientHeight) is
+                        // the contentView area NOT obscured by the title bar/toolbar
+                        // (the WKWebView frame fills the whole content but the web
+                        // content is inset). That obscured band = contentView.height
+                        // - contentLayoutRect.height. Size the window so the
+                        // unobscured area == the iPhone layout viewport.
+                        CGFloat contentH = weakWindow.contentView.frame.size.height;
+                        CGFloat unobscuredH = weakWindow.contentLayoutRect.size.height;
+                        CGFloat chrome = contentH - unobscuredH;
+                        if (chrome < 0)
+                            chrome = 0;
+                        NSLog(@"[Driftstack-WindowSize] content=%.0f unobscured=%.0f chrome=%.0f -> window content=%.0f (target viewport=%d)",
+                            contentH, unobscuredH, chrome, (double)(layoutViewportHeight + chrome), layoutViewportHeight);
+                        [weakWindow setContentSize:NSMakeSize(w, layoutViewportHeight + chrome)];
+                    });
+                }
             });
         }
     }
