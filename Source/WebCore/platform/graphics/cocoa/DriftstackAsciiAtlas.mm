@@ -55,8 +55,13 @@ void DriftstackAsciiAtlas::mapAtlas()
     // (font,size,glyph) it doesn't cover. Empty atlas → every lookup misses →
     // native CT render (readable). Production capture mode (env unset) loads
     // normally so canvas fingerprint stays bit-identical.
-    if (const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE"); db && db[0] == '1') {
-        WTFLogAlways("[Driftstack] AsciiAtlas: load suppressed (DRIFTSTACK_DIRECT_BROWSE=1) — native page-text render");
+    // Suppress for any interactive BROWSE render (readable page text): direct
+    // browse OR proxy browse. DRIFTSTACK_BROWSE is the render-mode flag (set in
+    // both); DRIFTSTACK_DIRECT_BROWSE is kept for back-compat.
+    const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE");
+    const char* bm = getenv("DRIFTSTACK_BROWSE");
+    if ((db && db[0] == '1') || (bm && bm[0] == '1')) {
+        WTFLogAlways("[Driftstack] AsciiAtlas: load suppressed (browse render) — native page-text");
         return;
     }
 

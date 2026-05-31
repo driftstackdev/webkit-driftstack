@@ -112,7 +112,9 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
     // Direct-browse (human inspection) mode: skip the canvas-fingerprint text-run
     // atlas so page text renders natively (see DriftstackAsciiAtlas::mapAtlas for
     // rationale). Leaving m_loaded false keeps lookup() returning nullopt → native.
-    if (const char* db = std::getenv("DRIFTSTACK_DIRECT_BROWSE"); db && db[0] == '1')
+    const char* db = std::getenv("DRIFTSTACK_DIRECT_BROWSE");
+    const char* bm = std::getenv("DRIFTSTACK_BROWSE");
+    if ((db && db[0] == '1') || (bm && bm[0] == '1'))
         return false;
 
     const char* resolved = path;

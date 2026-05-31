@@ -44,8 +44,10 @@ void DriftstackCompositeAtlas::mapAtlas()
 {
     // Direct-browse (human inspection) mode: skip the canvas-fingerprint atlas so
     // page text renders natively (see DriftstackAsciiAtlas::mapAtlas for rationale).
-    if (const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE"); db && db[0] == '1') {
-        WTFLogAlways("[Driftstack] CompositeAtlas: load suppressed (DRIFTSTACK_DIRECT_BROWSE=1) — native page-text render");
+    const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE");
+    const char* bm = getenv("DRIFTSTACK_BROWSE");
+    if ((db && db[0] == '1') || (bm && bm[0] == '1')) {
+        WTFLogAlways("[Driftstack] CompositeAtlas: load suppressed (browse render) — native page-text");
         return;
     }
 
