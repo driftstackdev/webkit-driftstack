@@ -48,6 +48,18 @@ DriftstackAsciiAtlas::~DriftstackAsciiAtlas()
 
 void DriftstackAsciiAtlas::mapAtlas()
 {
+    // Direct-browse (human inspection) mode: skip loading the canvas-fingerprint
+    // glyph atlas so live web-page text renders natively from the iOS font
+    // binaries. Atlas glyph substitution targets canvas-text bit-identity, but
+    // applied to ordinary page-text glyph runs it emits solid boxes for any
+    // (font,size,glyph) it doesn't cover. Empty atlas → every lookup misses →
+    // native CT render (readable). Production capture mode (env unset) loads
+    // normally so canvas fingerprint stays bit-identical.
+    if (const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE"); db && db[0] == '1') {
+        WTFLogAlways("[Driftstack] AsciiAtlas: load suppressed (DRIFTSTACK_DIRECT_BROWSE=1) — native page-text render");
+        return;
+    }
+
     const char* envPath = getenv("DRIFTSTACK_ASCII_ATLAS_PATH");
     const char* path = envPath ? envPath : kAsciiAtlasDefaultPath;
 
