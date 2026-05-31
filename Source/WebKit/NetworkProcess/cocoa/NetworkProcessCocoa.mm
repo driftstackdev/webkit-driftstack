@@ -91,6 +91,27 @@ void NetworkProcess::platformInitializeNetworkProcessCocoa(const NetworkProcessC
 {
     m_isParentProcessFullWebBrowserOrRunningTest = parameters.isParentProcessFullWebBrowserOrRunningTest;
 
+#if PLATFORM(DRIFTSTACK)
+    // Mirror the WebContent AppleLanguages override (WebProcessCocoa.mm §91.F) in
+    // the NetworkProcess so the Accept-Language header CFNetwork builds matches
+    // navigator.language(s). Without this, navigator.language follows
+    // DRIFTSTACK_APPLELANGUAGES but Accept-Language stays the Mac's system locale
+    // -> a JS-vs-header language MISMATCH (a loud fingerprint tell, e.g. geo-IP
+    // says France but the header says en-US). CFNetwork reads
+    // CFLocaleCopyPreferredLanguages -> NSArgumentDomain AppleLanguages; set it
+    // before any session is created. CFNetwork appends the bare-language fallback
+    // at q=0.9 itself, so a real iPhone's "en-US,en;q=0.9" shape is reproduced.
+    if (const char* langEnv = getenv("DRIFTSTACK_APPLELANGUAGES"); langEnv && langEnv[0]) {
+        RetainPtr<CFStringRef> langStr = adoptCF(CFStringCreateWithCString(nullptr, langEnv, kCFStringEncodingUTF8));
+        RetainPtr<CFArrayRef> langArr = adoptCF(CFStringCreateArrayBySeparatingStrings(nullptr, langStr.get(), CFSTR(",")));
+        RetainPtr<NSDictionary> existingArgs = [[NSUserDefaults standardUserDefaults] volatileDomainForName:NSArgumentDomain];
+        RetainPtr<NSMutableDictionary> newArgs = adoptNS([existingArgs mutableCopy]);
+        [newArgs setValue:(NSArray *)langArr.get() forKey:@"AppleLanguages"];
+        [[NSUserDefaults standardUserDefaults] setVolatileDomain:newArgs.get() forName:NSArgumentDomain];
+        WTFLogAlways("[Driftstack-§91.F.net] NetworkProcess AppleLanguages=%s set (Accept-Language follows navigator.language)", langEnv);
+    }
+#endif
+
     _CFNetworkSetATSContext(parameters.networkATSContext.get());
 
     m_uiProcessBundleIdentifier = parameters.uiProcessBundleIdentifier;

@@ -459,6 +459,10 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Fingerprint overrides:
             { "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE") },
             { "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE") },
+            // Locale: forward to BOTH WebContent (navigator.language via the
+            // AppleLanguages override) AND NetworkProcess (Accept-Language), so
+            // the JS language and the HTTP header never diverge.
+            { "DRIFTSTACK_APPLELANGUAGES", getenv("DRIFTSTACK_APPLELANGUAGES") },
             { "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", getenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP") },
             // Wave 29-397 V-MacCT-Realign.B.1.d.3 — env-var forwarding for
             // generic-font-keyword override (serif/sans-serif/monospace →
