@@ -3136,6 +3136,35 @@ void WebGL2RenderingContext::addMembersToOpaqueRoots(JSC::AbstractSlotVisitor& v
         addWebCoreOpaqueRoot(visitor, entry.get());
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Per-version profile (BS real-device 2026-05-30): WebGL2 uniform-block limits
+// jumped at Safari 26.5 — ≤26.4 → MAX_FRAGMENT/UNIFORM_BUFFER_BINDINGS/VERTEX
+// uniform-blocks = 12/24/12; ≥26.5 → 16/32/16 (Apple raised them; iPhone 17 family,
+// version-keyed not device-keyed — MAX_SAMPLES is the device-keyed one above). Read
+// the safari version once per WebContent process from DRIFTSTACK_ARCHETYPE
+// (e.g. "iphone17_ios18_7_safari26_4"); default (no archetype) = launch 26.4 → 12/24/12.
+static bool driftstackWebGLUniformBlocksV265Plus()
+{
+    static const bool s_v265plus = []() -> bool {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view sv(archetype);
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos)
+            return false;
+        sv.remove_prefix(pos + 6);
+        int major = 0, minor = 0;
+        size_t i = 0;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+        if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) ++i;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+        return major > 26 || (major == 26 && minor >= 5);
+    }();
+    return s_v265plus;
+}
+#endif
+
 WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
 {
     if (isContextLost())
@@ -3197,7 +3226,7 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_BLOCKS:
 #if PLATFORM(DRIFTSTACK)
-        return 12;
+        return driftstackWebGLUniformBlocksV265Plus() ? 16 : 12;
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_COMPONENTS:
@@ -3260,7 +3289,7 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_UNIFORM_BUFFER_BINDINGS:
 #if PLATFORM(DRIFTSTACK)
-        return 24;
+        return driftstackWebGLUniformBlocksV265Plus() ? 32 : 24;
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VARYING_COMPONENTS:
@@ -3275,7 +3304,7 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_BLOCKS:
 #if PLATFORM(DRIFTSTACK)
-        return 12;
+        return driftstackWebGLUniformBlocksV265Plus() ? 16 : 12;
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_COMPONENTS:
