@@ -1799,7 +1799,19 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         }
     }
 
-    if (!perSessionSOCKS5) {
+    if (driftstackDirectBrowse && !perSessionSOCKS5 && getenv("DRIFTSTACK_SOCKS5_PROXY") && getenv("DRIFTSTACK_SOCKS5_PROXY")[0]) {
+        // Direct-browse means truly direct: DRIFTSTACK_DIRECT_BROWSE=1 must
+        // suppress the EG-WK-1.1 env-var SOCKS5 fallback too, not just the
+        // per-session proxy dict cleared above. Otherwise an inherited (often
+        // stale/dead) DRIFTSTACK_SOCKS5_PROXY gets injected and every request
+        // dies at the proxy -> blank pages, defeating the whole direct-browse
+        // mode. Skip the env fallback entirely here.
+        static bool loggedDirectSkipOnce = false;
+        if (!loggedDirectSkipOnce) {
+            loggedDirectSkipOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.1] env-fallback SOCKS5 SKIPPED — DRIFTSTACK_DIRECT_BROWSE=1 (truly direct egress, no proxy)");
+        }
+    } else if (!perSessionSOCKS5) {
         // EG-WK-1.1 env-var fallback path. Activates when no per-session
         // SOCKS5 config provided. Useful for harness-level global proxy
         // (single-session deploys, dev/test fixtures).
