@@ -26,6 +26,8 @@
 #include "config.h"
 #include "HTMLElement.h"
 
+#include "Autocapitalize.h" // self-guarded; provides stringForAutocapitalizeType / autocapitalizeTypeForAttributeValue on the fork
+
 #include "AXObjectCache.h"
 #include "CSSMarkup.h"
 #include "CSSParserFastPaths.h"
