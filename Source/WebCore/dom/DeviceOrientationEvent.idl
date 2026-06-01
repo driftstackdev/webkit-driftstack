@@ -34,9 +34,11 @@
 
     [CallWith=CurrentDocument, EnabledBySetting=DeviceOrientationPermissionAPIEnabled] static Promise<DeviceOrientationOrMotionPermissionState> requestPermission();
 
-    // FIXME: Consider defining an ENABLE macro for iOS device orientation code and/or modifying
-    // the bindings scripts to support generating more complicated conditional code.
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+    // This fork is always built as PLATFORM(DRIFTSTACK) (iPhone emulation) and the IDL preprocessor does NOT see
+    // WTF_PLATFORM_DRIFTSTACK (only the C++ compile does), so the original `#if WTF_PLATFORM_IOS_FAMILY` always took
+    // the desktop `#else` (absolute) branch in the generated binding — mismatching the C++ (compass) branch.
+    // A real iPhone exposes webkitCompassHeading/webkitCompassAccuracy and NO `absolute`; emit that unconditionally
+    // (the C++ uses PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK), i.e. the compass impl, on this fork).
     [ImplementedAs=compassHeading] readonly attribute unrestricted double? webkitCompassHeading;
     [ImplementedAs=compassAccuracy] readonly attribute unrestricted double? webkitCompassAccuracy;
     undefined initDeviceOrientationEvent(optional [AtomString] DOMString type = "",
@@ -47,14 +49,4 @@
                                     optional unrestricted double? gamma = null,
                                     optional unrestricted double? compassHeading = null,
                                     optional unrestricted double? compassAccuracy = null);
-#else
-    readonly attribute boolean? absolute;
-    undefined initDeviceOrientationEvent(optional [AtomString] DOMString type = "",
-                                    optional boolean bubbles = false,
-                                    optional boolean cancelable = false,
-                                    optional unrestricted double? alpha = null,
-                                    optional unrestricted double? beta = null,
-                                    optional unrestricted double? gamma = null,
-                                    optional boolean? absolute = null);
-#endif
 };

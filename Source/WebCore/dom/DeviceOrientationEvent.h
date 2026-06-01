@@ -54,7 +54,7 @@ public:
     std::optional<double> NODELETE beta() const;
     std::optional<double> NODELETE gamma() const;
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     std::optional<double> compassHeading() const;
     std::optional<double> compassAccuracy() const;
 
