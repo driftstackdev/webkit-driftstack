@@ -36,8 +36,10 @@
 #include <WebCore/DoublePoint.h>
 #include <WebCore/EventTarget.h>
 #include <WebCore/LayoutPoint.h>
+#include <wtf/MathExtras.h>
 #include <wtf/RefCounted.h>
 #include <wtf/RefPtr.h>
+#include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
@@ -68,6 +70,13 @@ public:
     float webkitRotationAngle() const { return m_rotationAngle; }
     double twist() const { return m_twist; }
     float webkitForce() const { return m_force; }
+    // iOS-only standard Touch fields. The unprefixed force/radiusX/radiusY/rotationAngle are exposed in
+    // Touch.idl via [ImplementedAs=webkit*] (same data, iOS names); these 3 are additions iOS exposes.
+    // Finger-touch (non-stylus) defaults: altitudeAngle π/2, azimuthAngle 0 (matches the real iPhone-17
+    // PointerEvent defaults captured 2026-06-01), touchType "direct" ("stylus" is Apple-Pencil-only).
+    double altitudeAngle() const { return piOverTwoDouble; }
+    double azimuthAngle() const { return 0; }
+    String touchType() const { return "direct"_s; }
     const DoublePoint& absoluteLocation() const LIFETIME_BOUND { return m_absoluteLocation; }
     Ref<Touch> cloneWithNewTarget(EventTarget*) const;
 
