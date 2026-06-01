@@ -47,6 +47,7 @@
 #include "platform/graphics/cocoa/DriftstackAudioAtlas.h"
 #include "AudioNodeInput.h"
 #include "BiquadFilterNode.h"
+#include "DynamicsCompressorNode.h"
 #include "GainNode.h"
 #include "OscillatorNode.h"
 #include <CommonCrypto/CommonDigest.h>
@@ -386,6 +387,24 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
                         canon.append(FormattedNumber::fixedWidth(bq->gain().value(), 6));
                         canon.append(':');
                         canon.append(FormattedNumber::fixedWidth(bq->detune().value(), 6));
+                    }
+                    break;
+                case AudioNode::NodeTypeDynamicsCompressor:
+                    // Wave 29-3xx: serialize the DynamicsCompressor params so graphs that differ ONLY in
+                    // their compressor (e.g. FingerprintJS thr-50/knee40/attack0 vs a default
+                    // createDynamicsCompressor() thr-24/attack0.003) hash distinctly. Without this the
+                    // compressor fell into default:'?' below, so every compressor config produced the same
+                    // graph digest → graph-key miss → entryByShape returned one fixed entry for all configs.
+                    if (auto* comp = dynamicDowncast<DynamicsCompressorNode>(node)) {
+                        canon.append(FormattedNumber::fixedWidth(comp->threshold().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(comp->knee().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(comp->ratio().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(comp->attack().value(), 6));
+                        canon.append(':');
+                        canon.append(FormattedNumber::fixedWidth(comp->release().value(), 6));
                     }
                     break;
                 default:
