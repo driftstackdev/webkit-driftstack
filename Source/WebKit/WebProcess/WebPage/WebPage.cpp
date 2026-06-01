@@ -5097,6 +5097,21 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setFullScreenEnabled(false);
     settings.setCSSScrollAnchoringEnabled(false);
 
+    // Wave 29-4xx mobile-shape DROP — desktop-only APIs a real iPhone Safari does NOT expose
+    // (verified vs real iPhone-17 /aio 2026-06-01: the mobileAuth probe reports these present on
+    // the fork but ABSENT on a real iPhone; version-invariant per W45). Both are setting-gated, so
+    // disabling the setting removes the API surface via the IDL [EnabledBySetting] gate — same
+    // pattern as the hides above, no IDL change needed:
+    //  - getDisplayMedia is [EnabledBySetting=ScreenCaptureEnabled]; iOS Safari has no screen
+    //    capture. This is ALSO the lone cross-signal-coherence failure (W30).
+    //  - the GamepadHapticActuator interface is [EnabledBySetting=GamepadVibrationActuatorEnabled].
+#if ENABLE(MEDIA_STREAM)
+    settings.setScreenCaptureEnabled(false);
+#endif
+#if ENABLE(GAMEPAD)
+    settings.setGamepadVibrationActuatorEnabled(false);
+#endif
+
     // Wave 29-406 §11.A.13 — Touch event DOM attributes (ontouchstart etc.).
     // Mac fork DRIFTSTACK_TOUCH_STUBS gate makes the IDL accessors compile;
     // TouchEventDOMAttributesEnabled defaults to screenHasTouchDevice()
