@@ -926,7 +926,7 @@ RefPtr<NodeList> HTMLElement::labels()
     return ensureRareData().ensureNodeLists().addCacheWithAtomName<LabelsNodeList>(*this, starAtom());
 }
 
-#if ENABLE(AUTOCAPITALIZE)
+#if ENABLE(AUTOCAPITALIZE) || PLATFORM(DRIFTSTACK)
 
 const AtomString& HTMLElement::autocapitalize() const
 {
@@ -940,7 +940,7 @@ AutocapitalizeType HTMLElement::autocapitalizeType() const
 
 #endif
 
-#if ENABLE(AUTOCORRECT)
+#if ENABLE(AUTOCORRECT) || PLATFORM(DRIFTSTACK)
 
 bool HTMLElement::shouldAutocorrect() const
 {

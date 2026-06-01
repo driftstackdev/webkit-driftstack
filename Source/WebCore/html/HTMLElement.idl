@@ -45,7 +45,7 @@
     readonly attribute DOMString accessKeyLabel;
     [CEReactions=Needed] attribute boolean draggable;
     [CEReactions=Needed] attribute boolean spellcheck;
-    [Conditional=AUTOCAPITALIZE, CEReactions=Needed, ReflectSetter] attribute [AtomString] DOMString autocapitalize;
+    [CEReactions=Needed, ReflectSetter] attribute [AtomString] DOMString autocapitalize; // Conditional removed: fork is always PLATFORM(DRIFTSTACK), C++ gate OR'd with it
 
     [CEReactions=Needed] attribute [LegacyNullToEmptyString] DOMString innerText;
 
@@ -63,7 +63,7 @@
     [CEReactions=Needed] attribute [LegacyNullToEmptyString] DOMString outerText;
 
     // Non-standard: iOS extension.
-    [Conditional=AUTOCORRECT, CEReactions=Needed] attribute boolean autocorrect;
+    [CEReactions=Needed] attribute boolean autocorrect; // Conditional removed (see autocapitalize)
 
     // Non-standard: We are the only browser to support this now that Blink dropped it (http://crbug.com/688943).
     [CEReactions=Needed, Reflect] attribute DOMString webkitdropzone;

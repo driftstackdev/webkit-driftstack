@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if ENABLE(AUTOCAPITALIZE)
+#if ENABLE(AUTOCAPITALIZE) || PLATFORM(DRIFTSTACK)
 
 #include <WebCore/AutocapitalizeTypes.h>
 #include <wtf/text/AtomString.h>

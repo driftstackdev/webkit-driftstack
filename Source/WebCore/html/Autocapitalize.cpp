@@ -26,7 +26,7 @@
 #include "config.h"
 #include "Autocapitalize.h"
 
-#if ENABLE(AUTOCAPITALIZE)
+#if ENABLE(AUTOCAPITALIZE) || PLATFORM(DRIFTSTACK)
 
 #include "CommonAtomStrings.h"
 #include <wtf/NeverDestroyed.h>

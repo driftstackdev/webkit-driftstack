@@ -118,12 +118,12 @@ public:
     bool NODELETE canBeActuallyDisabled() const;
     virtual bool isActuallyDisabled() const;
 
-#if ENABLE(AUTOCAPITALIZE)
+#if ENABLE(AUTOCAPITALIZE) || PLATFORM(DRIFTSTACK)
     WEBCORE_EXPORT virtual AutocapitalizeType autocapitalizeType() const;
     WEBCORE_EXPORT const AtomString& autocapitalize() const;
 #endif
 
-#if ENABLE(AUTOCORRECT)
+#if ENABLE(AUTOCORRECT) || PLATFORM(DRIFTSTACK)
     bool autocorrect() const { return shouldAutocorrect(); }
     WEBCORE_EXPORT virtual bool shouldAutocorrect() const;
     WEBCORE_EXPORT void setAutocorrect(bool);
