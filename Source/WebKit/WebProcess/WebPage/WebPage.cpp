@@ -5105,11 +5105,17 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     //  - getDisplayMedia is [EnabledBySetting=ScreenCaptureEnabled]; iOS Safari has no screen
     //    capture. This is ALSO the lone cross-signal-coherence failure (W30).
     //  - the GamepadHapticActuator interface is [EnabledBySetting=GamepadVibrationActuatorEnabled].
+    //  - the whole Pointer Lock surface (Element.requestPointerLock + Document.exitPointerLock/
+    //    pointerLockElement/onpointerlockchange/onpointerlockerror) is [EnabledBySetting=PointerLockEnabled];
+    //    its default is already false on PLATFORM(IOS_FAMILY) but true on this fork (DRIFTSTACK), so force false.
 #if ENABLE(MEDIA_STREAM)
     settings.setScreenCaptureEnabled(false);
 #endif
 #if ENABLE(GAMEPAD)
     settings.setGamepadVibrationActuatorEnabled(false);
+#endif
+#if ENABLE(POINTER_LOCK)
+    settings.setPointerLockEnabled(false);
 #endif
 
     // Wave 29-406 §11.A.13 — Touch event DOM attributes (ontouchstart etc.).
