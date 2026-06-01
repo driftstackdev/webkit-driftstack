@@ -41,6 +41,10 @@
     readonly attribute boolean shiftKey;
     readonly attribute boolean altKey;
     readonly attribute boolean metaKey;
+    // iOS multi-touch gesture fields + legacy init (match real iPhone TouchEvent prototype).
+    readonly attribute float rotation;
+    readonly attribute float scale;
+    undefined initTouchEvent();
 };
 
 dictionary TouchEventInit : EventModifierInit {

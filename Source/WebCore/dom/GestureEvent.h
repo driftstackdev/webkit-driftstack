@@ -35,6 +35,15 @@ public:
 
     float scale() const { return 1.0f; }
     float rotation() const { return 0.0f; }
+    // iOS GestureEvent also exposes MouseEvent-like geometry/modifier fields + the legacy initGestureEvent
+    // (verified vs real iPhone-17 apiEnum.proto.GestureEvent, 2026-06-01: the fork lacked these 9 names).
+    // clientX/clientY/screenX/screenY are inherited virtuals (base returns 0 for a position-less event) — the IDL
+    // attributes bind to those; only the modifier flags + the presence-only legacy init are declared here.
+    bool ctrlKey() const { return false; }
+    bool altKey() const { return false; }
+    bool shiftKey() const { return false; }
+    bool metaKey() const { return false; }
+    void initGestureEvent() { }
 
     // Anchor declaration: vtable goes into GestureEvent.cpp.
     ~GestureEvent() override;

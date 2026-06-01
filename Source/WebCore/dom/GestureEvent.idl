@@ -17,4 +17,14 @@
 ] interface GestureEvent : UIEvent {
     readonly attribute float scale;
     readonly attribute float rotation;
+    // iOS GestureEvent geometry/modifier fields + legacy init (match real iPhone Touch/Gesture prototype).
+    readonly attribute double clientX;
+    readonly attribute double clientY;
+    readonly attribute double screenX;
+    readonly attribute double screenY;
+    readonly attribute boolean ctrlKey;
+    readonly attribute boolean altKey;
+    readonly attribute boolean shiftKey;
+    readonly attribute boolean metaKey;
+    undefined initGestureEvent();
 };

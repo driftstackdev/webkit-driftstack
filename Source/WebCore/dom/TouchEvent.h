@@ -65,6 +65,13 @@ public:
     TouchList* targetTouches() const { return m_targetTouches.get(); }
     TouchList* changedTouches() const { return m_changedTouches.get(); }
 
+    // iOS TouchEvent also exposes multi-touch rotation/scale + the legacy initTouchEvent (verified vs real
+    // iPhone-17 apiEnum.proto.TouchEvent, 2026-06-01: the fork lacked these 3). Default (non-gesture) values;
+    // legacy init is presence-only (modern code uses the constructor).
+    float rotation() const { return 0.0f; }
+    float scale() const { return 1.0f; }
+    void initTouchEvent() { }
+
     void setTouches(RefPtr<TouchList>&& touches) { m_touches = touches; }
     void setTargetTouches(RefPtr<TouchList>&& targetTouches) { m_targetTouches = targetTouches; }
     void setChangedTouches(RefPtr<TouchList>&& changedTouches) { m_changedTouches = changedTouches; }
