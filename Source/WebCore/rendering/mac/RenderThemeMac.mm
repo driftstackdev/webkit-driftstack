@@ -466,6 +466,22 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
     const bool useDarkAppearance = options.contains(StyleColorOptions::UseDarkAppearance);
     const bool forVisitedLink = options.contains(StyleColorOptions::ForVisitedLink);
 
+#if PLATFORM(DRIFTSTACK)
+    // iPhone form-control palette: Mac's NSColor resolutions of these -apple-system colors diverge from iOS.
+    // -apple-system-label is OPAQUE on iOS (UIColor.label: rgb(0,0,0) light / rgb(255,255,255) dark) where Mac
+    // returns 85% (NSColor.labelColor = rgba(0,0,0,0.847)); -apple-system-opaque-secondary-fill is opaque
+    // rgb(233,233,234) on iOS where Mac returns the RAW translucent fill (rgba(0,0,0,0.08), no makeOpaque flatten).
+    // Buttons/selects resolve text via buttonTextColor→label and bg via html.css→opaque-secondary-fill, so these
+    // fix the form-control text/bg to match a real iPhone. Set the iOS values DIRECTLY — NOT a flatten of the Mac
+    // base (W226 proved flattening the Mac fill gives rgb(235,235,235) ≠ the iOS rgb(233,233,234)). Light values
+    // VERIFIED vs reference uastylesheet-iPhone_17; label-dark = the documented opaque UIColor.label; the fill's
+    // dark falls through to Mac (residual, pending a real-device dark-mode capture).
+    if (cssValueID == CSSValueAppleSystemLabel)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 255, 255 } } : Color { SRGBA<uint8_t> { 0, 0, 0 } };
+    if (!useDarkAppearance && cssValueID == CSSValueAppleSystemOpaqueSecondaryFill)
+        return SRGBA<uint8_t> { 233, 233, 234 };
+#endif
+
     auto& cache = colorCache(options);
 
     if (useSystemAppearance) {
