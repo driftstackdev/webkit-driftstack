@@ -350,6 +350,13 @@ void LineBoxBuilder::setLayoutBoundsForInlineBox(InlineLevelBox& inlineBox, Font
                         halfLeading = std::round(halfLeading);
                     else if (env[0] == '1')
                         halfLeading = std::round(halfLeading);
+                    else if (env[0] == 'e' || env[0] == 'E') {
+                        // W336: round-half-to-EVEN (banker's rounding). The P-track
+                        // #46 iOS targets are exactly this — cjk 17.5→18, emoji
+                        // 18.5→18, family 18.5→18, flag 18.0→18 — which ceil/round
+                        // (away-from-zero: 18.5→19) miss but half-to-even matches.
+                        halfLeading = std::nearbyint(halfLeading);
+                    }
                 }
 #endif
                 ascent += halfLeading;
