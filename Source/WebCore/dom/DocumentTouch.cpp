@@ -26,7 +26,7 @@
 #include "config.h"
 #include "DocumentTouch.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "Document.h"
 #include "FrameDestructionObserverInlines.h"

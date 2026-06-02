@@ -1273,7 +1273,7 @@ dom/DocumentOrShadowRootFullscreen.cpp
 dom/DocumentParser.cpp
 dom/DocumentSharedObjectPool.cpp
 dom/DocumentStorageAccess.cpp
-dom/DocumentTouch.cpp @no-unify
+dom/DocumentTouch.cpp
 dom/DocumentType.cpp
 dom/DragEvent.cpp
 dom/Element.cpp @header:RenderStyleGetters

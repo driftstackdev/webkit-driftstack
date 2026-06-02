@@ -1155,6 +1155,7 @@ JS_BINDING_IDLS := \
     $(WebCore)/dom/DeviceOrientationEvent.idl \
     $(WebCore)/dom/DeviceOrientationOrMotionPermissionState.idl \
     $(WebCore)/dom/Document.idl \
+    $(WebCore)/dom/Document+Touch.idl \
     $(WebCore)/dom/Document+CSSOMView.idl \
     $(WebCore)/dom/Document+CaretPositionFromPoint.idl \
     $(WebCore)/dom/Document+Fullscreen.idl \
