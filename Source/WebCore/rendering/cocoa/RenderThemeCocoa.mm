@@ -4808,7 +4808,13 @@ float RenderThemeCocoa::adjustedMaximumLogicalWidthForControl(const RenderStyle&
 
 void RenderThemeCocoa::adjustCheckboxStyle(RenderStyle& style, const Element* element) const
 {
-#if ENABLE(FORM_CONTROL_REFRESH)
+    // PLATFORM(DRIFTSTACK): shipping Safari 26.4 ships with FORM_CONTROL_REFRESH disabled, so it does NOT
+    // reset the border here — the iOS UA-stylesheet border-radius (html.css: checkbox 5px) survives into
+    // getComputedStyle(...).borderRadius. The fork builds with refresh defaulting true (Cocoa); calling
+    // resetBorder() would wipe it to 0px, a uaStylesheet fingerprint divergence vs a real iPhone. The
+    // `&& !PLATFORM(DRIFTSTACK)` guard skips only this reset (NOT the global refresh — that regressed
+    // button/search, W206), keeping the computed border-radius bit-identical. Size already matches (W201/W203).
+#if ENABLE(FORM_CONTROL_REFRESH) && !PLATFORM(DRIFTSTACK)
     if (formControlRefreshEnabled(element))
         style.resetBorder();
 #endif
@@ -4828,7 +4834,10 @@ bool RenderThemeCocoa::paintCheckbox(const RenderElement& box, const PaintInfo& 
 
 void RenderThemeCocoa::adjustRadioStyle(RenderStyle& style, const Element* element) const
 {
-#if ENABLE(FORM_CONTROL_REFRESH)
+    // PLATFORM(DRIFTSTACK): same as adjustCheckboxStyle — skip the refresh resetBorder() so the iOS
+    // UA-stylesheet border-radius (html.css: radio 50%) survives into getComputedStyle(...).borderRadius
+    // bit-identical to a real iPhone (shipping Safari 26.4 has FORM_CONTROL_REFRESH off; fork defaults it on).
+#if ENABLE(FORM_CONTROL_REFRESH) && !PLATFORM(DRIFTSTACK)
     if (formControlRefreshEnabled(element))
         style.resetBorder();
 #endif
