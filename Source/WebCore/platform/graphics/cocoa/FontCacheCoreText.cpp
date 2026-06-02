@@ -445,41 +445,21 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // family names (identical width=160.0625 / fBBA=14 / fBBD=4 metrics
     // when CSS asks for them on iPhone).
     //
-    // Wave 29-407.7 (2026-05-20): family-of-archetype detection. Empirical
-    // (BS Automate 5/5 captures) iPhone Safari 18.6 (Family A) does NOT
-    // detect these 4 Indic-script fonts as present (per offsetWidth probe).
-    // The Helvetica alias above PRODUCES a false positive on Family A
-    // (Mac fork renders with Helvetica metrics ≠ monospace baseline, so
-    // detection triggers as present). For Family A archetypes, return
-    // nullptr instead so the natural cascade falls through to monospace
-    // baseline (matches iPhone Safari 18.6).
-    static const bool s_isFamilyAArchetype = []() {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return false;
-        std::string_view sv(archetype);
-        return sv.find("safari17_") != std::string_view::npos
-            || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari20_") != std::string_view::npos
-            || sv.find("safari21_") != std::string_view::npos
-            || sv.find("safari22_") != std::string_view::npos
-            || sv.find("safari23_") != std::string_view::npos
-            || sv.find("safari24_") != std::string_view::npos
-            || sv.find("safari25_") != std::string_view::npos;
-    }();
-    if (s_isFamilyAArchetype) {
-        if (lowercase == "gujarati sangam mn"_s
-            || lowercase == "oriya sangam mn"_s
-            || lowercase == "plantagenet cherokee"_s
-            || lowercase == "gurmukhi mn"_s)
-            return nullptr;
-    }
-    if (lowercase == "kefa"_s
-        || lowercase == "gujarati sangam mn"_s
+    // W208: the 4 fonts below (Gujarati Sangam MN / Oriya Sangam MN / Plantagenet
+    // Cherokee / Gurmukhi MN) are absent on EVERY real iPhone version (26.5, 18.6,
+    // 17.1.1 — close-list §1) → genuine fork over-detection. Exclude them
+    // UNCONDITIONALLY (was Family-A-only via s_isFamilyAArchetype, a stale gate from
+    // when Family A was the launch; the launch is now Family B iphone17 26.4, which
+    // skipped the gate → hit the helvetica alias below → rendered as a real font →
+    // detected). Returning nullptr → a CSS `"Gujarati Sangam MN", monospace` request
+    // falls back to the SPECIFIED fallback → matches the width-detection baseline →
+    // not over-detected, matching a real iPhone.
+    if (lowercase == "gujarati sangam mn"_s
         || lowercase == "oriya sangam mn"_s
         || lowercase == "plantagenet cherokee"_s
         || lowercase == "gurmukhi mn"_s)
+        return nullptr;
+    if (lowercase == "kefa"_s)
         lowercase = "helvetica"_s;
     // V-479 Times-family alias (V-442 TRIGGER C closure 2026-05-08):
     // iOS Stage B install ships TimesNewRoman.ttf, registered under
