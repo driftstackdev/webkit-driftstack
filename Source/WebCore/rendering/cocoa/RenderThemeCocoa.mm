@@ -3336,7 +3336,12 @@ bool RenderThemeCocoa::adjustButtonStyleForVectorBasedControls(RenderStyle& styl
             style.setColor(buttonTextColor(styleColorOptions, isEnabled));
     }
 
-#if PLATFORM(IOS_FAMILY)
+// PLATFORM(DRIFTSTACK): the fork builds the refresh path with FORM_CONTROL_REFRESH on; its #else Mac
+// branch yields button min-height 15px + padding 6px, but a real iPhone is min-height 20px + 1em(11px)
+// padding (height follows to 20px). Take the IOS_FAMILY sizing branch (ControlBaseHeight/FontSize → 20px,
+// 1em padding) so the button family's computed min-height/padding/height is bit-identical to a real iPhone.
+// Verified vs reference/realdevice-bs/uastylesheet-iPhone_17. (bg/radius/color are separate sub-surfaces.)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     constexpr auto controlBaseHeight = 20.0f;
     constexpr auto controlBaseFontSize = 11.0f;
 
