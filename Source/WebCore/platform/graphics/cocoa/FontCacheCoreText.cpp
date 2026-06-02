@@ -46,7 +46,9 @@
 #include <pal/spi/cocoa/AccessibilitySupportSPI.h>
 #if PLATFORM(DRIFTSTACK)
 #include <dirent.h>
+#include <fcntl.h>
 #include <string>
+#include <unistd.h>
 #include <sys/stat.h>
 #endif
 #include <wtf/HashSet.h>
@@ -111,6 +113,164 @@ static MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& 
 
 static bool driftstackIOSFontMapInitialized WTF_GUARDED_BY_LOCK(driftstackIOSFontMapLock) = false;
 
+// W332 (#26b) — build {family-name → [all sibling family names of that face]}
+// by reading the sfnt 'name' table DIRECTLY from a FONTS_DIR font file (TTF/OTF
+// single or TTC collection), via bounded positioned reads. Every nameID=1 (and
+// qualifying nameID=16) name of a face is cross-linked to all the others, so a
+// descriptor matched on its English family resolves the localized/abbreviated
+// siblings. WHY direct-from-binary: CTFontCreateWithFontDescriptor resolves a
+// FONTS_DIR descriptor whose PostScript name collides with an already-
+// registered Mac SYSTEM font (e.g. Hiragino) to the SYSTEM font, whose name
+// table lacks the iOS localized records (ヒラギノ角ゴシック); and the descriptor
+// array is NOT 1:1 with ttc face order, so we cannot index by it. Faces whose
+// PostScript name is dot-prefixed (.AppleSystemUIFont / .PingFang UI …) are
+// skipped entirely, so the hidden system UI font's localized names
+// (Systeemlettertype / 系统字体 …) can never over-register. The CJK collections
+// are 19-139 MB, so we pread only the header, table directory and name table.
+static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<String, Vector<String>>& out)
+{
+    int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0)
+        return;
+    auto readAt = [&](off_t off, size_t len) -> Vector<uint8_t> {
+        Vector<uint8_t> buf(len);
+        if (len) {
+            ssize_t got = pread(fd, buf.mutableSpan().data(), len, off);
+            if (got < 0 || static_cast<size_t>(got) != len)
+                buf.clear();
+        }
+        return buf;
+    };
+    auto be16 = [](std::span<const uint8_t> s, size_t o) -> unsigned {
+        return (static_cast<unsigned>(s[o]) << 8) | s[o + 1];
+    };
+    auto be32 = [](std::span<const uint8_t> s, size_t o) -> uint32_t {
+        return (static_cast<uint32_t>(s[o]) << 24) | (static_cast<uint32_t>(s[o + 1]) << 16)
+            | (static_cast<uint32_t>(s[o + 2]) << 8) | s[o + 3];
+    };
+
+    Vector<off_t> faceDirs;
+    auto head = readAt(0, 12);
+    if (head.size() < 12) {
+        close(fd);
+        return;
+    }
+    if (head[0] == 't' && head[1] == 't' && head[2] == 'c' && head[3] == 'f') {
+        uint32_t numFonts = be32(head.span(), 8);
+        if (numFonts > 1024)
+            numFonts = 1024; // sanity
+        auto offs = readAt(12, static_cast<size_t>(numFonts) * 4);
+        if (offs.size() == static_cast<size_t>(numFonts) * 4) {
+            for (uint32_t k = 0; k < numFonts; ++k)
+                faceDirs.append(static_cast<off_t>(be32(offs.span(), static_cast<size_t>(k) * 4)));
+        }
+    } else
+        faceDirs.append(0);
+
+    for (off_t dirOffset : faceDirs) {
+        auto dirHead = readAt(dirOffset, 12);
+        if (dirHead.size() < 12)
+            continue;
+        unsigned numTables = be16(dirHead.span(), 4);
+        auto tableDir = readAt(dirOffset + 12, static_cast<size_t>(numTables) * 16);
+        if (tableDir.size() != static_cast<size_t>(numTables) * 16)
+            continue;
+        uint32_t nameOff = 0;
+        uint32_t nameLen = 0;
+        for (unsigned t = 0; t < numTables; ++t) {
+            size_t e = static_cast<size_t>(t) * 16;
+            if (tableDir[e] == 'n' && tableDir[e + 1] == 'a' && tableDir[e + 2] == 'm' && tableDir[e + 3] == 'e') {
+                nameOff = be32(tableDir.span(), e + 8);
+                nameLen = be32(tableDir.span(), e + 12);
+                break;
+            }
+        }
+        if (!nameLen || nameLen >= (1u << 24))
+            continue;
+        auto nameData = readAt(nameOff, nameLen);
+        if (nameData.size() < 6)
+            continue;
+        auto ns = nameData.span();
+        unsigned recCount = be16(ns, 2);
+        size_t storageOffset = be16(ns, 4);
+        String facePS;
+        // Family names from this face. nameID=1 (Font Family) is always taken.
+        // nameID=16 (Typographic Family) carries the BARE iOS family that the
+        // weighted nameID=1 lacks ('ヒラギノ明朝 Pro' vs 'ヒラギノ明朝 Pro W3') — but
+        // is taken ONLY when the SAME (platform,language) also has a nameID=1
+        // record. That gate matches what iOS exposes: Hiragino has BOTH a JP
+        // nameID=1 and a JP nameID=16 (lid 1041) → the bare JP name is exposed;
+        // AppleSDGothicNeo has only an EN nameID=1 (pid=1) + a KO-only nameID=16
+        // (lid 1042) → iOS does NOT expose 'Apple SD 산돌고딕 Neo', so we skip it.
+        // Cross-linked: every kept name keys → all of them.
+        Vector<String> names;
+        Vector<uint32_t> id1Langs; // (platformID<<16 | languageID) of nameID=1 records
+        struct TypoCand { String name; uint32_t lang; };
+        Vector<TypoCand> id16Cands;
+        for (unsigned r = 0; r < recCount; ++r) {
+            size_t recPos = 6 + static_cast<size_t>(r) * 12;
+            if (recPos + 12 > nameData.size())
+                break;
+            unsigned nameID = be16(ns, recPos + 6);
+            if (nameID != 1 && nameID != 6 && nameID != 16) // 1=Family, 6=PostScript, 16=Typographic Family
+                continue;
+            unsigned platformID = be16(ns, recPos + 0);
+            unsigned encodingID = be16(ns, recPos + 2);
+            unsigned languageID = be16(ns, recPos + 4);
+            // Mac platform (1) records: only Roman (eid=0) decodes correctly
+            // as MacRoman; Mac-Japanese/Chinese/etc. (eid≠0) would be mojibake
+            // (the real CJK names live in the pid=3 UTF-16 records).
+            if (platformID == 1 && encodingID)
+                continue;
+            unsigned strLen = be16(ns, recPos + 8);
+            size_t sPos = storageOffset + be16(ns, recPos + 10);
+            if (!strLen || sPos + strLen > nameData.size())
+                continue;
+            CFStringEncoding enc = (platformID == 1) ? kCFStringEncodingMacRoman : kCFStringEncodingUTF16BE;
+            auto sb = ns.subspan(sPos, strLen);
+            RetainPtr<CFStringRef> cf = adoptCF(CFStringCreateWithBytes(kCFAllocatorDefault, sb.data(), sb.size(), enc, false));
+            if (!cf)
+                continue;
+            String s = String(cf.get());
+            if (s.isEmpty())
+                continue;
+            if (nameID == 6) {
+                if (facePS.isEmpty())
+                    facePS = s.convertToASCIILowercase();
+                continue;
+            }
+            if (s.startsWith('.'))
+                continue;
+            String lk = s.convertToASCIILowercase();
+            if (lk.isEmpty())
+                continue;
+            uint32_t lang = (static_cast<uint32_t>(platformID) << 16) | languageID;
+            if (nameID == 1) {
+                if (!names.contains(lk))
+                    names.append(lk);
+                if (!id1Langs.contains(lang))
+                    id1Langs.append(lang);
+            } else // nameID == 16
+                id16Cands.append(TypoCand { lk, lang });
+        }
+        for (const auto& cand : id16Cands) {
+            if (id1Langs.contains(cand.lang) && !names.contains(cand.name))
+                names.append(cand.name);
+        }
+        // Only non-hidden faces (PostScript name not dot-prefixed).
+        if (facePS.isEmpty() || facePS.startsWith('.') || names.isEmpty())
+            continue;
+        for (const String& key : names) {
+            auto& vec = out.ensure(key, [] { return Vector<String> { }; }).iterator->value;
+            for (const String& fam : names) {
+                if (!vec.contains(fam))
+                    vec.append(fam);
+            }
+        }
+    }
+    close(fd);
+}
+
 static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& map, size_t& mappedCount, size_t& parseFailedCount)
 {
     DIR* dir = opendir(root.c_str());
@@ -173,6 +333,14 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             continue;
         }
         CFIndex count = CFArrayGetCount(descs.get());
+
+        // W332 (#26b) — cross-linked family-name map for this binary's faces,
+        // read DIRECTLY from its sfnt name tables (see
+        // driftstackBuildLocalizedFamilyMap). Built once per file; looked up
+        // per descriptor by family name below.
+        HashMap<String, Vector<String>> localizedByFamily;
+        driftstackBuildLocalizedFamilyMap(fullPath, localizedByFamily);
+
         for (CFIndex i = 0; i < count; ++i) {
             CTFontDescriptorRef desc = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
             RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontFamilyNameAttribute)));
@@ -288,66 +456,28 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                 }
             }
 
-            // W330 (2026-06-02) — #26 CLOSE: register localized + abbreviated
-            // family-name aliases from the sfnt 'name' table (nameID=1, across
-            // ALL platform/language IDs). VERIFIED vs real iPhone 17 / Safari
-            // 26.x: iOS CoreText exposes per-language family names that Mac's
-            // kCTFontFamilyNameAttribute collapses to the single pid=1 ASCII
-            // name. Empirically (sfnt name-table dump of FONTS_DIR binaries):
-            //   Damascus.ttc nameID=1 pid=3 lid=3073 'دمشق', lid=1081
-            //     'दमिश्कश', lid=1056 'ڈیمسکس' (real iPhone exposes all three).
-            //   NotoSansCanadianAboriginal.otf nameID=1 pid=3 lid=1033
-            //     'Noto Sans CanAborig' — the abbreviated form iOS exposes,
-            //     distinct from nameID=16 'Noto Sans Canadian Aboriginal'.
-            // The fonts-full 3976 test (browserleaks 3564 + iOS-beyond) under-
-            // detected 88 names pre-fix; all resolve from this single source.
-            // Dot-prefixed PUA/internal names are skipped (iOS does not expose
-            // them as CSS-queryable families).
-            if (auto nameFont = adoptCF(CTFontCreateWithFontDescriptor(desc, 0, nullptr))) {
-                // Skip hidden/internal system fonts — including the case where
-                // CoreText realizes an unresolvable descriptor to the system UI
-                // font fallback. If the REALIZED font's PostScript name is dot-
-                // prefixed (.AppleSystemUIFont / .SF…), iOS exposes none of its
-                // names; without this guard the system font's localized nameID=1
-                // records ('Systeemlettertype', '系统字体', 'Системний шрифт', …)
-                // over-register as detectable families the real iPhone lacks.
-                bool hiddenSystemFont = false;
-                if (auto realizedPS = adoptCF(CTFontCopyPostScriptName(nameFont.get())))
-                    hiddenSystemFont = String(realizedPS.get()).startsWith('.');
-                if (!hiddenSystemFont) {
-                if (auto nameTable = adoptCF(CTFontCopyTable(nameFont.get(), kCTFontTableName, kCTFontTableOptionNoOptions))) {
-                    auto nameData = WTF::span(nameTable.get()); // bounds-safe std::span<const uint8_t>
-                    if (nameData.size() >= 6) {
-                        auto be16 = [&](size_t off) -> unsigned {
-                            return (static_cast<unsigned>(nameData[off]) << 8) | nameData[off + 1];
-                        };
-                        unsigned recCount = be16(2);
-                        size_t storageOffset = be16(4);
-                        for (unsigned r = 0; r < recCount; ++r) {
-                            size_t recPos = 6 + static_cast<size_t>(r) * 12;
-                            if (recPos + 12 > nameData.size())
-                                break;
-                            if (be16(recPos + 6) != 1) // nameID 1 = Font Family name
-                                continue;
-                            unsigned platformID = be16(recPos + 0);
-                            unsigned strLen = be16(recPos + 8);
-                            size_t sPos = storageOffset + be16(recPos + 10);
-                            if (!strLen || sPos + strLen > nameData.size())
-                                continue;
-                            CFStringEncoding enc = (platformID == 1) ? kCFStringEncodingMacRoman : kCFStringEncodingUTF16BE;
-                            auto strBytes = nameData.subspan(sPos, strLen);
-                            RetainPtr<CFStringRef> aliasCF = adoptCF(CFStringCreateWithBytes(kCFAllocatorDefault, strBytes.data(), strBytes.size(), enc, false));
-                            if (!aliasCF)
-                                continue;
-                            String aliasName = String(aliasCF.get());
-                            if (aliasName.isEmpty() || aliasName.startsWith('.'))
-                                continue;
-                            String aliasKey = aliasName.convertToASCIILowercase();
-                            if (!aliasKey.isEmpty() && !aliasKeys.contains(aliasKey))
-                                aliasKeys.append(aliasKey);
-                        }
+            // W330/W332 (#26/#26b) — register the localized + abbreviated family
+            // names iOS CoreText exposes that Mac's kCTFontFamilyNameAttribute
+            // collapses to the single pid=1 ASCII name. Read DIRECTLY from this
+            // binary's sfnt name tables (localizedByFamily, built above) and
+            // matched to this face by its English family name — NOT via
+            // CTFontCopyTable on a CTFont-realized font, which CoreText resolves
+            // to a same-PS-name Mac SYSTEM font (Hiragino) whose name table
+            // lacks the iOS localized records. Empirically (FONTS_DIR name
+            // tables): Damascus → 'دمشق'/'दमिश्कश'/'ڈیمسکس';
+            // NotoSansCanadianAboriginal → 'Noto Sans CanAborig'; Hiragino →
+            // 'ヒラギノ角ゴシック'…. Hidden system/UI faces (dot-prefixed PS) are
+            // excluded at build time, so the system UI font's localized names
+            // (Systeemlettertype / 系统字体 …) can never over-register. (PingFang's
+            // 苹方-简… are blocked separately by its CTFontManager parse-fail —
+            // founder-action-queue #26c.)
+            if (!family.isEmpty() && !family.startsWith('.')) {
+                auto it = localizedByFamily.find(family);
+                if (it != localizedByFamily.end()) {
+                    for (const String& alias : it->value) {
+                        if (!aliasKeys.contains(alias))
+                            aliasKeys.append(alias);
                     }
-                }
                 }
             }
 
