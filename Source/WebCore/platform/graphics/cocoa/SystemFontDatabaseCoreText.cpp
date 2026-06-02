@@ -461,7 +461,15 @@ static inline FontSelectionValue cssWeightOfSystemFontDescriptor(CTFontDescripto
 
 static CTFontTextStylePlatform NODELETE fontPlatform()
 {
-#if PLATFORM(VISION)
+#if PLATFORM(DRIFTSTACK)
+    // W250: the fork impersonates an iPhone, so the Apple text-style shorthands (-apple-system-body / -headline /
+    // -caption1 / …) MUST resolve to the iOS Dynamic Type metrics, not the macOS ones. CoreText's PlatformDefault
+    // picks the HOST platform (Mac → body ≈13.5px); forcing PlatformPhone yields the iPhone sizes (body 17px).
+    // Closes the FingerprintJS `fontPreferences.apple` gap (the -apple-system-body width: fork 121.72 vs real 153.53).
+    // The form-control font shorthands above use CTFontDescriptor-based items, NOT these text styles, so they are
+    // unaffected; plain `-apple-system` (no text-style) is likewise unaffected.
+    return kCTFontTextStylePlatformPhone;
+#elif PLATFORM(VISION)
     if (PAL::currentUserInterfaceIdiomIsVision())
         return kCTFontTextStylePlatformVision;
     return kCTFontTextStylePlatformPhone;
