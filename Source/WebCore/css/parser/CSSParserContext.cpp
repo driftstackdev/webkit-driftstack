@@ -162,8 +162,30 @@ CSSParserContext::CSSParserContext(const Settings& settings)
             || sv.find("safari24_") != std::string_view::npos
             || sv.find("safari25_") != std::string_view::npos;
     }();
-    if (!s_isFamilyAArchetype)
-        propertySettings.cssAnchorPositioningEnabled = true;
+    if (!s_isFamilyAArchetype) {
+        // V-527.A.1 follow-up (2026-06-02, W306): the original patch's comment
+        // listed `animation-timeline` among the pre-patch False properties but
+        // only force-enabled the anchor flag. `animation-timeline` is gated by
+        // scrollDrivenAnimationsEnabled, NOT cssAnchorPositioningEnabled, so this
+        // mirrors the same propertySettings force-true for Family B parity. This
+        // makes the animation-timeline PROPERTY parse (CSS.supports('animation-
+        // timeline: auto'/'none') === true, matching real iPhone 17/26.4).
+        //
+        // NOTE (verified W306, do NOT mistake this for a full fix): the remaining
+        // tracked CSS-feature divergences are UPSTREAM-VERSION implementation gaps
+        // in this WebCore base, NOT settings gaps, and this flag cannot close them:
+        //   - CSS.supports('animation-timeline: scroll()') stays False — the
+        //     scroll()/view() VALUE functions are unimplemented (auto/none parse).
+        //   - CSS.supports('anchor-name: none'/'--foo') stays False — the
+        //     anchor-name/position-anchor PROPERTIES are absent from the parser
+        //     entirely (even the initial value `none` fails), although the
+        //     anchor() function in inset props (top: anchor(top)) IS implemented.
+        // Real iPhone 17/26.4 returns all three True. Closure requires backporting
+        // those WebKit changes or rebasing the fork on a newer upstream. Tracked as
+        // founder-action-queue #21. No regression risk: scroll-timeline/view-
+        // timeline:foo stay False on both (invalid value), Family A respects Settings.
+        propertySettings.scrollDrivenAnimationsEnabled = true;
+    }
 #endif
 }
 
