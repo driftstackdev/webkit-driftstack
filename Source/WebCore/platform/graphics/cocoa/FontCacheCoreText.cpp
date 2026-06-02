@@ -454,20 +454,29 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // detected). Returning nullptr → a CSS `"Gujarati Sangam MN", monospace` request
     // falls back to the SPECIFIED fallback → matches the width-detection baseline →
     // not over-detected, matching a real iPhone.
+    // W232: Kefa joins the nullptr exclusion. Kefa is a macOS-only font absent on a real
+    // iPhone-17 (verified vs 5 real-device aio refs + BOTH font probes: browserleaks
+    // fonts.detected had Kefa as the lone fork-only entry, 171 vs real 170; exhaustiveBitmap
+    // Kefa present=fork-only). The OLD `kefa → helvetica` alias (below, now removed) resolved
+    // Kefa to a REAL font even when an explicit fallback was specified, so the browserleaks
+    // width-detection ("Kefa, monospace" vs "monospace") saw Kefa as PRESENT — a fork
+    // over-detection tell. Returning nullptr makes Kefa genuinely absent: "Kefa, monospace"
+    // falls to the specified monospace (not detected, matching iPhone), while a bare
+    // measureText("Kefa") still falls to the canvas default (Helvetica, width 160.0625 ==
+    // the real-device measureText value). Same mechanism as the 4 Indic fonts above.
     if (lowercase == "gujarati sangam mn"_s
         || lowercase == "oriya sangam mn"_s
         || lowercase == "plantagenet cherokee"_s
-        || lowercase == "gurmukhi mn"_s)
+        || lowercase == "gurmukhi mn"_s
+        || lowercase == "kefa"_s)
         return nullptr;
-    if (lowercase == "kefa"_s)
-        lowercase = "helvetica"_s;
     // V-479 Times-family alias (V-442 TRIGGER C closure 2026-05-08):
     // iOS Stage B install ships TimesNewRoman.ttf, registered under
     // family 'times new roman'. Mac CSS and CT_FONT_NAME 'Times'
     // doesn't directly map to it. iPhone resolves CSS 'Times' to
     // TimesNewRoman.ttf via family alias; mirror that here so V-442
     // Stage B audit moves Times from MAC_DEFAULT_FAIL → STAGE_B_PASS.
-    else if (lowercase == "times"_s)
+    if (lowercase == "times"_s)
         lowercase = "times new roman"_s;
     // V-433.X (wave 29-195) — iOS legacy `* Sangam MN` family-name alias
     // to the modern Kohinoor families. iOS Safari resolves these CSS
