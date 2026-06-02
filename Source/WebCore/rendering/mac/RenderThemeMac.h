@@ -63,6 +63,13 @@ public:
     Color platformInactiveListBoxSelectionForegroundColor(OptionSet<StyleColorOptions>) const final;
     Color platformFocusRingColor(OptionSet<StyleColorOptions>) const final;
     Color platformTextSearchHighlightColor(OptionSet<StyleColorOptions>) const final;
+#if PLATFORM(DRIFTSTACK)
+    // iPhone archetype: match RenderThemeIOS's tap-highlight (RenderThemeIOS.h: { 26, 26, 26, 77 }
+    // = rgba(26,26,26,0.30)). The Mac base returns rgba(0,0,0,0.4) — the lone remaining mobileAuth
+    // tell (uaStylesheet.div.webkitTapHighlightColor). Mirror the iOS value so
+    // getComputedStyle(...).webkitTapHighlightColor is bit-identical to a real iPhone.
+    Color platformTapHighlightColor() const final { return SRGBA<uint8_t> { 26, 26, 26, 77 }; }
+#endif
     Color platformAnnotationHighlightBackgroundColor(OptionSet<StyleColorOptions>) const final;
     Color platformDefaultButtonTextColor(OptionSet<StyleColorOptions>) const final;
     Color platformAutocorrectionReplacementMarkerColor(OptionSet<StyleColorOptions>) const final;
