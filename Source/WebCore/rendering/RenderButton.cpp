@@ -34,6 +34,7 @@
 #include "RenderElementInlines.h"
 #include "RenderStyle+SettersInlines.h"
 #include "RenderTheme.h"
+#include "StyleFillLayers.h"
 #include "RenderTreeBuilder.h"
 #include <wtf/TZoneMallocInlines.h>
 
@@ -174,9 +175,9 @@ void RenderButton::layout()
         auto& s = mutableStyle();
         auto appearance = s.usedAppearance();
         bool canAdjust = !(appearance == StyleAppearance::Base || appearance == StyleAppearance::None || appearance == StyleAppearance::SearchField);
-        // (iOS also skips when a bg image is present — a rare, custom-styled edge case; the default UA
-        // button has none, so this gate-pair suffices for the fingerprint-relevant default control.)
-        if (canAdjust && !s.hasExplicitlySetBorderRadius()) {
+        // W303: also skip when a bg image is present — the exact RenderThemeIOS.mm:430 gate, so a
+        // custom button with a background-image keeps its author radius (matching iOS), not the pill.
+        if (canAdjust && !s.hasExplicitlySetBorderRadius() && !Style::hasImageInAnyLayer(s.backgroundLayers())) {
             constexpr int largeButtonSize = 45;
             constexpr float largeButtonBorderRadiusRatio = 0.35f / 2;
             auto zoom = s.usedZoomForLength().value;
