@@ -1578,13 +1578,25 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
     // resolve it; Mac's PingFangUI.ttc resolves the same name via Mac
     // CTFont. Allow that fallback only for these specific families.
     auto lowercaseFamily = family.string().convertToASCIILowercase();
-    static const std::array<const char*, 7> kIOSCanonicalSharedGlyphFamilies = {
+    static const std::array<const char*, 11> kIOSCanonicalSharedGlyphFamilies = {
         "pingfang hk",
         "pingfang sc",
         "pingfang tc",
         "heiti sc",
         "heiti tc",
         "applesdgothicneo",
+        // W335 (2026-06-02) — #26c PARTIAL: the localized PingFang family names
+        // iOS exposes that Mac CTFont ALSO resolves to the bit-identical
+        // PingFangUI.ttc (V-679). PingFang.ttc V-487-parse-fails so
+        // driftstackIOSFontWithFamily can't load the iOS binary; these route
+        // through the SAME Mac-CTFont shared-glyph fallback as Latin "pingfang
+        // sc". Only the 4 script/region-MATCHED names resolve on Mac (verified
+        // via CTFontCreateWithName: 苹方-简→PingFang SC, 蘋方-港→HK, 蘋方-澳→MO,
+        // 蘋方-繁→TC). The 4 MISMATCHED (苹方-港/澳/繁, 蘋方-簡) fall back to
+        // Helvetica on Mac, so they are NOT added — adding them would
+        // over-detect as Helvetica (a tell). Those need the iOS binary loaded
+        // directly (#26c residual; PingFang.ttc CTFontManager parse-fail).
+        "苹方-简", "蘋方-港", "蘋方-澳", "蘋方-繁",
         // V-433.Y wave 29-197 — Snell Roundhand is iOS's CSS-cursive
         // default font. iPhone's "cursive" baseline tuple == Snell tuple
         // → Snell Roundhand probes return baseline → "not detected".
