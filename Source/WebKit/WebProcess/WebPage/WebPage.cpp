@@ -5026,6 +5026,30 @@ void WebPage::adjustSettingsForLockdownMode(Settings& settings, const WebPrefere
     }
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Parse the Safari major.minor from the DRIFTSTACK_ARCHETYPE env slug (e.g. "..._safari26_4"),
+// read once per WebContent process. Used to version-key globals Apple added at a specific Safari
+// version (e.g. window.Origin at 26.5). Mirrors driftstackWebGLUniformBlocksV265Plus() in
+// WebGL2RenderingContext.cpp. No archetype env (default) = the 26.4 launch target → false.
+static bool driftstackArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype)
+        return false;
+    std::string_view sv(archetype);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    int major = 0, minor = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+    return major > wantMajor || (major == wantMajor && minor >= wantMinor);
+}
+#endif
+
 void WebPage::updatePreferences(const WebPreferencesStore& store)
 {
     updatePreferencesGenerated(store);
@@ -5119,12 +5143,14 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 #endif
     // #17 (founder green-lit 2026-06-02): drop the fork-extra window globals that a real iPhone
     // 26.4 (the launch target) does NOT expose — both verified absent vs real iPhone (W279/W280).
-    //  - window.Origin is [EnabledBySetting=OriginAPIEnabled]: absent on real 26.4 (a 26.5-era global);
-    //    disabling pins the 26.4 launch surface.
+    //  - window.Origin is [EnabledBySetting=OriginAPIEnabled]: Apple ADDED it at Safari 26.5 (absent on
+    //    real 26.4, present on real 26.5 — W280). VERSION-KEYED: enable only for 26.5+ archetypes, disable
+    //    for the 26.4 launch target and earlier (so per-iOS-version profiles stay bit-identical, W295).
     //  - HTMLSelectedContentElement + the whole customizable-<select> surface is
     //    [EnabledBySetting=HTMLEnhancedSelectParsingEnabled & HTMLEnhancedSelectEnabled]: absent on real
-    //    26.4 AND 26.5 (pure fork-extra); the feature ships as a unit, so disable both flags.
-    settings.setOriginAPIEnabled(false);
+    //    26.4 AND 26.5 (pure fork-extra, both versions); the feature ships as a unit — disable both flags
+    //    unconditionally (no version-keying needed).
+    settings.setOriginAPIEnabled(driftstackArchetypeSafariAtLeast(26, 5));
     settings.setHTMLEnhancedSelectEnabled(false);
     settings.setHTMLEnhancedSelectParsingEnabled(false);
 #if ENABLE(TEXT_AUTOSIZING)
