@@ -228,7 +228,7 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             // (252 detected vs fork pre-fix 216 → 37 face variants
             // iPhone exposes that Mac CTFont descriptor parsing collapses
             // into the parent family). Lowercase, exact-match.
-            static const std::array<const char*, 37> kIPhoneCanonicalFaceNames = {
+            static const std::array<const char*, 73> kIPhoneCanonicalFaceNames = {
                 "avenir black", "avenir black oblique", "avenir book",
                 "avenir heavy", "avenir light", "avenir medium",
                 "avenir next condensed demi bold", "avenir next condensed heavy",
@@ -246,6 +246,34 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                 "hiragino sans w6", "hiragino sans w7", "hiragino sans w8",
                 "seravek extralight", "seravek light", "seravek medium",
                 "signpainter-housescript",
+                // W321 (2026-06-02) — the larger fontsfull test (3976: browserleaks
+                // 3564 + all iOS name variants) vs a real iPhone 17 / Safari 26.4
+                // capture revealed 36 MORE face names iOS exposes that the 37-name
+                // v433y allowlist missed (browserleaks's partial 3564 list hid them).
+                // All 36 are iOS-EXPOSED (real device detects them). VERIFIED build:
+                // 18 resolve via the CTFontDisplayName match below (prod-fork 304->322,
+                // 0 over-detection vs real). The other 18 (abbreviated Noto family
+                // names "Noto Sans CanAborig"/etc. + "Fakt Slab Stencil Pro Med") have
+                // a different CTFontDisplayName than these keys → they need an
+                // ADDITIONAL source: the sfnt name-table id=1 family name (TODO #26,
+                // follow-up). Kept here as documented targets (inert = harmless until
+                // the name-table source lands; no over-detection).
+                "druk bold", "druk heavy", "druk medium", "druk super",
+                "druk text bold", "druk wide bold", "druk wide bold italic",
+                "druk wide medium", "druk wide medium italic",
+                "fakt slab stencil pro med", "journal sans new inline",
+                "muktamahee bold", "muktamahee light", "muktamahee regular",
+                "noto sans armenian light", "noto sans canaborig",
+                "noto sans caucalban", "noto sans egypthiero",
+                "noto sans hanifirohg", "noto sans imparamaic",
+                "noto sans inspahlavi", "noto sans insparthi",
+                "noto sans kannada light", "noto sans meeteimayek",
+                "noto sans myanmar light", "noto sans newtailue",
+                "noto sans oldhung", "noto sans oldnorarab",
+                "noto sans oldpersian", "noto sans oldsouarab",
+                "noto sans paucinhau", "noto sans psapahlavi",
+                "noto sans sorasomp", "noto sans warangciti",
+                "noto sans zawgyi light", "the hand serif semibold",
             };
             RetainPtr<CFStringRef> displayCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontDisplayNameAttribute)));
             if (displayCF) {
