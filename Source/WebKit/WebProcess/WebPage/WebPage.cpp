@@ -5117,6 +5117,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 #if ENABLE(POINTER_LOCK)
     settings.setPointerLockEnabled(false);
 #endif
+    // #17 (founder green-lit 2026-06-02): drop the fork-extra window globals that a real iPhone
+    // 26.4 (the launch target) does NOT expose — both verified absent vs real iPhone (W279/W280).
+    //  - window.Origin is [EnabledBySetting=OriginAPIEnabled]: absent on real 26.4 (a 26.5-era global);
+    //    disabling pins the 26.4 launch surface.
+    //  - HTMLSelectedContentElement + the whole customizable-<select> surface is
+    //    [EnabledBySetting=HTMLEnhancedSelectParsingEnabled & HTMLEnhancedSelectEnabled]: absent on real
+    //    26.4 AND 26.5 (pure fork-extra); the feature ships as a unit, so disable both flags.
+    settings.setOriginAPIEnabled(false);
+    settings.setHTMLEnhancedSelectEnabled(false);
+    settings.setHTMLEnhancedSelectParsingEnabled(false);
 #if ENABLE(TEXT_AUTOSIZING)
     // -webkit-text-size-adjust is enable-if ENABLE_TEXT_AUTOSIZING (on for Cocoa) + settings-flag
     // textAutosizingEnabled, which defaults TRUE on PLATFORM(IOS_FAMILY) but FALSE off-iOS — so the
