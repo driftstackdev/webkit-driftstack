@@ -5121,6 +5121,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setFullScreenEnabled(false);
     settings.setCSSScrollAnchoringEnabled(false);
 
+    // W313 (2026-06-02) — ReadableStream async iteration hide (all archetypes).
+    // The fork's WebKit ships ReadableStreamIterableEnabled (yaml status:stable
+    // default:true) so ReadableStream.prototype[Symbol.asyncIterator] is a
+    // function, but SHIPPED Safari has NOT enabled it: real iPhone 17 returns
+    // typeof ReadableStream.prototype[Symbol.asyncIterator] !== 'function' on
+    // ALL 17 BS captures (8×26.4 + 9×26.5). Disable globally for iPhone fidelity
+    // (the fork upstream is ahead of shipped Safari on this feature). Same
+    // pattern as the FullScreen/CSSScrollAnchoring global hides above.
+    settings.setReadableStreamIterableEnabled(false);
+
     // Wave 29-4xx mobile-shape DROP — desktop-only APIs a real iPhone Safari does NOT expose
     // (verified vs real iPhone-17 /aio 2026-06-01: the mobileAuth probe reports these present on
     // the fork but ABSENT on a real iPhone; version-invariant per W45). Both are setting-gated, so
