@@ -480,6 +480,11 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 255, 255 } } : Color { SRGBA<uint8_t> { 0, 0, 0 } };
     if (!useDarkAppearance && cssValueID == CSSValueAppleSystemOpaqueSecondaryFill)
         return SRGBA<uint8_t> { 233, 233, 234 };
+    // NOTE (W242): input[type=search]'s bg (iOS rgb(238,238,239)) uses -apple-system-opaque-tertiary-fill,
+    // whose CSS keyword is enable-if=WTF_PLATFORM_IOS_FAMILY (NOT in the Mac build) — so html.css's rule is
+    // invalid on the fork → white. Can't override here (CSSValueAppleSystemOpaqueTertiaryFill is undeclared);
+    // enabling the keyword for DRIFTSTACK would over-recognize it in AUTHOR css (iOS keeps it UA-internal) = a
+    // new tell. Deferred — needs UA-sheet-scoped keyword enabling or an html.css color substitution.
 #endif
 
     auto& cache = colorCache(options);

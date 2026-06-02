@@ -3324,7 +3324,12 @@ bool RenderThemeCocoa::adjustButtonStyleForVectorBasedControls(RenderStyle& styl
 
     auto adjustStyleForSubmitButton = [&] {
         style.setInsideSubmitButton(true);
-#if PLATFORM(MAC)
+#if PLATFORM(DRIFTSTACK)
+        // iPhone primary/submit button = WHITE text on the accent (blue) bg, both light + dark (verified vs
+        // uastylesheet-iPhone_17: input_submit.color rgb(255,255,255)). Mac would set buttonTextColor (the label,
+        // now opaque black via our systemColor override) which is the REGULAR-button color, wrong for submit.
+        style.setColor(Color { SRGBA<uint8_t> { 255, 255, 255 } });
+#elif PLATFORM(MAC)
         style.setColor(buttonTextColor(styleColorOptions, isEnabled));
 #endif
     };
