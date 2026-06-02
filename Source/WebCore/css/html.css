@@ -511,6 +511,15 @@ input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], 
 }
 #endif
 
+#if defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK
+/* W244: this WebKit's html.css sets date/time input text to -apple-system-blue (non-Vision iOS), but a real
+   iPhone-17 / Safari 26.4 renders it in CanvasText (black) — verified vs uastylesheet-iPhone_17 (input_date/
+   input_time color rgb(0,0,0)). Override to CanvasText to match the launch target. */
+input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) {
+    color: CanvasText;
+}
+#endif
+
 input::-webkit-date-and-time-value {
 #if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     margin: 0px;
