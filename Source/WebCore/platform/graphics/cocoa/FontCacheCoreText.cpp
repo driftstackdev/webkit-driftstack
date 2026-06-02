@@ -1395,6 +1395,19 @@ static RetainPtr<CTFontRef> fontWithFamily(FontDatabase& fontDatabase, const Ato
     } else if (lowercaseFamily == "heiti tc"_s) {
         lookupFamily = AtomString { "PingFang TC"_s };
         isSharedGlyph = true;
+    } else if (lowercaseFamily == "pingfang mo"_s) {
+        // W240 — PingFang MO (Macau variant): iOS exposes it, but Mac's PingFangUI.ttc
+        // ships only HK/SC/TC faces (no MO). All PingFang regional variants share ONE
+        // typeface — identical Latin metrics (width 163.26651, verified == fork's HK/SC/TC
+        // which already match iOS exactly) — differing only in Chinese character coverage,
+        // which the Latin width-detection never exercises. So redirect MO → the HK face via
+        // the SAME shared-glyph mechanism as Heiti: this makes the fork DETECT PingFang MO
+        // with the correct 163.26651 metric, matching a real iPhone (which has MO). NOTE:
+        // W212's earlier attempt was a no-op because it aliased INSIDE driftstackIOSFontWithFamily
+        // (which returns nullptr for non-map families → caller fell back to the original name);
+        // this caller-level redirect is the working level (mirrors the Heiti redirect above).
+        lookupFamily = AtomString { "PingFang HK"_s };
+        isSharedGlyph = true;
     }
     if (!isSharedGlyph)
         return nullptr;
