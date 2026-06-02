@@ -5117,6 +5117,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
 #if ENABLE(POINTER_LOCK)
     settings.setPointerLockEnabled(false);
 #endif
+#if ENABLE(TEXT_AUTOSIZING)
+    // -webkit-text-size-adjust is enable-if ENABLE_TEXT_AUTOSIZING (on for Cocoa) + settings-flag
+    // textAutosizingEnabled, which defaults TRUE on PLATFORM(IOS_FAMILY) but FALSE off-iOS — so the
+    // Mac fork's getComputedStyle omits the property, while a real iPhone exposes
+    // -webkit-text-size-adjust:auto on every UA-styled element. Force-enable so the property is
+    // recognized + enumerated like iOS (closes the lone remaining mobile-shape -webkit- CSS prop).
+    // textAutosizingWindowSizeOverride defaults 0 → autosizing does NOT inflate text on a normal
+    // render, so canvas/measureText Text fingerprints stay unchanged (Text-arc gate — verify post-build).
+    settings.setTextAutosizingEnabled(true);
+#endif
 
     // Wave 29-406 §11.A.13 — Touch event DOM attributes (ontouchstart etc.).
     // Mac fork DRIFTSTACK_TOUCH_STUBS gate makes the IDL accessors compile;
