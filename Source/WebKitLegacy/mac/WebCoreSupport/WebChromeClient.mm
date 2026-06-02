@@ -205,6 +205,15 @@ FloatRect WebChromeClient::windowRect() const
 #endif
 }
 
+#if ENABLE(ORIENTATION_EVENTS) && !PLATFORM(IOS_FAMILY)
+// Driftstack: ENABLE(ORIENTATION_EVENTS) is on for the fork (PLATFORM(DRIFTSTACK), not IOS_FAMILY) so window.orientation
+// is exposed; return 0 (portrait) like the WebKit2 WebChromeClient stub — a real portrait iPhone's window.orientation.
+WebCore::IntDegrees WebChromeClient::deviceOrientation() const
+{
+    return 0;
+}
+#endif
+
 // FIXME: We need to add API for setting and getting this.
 FloatRect WebChromeClient::pageRect() const
 {

@@ -683,7 +683,12 @@
 #endif
 
 // ORIENTATION_EVENTS should never get enabled on Desktop, only Mobile.
-#if !defined(ENABLE_ORIENTATION_EVENTS) && PLATFORM(IOS_FAMILY)
+// Driftstack: the fork (PLATFORM(DRIFTSTACK)) emulates iPhone Safari, which exposes window.orientation +
+// onorientationchange. Enable the feature for DRIFTSTACK too — the whole feature is contained (orientation
+// attr + orientationchange event + ChromeClient::deviceOrientation()); WebChromeClient implements the value
+// for !IOS_FAMILY (returns 0 = portrait, matching a portrait iPhone). The IDL [Conditional] is dropped in
+// DOMWindow+Compat.idl since the IDL preprocessor does not see WTF_PLATFORM_DRIFTSTACK (f7e9e741 pattern).
+#if !defined(ENABLE_ORIENTATION_EVENTS) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))
 #define ENABLE_ORIENTATION_EVENTS 1
 #endif
 

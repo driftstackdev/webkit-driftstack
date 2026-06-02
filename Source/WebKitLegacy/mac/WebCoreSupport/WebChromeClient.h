@@ -168,6 +168,14 @@ private:
     void elementDidBlur(WebCore::Element&) override;
 #endif
 
+#if ENABLE(ORIENTATION_EVENTS) && !PLATFORM(IOS_FAMILY)
+    // Driftstack: the fork (PLATFORM(DRIFTSTACK), not IOS_FAMILY) enables ENABLE(ORIENTATION_EVENTS) so window.orientation
+    // matches a real iPhone; the base ChromeClient::deviceOrientation() is then pure-virtual, and this legacy mac
+    // WebChromeClient (which iOS' WebChromeClientIOS provides on iOS) otherwise has no impl -> abstract. Provide a stub
+    // (0 = portrait), mirroring Source/WebKit/WebProcess/WebCoreSupport/WebChromeClient.cpp.
+    WebCore::IntDegrees deviceOrientation() const final;
+#endif
+
     bool shouldPaintEntireContents() const final;
 
     void attachRootGraphicsLayer(WebCore::LocalFrame&, WebCore::GraphicsLayer*) override;

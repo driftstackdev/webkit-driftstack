@@ -24,9 +24,11 @@
  */
 
 // https://compat.spec.whatwg.org/#windoworientation-interface
-[
-    Conditional=ORIENTATION_EVENTS
-] partial interface DOMWindow {
+// Driftstack: the original [Conditional=ORIENTATION_EVENTS] is dropped — the IDL preprocessor does NOT see
+// WTF_PLATFORM_DRIFTSTACK (only the C++ compile does, where ENABLE_ORIENTATION_EVENTS is now 1 for the fork
+// via PlatformEnableCocoa.h), so this fork (always built as PLATFORM(DRIFTSTACK)) emits the attributes
+// unconditionally to match a real iPhone (f7e9e741 DeviceOrientationEvent pattern).
+partial interface DOMWindow {
     readonly attribute short orientation;
     [WindowEventHandler] attribute EventHandler onorientationchange;
 };
