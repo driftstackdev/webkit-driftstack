@@ -35,7 +35,12 @@ void WGSLLanguageFeatures::initializeSetLike(DOMSetAdapter& set) const
     set.add<IDLDOMString>("packed_4x8_integer_dot_product"_s);
     set.add<IDLDOMString>("pointer_composite_access"_s);
     set.add<IDLDOMString>("readonly_and_readwrite_storage_textures"_s);
+#if !PLATFORM(DRIFTSTACK)
+    // texture_formats_tier1 is exposed by the Mac's Metal-backed WGSL but is ABSENT on a real
+    // iPhone (verified on real iPhone 17 / Safari 26.4 AND 26.5, founder item #17.A). Drop it on
+    // the fork so navigator.gpu.wgslLanguageFeatures = the iPhone-exact 4-feature set.
     set.add<IDLDOMString>("texture_formats_tier1"_s);
+#endif
     set.add<IDLDOMString>("unrestricted_pointer_parameters"_s);
 }
 

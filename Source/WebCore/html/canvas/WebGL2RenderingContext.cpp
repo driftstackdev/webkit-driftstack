@@ -749,6 +749,25 @@ WebGLAny WebGL2RenderingContext::getInternalformatParameter(GCGLenum target, GCG
     if (!validateForbiddenInternalFormats("getInternalformatParameter"_s, internalformat))
         return nullptr;
 
+#if PLATFORM(DRIFTSTACK)
+    // Archetype-keyed RGBA8 multisample counts — MUST stay CONSISTENT with the MAX_SAMPLES
+    // override in getParameter() (Wave 29-404 §11.B): iPhone 17 (A19) exposes 8x MSAA → [8,4,2];
+    // iPhone 16 Pro (A18 Pro) → [4,2]. The Mac GPU's ANGLE backend natively returns [4,2], so
+    // without this an iphone17 session reports MAX_SAMPLES=8 but rgba8Samples=[4,2] — an internal
+    // inconsistency tell (founder item #18, W290). Mirrors the line-3259 archetype dispatch exactly.
+    if (pname == GraphicsContextGL::SAMPLES && internalformat == GraphicsContextGL::RGBA8) {
+        // Cache only the POD decision (a static Vector would need an exit-time destructor,
+        // which WebKit forbids — match the int-cached MAX_SAMPLES dispatch). The 2-3 element
+        // Vector is built per call (this query is rare).
+        static const bool s_isIPhone16Pro = []() {
+            const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+            return archetype && std::string_view(archetype).find("iphone16pro_") != std::string_view::npos;
+        }();
+        Vector<GCGLint> rgba8Samples = s_isIPhone16Pro ? Vector<GCGLint> { 4, 2 } : Vector<GCGLint> { 8, 4, 2 };
+        return toWebGLAny(Int32Array::tryCreate(rgba8Samples.span()));
+    }
+#endif
+
     updateErrors();
     RefPtr context = m_context;
     GCGLint numValues = context->getInternalformati(target, internalformat, GraphicsContextGL::NUM_SAMPLE_COUNTS);

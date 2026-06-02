@@ -119,6 +119,14 @@ static std::optional<PlatformMediaCapabilitiesInfo> computeMediaCapabilitiesInfo
                 return std::nullopt;
             info = *parsedInfo;
         } else if (codec.startsWith("vp8"_s) || codec.startsWith("vp08"_s)) {
+#if PLATFORM(DRIFTSTACK)
+            // iOS has no VP8 WebM video decode path; macOS WebKit does (isVP8DecoderAvailable()
+            // returns true on the Mac fork). Report VP8 as unsupported to match a real iPhone
+            // (verified supported=false on real iPhone 17 / Safari 26.4 AND 26.5, founder item #19).
+            // This routes through every decode-capability path (decodingInfo + canPlayType /
+            // isTypeSupported), not just one. Opus-in-WebM (audio) is unaffected — iPhone supports it.
+            return std::nullopt;
+#endif
             if (!isVP8DecoderAvailable())
                 return std::nullopt;
             auto parameters = parseVPCodecParameters(codec);
