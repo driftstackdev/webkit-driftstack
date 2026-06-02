@@ -58,6 +58,7 @@
 #include <wtf/URLHash.h>
 #include <wtf/cf/NotificationCenterCF.h>
 #include <wtf/cf/TypeCastsCF.h>
+#include <wtf/cf/VectorCF.h>
 #include <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
 
 // Wave 29-499.58 — Forward declaration at file scope (extern "C" cannot
@@ -284,6 +285,69 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                             aliasKeys.append(display);
                         break;
                     }
+                }
+            }
+
+            // W330 (2026-06-02) — #26 CLOSE: register localized + abbreviated
+            // family-name aliases from the sfnt 'name' table (nameID=1, across
+            // ALL platform/language IDs). VERIFIED vs real iPhone 17 / Safari
+            // 26.x: iOS CoreText exposes per-language family names that Mac's
+            // kCTFontFamilyNameAttribute collapses to the single pid=1 ASCII
+            // name. Empirically (sfnt name-table dump of FONTS_DIR binaries):
+            //   Damascus.ttc nameID=1 pid=3 lid=3073 'دمشق', lid=1081
+            //     'दमिश्कश', lid=1056 'ڈیمسکس' (real iPhone exposes all three).
+            //   NotoSansCanadianAboriginal.otf nameID=1 pid=3 lid=1033
+            //     'Noto Sans CanAborig' — the abbreviated form iOS exposes,
+            //     distinct from nameID=16 'Noto Sans Canadian Aboriginal'.
+            // The fonts-full 3976 test (browserleaks 3564 + iOS-beyond) under-
+            // detected 88 names pre-fix; all resolve from this single source.
+            // Dot-prefixed PUA/internal names are skipped (iOS does not expose
+            // them as CSS-queryable families).
+            if (auto nameFont = adoptCF(CTFontCreateWithFontDescriptor(desc, 0, nullptr))) {
+                // Skip hidden/internal system fonts — including the case where
+                // CoreText realizes an unresolvable descriptor to the system UI
+                // font fallback. If the REALIZED font's PostScript name is dot-
+                // prefixed (.AppleSystemUIFont / .SF…), iOS exposes none of its
+                // names; without this guard the system font's localized nameID=1
+                // records ('Systeemlettertype', '系统字体', 'Системний шрифт', …)
+                // over-register as detectable families the real iPhone lacks.
+                bool hiddenSystemFont = false;
+                if (auto realizedPS = adoptCF(CTFontCopyPostScriptName(nameFont.get())))
+                    hiddenSystemFont = String(realizedPS.get()).startsWith('.');
+                if (!hiddenSystemFont) {
+                if (auto nameTable = adoptCF(CTFontCopyTable(nameFont.get(), kCTFontTableName, kCTFontTableOptionNoOptions))) {
+                    auto nameData = WTF::span(nameTable.get()); // bounds-safe std::span<const uint8_t>
+                    if (nameData.size() >= 6) {
+                        auto be16 = [&](size_t off) -> unsigned {
+                            return (static_cast<unsigned>(nameData[off]) << 8) | nameData[off + 1];
+                        };
+                        unsigned recCount = be16(2);
+                        size_t storageOffset = be16(4);
+                        for (unsigned r = 0; r < recCount; ++r) {
+                            size_t recPos = 6 + static_cast<size_t>(r) * 12;
+                            if (recPos + 12 > nameData.size())
+                                break;
+                            if (be16(recPos + 6) != 1) // nameID 1 = Font Family name
+                                continue;
+                            unsigned platformID = be16(recPos + 0);
+                            unsigned strLen = be16(recPos + 8);
+                            size_t sPos = storageOffset + be16(recPos + 10);
+                            if (!strLen || sPos + strLen > nameData.size())
+                                continue;
+                            CFStringEncoding enc = (platformID == 1) ? kCFStringEncodingMacRoman : kCFStringEncodingUTF16BE;
+                            auto strBytes = nameData.subspan(sPos, strLen);
+                            RetainPtr<CFStringRef> aliasCF = adoptCF(CFStringCreateWithBytes(kCFAllocatorDefault, strBytes.data(), strBytes.size(), enc, false));
+                            if (!aliasCF)
+                                continue;
+                            String aliasName = String(aliasCF.get());
+                            if (aliasName.isEmpty() || aliasName.startsWith('.'))
+                                continue;
+                            String aliasKey = aliasName.convertToASCIILowercase();
+                            if (!aliasKey.isEmpty() && !aliasKeys.contains(aliasKey))
+                                aliasKeys.append(aliasKey);
+                        }
+                    }
+                }
                 }
             }
 
