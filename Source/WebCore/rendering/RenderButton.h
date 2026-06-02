@@ -57,7 +57,7 @@ public:
     void setText(const String&);
     String NODELETE text() const;
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     void layout() override;
 #endif
 

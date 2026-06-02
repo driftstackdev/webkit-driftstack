@@ -157,13 +157,46 @@ LayoutRect RenderButton::controlClipRect(const LayoutPoint& additionalOffset) co
     return LayoutRect(additionalOffset.x() + borderLeft(), additionalOffset.y() + borderTop(), width() - borderLeft() - borderRight(), height() - borderTop() - borderBottom());
 }
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
 void RenderButton::layout()
 {
     RenderFlexibleBox::layout();
 
     // FIXME: We should not be adjusting styles during layout. See <rdar://problem/7675493>.
+#if PLATFORM(IOS_FAMILY)
     RenderThemeIOS::adjustRoundBorderRadius(mutableStyle(), *this);
+#else
+    // PLATFORM(DRIFTSTACK): a real iPhone gives default buttons the iOS pill radius (box-height/2,
+    // e.g. 10px for a 20px button) via getComputedStyle.borderRadius; the fork's Mac RenderTheme leaves
+    // it 0px — a uaStylesheet tell (W299, verified vs real iPhone 17/26.4). RenderThemeIOS.mm is
+    // IOS_FAMILY-only, so replicate adjustRoundBorderRadius (RenderThemeIOS.mm:411/428) here exactly.
+    {
+        auto& s = mutableStyle();
+        auto appearance = s.usedAppearance();
+        bool canAdjust = !(appearance == StyleAppearance::Base || appearance == StyleAppearance::None || appearance == StyleAppearance::SearchField);
+        // (iOS also skips when a bg image is present — a rare, custom-styled edge case; the default UA
+        // button has none, so this gate-pair suffices for the fingerprint-relevant default control.)
+        if (canAdjust && !s.hasExplicitlySetBorderRadius()) {
+            constexpr int largeButtonSize = 45;
+            constexpr float largeButtonBorderRadiusRatio = 0.35f / 2;
+            auto zoom = s.usedZoomForLength().value;
+            auto unzoomedHeight = height() / zoom;
+            auto unzoomedMinDimension = std::min(width(), height()) / zoom;
+            if (height() >= largeButtonSize) {
+                Style::LengthPercentage<CSS::NonnegativeUnzoomed>::Dimension r { static_cast<float>(unzoomedMinDimension * largeButtonBorderRadiusRatio) };
+                s.setBorderRadius({ r, r });
+            } else {
+                Style::BorderRadiusValue br {
+                    Style::LengthPercentage<CSS::NonnegativeUnzoomed>::Dimension { static_cast<float>(unzoomedMinDimension / 2) },
+                    Style::LengthPercentage<CSS::NonnegativeUnzoomed>::Dimension { static_cast<float>(unzoomedHeight / 2) },
+                };
+                if (!s.writingMode().isHorizontal())
+                    br.transpose();
+                s.setBorderRadius(std::move(br));
+            }
+        }
+    }
+#endif
 }
 #endif
 
