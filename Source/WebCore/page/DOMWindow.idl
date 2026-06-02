@@ -108,9 +108,11 @@
     [ImplementedAs=cancelAnimationFrame] undefined webkitCancelRequestAnimationFrame(long id);
 
     // Non-standard: iOS extension - https://developer.apple.com/reference/webkitjs/gestureevent
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongesturechange;
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongestureend;
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongesturestart;
+    // Driftstack: expose the ongesture* handler attributes for the fork via DRIFTSTACK_TOUCH_STUBS (presence-only, matching
+    // a real iPhone; does NOT enable IOS_GESTURE_EVENTS — see Element.idl note).
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongesturechange;
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongestureend;
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongesturestart;
 
     // Non-standard: For now we expose this to user worlds since Safari is using it, but we plan to remove it.
     [EnabledForWorld=isUser] CSSRuleList? getMatchedCSSRules(optional Element? element = null, optional DOMString? pseudoElement = null);

@@ -1032,11 +1032,14 @@
 #define ENABLE_WEBPROCESS_CACHE 1
 #endif
 
-#if !defined(ENABLE_WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY) && PLATFORM(IOS_FAMILY)
+// Driftstack: enable the iOS-only -webkit- CSS properties for the fork so its CSSProperties enumeration matches a real
+// iPhone (W144 found these fork-MISSING). -webkit-overflow-scrolling ALSO needs the legacyOverflowScrollingTouchEnabled
+// setting at runtime (archetype hook) to be exposed; -webkit-touch-callout needs only this codegen flag.
+#if !defined(ENABLE_WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))
 #define ENABLE_WEBKIT_OVERFLOW_SCROLLING_CSS_PROPERTY 1
 #endif
 
-#if !defined(ENABLE_WEBKIT_TOUCH_CALLOUT_CSS_PROPERTY) && PLATFORM(IOS_FAMILY)
+#if !defined(ENABLE_WEBKIT_TOUCH_CALLOUT_CSS_PROPERTY) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))
 #define ENABLE_WEBKIT_TOUCH_CALLOUT_CSS_PROPERTY 1
 #endif
 

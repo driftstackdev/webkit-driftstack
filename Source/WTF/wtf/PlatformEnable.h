@@ -571,7 +571,9 @@
 #define ENABLE_TOUCH_EVENTS 0
 #endif
 
-#if !defined(ENABLE_CSS_TAP_HIGHLIGHT_COLOR) && ENABLE(TOUCH_EVENTS)
+// Driftstack: the fork sets DRIFTSTACK_TOUCH_STUBS (not full TOUCH_EVENTS); a real iPhone exposes -webkit-tap-highlight-color,
+// so enable it under the stub flag too (PlatformEnableCocoa.h sets DRIFTSTACK_TOUCH_STUBS before these generic defaults).
+#if !defined(ENABLE_CSS_TAP_HIGHLIGHT_COLOR) && (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS))
 #define ENABLE_CSS_TAP_HIGHLIGHT_COLOR 1
 #endif
 

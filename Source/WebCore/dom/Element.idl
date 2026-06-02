@@ -81,9 +81,12 @@
     [NotEnumerable] attribute EventHandler onfocusout;
 
     // Non-standard: https://developer.apple.com/reference/webkitjs/gestureevent.
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongesturechange;
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongestureend;
-    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS] attribute EventHandler ongesturestart;
+    // Driftstack: also emit under DRIFTSTACK_TOUCH_STUBS so the fork exposes the ongesture* handler attributes like a real
+    // iPhone (presence-only — the event names are unconditional in EventNames.json + GestureEvent already exists via the stub
+    // flag; this does NOT enable IOS_GESTURE_EVENTS, so the gesture dispatch / GestureEvent.cpp stub / Mac-gesture stay as-is).
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongesturechange;
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongestureend;
+    [NotEnumerable, Conditional=IOS_GESTURE_EVENTS|DRIFTSTACK_TOUCH_STUBS] attribute EventHandler ongesturestart;
 
     // Non-standard: https://developer.apple.com/reference/webkitjs/element/1633146-onbeforeload.
     [NotEnumerable] attribute EventHandler onbeforeload;
