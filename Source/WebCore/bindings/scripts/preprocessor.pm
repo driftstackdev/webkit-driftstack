@@ -112,6 +112,33 @@ sub _evaluateCondition
         return _evaluateCondition($1, $macros) ? 0 : 1;
     }
 
+    # Handle disjunctions: "(A) || (B)" — lower precedence than &&. Split on
+    # top-level || (paren-depth 0) and OR the parts. Added so PLATFORM(DRIFTSTACK)
+    # gates like "(defined(X) && X) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)"
+    # evaluate (the simple evaluator otherwise supports only && / defined / negation / parens,
+    # which is why || conditions silently mis-evaluated to false — the f7e9e741 IDL workaround).
+    {
+        my @orParts;
+        my ($depth, $cur, $i) = (0, '', 0);
+        my @ch = split //, $expr;
+        while ($i < @ch) {
+            my $c = $ch[$i];
+            if ($c eq '(') { $depth++; $cur .= $c; }
+            elsif ($c eq ')') { $depth--; $cur .= $c; }
+            elsif ($depth == 0 && $c eq '|' && $i + 1 < @ch && $ch[$i + 1] eq '|') {
+                push @orParts, $cur; $cur = ''; $i++;
+            } else { $cur .= $c; }
+            $i++;
+        }
+        push @orParts, $cur;
+        if (@orParts > 1) {
+            for my $part (@orParts) {
+                return 1 if _evaluateCondition($part, $macros);
+            }
+            return 0;
+        }
+    }
+
     # Handle parenthesized expression: "(defined(X) && X)"
     if ($expr =~ /^\s*\((.+)\)\s*$/) {
         return _evaluateCondition($1, $macros);

@@ -153,7 +153,7 @@ body:-internal-media-document {
 
 video {
     object-fit: contain;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     -webkit-tap-highlight-color: transparent;
 #endif
     content: normal !important;
@@ -392,7 +392,7 @@ button {
 
 input, textarea, select, button {
     margin: 0__qem;
-#if !(defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
     font: -webkit-small-control;
 #endif
     color: initial;
@@ -410,14 +410,14 @@ input[type="hidden"] {
     display: none;
 }
 
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
 textarea,
 #endif
 input {
     appearance: auto;
     color: CanvasText;
     background-color: Canvas;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border: 1px solid -apple-system-secondary-label;
     font: 11px system-ui;
     padding-block: 0.2em 0.3em;
@@ -443,7 +443,7 @@ input {
 
 input[type="search"] {
     box-sizing: border-box;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border: 1px solid -webkit-control-background;
     background-color: -apple-system-opaque-tertiary-fill;
 #endif
@@ -471,7 +471,7 @@ input[type="search"]::-webkit-search-results-button {
     appearance: auto;
     display: block;
     flex: none;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     align-self: flex-start;
     margin-block: auto;
     margin-inline: 0;
@@ -482,7 +482,7 @@ input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], 
     align-items: center;
     display: inline-flex;
     overflow: hidden;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border: 1px solid -webkit-control-background;
     font-family: system-ui;
     padding-block: 0.2em;
@@ -503,7 +503,7 @@ input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], 
 #endif
 }
 
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
 input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]):disabled {
     background-color: -apple-system-opaque-secondary-fill-disabled;
     color: -apple-system-tertiary-label;
@@ -512,7 +512,7 @@ input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], 
 #endif
 
 input::-webkit-date-and-time-value {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     margin: 0px;
     text-align: center;
     inline-size: 100%;
@@ -709,7 +709,7 @@ input::-webkit-list-button {
     align-self: stretch;
     flex: none;
     -webkit-user-select: none;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     /* Make it easier to hit the button on iOS */
     padding: 7px;
     margin: -7px;
@@ -720,7 +720,7 @@ input::-webkit-list-button {
 
 textarea {
     appearance: auto;
-#if !(defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
     color: CanvasText;
     background-color: Canvas;
     border: 1px solid;
@@ -804,7 +804,7 @@ input:is([type="radio"], [type="checkbox"]) {
     margin: 3px 2px;
     box-sizing: border-box;
     border: initial;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     width: 16px;
     height: 16px;
     padding: 0px;
@@ -817,44 +817,44 @@ input:is([type="radio"], [type="checkbox"]) {
 }
 
 input[type="checkbox"] {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border-radius: 5px;
 #endif
 }
 
 input[type="radio"] {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border-radius: 50%;
 #endif
 }
 
 input[type="checkbox"]:indeterminate {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     background: rgba(0, 0, 0, 0.8);
 #endif
 }
 
 input[type="checkbox"]:indeterminate:disabled {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     opacity: initial;
     background: rgba(0, 0, 0, 0.8);
 #endif
 }
 
 input:is([type="checkbox"], [type="radio"]):checked {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border-color: rgba(255, 255, 255, 0.0);
 #endif
 }
 
 input:is([type="checkbox"], [type="radio"]):disabled {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     opacity: initial;
 #endif
 }
 
 input:is([type="checkbox"], [type="radio"]):checked:disabled {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     opacity: initial;
     background: rgba(0, 0, 0, 0.8);
 #endif
@@ -874,7 +874,7 @@ input:is([type="button"], [type="submit"], [type="reset"]), input[type="file"]::
     text-align: center;
     cursor: default;
     padding-inline: 6px;
-#if !(defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
     color: ButtonText;
     padding-block: 2px 3px;
     border: 2px outset ButtonFace;
@@ -894,14 +894,14 @@ input:is([type="button"], [type="submit"], [type="reset"]), input[type="file"]::
 }
 
 input:is([type="button"], [type="submit"], [type="reset"]):active, input[type="file"]::file-selector-button:active, button:active {
-#if !(defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
     color: ActiveButtonText;
 #else
     color: -apple-system-blue;
 #endif
 }
 
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
 
 input[type="submit"], input[type="submit"]:active,
 button[type="submit"], button[type="submit"]:active,
@@ -940,7 +940,7 @@ input[type="range"]::-webkit-slider-thumb {
     display: block;
 }
 
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
 input[type="range"]::-webkit-slider-thumb, input[type="range"]::-webkit-slider-thumb:active {
     background-color: white;
     border: initial;
@@ -956,7 +956,7 @@ input[readonly], textarea[readonly] {
 }
 #endif
 
-#if !(defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
 
 input:is([type="button"], [type="submit"], [type="reset"]):disabled,
 input[type="file"]:disabled::file-selector-button, button:disabled,
@@ -996,7 +996,7 @@ input[type="color"] {
     appearance: auto;
     box-sizing: border-box;
     outline: none;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     width: 28px;
     height: 28px;
     padding: 3px;
@@ -1015,7 +1015,7 @@ input[type="color"]::-internal-color-swatch-overlay {
 input[type="color"]::-webkit-color-swatch-wrapper {
     appearance: auto;
     display: flex;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border-radius: inherit;
     padding: 2px;
 #else
@@ -1030,7 +1030,7 @@ input[type="color"]::-webkit-color-swatch-wrapper {
 input[type="color"]::-webkit-color-swatch {
     appearance: auto;
     background-color: #000000;
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border-radius: inherit;
 #else
     border-radius: 2px;
@@ -1046,7 +1046,7 @@ select {
 }
 
 select:-internal-uses-menulist {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     padding-inline: -internal-auto-base(0.4em, 0.5em);
     color: -internal-auto-base(-apple-system-blue, inherit);
     font: -internal-auto-base(11px system-ui, inherit);
@@ -1086,7 +1086,7 @@ select:-internal-uses-menulist:enabled:active {
 }
 
 select:-internal-uses-menulist:disabled {
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     background-color: -internal-auto-base(-apple-system-opaque-secondary-fill-disabled, transparent);
     color: -internal-auto-base(-apple-system-tertiary-label, color-mix(currentColor 50%, transparent));
 #else
@@ -1463,7 +1463,7 @@ img:is([sizes="auto" i], [sizes^="auto," i]) {
     contain-intrinsic-size: 300px 150px;
 }
 
-#if defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
 embed, object, img {
     -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
 }
