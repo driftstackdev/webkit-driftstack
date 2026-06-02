@@ -5127,6 +5127,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // render, so canvas/measureText Text fingerprints stay unchanged (Text-arc gate — verify post-build).
     settings.setTextAutosizingEnabled(true);
 #endif
+    // textAreasAreResizable defaults true off-iOS (PLATFORM(IOS_FAMILY):false in
+    // UnifiedWebPreferences.yaml) — so the Mac fork's `<textarea>` resolves the UA stylesheet's
+    // `resize: -internal-textarea-auto` to Resize::Both (StyleResize.cpp:43), exposing a desktop
+    // `resize: both` computed value; a real iPhone has the setting false → Resize::None. Force OFF
+    // so getComputedStyle(textarea).resize === 'none', matching iOS (close-list §1 textarea item).
+    settings.setTextAreasAreResizable(false);
 
     // Wave 29-406 §11.A.13 — Touch event DOM attributes (ontouchstart etc.).
     // Mac fork DRIFTSTACK_TOUCH_STUBS gate makes the IDL accessors compile;
