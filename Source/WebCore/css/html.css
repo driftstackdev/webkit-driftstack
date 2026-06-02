@@ -1086,6 +1086,18 @@ select:-internal-uses-menulist {
     word-spacing: -internal-auto-base(normal, inherit);
 }
 
+#if defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK
+/* W246: a real iPhone-17 / Safari 26.4 renders the legacy (non-base) <select> with padding-inline 5px — verified
+   vs uastylesheet-iPhone_17 (select.padding-left = 5px, == the text-input padding). This WebKit's html.css ships
+   the legacy auto-base value as 0.4em, which at the locked 11px control font computes to 4.4px. (The 5px is a fixed
+   control metric, not 0.4em/0.5em at 11px — same theme-set padding the text-input theme applies; the fork's menulist
+   theme path doesn't set it, so it falls through to this html.css default.) Override the legacy value to 5px; keep
+   the appearance-base value (0.5em) intact for `appearance: base-select`. */
+select:-internal-uses-menulist {
+    padding-inline: -internal-auto-base(5px, 0.5em);
+}
+#endif
+
 select:-internal-uses-menulist:enabled:hover {
     background-color: -internal-auto-base(revert-rule, color-mix(currentColor 10%, transparent));
 }
