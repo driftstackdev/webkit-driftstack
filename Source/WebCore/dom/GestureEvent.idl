@@ -17,6 +17,11 @@
 ] interface GestureEvent : UIEvent {
     readonly attribute float scale;
     readonly attribute float rotation;
+    // W390: real iPhone-17 lists `target` as an OWN prop of GestureEvent.prototype (own-prop diff 12-vs-13,
+    // pinpointed via the drillOwn capture vs real Safari 26.5; full-chain was already 52==52 because the fork
+    // inherits target from Event). Redeclaring it re-homes it as own on GestureEvent.prototype, reusing the base
+    // Event::target() impl (no new C++). Type matches Event.idl (`EventTarget?`). Undispatched → null on both.
+    readonly attribute EventTarget? target;
     // iOS GestureEvent geometry/modifier fields + legacy init (match real iPhone Touch/Gesture prototype).
     readonly attribute double clientX;
     readonly attribute double clientY;
