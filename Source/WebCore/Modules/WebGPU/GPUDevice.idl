@@ -37,7 +37,10 @@
 
     [SameObject] readonly attribute GPUQueue queue;
 
-    attribute EventHandler onuncapturederror;
+    // Driftstack: onuncapturederror is fork-too-new (WebGPU error-handling still evolving upstream); real
+    // iPhone-17 proto.GPUDevice exposes ZERO on* handlers (W349). Gate on a setting the fork disables
+    // (WebPage.cpp) — WebGPU itself stays enabled (navigator.gpu present on iPhone), only this handler is hidden.
+    [EnabledBySetting=WebGPUUncapturedErrorEventEnabled] attribute EventHandler onuncapturederror;
 
     [CallWith=CurrentScriptExecutionContext] undefined destroy();
 

@@ -6166,6 +6166,20 @@ PeerConnectionEnabled:
   richJavaScript: true
   mediaPlaybackRelated: true
 
+PeerConnectionJitterBufferTargetEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "RTCRtpReceiver jitterBufferTarget"
+  humanReadableDescription: "Enable the RTCRtpReceiver.jitterBufferTarget attribute"
+  defaultValue:
+    WebCore:
+      default: true
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+
 PeerConnectionVideoScalingAdaptationDisabled:
   type: bool
   status: embedder
@@ -9586,6 +9600,20 @@ WebGPUHDREnabled:
       default: false
   disableInLockdownMode: true
   sharedPreferenceForWebProcess: true
+
+WebGPUUncapturedErrorEventEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "GPUDevice onuncapturederror"
+  humanReadableDescription: "Enable the GPUDevice.onuncapturederror event handler attribute"
+  defaultValue:
+    WebCore:
+      default: true
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
 
 WebInspectorEngineeringSettingsAllowed:
   type: bool

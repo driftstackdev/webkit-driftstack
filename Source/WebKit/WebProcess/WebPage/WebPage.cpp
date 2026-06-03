@@ -5138,6 +5138,14 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // via the same EnabledBySetting gate (ReadableStreamFromEnabled) as W313.
     settings.setReadableStreamFromEnabled(false);
 
+    // W353 (2026-06-02) — two more fork-too-new attributes the full-enumeration apiEnum surface caught, both
+    // ABSENT on real iPhone-17 (W349) and gated here via new EnabledBySetting settings (the IDL preprocessor
+    // cannot see PLATFORM(DRIFTSTACK), so a runtime setting is the only working hide):
+    //   - RTCRtpReceiver.jitterBufferTarget — Safari STP 242 only, not in shipped iOS 26.4/26.5.
+    //   - GPUDevice.onuncapturederror — WebGPU error-handling still evolving; real GPUDevice has zero on* handlers.
+    settings.setPeerConnectionJitterBufferTargetEnabled(false);
+    settings.setWebGPUUncapturedErrorEventEnabled(false);
+
     // Wave 29-4xx mobile-shape DROP — desktop-only APIs a real iPhone Safari does NOT expose
     // (verified vs real iPhone-17 /aio 2026-06-01: the mobileAuth probe reports these present on
     // the fork but ABSENT on a real iPhone; version-invariant per W45). Both are setting-gated, so

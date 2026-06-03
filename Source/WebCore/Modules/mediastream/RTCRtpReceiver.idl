@@ -44,7 +44,11 @@ typedef double DOMHighResTimeStamp;
     sequence<RTCRtpContributingSource> getContributingSources();
     sequence<RTCRtpSynchronizationSource> getSynchronizationSources();
     Promise<RTCStatsReport> getStats();
-    attribute DOMHighResTimeStamp? jitterBufferTarget;
+    // Driftstack: jitterBufferTarget is Safari STP 242 only, absent in shipped iOS 26.4/26.5 (real iPhone-17
+    // proto.RTCRtpReceiver lacks it, W349). Gate on a setting the fork disables (WebPage.cpp) to hide the
+    // fork-too-new attribute for iPhone fidelity — the IDL preprocessor cannot see PLATFORM(DRIFTSTACK), so
+    // [EnabledBySetting] (a runtime gate) is the only working hide, same pattern as ReadableStream.from (W349).
+    [EnabledBySetting=PeerConnectionJitterBufferTargetEnabled] attribute DOMHighResTimeStamp? jitterBufferTarget;
 
     [CallWith=CurrentScriptExecutionContext, EnabledByQuirk=shouldEnableRTCEncodedStreams] RTCEncodedStreams createEncodedStreams();
 };
