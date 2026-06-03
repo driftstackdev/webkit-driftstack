@@ -36,6 +36,13 @@
     [ImplementedAs=getCTMForBindings, NewObject] SVGMatrix? getCTM();
     // FIXME: `getScreenCTM` should return a `DOMMatrix?`.
     [ImplementedAs=getScreenCTMForBindings, NewObject] SVGMatrix? getScreenCTM();
+
+    // W392: nearestViewportElement / farthestViewportElement are SVG1.1 SVGLocatable readonly attributes that SVG2 removed
+    // upstream, but real iPhone-17 Safari (26.4/26.5) still exposes them on SVGGraphicsElement.prototype (drillOwn own=9 vs
+    // fork 7). Re-add to match: nearest reuses the still-present static helper; farthest mirrors historical WebKit. ImplementedAs
+    // ...ForBindings avoids clashing with the internal static SVGGraphicsElement::nearestViewportElement(const SVGElement*).
+    [ImplementedAs=nearestViewportElementForBindings] readonly attribute SVGElement? nearestViewportElement;
+    [ImplementedAs=farthestViewportElementForBindings] readonly attribute SVGElement? farthestViewportElement;
 };
 
 SVGGraphicsElement includes SVGTests;

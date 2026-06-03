@@ -65,6 +65,11 @@ public:
 
     static SVGElement* NODELETE nearestViewportElement(const SVGElement*);
 
+    // W392: binding-facing instance accessors for the SVG1.1 SVGLocatable readonly attributes real iPhone-17 retains
+    // (the ForBindings suffix avoids a static-vs-instance name clash with nearestViewportElement above).
+    SVGElement* nearestViewportElementForBindings() const;
+    SVGElement* farthestViewportElementForBindings() const;
+
     bool shouldIsolateBlending() const { return m_shouldIsolateBlending; }
     void setShouldIsolateBlending(bool isolate) { m_shouldIsolateBlending = isolate; }
 

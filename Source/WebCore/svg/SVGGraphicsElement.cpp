@@ -84,6 +84,25 @@ SVGElement* SVGGraphicsElement::nearestViewportElement(const SVGElement* element
     return nullptr;
 }
 
+// W392: binding-facing instance accessors for the SVG1.1 SVGLocatable readonly attributes (nearestViewportElement /
+// farthestViewportElement) that real iPhone-17 Safari still exposes. nearest reuses the static helper above; farthest
+// mirrors the historical WebKit SVGLocatable::farthestViewportElement (walk ALL ancestors, keep the LAST viewport element).
+SVGElement* SVGGraphicsElement::nearestViewportElementForBindings() const
+{
+    return nearestViewportElement(this);
+}
+
+SVGElement* SVGGraphicsElement::farthestViewportElementForBindings() const
+{
+    SVGElement* farthest = nullptr;
+    for (auto* current = parentOrShadowHostElement(); current; current = current->parentOrShadowHostElement()) {
+        auto* svgElement = dynamicDowncast<SVGElement>(*current);
+        if (isViewportElement(svgElement))
+            farthest = svgElement;
+    }
+    return farthest;
+}
+
 FloatRect SVGGraphicsElement::computeBBox(SVGElement* element, StyleUpdateStrategy styleUpdateStrategy)
 {
     ASSERT(element);
