@@ -489,7 +489,14 @@ void OfflineAudioContext::finishedRendering(bool didRendering)
                         WTFLogAlways("[Driftstack-AudioGraphHash-Phase-C-miss] graph-key not in atlas; falling through to shape-only");
                 }
             }
-            if (bytes.empty())
+            // W545 (V-405 audio close): on the DISPATCH path a graph-key MISS is a Phase-C-miss
+            // (the distinct graph isn't atlas-built yet). Do NOT fall to the shape-only entry —
+            // entryByShape returns the FPJS 124.04 for ANY triangle@10000 graph, which is grossly
+            // wrong for compDefault (real 172.67) / compNoComp (real 258.10). Fall through to NATIVE
+            // rendering instead (config-sensitive, ~correct to 6 decimals per W489). entryByShape
+            // remains the sole mechanism on the LEGACY (dispatch-off / invalid-digest) path only.
+            // The FPJS-HIT path (entryFor returned non-empty) is unaffected — no audio-fp regression.
+            if (bytes.empty() && !(s_graphHashDispatchEnabled && graphDigestValid))
                 bytes = atlas.entryByShape(sampleRate, channelCount, framesPerChannel);
             if (!bytes.empty()) {
                 // Atlas data is interleaved Float32; deinterleave into channel data.
