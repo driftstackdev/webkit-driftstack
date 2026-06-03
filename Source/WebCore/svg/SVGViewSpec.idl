@@ -31,9 +31,13 @@
     Exposed=Window
 ] interface SVGViewSpec {
     readonly attribute SVGTransformList transform;
+    // W393: SVG1.1 viewTarget/viewTargetString — SVG2 removed them upstream but real iPhone-17 Safari retains them on
+    // SVGViewSpec.prototype (drillOwn own 11 vs real 13). viewTarget is nullable (resolves an id that may not match).
+    readonly attribute SVGElement? viewTarget;
     readonly attribute DOMString viewBoxString;
     readonly attribute DOMString preserveAspectRatioString;
     readonly attribute DOMString transformString;
+    readonly attribute DOMString viewTargetString;
 };
 
 SVGViewSpec includes SVGFitToViewBox;

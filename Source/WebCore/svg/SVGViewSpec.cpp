@@ -50,6 +50,17 @@ void SVGViewSpec::reset()
     protect(transform())->clearItems();
     SVGFitToViewBox::reset();
     SVGZoomAndPan::reset();
+    m_viewTargetString = String(); // W393
+}
+
+// W393: resolve the parsed viewTarget id against the context element's tree scope (SVG1.1 SVGViewSpec.viewTarget).
+// Returns RefPtr (not a raw pointer) so the returned ref is owned independently of the local — a raw return tripped
+// -Wreturn-stack-address since the compiler can't see the DOM tree keeps the element alive past the local RefPtr.
+RefPtr<SVGElement> SVGViewSpec::viewTarget() const
+{
+    if (!m_contextElement)
+        return nullptr;
+    return dynamicDowncast<SVGElement>(m_contextElement->treeScope().getElementById(AtomString { m_viewTargetString }));
 }
 
 template<typename CharacterType> static constexpr std::array<CharacterType, 7> svgViewSpec { 's', 'v', 'g', 'V', 'i', 'e', 'w' };
@@ -83,13 +94,16 @@ bool SVGViewSpec::parseViewSpec(StringView string)
                     if (!skipExactly(buffer, ')'))
                         return false;
                 } else if (skipCharactersExactly(buffer, std::span { viewTargetSpec<CharacterType> })) {
-                    // viewTarget is removed from SVG2 but we still need to skip over it
-                    // to avoid failing the entire svgView() fragment parse.
+                    // viewTarget is removed from SVG2; WebCore previously skipped it, but real iPhone-17 Safari still
+                    // exposes SVGViewSpec.viewTarget/viewTargetString, so capture the id here (W393). Still tolerant —
+                    // we never fail the svgView() fragment parse on the (deprecated) viewTarget token.
                     if (!skipExactly(buffer, '('))
                         return false;
+                    auto idStart = buffer.position();
                     skipUntil(buffer, ')');
                     if (buffer.atEnd())
                         return false;
+                    m_viewTargetString = String(std::span(idStart, buffer.position() - idStart));
                     ++buffer;
                 } else
                     return false;

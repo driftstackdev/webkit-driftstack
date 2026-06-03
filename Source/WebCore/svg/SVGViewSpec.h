@@ -46,6 +46,12 @@ public:
     String transformString() const { return m_transform->valueAsString(); }
     Ref<SVGTransformList>& transform() { return m_transform; }
 
+    // W393: SVG1.1 SVGViewSpec.viewTarget / viewTargetString — removed from SVG2 (WebCore previously parsed-then-
+    // discarded the viewTarget token, SVGViewSpec.cpp), but real iPhone-17 Safari still exposes both on the prototype.
+    // viewTargetString is the raw id captured during parse; viewTarget resolves it against the context element's tree scope.
+    String viewTargetString() const { return m_viewTargetString; }
+    RefPtr<SVGElement> viewTarget() const;
+
     SVGElement* contextElementConcurrently() const { return m_contextElement; }
 
     using PropertyRegistry = SVGPropertyOwnerRegistry<SVGViewSpec, SVGFitToViewBox>;
@@ -55,6 +61,7 @@ private:
 
     WeakPtr<SVGElement, WeakPtrImplWithEventTargetData> m_contextElement;
     Ref<SVGTransformList> m_transform;
+    String m_viewTargetString; // W393: raw viewTarget id captured during parseViewSpec (SVG1.1 viewTarget support)
 };
 
 } // namespace WebCore
