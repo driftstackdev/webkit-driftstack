@@ -5157,6 +5157,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setPerformanceResourceTimingWorkerRoutingEnabled(false);
     settings.setWebKitNamespaceEvaluateScriptEnabled(false);
 
+    // W388 (2026-06-03) — #28 Notification: ServiceWorkerRegistration.{getNotifications, showNotification} (+ the SW-scope
+    // NotificationEvent / onnotificationclick surface) are ABSENT on real iPhone-17 Safari-tab (W387 full-JS-surface diff:
+    // fork ServiceWorkerRegistration 12 vs real-26.4 10). These are ALL gated by the EXISTING NotificationEventEnabled
+    // setting, whose UnifiedWebPreferences default is `ENABLE(NOTIFICATION_EVENT) && !PLATFORM(IOS_FAMILY)` → TRUE on this
+    // macOS fork but FALSE on real iOS. So real iOS turns this whole surface off via its own platform default; the Mac-fork
+    // exposed it only because it builds as !IOS_FAMILY. Disabling here makes the fork iOS-faithful (replicates iOS's own
+    // default) — NOT an over-hide: window.Notification is a SEPARATE setting (NotificationsEnabled, left ON, iOS has it),
+    // and no code re-enables NotificationEventEnabled (grep-verified, unlike TrackConfiguration W378).
+    settings.setNotificationEventEnabled(false);
+
     // W378 (2026-06-02) — #28: AudioTrack.configuration + VideoTrack.configuration (gated by
     // TrackConfigurationEnabled) are ABSENT on real iPhone-17 (verified on TWO /aio captures, W372/W374/W377).
     // The disable is applied LATER (after the developerExtrasEnabled() block below re-enables it), see W378b.
