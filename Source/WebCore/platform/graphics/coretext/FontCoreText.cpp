@@ -1085,15 +1085,27 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     // so canvas.measureText returns iPhone-equivalent widths.
     if (platformData().size() > 0.f && colorGlyphType(glyph) == ColorGlyphType::Color) {
         const float ptSize = platformData().size();
+        // W554 (2026-06-03): EXACT real iPhone 17 Apple Color Emoji measureText advance, captured
+        // across the FULL V-405 fuzzer size set (BS /emoji-advance-curve, uniform across all emoji):
+        // advance == ptSize for size >= 26 (26->26 .. 72->72), and a strike floor below
+        // {12:16,14:19,16:21,18:22,20:23,22:24,24:25}. The old V-094 code linearly interpolated the
+        // 24->48 segment (25->48) from only 3 captured points (14/24/48) — which yielded 32.67 @32px
+        // (the OPEN closelist emoji item). The real curve is FLAT (ratio 1.0) from 26 up, so 32 -> 32.
+        const unsigned ptPx = static_cast<unsigned>(ptSize + 0.5f);
         float iphoneAdvance;
-        if (ptSize <= 14.f)
-            iphoneAdvance = 19.f * (ptSize / 14.f);
-        else if (ptSize >= 48.f)
+        if (ptPx >= 26)
             iphoneAdvance = ptSize;
-        else if (ptSize <= 24.f)
-            iphoneAdvance = 19.f + (ptSize - 14.f) * (25.f - 19.f) / (24.f - 14.f);
-        else
-            iphoneAdvance = 25.f + (ptSize - 24.f) * (48.f - 25.f) / (48.f - 24.f);
+        else switch (ptPx) {
+            case 12: iphoneAdvance = 16.f; break;
+            case 14: iphoneAdvance = 19.f; break;
+            case 16: iphoneAdvance = 21.f; break;
+            case 18: iphoneAdvance = 22.f; break;
+            case 20: iphoneAdvance = 23.f; break;
+            case 22: iphoneAdvance = 24.f; break;
+            case 24: iphoneAdvance = 25.f; break;
+            // odd / uncaptured small sizes (not in the V-405 even-size fuzzer set): best-effort.
+            default: iphoneAdvance = ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize; break;
+        }
         // V-147 / V-143 Option A: when primary font is NOT Apple Color Emoji
         // (i.e., emoji is rendered via fallback), iPhone CT adds +1 px to
         // the natural emoji width. Per stage-f-emoji-advances capture:

@@ -744,6 +744,16 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             CGGlyph glyph = glyphs[glyphIndex];
             FloatSize advance = treatAsSpace ? FloatSize(spaceWidth, advances[glyphIndex].height()) : advances[glyphIndex];
 
+            // W554b (2026-06-03): emoji measureText. Multi-codepoint / ZWJ / VS emoji take THIS
+            // complex-text path and use CoreText's native base advance (e.g. 32.67 @32px), NOT the
+            // iPhone strike advance the single-glyph simple path applies via Font::widthForGlyph.
+            // Route color (emoji) glyphs here through the SAME widthForGlyph override (FontCoreText.cpp
+            // V-094/W554 — the exact captured iPhone curve, advance==ptSize for size>=26), so both
+            // text paths agree on the real iPhone 17 emoji advance. SyntheticBoldInclusion::Exclude
+            // because the complex path blanket-applies synthetic bold later in this function.
+            if (!treatAsSpace && font->colorGlyphType(glyph) == ColorGlyphType::Color)
+                advance.setWidth(font->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude));
+
             if (character == tabCharacter && m_run->allowTabs()) {
                 advance.setWidth(m_fontCascade->tabWidth(font.get(), m_run->tabSize(), m_run->xPos() + m_totalAdvance.width(), Font::SyntheticBoldInclusion::Exclude));
                 // Like simple text path in WidthIterator::applyCSSVisibilityRules,
