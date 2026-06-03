@@ -41,7 +41,7 @@
     undefined endElementAt(float offset);
 
     [ImplementedAs=onbeginEvent] attribute EventHandler onbegin;
-    [ImplementedAs=onendEvent] attribute EventHandler onend;
+    [EnabledBySetting=Safari265PrototypeMembersEnabled, ImplementedAs=onendEvent] attribute EventHandler onend;
     [ImplementedAs=onrepeatEvent] attribute EventHandler onrepeat;
 };
 

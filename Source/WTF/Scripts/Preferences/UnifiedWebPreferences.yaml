@@ -6886,6 +6886,20 @@ SWVPDecodersAlwaysEnabled:
     WebKit:
       default: false
 
+Safari265PrototypeMembersEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Safari 26.5 prototype members"
+  humanReadableDescription: "Expose ToggleEvent.source and SVGAnimationElement.onend (added in Safari 26.5)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 SafeBrowsingEnabled:
   type: bool
   status: embedder

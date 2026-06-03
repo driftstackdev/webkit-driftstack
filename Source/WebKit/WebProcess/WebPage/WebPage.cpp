@@ -5212,6 +5212,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setOriginAPIEnabled(driftstackArchetypeSafariAtLeast(26, 5));
     settings.setHTMLEnhancedSelectEnabled(false);
     settings.setHTMLEnhancedSelectParsingEnabled(false);
+    // W546 (#17): ToggleEvent.prototype.source (STP 237) + SVGAnimationElement.prototype.onend
+    // ("added the missing onend handler") are Safari-26.5-era prototype members — ABSENT real 26.4,
+    // PRESENT real 26.5 (verified vs real iPhone-17, W533/W534). Version-key like Origin so the fork
+    // matches the real per-minor surface (26.4 hides both; 26.5 exposes them). Only `onend` is gated —
+    // onbegin/onrepeat pre-existed in 26.4 (W534).
+    settings.setSafari265PrototypeMembersEnabled(driftstackArchetypeSafariAtLeast(26, 5));
 #if ENABLE(TEXT_AUTOSIZING)
     // -webkit-text-size-adjust is enable-if ENABLE_TEXT_AUTOSIZING (on for Cocoa) + settings-flag
     // textAutosizingEnabled, which defaults TRUE on PLATFORM(IOS_FAMILY) but FALSE off-iOS — so the
