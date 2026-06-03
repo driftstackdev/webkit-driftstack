@@ -5146,6 +5146,10 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setPeerConnectionJitterBufferTargetEnabled(false);
     settings.setWebGPUUncapturedErrorEventEnabled(false);
 
+    // W378 (2026-06-02) — #28: AudioTrack.configuration + VideoTrack.configuration (gated by
+    // TrackConfigurationEnabled) are ABSENT on real iPhone-17 (verified on TWO /aio captures, W372/W374/W377).
+    // The disable is applied LATER (after the developerExtrasEnabled() block below re-enables it), see W378b.
+
     // Wave 29-4xx mobile-shape DROP — desktop-only APIs a real iPhone Safari does NOT expose
     // (verified vs real iPhone-17 /aio 2026-06-01: the mobileAuth probe reports these present on
     // the fork but ABSENT on a real iPhone; version-invariant per W45). Both are setting-gated, so
@@ -5442,6 +5446,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         settings.setShowMediaStatsContextMenuItemEnabled(true);
         settings.setTrackConfigurationEnabled(true);
     }
+
+    // W378b (2026-06-02) — #28 fork-EXTRA hide, applied AFTER the developerExtrasEnabled() block above which
+    // unconditionally re-enables TrackConfigurationEnabled (that masked the W378 disable in dev/inspector
+    // builds; production has dev-extras OFF so it worked there, but this placement makes the fork hide
+    // AudioTrack.configuration / VideoTrack.configuration ALWAYS, matching real iPhone-17 in every build).
+    // TrackConfigurationEnabled gates ONLY those two attributes (W377 scope check — no over-hide).
+    settings.setTrackConfigurationEnabled(false);
 
 #if ENABLE(WIRELESS_PLAYBACK_MEDIA_PLAYER)
     platformStrategies()->mediaStrategy()->setWirelessPlaybackMediaPlayerEnabled(store.getBoolValueForKey(WebPreferencesKey::wirelessPlaybackMediaPlayerEnabledKey()));
