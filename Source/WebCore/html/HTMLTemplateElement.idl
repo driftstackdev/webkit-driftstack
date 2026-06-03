@@ -36,7 +36,9 @@
     readonly attribute DocumentFragment content;
     [CEReactions=NotNeeded, ReflectSetter] attribute [AtomString] DOMString shadowRootMode;
     [CEReactions=NotNeeded, Reflect] attribute boolean shadowRootDelegatesFocus;
-    [CEReactions=NotNeeded, ReflectSetter] attribute [AtomString] DOMString shadowRootSlotAssignment;
+    // Driftstack (#28): real iPhone-17 lacks shadowRootSlotAssignment (verified absent on 2 /aio captures);
+    // gate on a setting the fork disables (WebPage.cpp) to match — the fork's newer WebKit added it, shipped iOS lacks it.
+    [EnabledBySetting=HTMLTemplateShadowRootSlotAssignmentEnabled, CEReactions=NotNeeded, ReflectSetter] attribute [AtomString] DOMString shadowRootSlotAssignment;
     [CEReactions=NotNeeded, Reflect] attribute boolean shadowRootClonable;
     [CEReactions=NotNeeded, Reflect] attribute boolean shadowRootSerializable;
     [EnabledBySetting=ScopedCustomElementRegistryEnabled, CEReactions=NotNeeded, Reflect] attribute DOMString shadowRootCustomElementRegistry;

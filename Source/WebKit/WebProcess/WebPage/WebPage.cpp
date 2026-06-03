@@ -5146,6 +5146,17 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setPeerConnectionJitterBufferTargetEnabled(false);
     settings.setWebGPUUncapturedErrorEventEnabled(false);
 
+    // W379 (2026-06-02) — #28 Batch A: three more fork-too-new prototype members the exhaustive apiEnum diff
+    // caught, all ABSENT on real iPhone-17 (verified on 2 /aio captures, W372/W374/W377), each gated via a NEW
+    // EnabledBySetting setting the fork disables here (none re-enabled elsewhere, unlike TrackConfiguration W378):
+    //   - HTMLTemplateElement.shadowRootSlotAssignment (recent declarative-shadow-DOM addition)
+    //   - PerformanceResourceTiming.{workerRouterEvaluationStart, workerCacheLookupStart, workerMatchedRouterSource,
+    //     workerFinalRouterSource} (Service-Worker static-routing timings)
+    //   - WebKitNamespace.evaluateScript (upstream method shipped iOS Safari does not expose; Driftstack unused)
+    settings.setHTMLTemplateShadowRootSlotAssignmentEnabled(false);
+    settings.setPerformanceResourceTimingWorkerRoutingEnabled(false);
+    settings.setWebKitNamespaceEvaluateScriptEnabled(false);
+
     // W378 (2026-06-02) — #28: AudioTrack.configuration + VideoTrack.configuration (gated by
     // TrackConfigurationEnabled) are ABSENT on real iPhone-17 (verified on TWO /aio captures, W372/W374/W377).
     // The disable is applied LATER (after the developerExtrasEnabled() block below re-enables it), see W378b.

@@ -57,10 +57,13 @@ typedef double DOMHighResTimeStamp;
     readonly attribute unsigned long long encodedBodySize;
     readonly attribute unsigned long long decodedBodySize;
 
-    readonly attribute DOMHighResTimeStamp workerRouterEvaluationStart;
-    readonly attribute DOMHighResTimeStamp workerCacheLookupStart;
-    readonly attribute DOMString workerMatchedRouterSource;
-    readonly attribute DOMString workerFinalRouterSource;
+    // Driftstack (#28): the Service-Worker static-routing timing members are absent on real iPhone-17
+    // (verified on 2 /aio captures) — the fork's newer WebKit added them, shipped iOS lacks them. Gate on a
+    // setting the fork disables (WebPage.cpp) to match.
+    [EnabledBySetting=PerformanceResourceTimingWorkerRoutingEnabled] readonly attribute DOMHighResTimeStamp workerRouterEvaluationStart;
+    [EnabledBySetting=PerformanceResourceTimingWorkerRoutingEnabled] readonly attribute DOMHighResTimeStamp workerCacheLookupStart;
+    [EnabledBySetting=PerformanceResourceTimingWorkerRoutingEnabled] readonly attribute DOMString workerMatchedRouterSource;
+    [EnabledBySetting=PerformanceResourceTimingWorkerRoutingEnabled] readonly attribute DOMString workerFinalRouterSource;
 
     // https://w3c.github.io/resource-timing/#dfn-delivery-type
     readonly attribute DOMString deliveryType;
