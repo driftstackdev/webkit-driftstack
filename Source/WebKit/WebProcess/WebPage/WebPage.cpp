@@ -5167,6 +5167,15 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // and no code re-enables NotificationEventEnabled (grep-verified, unlike TrackConfiguration W378).
     settings.setNotificationEventEnabled(false);
 
+    // W391 (2026-06-03) — #28 Batch B ADD: HTMLVideoElement.showCaptionDisplaySettings is PRESENT on real iPhone-17
+    // (drillOwn vs real Safari 26.5: real HTMLVideoElement.prototype own=26 incl showCaptionDisplaySettings, fork=25 lacked
+    // it). Both the IDL (HTMLVideoElement+CaptionDisplaySettings.idl) and the C++ impl (HTMLVideoElementCaptionDisplaySettings
+    // .cpp) already exist — gated by EnabledBySetting=CaptionDisplaySettingsEnabled, whose Cocoa default
+    // (defaultCaptionDisplaySettingsEnabled()) is `false` BUT is defaultsOverridable, and real iOS Safari (MobileSafari)
+    // overrides it ON. Enabling here replicates MobileSafari (no new C++/IDL, the impl is dormant-present). The setting gates
+    // ONLY showCaptionDisplaySettings (single IDL hit, grep-verified) so this adds exactly the 1 missing member — no over-expose.
+    settings.setCaptionDisplaySettingsEnabled(true);
+
     // W378 (2026-06-02) — #28: AudioTrack.configuration + VideoTrack.configuration (gated by
     // TrackConfigurationEnabled) are ABSENT on real iPhone-17 (verified on TWO /aio captures, W372/W374/W377).
     // The disable is applied LATER (after the developerExtrasEnabled() block below re-enables it), see W378b.
