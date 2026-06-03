@@ -499,6 +499,20 @@
 #define ENABLE_MANAGED_DOMAINS 1
 #endif
 
+// Driftstack (W341): the fork (PLATFORM(DRIFTSTACK)) emulates iPhone Safari,
+// which ships HTML Media Capture on (the `capture` attribute on file inputs →
+// HTMLInputElement.capture). Apple's default below DISABLES MEDIA_CAPTURE on
+// PLATFORM(MAC), but the fork builds on Mac while targeting iPhone — so a real
+// iPhone exposes HTMLInputElement.capture and the unpatched Mac fork did not
+// (caught by the W339 apiEnum prototype enumeration: fork-MISSING capture vs
+// real iPhone 17 / Safari 26.x). `capture` is an old, standard, non-version-
+// sensitive feature, and MEDIA_CAPTURE's only JS-visible surface IS `capture`
+// (the rest — FileChooser/FileInputType — is internal), so enabling it here
+// adds exactly the one missing attribute with no other surface change.
+#if !defined(ENABLE_MEDIA_CAPTURE) && PLATFORM(DRIFTSTACK)
+#define ENABLE_MEDIA_CAPTURE 1
+#endif
+
 #if !defined(ENABLE_MEDIA_CAPTURE) && !PLATFORM(MAC) && !PLATFORM(WATCHOS) && !PLATFORM(APPLETV)
 #define ENABLE_MEDIA_CAPTURE 1
 #endif

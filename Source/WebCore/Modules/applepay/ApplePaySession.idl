@@ -33,17 +33,19 @@
 
     const unsigned short STATUS_SUCCESS = 0;
     const unsigned short STATUS_FAILURE = 1;
-    // V-199 (2026-05-05): iOS Safari behavior changed since V-078. Real
-    // iPhone 16 Pro / iOS 18.7 / Safari 26.4 reference recapture
-    // (2026-05-04T19-24-11Z) reports both STATUS_INVALID_BILLING_ADDRESS
-    // and STATUS_INVALID_SHIPPING_ADDRESS as `undefined`. iPhone no longer
-    // exposes the legacy non-POSTAL names. The earlier V-078/V-094
-    // declarations have been retired to match current iOS behavior.
-    // STATUS_SUCCESS, STATUS_FAILURE, STATUS_INVALID_SHIPPING_CONTACT,
-    // STATUS_PIN_* are still present per the recapture (typeof === number).
-    // The corresponding `STATUS_INVALID_BILLING_ADDRESS` /
-    // `STATUS_INVALID_SHIPPING_ADDRESS` aliases under PLATFORM(DRIFTSTACK)
-    // in ApplePaySession.h are also retired (no IDL referent).
+    // V-199 (2026-05-05) + W349 (2026-06-02): the POSTAL-address statuses ARE
+    // present on real iPhone. STATUS_INVALID_BILLING_POSTAL_ADDRESS (2) and
+    // STATUS_INVALID_SHIPPING_POSTAL_ADDRESS (3) appear in the FULL prototype +
+    // static enumeration of ApplePaySession on real iPhone-17, verified vs /aio
+    // captures on BOTH Safari 26.4 and 26.5 (proto count 38, static count 15).
+    // The V-199 recapture omitted them only because its curated probe never
+    // checked the POSTAL names — a probe-coverage gap the W342 full-enumeration
+    // surface closed (a "bigger checker" catch). The legacy NON-POSTAL aliases
+    // STATUS_INVALID_BILLING_ADDRESS / STATUS_INVALID_SHIPPING_ADDRESS remain
+    // correctly absent: they are NOT in the real iPhone name set, so the
+    // ApplePaySession.h aliases stay retired (no IDL referent).
+    const unsigned short STATUS_INVALID_BILLING_POSTAL_ADDRESS = 2;
+    const unsigned short STATUS_INVALID_SHIPPING_POSTAL_ADDRESS = 3;
     const unsigned short STATUS_INVALID_SHIPPING_CONTACT = 4;
     const unsigned short STATUS_PIN_REQUIRED = 5;
     const unsigned short STATUS_PIN_INCORRECT = 6;

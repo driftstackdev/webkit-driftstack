@@ -5131,6 +5131,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // pattern as the FullScreen/CSSScrollAnchoring global hides above.
     settings.setReadableStreamIterableEnabled(false);
 
+    // W349 (2026-06-02) — ReadableStream.from (static) is likewise fork-too-new:
+    // Safari STP 238+ exposes it but SHIPPED iOS 26.4/26.5 does NOT. Real
+    // iPhone-17 static.ReadableStream = [length, name, prototype] only (no
+    // `from`) on BOTH Safari 26.4 and 26.5 (verified vs /aio captures). Disable
+    // via the same EnabledBySetting gate (ReadableStreamFromEnabled) as W313.
+    settings.setReadableStreamFromEnabled(false);
+
     // Wave 29-4xx mobile-shape DROP — desktop-only APIs a real iPhone Safari does NOT expose
     // (verified vs real iPhone-17 /aio 2026-06-01: the mobileAuth probe reports these present on
     // the fork but ABSENT on a real iPhone; version-invariant per W45). Both are setting-gated, so
