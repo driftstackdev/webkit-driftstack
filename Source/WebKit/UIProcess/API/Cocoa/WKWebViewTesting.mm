@@ -45,6 +45,11 @@
 #import "WKWebViewInternal.h"
 #import "WebFrameProxy.h"
 #import "WebPageProxy.h"
+#if ENABLE(DRIFTSTACK_TOUCH_STUBS)
+#import "NativeWebTouchEvent.h"
+#import "WebEventType.h"
+#import <wtf/MathExtras.h>
+#endif
 #import "WebPageProxyTesting.h"
 #import "WebProcessPool.h"
 #import "WebProcessProxy.h"
@@ -104,6 +109,32 @@
 #endif
 
 @implementation WKWebView (WKTesting)
+
+#if ENABLE(DRIFTSTACK_TOUCH_STUBS)
+// Fork-test vehicle: synthesize a native down+up touch at point (iPhone-17 geometry, radiusX=24.278
+// set in C++), reusing the exact construction from WebAutomationSession::platformSimulateTouchInteraction
+// so a tap fires a real touchstart/touchend on the fork. Driven by MiniBrowser's DRIFTSTACK_AUTOTAP hook.
+- (void)_dsSimulateTouchDownUpAtPoint:(CGPoint)point
+{
+    WebCore::DoublePoint loc(point.x, point.y);
+    {
+        Vector<WebKit::WebPlatformTouchPoint> pts;
+        pts.append(WebKit::WebPlatformTouchPoint(1u, loc, loc, loc, WebKit::WebPlatformTouchPoint::State::Pressed,
+            24.278, 0.0, 0.0, 0.0, 0.0, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
+        WebKit::NativeWebTouchEvent down(WebKit::WebEvent { WebKit::WebEventType::TouchStart, OptionSet<WebKit::WebEventModifier> { }, MonotonicTime::now() },
+            pts, { }, { }, loc, true, false, 1.f, 0.f);
+        _page->handleTouchEvent(nullptr, down);
+    }
+    {
+        Vector<WebKit::WebPlatformTouchPoint> pts;
+        pts.append(WebKit::WebPlatformTouchPoint(1u, loc, loc, loc, WebKit::WebPlatformTouchPoint::State::Released,
+            24.278, 0.0, 0.0, 0.0, 0.0, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
+        WebKit::NativeWebTouchEvent up(WebKit::WebEvent { WebKit::WebEventType::TouchEnd, OptionSet<WebKit::WebEventModifier> { }, MonotonicTime::now() },
+            pts, { }, { }, loc, false, false, 1.f, 0.f);
+        _page->handleTouchEvent(nullptr, up);
+    }
+}
+#endif
 
 - (_WKRectEdge)_fixedContainerEdges
 {

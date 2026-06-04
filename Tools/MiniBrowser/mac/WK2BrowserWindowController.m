@@ -979,6 +979,19 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 {
     LOG(@"didFinishNavigation: %@", navigation);
+#if ENABLE(DRIFTSTACK_TOUCH_STUBS)
+    // Fork-test: DRIFTSTACK_AUTOTAP=1 → after load, tap the probe's tapZone center (read live from the
+    // page via window.__dsTapZoneCenter, robust to layout) so it fires a native touchstart into A3's oracle.
+    if (getenv("DRIFTSTACK_AUTOTAP")) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [webView evaluateJavaScript:@"(function(){var c=window.__dsTapZoneCenter;return c?[c.x,c.y]:null;})()"
+                      completionHandler:^(id result, NSError *error) {
+                if ([result isKindOfClass:[NSArray class]] && [result count] == 2)
+                    [webView _dsSimulateTouchDownUpAtPoint:CGPointMake([result[0] doubleValue], [result[1] doubleValue])];
+            }];
+        });
+    }
+#endif
 }
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *__nullable credential))completionHandler

@@ -73,6 +73,10 @@ typedef NSVisualEffectView _WKPlatformVisualEffectView;
 - (void)_setPageScale:(CGFloat)scale withOrigin:(CGPoint)origin;
 - (CGFloat)_pageScale;
 
+#if ENABLE(DRIFTSTACK_TOUCH_STUBS)
+- (void)_dsSimulateTouchDownUpAtPoint:(CGPoint)point;   // fork-test vehicle (radiusX=24.278)
+#endif
+
 - (void)_setContinuousSpellCheckingEnabledForTesting:(BOOL)enabled;
 - (void)_setGrammarCheckingEnabledForTesting:(BOOL)enabled;
 - (NSDictionary *)_contentsOfUserInterfaceItem:(NSString *)userInterfaceItem;
