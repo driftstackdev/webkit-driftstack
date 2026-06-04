@@ -125,6 +125,9 @@
 #include "ProvisionalPageProxy.h"
 #include "RemotePageProxy.h"
 #include "RemoteWebTouchEvent.h"
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
+#include "NativeWebTouchEvent.h"
+#endif
 #include "RestrictedOpenerType.h"
 #include "RunJavaScriptParameters.h"
 #include "SandboxExtension.h"

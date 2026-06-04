@@ -180,7 +180,7 @@ struct SpeechSynthesisData {
 };
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 struct QueuedTouchEvents {
     QueuedTouchEvents(const NativeWebTouchEvent& event)
@@ -389,11 +389,11 @@ public:
     std::optional<SpeechSynthesisData> optionalSpeechSynthesisData;
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     TouchEventTracking touchEventTracking;
 #endif
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
     Deque<QueuedTouchEvents> touchEventQueue;
 #endif
 

@@ -100,12 +100,12 @@ class WebKit::WebKeyboardEvent : WebKit::WebEvent {
 [Nested] enum class WebKit::WebPlatformTouchPoint::TouchType : bool
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 class WebKit::WebTouchEvent : WebKit::WebEvent {
     Vector<WebKit::WebPlatformTouchPoint> touchPoints();
     Vector<WebKit::WebTouchEvent> coalescedEvents();
     Vector<WebKit::WebTouchEvent> predictedEvents();
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     WebCore::DoublePoint position();
     bool isPotentialTap();
     bool isGesture();
