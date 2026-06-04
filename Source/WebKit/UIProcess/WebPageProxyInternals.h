@@ -78,7 +78,7 @@
 #include <WebCore/PlatformSpeechSynthesizer.h>
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 #include "NativeWebTouchEvent.h"
 #include <WebCore/EventTrackingRegions.h>
 #endif
