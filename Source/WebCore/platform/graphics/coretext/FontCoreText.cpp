@@ -1128,19 +1128,44 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     if (platformData().size() > 0.f) {
         const auto& familyName = m_platformData.familyName();
         if (familyName == "Apple Color Emoji"_s || familyName == ".Apple Color Emoji UI"_s) {
-            // Determine if this glyph is the space character.
-            UniChar ch = 0x20;
-            CGGlyph spaceGlyph = 0;
-            CTFontGetGlyphsForCharacters(protect(ctFont()).get(), &ch, &spaceGlyph, 1);
-            if (spaceGlyph && glyph == spaceGlyph) {
-                const uint16_t sizePx = static_cast<uint16_t>(roundf(platformData().size()));
-                switch (sizePx) {
+            // V-145 + W588 (2026-06-04): Apple Color Emoji renders the keycap-base characters
+            // — space (U+0020), '#' (U+0023), '*' (U+002A) and digits '0'-'9' (U+0030..U+0039),
+            // the bases of the keycap-emoji sequences (0️⃣..9️⃣ #️⃣ *️⃣) — at the Apple Color Emoji
+            // STRIKE advance, NOT the glyph's natural width. Real iPhone-17 / Safari 26.4, W587
+            // full-surface (10 /aio refs, 86 size×char keys): {10:13,12:16,14:19,16:21,18:22,
+            // 20:23,22:24,24:25}, == ptSize for >=26. The Mac fork returned the natural (~ptSize)
+            // advance → an 86-key measureText divergence (atlas-work-queue item 2; NOT closed by
+            // the W554 emoji block, since bare digits are not color glyphs). Other ASCII (+ - and
+            // letters) is Arial-resolved and already matches, so the override is scoped to the
+            // keycap-base set. (Widens the old space-only block — which covered just 14/16/18/20/24
+            // — to the full keycap set AND the previously-missing 10/12/22 sizes.)
+            static const UniChar kKeycapBase[] = {
+                0x20, 0x23, 0x2A, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39
+            };
+            RetainPtr keycapFont = ctFont();
+            bool isKeycapBase = false;
+            for (UniChar kc : kKeycapBase) {
+                CGGlyph g = 0;
+                if (CTFontGetGlyphsForCharacters(keycapFont.get(), &kc, &g, 1) && g && g == glyph) {
+                    isKeycapBase = true;
+                    break;
+                }
+            }
+            if (isKeycapBase) {
+                const float ptSize = platformData().size();
+                const unsigned ptPx = static_cast<unsigned>(ptSize + 0.5f);
+                if (ptPx >= 26)
+                    return ptSize;
+                switch (ptPx) {
+                    case 10: return 13.f;
+                    case 12: return 16.f;
                     case 14: return 19.f;
                     case 16: return 21.f;
                     case 18: return 22.f;
                     case 20: return 23.f;
+                    case 22: return 24.f;
                     case 24: return 25.f;
-                    default: break;
+                    default: return ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize;
                 }
             }
         }
