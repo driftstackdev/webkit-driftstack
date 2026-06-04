@@ -4082,7 +4082,7 @@ void WebPage::cancelCurrentInteractionInformationRequest()
 #endif
 }
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 static Expected<bool, WebCore::RemoteFrameGeometryTransformer> handleTouchEvent(FrameIdentifier frameID, const WebTouchEvent& touchEvent, Page* page)
 {
     RefPtr frame = WebProcess::singleton().webFrame(frameID);

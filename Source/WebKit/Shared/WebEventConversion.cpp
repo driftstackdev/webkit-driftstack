@@ -133,7 +133,7 @@ WebCore::PlatformEvent::Type platform(WebEventType type)
     case WebEventType::Char:
         return WebCore::PlatformEvent::Type::Char;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     // Touch
     case WebEventType::TouchStart:
         return WebCore::PlatformEvent::Type::TouchStart;
@@ -191,7 +191,7 @@ WebEventType kit(WebCore::PlatformEvent::Type type)
     case WebCore::PlatformEvent::Type::Char:
         return WebEventType::Char;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     // Touch
     case WebCore::PlatformEvent::Type::TouchStart:
         return WebEventType::TouchStart;
@@ -424,9 +424,9 @@ WebCore::PlatformKeyboardEvent platform(const WebKeyboardEvent& webEvent)
     return WebKit2PlatformKeyboardEvent(webEvent);
 }
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
 
 static WebCore::PlatformTouchPoint::TouchPhaseType touchEventType(const WebPlatformTouchPoint& webTouchPoint)
 {
@@ -458,7 +458,7 @@ class WebKit2PlatformTouchPoint : public WebCore::PlatformTouchPoint {
 public:
 WebKit2PlatformTouchPoint(const WebPlatformTouchPoint& webTouchPoint)
     : PlatformTouchPoint(webTouchPoint.identifier(), DoublePoint(webTouchPoint.locationInRootView()), DoublePoint(webTouchPoint.locationInViewport()), touchEventType(webTouchPoint)
-#if ENABLE(IOS_TOUCH_EVENTS)
+#if ENABLE(IOS_TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
         , webTouchPoint.radiusX(), webTouchPoint.radiusY(), webTouchPoint.rotationAngle(), webTouchPoint.twist(), webTouchPoint.force(), webTouchPoint.altitudeAngle(), webTouchPoint.azimuthAngle(), webPlatformTouchTypeToPlatform(webTouchPoint.touchType()), DoublePoint(webTouchPoint.previousLocationInRootView())
 #endif
     )
