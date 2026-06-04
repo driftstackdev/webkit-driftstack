@@ -472,7 +472,11 @@ class WebKit2PlatformTouchPoint : public WebCore::PlatformTouchPoint {
 public:
     WebKit2PlatformTouchPoint(const WebPlatformTouchPoint& webTouchPoint)
     {
+#if PLATFORM(DRIFTSTACK)
+        m_id = webTouchPoint.identifier();
+#else
         m_id = webTouchPoint.id();
+#endif
 
         switch (webTouchPoint.state()) {
         case WebPlatformTouchPoint::State::Released:
@@ -494,9 +498,17 @@ public:
             ASSERT_NOT_REACHED();
         }
 
+#if PLATFORM(DRIFTSTACK)
+        // The fork uses the iOS-style WebPlatformTouchPoint (identifier/locationInRootView/radiusX),
+        // converted into the generic WebCore::PlatformTouchPoint.
+        m_screenPos = webTouchPoint.locationInRootView();
+        m_pos = webTouchPoint.locationInViewport();
+        m_radius = WebCore::DoubleSize(webTouchPoint.radiusX(), webTouchPoint.radiusY());
+#else
         m_screenPos = webTouchPoint.screenPosition();
         m_pos = webTouchPoint.position();
         m_radius = webTouchPoint.radius();
+#endif
         m_force = webTouchPoint.force();
         m_rotationAngle = webTouchPoint.rotationAngle();
     }
