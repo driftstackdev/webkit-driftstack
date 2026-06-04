@@ -3784,6 +3784,8 @@
 		935C476809AC4D4300A6AAB4 /* PlatformKeyboardEvent.h in Headers */ = {isa = PBXBuildFile; fileRef = 935C476609AC4D4300A6AAB4 /* PlatformKeyboardEvent.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		935C476909AC4D4300A6AAB4 /* PlatformMouseEvent.h in Headers */ = {isa = PBXBuildFile; fileRef = 935C476709AC4D4300A6AAB4 /* PlatformMouseEvent.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		935C476B09AC4D4F00A6AAB4 /* PlatformWheelEvent.h in Headers */ = {isa = PBXBuildFile; fileRef = 935C476A09AC4D4F00A6AAB4 /* PlatformWheelEvent.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		DF7011C400000000000000E2 /* PlatformTouchEvent.h in Headers */ = {isa = PBXBuildFile; fileRef = DF7011C400000000000000E1 /* PlatformTouchEvent.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		DF7011C400000000000000F2 /* PlatformTouchPoint.h in Headers */ = {isa = PBXBuildFile; fileRef = DF7011C400000000000000F1 /* PlatformTouchPoint.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		935C477009AC4D7300A6AAB4 /* KeyEventMac.mm in Sources */ = {isa = PBXBuildFile; fileRef = 935C476E09AC4D7300A6AAB4 /* KeyEventMac.mm */; };
 		935C477509AC4D8E00A6AAB4 /* GapRects.h in Headers */ = {isa = PBXBuildFile; fileRef = 935C477409AC4D8D00A6AAB4 /* GapRects.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		935F45430F7C3B5F00D7C1FB /* JSLazyEventListener.h in Headers */ = {isa = PBXBuildFile; fileRef = 935F45410F7C3B5F00D7C1FB /* JSLazyEventListener.h */; };
@@ -16256,6 +16258,8 @@
 		935C476609AC4D4300A6AAB4 /* PlatformKeyboardEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PlatformKeyboardEvent.h; sourceTree = "<group>"; };
 		935C476709AC4D4300A6AAB4 /* PlatformMouseEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PlatformMouseEvent.h; sourceTree = "<group>"; };
 		935C476A09AC4D4F00A6AAB4 /* PlatformWheelEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PlatformWheelEvent.h; sourceTree = "<group>"; };
+		DF7011C400000000000000E1 /* PlatformTouchEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PlatformTouchEvent.h; sourceTree = "<group>"; };
+		DF7011C400000000000000F1 /* PlatformTouchPoint.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PlatformTouchPoint.h; sourceTree = "<group>"; };
 		935C476E09AC4D7300A6AAB4 /* KeyEventMac.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; path = KeyEventMac.mm; sourceTree = "<group>"; };
 		935C477409AC4D8D00A6AAB4 /* GapRects.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = GapRects.h; sourceTree = "<group>"; };
 		935F45400F7C3B5F00D7C1FB /* JSLazyEventListener.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = JSLazyEventListener.cpp; sourceTree = "<group>"; };
@@ -39281,6 +39285,8 @@
 				FE3DC9932D0C063C0021B6FC /* PlatformTZoneImpls.cpp */,
 				0FD7C21D23CE41E30096D102 /* PlatformWheelEvent.cpp */,
 				935C476A09AC4D4F00A6AAB4 /* PlatformWheelEvent.h */,
+				DF7011C400000000000000E1 /* PlatformTouchEvent.h */,
+				DF7011C400000000000000F1 /* PlatformTouchPoint.h */,
 				F491A66A2A9FEFA300F96146 /* PlatformWheelEvent.serialization.in */,
 				BCBB8AB513F1AFB000734DF0 /* PODInterval.h */,
 				BCBB8AB613F1AFB000734DF0 /* PODIntervalTree.h */,
@@ -47498,6 +47504,8 @@
 				CD1F9B042700323D00617EB6 /* PlatformVideoTransferCharacteristics.h in Headers */,
 				95BA4FAD26D981AA002A0E62 /* PlatformViewController.h in Headers */,
 				935C476B09AC4D4F00A6AAB4 /* PlatformWheelEvent.h in Headers */,
+				DF7011C400000000000000E2 /* PlatformTouchEvent.h in Headers */,
+				DF7011C400000000000000F2 /* PlatformTouchPoint.h in Headers */,
 				F491A66B2A9FEFA300F96146 /* PlatformWheelEvent.serialization.in in Headers */,
 				E1EE8B722412B2A800E794D6 /* PlatformXR.h in Headers */,
 				3A3A05812B04973800017309 /* PlatformXRPose.h in Headers */,
