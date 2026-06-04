@@ -33,7 +33,7 @@
 
 namespace WebKit {
 
-#if !PLATFORM(IOS_FAMILY)
+#if !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)
 
 WebTouchEvent::WebTouchEvent(WebEvent&& event, Vector<WebPlatformTouchPoint>&& touchPoints, Vector<WebTouchEvent>&& coalescedEvents, Vector<WebTouchEvent>&& predictedEvents)
     : WebEvent(WTF::move(event))
