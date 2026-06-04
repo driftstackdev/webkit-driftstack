@@ -363,7 +363,7 @@ static inline ScrollGranularity NODELETE wheelGranularityToScrollGranularity(uns
     }
 }
 
-#if (ENABLE(TOUCH_EVENTS) && !PLATFORM(IOS_FAMILY))
+#if ((ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !PLATFORM(IOS_FAMILY))
 static bool shouldGesturesTriggerActive()
 {
     // If the platform we're on supports GestureTapDown and GestureTapCancel then we'll
@@ -5672,7 +5672,9 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
 #if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 bool EventHandler::dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent& platformMouseEvent)
 {
-#if ENABLE(IOS_TOUCH_EVENTS)
+// The fork uses native touch dispatch, not desktop mouse->touch emulation, so it takes
+// the early return-false path (like iOS) — and isTouchEventEmulationEnabled is TOUCH_EVENTS-gated.
+#if ENABLE(IOS_TOUCH_EVENTS) || PLATFORM(DRIFTSTACK)
     UNUSED_PARAM(platformMouseEvent);
     return false;
 #else
