@@ -29,6 +29,7 @@
 #if PLATFORM(MAC)
 
 #import "Logging.h"
+#import "NativeWebTouchEvent.h"
 #import "WebAutomationSessionMacros.h"
 #import "WebEventConversion.h"
 #import "WebEventFactory.h"
@@ -44,6 +45,7 @@
 #import <WebCore/PlatformMouseEvent.h>
 #import <objc/runtime.h>
 #import <pal/spi/mac/NSEventSPI.h>
+#import <wtf/MathExtras.h>
 #import <wtf/Scope.h>
 
 namespace WebKit {
@@ -906,6 +908,52 @@ void WebAutomationSession::platformSimulateWheelInteraction(WebPageProxy& page, 
 }
 
 #endif // ENABLE(WEBDRIVER_WHEEL_INTERACTIONS)
+
+#if ENABLE(WEBDRIVER_TOUCH_INTERACTIONS)
+// Driftstack: macOS has no native screen-touch NSEvent (unlike mouse/wheel above, which post
+// NSEvents), so the fork constructs a native WebTouchEvent directly and sends it through the
+// touch IPC — the same path iOS reaches via its UIKit gesture recognizer. The harness's W3C
+// WebDriver pointerType:"touch" Actions arrive here as TouchDown/MoveTo/LiftUp (SimulatedInputDispatcher
+// → simulateTouchInteraction → here); position+timing come from the Actions, the iPhone-17 contact
+// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY/rotationAngle/force 0 —
+// Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
+// fork instead of the mouse-alias (see operations/touch-capture/NATIVE-TOUCH-IMPL-PLAN.md).
+// VALUE CAVEAT: 24.278 is from a Safari 26.5 capture; confirm the exact 26.4 quantum before launch-pinning.
+void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, TouchInteraction interaction, const WebCore::IntPoint& locationInViewport, std::optional<Seconds> duration, AutomationCompletionHandler&& completionHandler)
+{
+    UNUSED_PARAM(duration);
+
+    WebPlatformTouchPoint::State phase;
+    WebEventType type;
+    switch (interaction) {
+    case TouchInteraction::TouchDown:
+        phase = WebPlatformTouchPoint::State::Pressed;
+        type = WebEventType::TouchStart;
+        break;
+    case TouchInteraction::MoveTo:
+        phase = WebPlatformTouchPoint::State::Moved;
+        type = WebEventType::TouchMove;
+        break;
+    case TouchInteraction::LiftUp:
+        phase = WebPlatformTouchPoint::State::Released;
+        type = WebEventType::TouchEnd;
+        break;
+    }
+
+    WebCore::DoublePoint location(locationInViewport.x(), locationInViewport.y());
+    Vector<WebPlatformTouchPoint> touchPoints;
+    touchPoints.append(WebPlatformTouchPoint(1u, location, location, location, phase,
+        24.278 /* radiusX */, 0.0 /* radiusY */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
+        piOverTwoDouble /* altitudeAngle */, 0.0 /* azimuthAngle */, WebPlatformTouchPoint::TouchType::Direct));
+
+    NativeWebTouchEvent touchEvent(WebEvent { type, OptionSet<WebEventModifier> { }, MonotonicTime::now() },
+        touchPoints, { }, { }, location, interaction == TouchInteraction::TouchDown /* isPotentialTap */,
+        false /* isGesture */, 1.f /* gestureScale */, 0.f /* gestureRotation */);
+
+    page.handleUnpreventableTouchEvent(touchEvent);
+    completionHandler(std::nullopt);
+}
+#endif // ENABLE(WEBDRIVER_TOUCH_INTERACTIONS)
 
 } // namespace WebKit
 
