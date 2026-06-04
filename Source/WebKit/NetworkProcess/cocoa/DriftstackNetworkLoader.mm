@@ -746,7 +746,7 @@ static HashSet<String>& driftstackH2PoolPending()
 }
 
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
-// (pseudo-header order m,s,p,a + canonical real-header order + cookies + cache-
+// (pseudo-header order m,s,a,p + canonical real-header order + cookies + cache-
 // validation stripping). Shared by the one-shot path AND the pooled session
 // path so the wire fingerprint is identical regardless of pooling.
 static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& url,
@@ -1417,7 +1417,8 @@ void DriftstackNetworkLoader::resume()
             // (verified via tls.peet.ws default-mode capture).
             // Order matters for JA4H + Akamai pseudo-header order.
             //
-            // Pseudo: :method, :scheme, :path, :authority (already in h2req)
+            // Pseudo: :method, :scheme, :authority, :path (m,s,a,p — wire order
+            // is set by DriftstackHttp2 HEADERS emit; authority BEFORE path)
             // Real headers in iPhone order:
             //   accept, sec-fetch-site, sec-fetch-dest, accept-encoding,
             //   sec-fetch-mode, user-agent, priority, accept-language

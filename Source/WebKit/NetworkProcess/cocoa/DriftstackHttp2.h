@@ -6,18 +6,20 @@
  *
  *  - Connection preface (24-byte PRI sequence)
  *  - Frame send/receive (9-byte header + payload)
- *  - SETTINGS frame with iPhone Safari 26.0 values:
- *      ENABLE_PUSH = 0
- *      INITIAL_WINDOW_SIZE = 4194304
- *      MAX_CONCURRENT_STREAMS = 100
- *      NO_RFC7540_PRIORITIES = 1
- *  - WINDOW_UPDATE increment = 10485760 (iPhone reference)
- *  - HEADERS frame with iPhone pseudo-header order (m,s,p,a)
+ *  - SETTINGS frame with iPhone 17 / Safari 26.4 values + order (BS capture
+ *    Wave .323; emit order is 2,3,4,9 — MAX_CONCURRENT before INITIAL_WINDOW):
+ *      ENABLE_PUSH = 0            (id 2)
+ *      MAX_CONCURRENT_STREAMS = 100   (id 3)
+ *      INITIAL_WINDOW_SIZE = 2097152  (id 4 — 2MB, NOT 4194304; that was stale)
+ *      NO_RFC7540_PRIORITIES = 1  (id 9)
+ *  - WINDOW_UPDATE increment = 10420225 (= target 10485760 - default 65535)
+ *  - HEADERS frame with iPhone pseudo-header order (m,s,a,p — authority BEFORE path)
  *  - DATA frames (request body, response body)
  *  - HPACK header encoding (RFC 7541) with static table only initially
  *
- * Akamai fingerprint target (from real iPhone capture via tls.peet.ws):
- *   2:0;4:4194304;3:100;9:1|10485760|0|m,s,p,a
+ * Akamai fingerprint target (real iPhone 17 capture via tls.peet.ws; W95/BS .323;
+ * hash c52879e43202aeb92740be6e8c86ea96):
+ *   2:0;3:100;4:2097152;9:1|10420225|0|m,s,a,p
  *
  * Used by DriftstackNetworkLoader when ALPN selects "h2". Provides
  * iPhone-Safari-bit-identical HTTP/2 wire fingerprint.

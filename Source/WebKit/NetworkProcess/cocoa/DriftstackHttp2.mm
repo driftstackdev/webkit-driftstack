@@ -717,9 +717,9 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     }
 
     // 4. Send HEADERS frame for stream 1 (client-initiated streams are odd).
-    // iPhone Safari pseudo-header order: m,s,p,a (method, scheme, path, authority)
     Vector<uint8_t> headersBlock;
-    // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — BS capture Wave .323.
+    // iPhone 17 pseudo-header order m,s,a,p (method, scheme, authority, path —
+    // authority BEFORE path) — BS capture Wave .323 / W95 tls.peet.ws.
     hpackEncodeHeader(headersBlock, ":method"_s, request.method);
     hpackEncodeHeader(headersBlock, ":scheme"_s, request.scheme);
     hpackEncodeHeader(headersBlock, ":authority"_s, request.authority);
