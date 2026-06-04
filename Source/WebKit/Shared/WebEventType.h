@@ -47,7 +47,7 @@ enum class WebEventType : uint32_t {
     RawKeyDown          = 1 << 9,
     Char                = 1 << 10,
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     // WebTouchEvent
     TouchStart          = 1 << 11,
     TouchMove           = 1 << 12,
@@ -87,7 +87,7 @@ inline ASCIILiteral toString(WebEventType action)
         return "RawKeyDown"_s;
     case WebEventType::Char:
         return "Char"_s;
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     case WebEventType::TouchStart:
         return "TouchStart"_s;
     case WebEventType::TouchMove:

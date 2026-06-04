@@ -464,7 +464,7 @@ public:
 #endif
 
     virtual void doneWithKeyEvent(const NativeWebKeyboardEvent&, bool wasEventHandled) = 0;
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     virtual void doneWithTouchEvent(const WebTouchEvent&, bool wasEventHandled) = 0;
 #endif
 #if ENABLE(IOS_TOUCH_EVENTS)

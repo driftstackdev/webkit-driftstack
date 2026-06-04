@@ -1228,6 +1228,14 @@ void PageClientImpl::positionInformationDidChange(const InteractionInformationAt
 {
 }
 
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
+void PageClientImpl::doneWithTouchEvent(const WebTouchEvent&, bool)
+{
+    // Mac fork: automation-injected touch is fire-and-forget; there is no native gesture
+    // system to defer to (the iOS path forwards to UIKit contentView). No-op is correct.
+}
+#endif
+
 } // namespace WebKit
 
 #endif // PLATFORM(MAC)

@@ -62,7 +62,7 @@ public:
     // platformSimulateTouchInteraction builds the WebTouchEvent directly (radiusX/force set in C++)
     // and wraps it here. Forwards straight to the rich WebTouchEvent base ctor.
     NativeWebTouchEvent(WebEvent&& event, const Vector<WebPlatformTouchPoint>& touchPoints, const Vector<WebTouchEvent>& coalescedEvents, const Vector<WebTouchEvent>& predictedEvents, WebCore::DoublePoint position, bool isPotentialTap, bool isGesture, float gestureScale, float gestureRotation)
-        : WebTouchEvent(WTFMove(event), touchPoints, coalescedEvents, predictedEvents, position, isPotentialTap, isGesture, gestureScale, gestureRotation) { }
+        : WebTouchEvent(WTF::move(event), touchPoints, coalescedEvents, predictedEvents, position, isPotentialTap, isGesture, gestureScale, gestureRotation) { }
 #elif PLATFORM(IOS_FAMILY)
 #if defined(__OBJC__)
     explicit NativeWebTouchEvent(const WKTouchEvent&, UIKeyModifierFlags);

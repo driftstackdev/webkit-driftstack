@@ -950,7 +950,9 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
         touchPoints, { }, { }, location, interaction == TouchInteraction::TouchDown /* isPotentialTap */,
         false /* isGesture */, 1.f /* gestureScale */, 0.f /* gestureRotation */);
 
-    page.handleUnpreventableTouchEvent(touchEvent);
+    // Fork uses the generic (non-iOS) UIProcess touch injection; the outer IPC::Connection*
+    // is unused by the body for a UI-originated event.
+    page.handleTouchEvent(nullptr, touchEvent);
     completionHandler(std::nullopt);
 }
 #endif // ENABLE(WEBDRIVER_TOUCH_INTERACTIONS)

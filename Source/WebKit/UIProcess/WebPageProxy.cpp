@@ -4732,7 +4732,7 @@ const WebPreferencesStore& WebPageProxy::preferencesStore() const
     return m_preferences->store();
 }
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 static TrackingType mergeTrackingTypes(TrackingType a, TrackingType b)
 {
@@ -5029,7 +5029,7 @@ void WebPageProxy::handleUnpreventableTouchEvent(const NativeWebTouchEvent& even
     }
 }
 
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 void WebPageProxy::touchEventHandlingCompleted(IPC::Connection* connection, std::optional<WebEventType> eventType, bool handled)
 {
     MESSAGE_CHECK_BASE(!internals().touchEventQueue.isEmpty(), connection);
@@ -12194,7 +12194,7 @@ void WebPageProxy::didReceiveEvent(IPC::Connection* connection, WebEventType eve
     case WebEventType::KeyUp:
     case WebEventType::RawKeyDown:
     case WebEventType::Char:
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     case WebEventType::TouchStart:
     case WebEventType::TouchMove:
     case WebEventType::TouchEnd:
@@ -12253,7 +12253,7 @@ void WebPageProxy::didReceiveEvent(IPC::Connection* connection, WebEventType eve
     case WebEventType::TouchEnd:
     case WebEventType::TouchCancel:
         break;
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     case WebEventType::TouchStart:
     case WebEventType::TouchMove:
     case WebEventType::TouchEnd:
@@ -12735,7 +12735,7 @@ void WebPageProxy::resetState(ResetStateReason resetStateReason)
     if (RefPtr openPanelResultListener = std::exchange(m_openPanelResultListener, nullptr))
         openPanelResultListener->invalidate();
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     internals().touchEventTracking.reset();
 #endif
 

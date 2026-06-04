@@ -4181,7 +4181,7 @@ void WebPage::updatePotentialTapSecurityOrigin(const WebTouchEvent& touchEvent, 
     if (auto targetDocument = touchEventTargetFrame->document())
         m_potentialTapSecurityOrigin = targetDocument->securityOrigin();
 }
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 void WebPage::touchEvent(const WebTouchEvent& touchEvent, CompletionHandler<void(std::optional<WebEventType>, bool)>&& completionHandler)
 {
     RefPtr localMainFrame = this->localMainFrame();
