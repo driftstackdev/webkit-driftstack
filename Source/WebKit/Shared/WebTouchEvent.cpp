@@ -26,7 +26,7 @@
 #include "config.h"
 #include "WebTouchEvent.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "ArgumentCoders.h"
 #include <WebCore/RemoteFrameGeometryTransformer.h>
