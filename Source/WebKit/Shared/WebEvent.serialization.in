@@ -124,14 +124,14 @@ class WebKit::WebTouchEvent : WebKit::WebEvent {
 };
 
 [CustomHeader] class WebKit::WebPlatformTouchPoint {
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     unsigned identifier()
     WebCore::DoublePoint locationInRootView()
     WebCore::DoublePoint previousLocationInRootView()
     WebCore::DoublePoint locationInViewport()
     WebKit::WebPlatformTouchPoint::State phase()
 #endif
-#if PLATFORM(IOS_FAMILY) && ENABLE(IOS_TOUCH_EVENTS)
+#if (PLATFORM(IOS_FAMILY) && ENABLE(IOS_TOUCH_EVENTS)) || PLATFORM(DRIFTSTACK)
     double radiusX()
     double radiusY()
     double rotationAngle()
@@ -141,7 +141,7 @@ class WebKit::WebTouchEvent : WebKit::WebEvent {
     double azimuthAngle()
     WebKit::WebPlatformTouchPoint::TouchType touchType()
 #endif
-#if !PLATFORM(IOS_FAMILY)
+#if !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)
     uint32_t id()
     WebKit::WebPlatformTouchPoint::State state()
     WebCore::DoublePoint screenPosition()
