@@ -222,7 +222,7 @@ struct PageData;
 struct WebAutocorrectionContext;
 struct WebHitTestResultData;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 class NativeWebTouchEvent;
 class WebTouchEvent;
 #endif
