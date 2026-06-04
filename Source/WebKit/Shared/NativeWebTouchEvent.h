@@ -53,11 +53,17 @@ namespace WebKit {
 
 struct WKTouchEvent;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 class NativeWebTouchEvent : public WebTouchEvent {
 public:
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(DRIFTSTACK)
+    // Mac fork: there is no native touch generator, so WebAutomationSession's
+    // platformSimulateTouchInteraction builds the WebTouchEvent directly (radiusX/force set in C++)
+    // and wraps it here. Forwards straight to the rich WebTouchEvent base ctor.
+    NativeWebTouchEvent(WebEvent&& event, const Vector<WebPlatformTouchPoint>& touchPoints, const Vector<WebTouchEvent>& coalescedEvents, const Vector<WebTouchEvent>& predictedEvents, WebCore::DoublePoint position, bool isPotentialTap, bool isGesture, float gestureScale, float gestureRotation)
+        : WebTouchEvent(WTFMove(event), touchPoints, coalescedEvents, predictedEvents, position, isPotentialTap, isGesture, gestureScale, gestureRotation) { }
+#elif PLATFORM(IOS_FAMILY)
 #if defined(__OBJC__)
     explicit NativeWebTouchEvent(const WKTouchEvent&, UIKeyModifierFlags);
 #endif
