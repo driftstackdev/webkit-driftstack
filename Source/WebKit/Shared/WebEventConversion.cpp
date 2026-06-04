@@ -426,7 +426,7 @@ WebCore::PlatformKeyboardEvent platform(const WebKeyboardEvent& webEvent)
 
 #if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
-#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
+#if PLATFORM(IOS_FAMILY)
 
 static WebCore::PlatformTouchPoint::TouchPhaseType touchEventType(const WebPlatformTouchPoint& webTouchPoint)
 {

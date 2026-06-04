@@ -108,7 +108,7 @@ TextStream& operator<<(TextStream& ts, WebEventType eventType)
     case WebEventType::RawKeyDown: ts << "RawKeyDown"_s; break;
     case WebEventType::Char: ts << "Char"_s; break;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     case WebEventType::TouchStart: ts << "TouchStart"_s; break;
     case WebEventType::TouchMove: ts << "TouchMove"_s; break;
     case WebEventType::TouchEnd: ts << "TouchEnd"_s; break;
