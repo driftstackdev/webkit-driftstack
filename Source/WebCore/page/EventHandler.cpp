@@ -5565,6 +5565,7 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
         if (!touchTargetNode)
             continue;
         Ref document = touchTargetNode->document();
+        WTFLogAlways("[Driftstack-AUTOTAP/WebProcess] EventHandler touch point: hasTouchEventHandlers=%d", document->hasTouchEventHandlers());
         if (!document->hasTouchEventHandlers())
             continue;
         RefPtr targetFrame = document->frame();
@@ -5660,6 +5661,7 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
 
             Ref<TouchEvent> touchEvent = TouchEvent::create(effectiveTouches.get(), targetTouches.get(), changedTouches[state].m_touches.get(),
                 stateName, downcast<Node>(*target).document().windowProxy(), { }, event.modifiers());
+            WTFLogAlways("[Driftstack-AUTOTAP/WebProcess] dispatching TouchEvent '%s' to JS target", stateName.string().utf8().data());
             target->dispatchEvent(touchEvent);
             swallowedEvent = swallowedEvent || touchEvent->defaultPrevented() || touchEvent->defaultHandled();
         }
