@@ -555,9 +555,23 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         uint8_t positionClass = driftstackComputePositionClass(
             context.platformContext(), anchorPoint);
 
+        // W1092: glyph PIXEL substitution (atlas blit below + the V-790.L
+        // per-glyph path) is a CANVAS-fingerprint concern only. drawGlyphs is
+        // ALSO the on-screen HTML text path, so substituting there paints
+        // canonical glyph images over the visible page → black boxes when
+        // browsing real sites (founder report 2026-06-05). Gate both pixel
+        // paths on the canvas text-draw scope: outside a canvas draw, the text
+        // falls through to native CTFontDrawGlyphs (readable). Canvas reads
+        // (getImageData/toDataURL) keep full substitution → fingerprint
+        // bit-identity preserved. The advance overrides above stay unconditional
+        // (they affect cursor metrics, never pixels, so cause no boxes).
+        const bool driftstackCanvasCtx = driftstackInCanvasTextDraw();
+
         auto& atlas = DriftstackTextRunAtlas::singleton();
         auto atlasResult = atlas.lookup(
             fontId, ptSize, positionClass, textRunHash);
+        if (!driftstackCanvasCtx)
+            atlasResult.reset(); // on-screen text: never blit atlas pixels
 
         // V-770.A.5 diag: opt-in trace for synthetic atlas hit verification.
         if (std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG")) {
@@ -642,7 +656,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             // calls). Codepoint extracted from sourceText (set by
             // FontCascade::drawGlyphBuffer via driftstackCurrentTextSource()).
             // For N>1 or empty sourceText, atlas lookup is skipped.
-            if (glyphs.size() == 1 && sourceText.length() >= 1) {
+            if (driftstackCanvasCtx && glyphs.size() == 1 && sourceText.length() >= 1) {
+                // W1092: per-glyph pixel substitution gated to canvas only
+                // (same rationale as the atlas blit above — no boxes on-screen).
                 // Extract first codepoint from sourceText.
                 //
                 // Empirical (wave 29-143 diag): sourceText is UTF-8
@@ -945,7 +961,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 // - Phase 3.C dispatch + logging remain (proves infrastructure).
                 static const bool v790lMultiSubEnabled = std::getenv("DRIFTSTACK_V790L_MULTI_SUB")
                     && std::getenv("DRIFTSTACK_V790L_MULTI_SUB")[0] == '1';
-                if (v790lMultiSubEnabled && v790lHits == glyphs.size()) {
+                if (driftstackCanvasCtx && v790lMultiSubEnabled && v790lHits == glyphs.size()) {
                     CGContextRef destCG = context.platformContext();
 
                     // V-790.L probe positioning (v790l-cjk-fullrange-capture.html):
@@ -1096,7 +1112,11 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // standalone V-583.K-text block below still serves the emoji-free
     // case so this refactor is incremental.
     bool didCompositePath = false;
-    {
+    // W1092: the emoji/text glyph-atlas composite dispatch substitutes iPhone
+    // glyph pixels — a CANVAS-fingerprint concern only. Gate on the canvas
+    // text-draw scope so on-screen HTML text skips it and renders natively
+    // (no black boxes); canvas reads still composite → bit-identity preserved.
+    if (driftstackInCanvasTextDraw()) {
         auto& emojiAtlas = DriftstackEmojiAtlas::singleton();
         // V-655: text-atlas state available for unified dispatch.
         static const bool v655TextAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
@@ -1347,7 +1367,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // without that re-score.
     static const bool textAtlasEnabled = std::getenv("DRIFTSTACK_TEXT_ATLAS")
         && std::getenv("DRIFTSTACK_TEXT_ATLAS")[0] == '1';
-    if (!didCompositePath && textAtlasEnabled) {
+    // W1092: standalone text glyph-atlas substitution is canvas-only (same
+    // rationale as the composite block above — no boxes on on-screen HTML text).
+    if (driftstackInCanvasTextDraw() && !didCompositePath && textAtlasEnabled) {
         auto& textAtlas = DriftstackTextGlyphAtlas::singleton();
         if (textAtlas.isAvailable() && glyphs.size() > 0) {
             const String& familyName = font.platformData().familyName();

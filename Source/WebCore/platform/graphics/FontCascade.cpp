@@ -1711,7 +1711,15 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // that run. The atlas-build side hashes on the FULL string per
     // capture, so font_id alone discriminates between font-runs hashing
     // identically.
-    if (!source.isEmpty() && glyphBuffer.size() > 0) {
+    //
+    // W1092: this drawGlyphBuffer-layer atlas blit (mask-tint fills the glyph
+    // shape with the CURRENT fillColor) is a CANVAS-fingerprint concern only.
+    // drawGlyphBuffer also serves on-screen HTML text, where this blit painted
+    // colored boxes over the page (e.g. grey boxes for grey subtext — founder
+    // report 2026-06-05). Gate on the canvas text-draw scope: on-screen text
+    // skips it → native rendering (readable). Canvas reads keep the blit →
+    // fingerprint bit-identity preserved.
+    if (driftstackInCanvasTextDraw() && !source.isEmpty() && glyphBuffer.size() > 0) {
         RefPtr fontData0 = glyphBuffer.fontAt(0);
         if (fontData0) {
             const Font& font = *fontData0;
@@ -1877,7 +1885,9 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         uint8_t colorIdx { 0 };
     };
     Vector<AtlasHit, 8> atlasHits;
-    if (!source.isEmpty() && glyphBuffer.size()) {
+    // W1092: canvas-only — this emoji/composite + stencil-tint atlas pass also
+    // paints glyph pixels with the context fill, so on-screen it boxed text.
+    if (driftstackInCanvasTextDraw() && !source.isEmpty() && glyphBuffer.size()) {
         auto codePointAt = [&](unsigned i) -> std::pair<char32_t, unsigned> {
             if (i >= source.length())
                 return { 0, 0 };
@@ -1988,7 +1998,10 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     // across 6 (font, size) cells; only iPhone-rendered atlas substitution
     // closes this. Per-glyph dispatch (one hit per ASCII glyph), no source-
     // text iteration needed beyond reading codepoint at glyph's stringOffset.
-    if (!source.isEmpty() && glyphBuffer.size()) {
+    // W1092: canvas-only (this V-117 ASCII substitution stencil-and-tints with
+    // the context fillColor, so on-screen it painted colored boxes over small
+    // ASCII text — e.g. grey subtext. Gate so on-screen renders native).
+    if (driftstackInCanvasTextDraw() && !source.isEmpty() && glyphBuffer.size()) {
         auto& asciiAtlas = DriftstackAsciiAtlas::singleton();
         // V-131 path 2 (CTM gate) was REVERTED in V-135. Empirical finding:
         // canvas's CTM is always non-identity (DPR-scaled by 2 or 3), so

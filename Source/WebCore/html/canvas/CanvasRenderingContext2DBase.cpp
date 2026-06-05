@@ -112,6 +112,16 @@ bool getV510AtlasRGBAForOpSeq(const WTF::String& opSequenceSHA256Hex, int width,
 #include "DriftstackFontCanonicalAtlas.h"
 #include "DriftstackMeasureTextOverrides.h"
 #include "OpSequenceRecorder.h"
+// W1092: DriftstackTextRunAtlas.h lives in platform/graphics/cg/ and is not in
+// WebCore's flat header map (FontCascadeCoreText reaches it via a relative path,
+// which unified-bundled TUs like this one can't use). Forward-declare just the
+// canvas-text-draw depth push/pop free functions (defined in
+// DriftstackTextRunAtlas.cpp) and wrap them in a local RAII guard — no header
+// include needed, and the guard is exception/early-return safe.
+namespace WebCore {
+void driftstackPushCanvasTextDraw();
+void driftstackPopCanvasTextDraw();
+}
 #endif
 #include "TextUtil.h"
 #include "WebCodecsVideoFrame.h"
@@ -3190,6 +3200,19 @@ static bool canUseCachedShapedText(const TextRun& textRun)
 
 void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, double x, double y, bool fill, std::optional<double> maxWidth)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W1092: mark this thread as inside a canvas 2D text draw for the full
+    // (synchronous) duration of this call — including the cached display-list
+    // replay + shadow/mask sub-draws below. The Font::drawGlyphs hook applies
+    // iPhone-canonical glyph PIXEL substitution ONLY while this is set, so the
+    // canvas fingerprint stays bit-identical while on-screen HTML text (which
+    // reaches drawGlyphs WITHOUT this scope) renders natively → no black boxes.
+    struct DriftstackCanvasTextGuard {
+        DriftstackCanvasTextGuard() { driftstackPushCanvasTextDraw(); }
+        ~DriftstackCanvasTextGuard() { driftstackPopCanvasTextDraw(); }
+    } driftstackCanvasTextGuard;
+#endif
+
     auto& fontCascade = this->fontProxy()->fontCascade();
     auto& fontMetrics = fontProxy()->metricsOfPrimaryFont();
 

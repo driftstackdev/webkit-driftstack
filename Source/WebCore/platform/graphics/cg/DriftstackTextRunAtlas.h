@@ -189,6 +189,28 @@ public:
 
 StringView driftstackCurrentTextSource();
 
+// Canvas-context marker (W1092). The glyph PIXEL-substitution paths in the
+// Font::drawGlyphs hook (text-run atlas blit + V-790.L per-glyph atlas) exist
+// to make the CANVAS fingerprint (getImageData/toDataURL) bit-identical to a
+// real iPhone. drawGlyphs is ALSO the on-screen HTML text path, so without a
+// scope those substitutions paint canonical glyph images over visible page
+// text → black boxes when browsing real sites (founder report 2026-06-05).
+// CanvasRenderingContext2DBase::drawTextUnchecked sets this scope around its
+// (synchronous) glyph draws; the hook only applies pixel substitution when it
+// is set. On-screen text (scope unset) renders natively → readable. Fingerprint
+// reads still go through the canvas path → atlas applies → bit-identity intact.
+// Depth counter (not a bool) because canvas text nests: shadow + mask-image
+// sub-draws re-enter drawTextUnchecked within the outer scope. Exposed as
+// push/pop free functions (rather than an RAII class) so callers in other
+// WebCore directories — e.g. html/canvas/, which can't include this header —
+// can forward-declare them and wrap them in a local guard.
+void driftstackPushCanvasTextDraw();
+void driftstackPopCanvasTextDraw();
+
+// True when the current thread is inside a canvas 2D text draw (fingerprint
+// surface). The drawGlyphs hook gates glyph pixel substitution on this.
+bool driftstackInCanvasTextDraw();
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

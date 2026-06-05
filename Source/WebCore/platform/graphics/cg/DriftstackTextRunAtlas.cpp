@@ -553,6 +553,37 @@ StringView driftstackCurrentTextSource()
     return slot.current;
 }
 
+namespace {
+// Per-thread canvas-text-draw nesting depth (W1092). >0 ⇒ the current
+// drawGlyphs dispatch originates from CanvasRenderingContext2DBase text
+// drawing (the fingerprint surface), so glyph pixel substitution applies.
+struct CanvasTextDepthSlot {
+    unsigned depth { 0 };
+};
+ThreadSpecific<CanvasTextDepthSlot>& canvasTextDepthSlot()
+{
+    static NeverDestroyed<ThreadSpecific<CanvasTextDepthSlot>> slot;
+    return slot.get();
+}
+} // namespace
+
+void driftstackPushCanvasTextDraw()
+{
+    ++canvasTextDepthSlot()->depth;
+}
+
+void driftstackPopCanvasTextDraw()
+{
+    auto& slot = *canvasTextDepthSlot();
+    if (slot.depth)
+        --slot.depth;
+}
+
+bool driftstackInCanvasTextDraw()
+{
+    return canvasTextDepthSlot()->depth > 0;
+}
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)
