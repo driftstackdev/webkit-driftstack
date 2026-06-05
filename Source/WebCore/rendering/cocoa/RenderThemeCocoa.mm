@@ -2886,6 +2886,15 @@ bool RenderThemeCocoa::adjustTextFieldStyleForVectorBasedControls(RenderStyle& s
             || input->isMonthField() || input->isWeekField())) {
         if (style.logicalHeight().isAuto())
             style.setLogicalMinHeight(Style::MinimumSize::Fixed { 20.f });
+        // W1137: iOS date/time inputs use the button block-padding (top=0, bottom=0) — see
+        // applyCommonButtonPaddingToStyleForVectorBasedControls — not the text-field em block-padding
+        // applied above (which gives padding-top:2px). A real iPhone-17 reports padding-top:0 here;
+        // match it by zeroing the block padding (the inline padding already matches real). Guarded
+        // so author padding still wins.
+        if (!style.hasExplicitlySetPaddingTop())
+            style.setPaddingTop(Style::PaddingEdge::Fixed { 0.f });
+        if (!style.hasExplicitlySetPaddingBottom())
+            style.setPaddingBottom(Style::PaddingEdge::Fixed { 0.f });
     }
 #endif
 
