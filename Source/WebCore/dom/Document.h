@@ -1556,7 +1556,7 @@ public:
     WEBCORE_EXPORT void NODELETE startTrackingStyleRecalcs();
     unsigned styleRecalcCount() const { return m_styleRecalcCount; }
 
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     bool hasTouchEventHandlers() const;
     bool touchEventTargetsContain(Node& node) const { return m_touchEventTargets.contains(node); }
 #else
@@ -2487,7 +2487,7 @@ private:
 
     RefPtr<MediaQueryMatcher> m_mediaQueryMatcher;
 
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     EventTargetSet m_touchEventTargets;
 #endif
 
