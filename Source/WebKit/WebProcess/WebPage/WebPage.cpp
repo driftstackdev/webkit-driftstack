@@ -4082,7 +4082,7 @@ void WebPage::cancelCurrentInteractionInformationRequest()
 #endif
 }
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 static Expected<bool, WebCore::RemoteFrameGeometryTransformer> handleTouchEvent(FrameIdentifier frameID, const WebTouchEvent& touchEvent, Page* page)
 {
     RefPtr frame = WebProcess::singleton().webFrame(frameID);
@@ -4181,7 +4181,7 @@ void WebPage::updatePotentialTapSecurityOrigin(const WebTouchEvent& touchEvent, 
     if (auto targetDocument = touchEventTargetFrame->document())
         m_potentialTapSecurityOrigin = targetDocument->securityOrigin();
 }
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 void WebPage::touchEvent(const WebTouchEvent& touchEvent, CompletionHandler<void(std::optional<WebEventType>, bool)>&& completionHandler)
 {
     RefPtr localMainFrame = this->localMainFrame();

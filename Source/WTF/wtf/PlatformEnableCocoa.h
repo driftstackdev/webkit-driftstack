@@ -1022,7 +1022,14 @@
 #define ENABLE_WEBDRIVER_MOUSE_INTERACTIONS 1
 #endif
 
-#if !defined(ENABLE_WEBDRIVER_TOUCH_INTERACTIONS) && PLATFORM(IOS_FAMILY)
+// Driftstack: the fork emulates iPhone Safari, which dispatches real touch events from
+// WebDriver "Perform Actions" pointerType:"touch" (the harness's tap/scroll path). Enabling
+// WEBDRIVER_TOUCH_INTERACTIONS for DRIFTSTACK stops WebAutomationSession from aliasing a touch
+// action to Mouse (WebAutomationSession.cpp: with both MOUSE+TOUCH enabled, neither alias branch
+// fires → a touch action runs simulateTouchInteraction → the DRIFTSTACK platformSimulateTouchInteraction
+// which builds a native WebTouchEvent with the iPhone-17 contact geometry in C++). Paired with
+// ENABLE(DRIFTSTACK_TOUCH_STUBS) re-gating the touch-event dispatch pipeline onto the Mac build.
+#if !defined(ENABLE_WEBDRIVER_TOUCH_INTERACTIONS) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))
 #define ENABLE_WEBDRIVER_TOUCH_INTERACTIONS 1
 #endif
 

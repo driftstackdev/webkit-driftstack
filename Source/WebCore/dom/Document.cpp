@@ -9241,7 +9241,7 @@ unsigned Document::wheelEventHandlerCount() const
 
 void Document::didAddTouchEventHandler(Node& handler)
 {
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     m_touchEventTargets.add(handler);
 
     if (auto* parent = parentDocument()) {
@@ -9261,7 +9261,7 @@ void Document::didAddTouchEventHandler(Node& handler)
 
 void Document::didRemoveTouchEventHandler(Node& handler, EventHandlerRemoval removalMode)
 {
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     removeHandlerFromSet(m_touchEventTargets, handler, removalMode);
 
     if (auto* parent = parentDocument())
@@ -9279,7 +9279,7 @@ void Document::didRemoveTouchEventHandler(Node& handler, EventHandlerRemoval rem
 
 void Document::didRemoveEventTargetNode(Node& handler)
 {
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     if (m_touchEventTargets.removeAll(handler)) {
         if ((&handler == this || m_touchEventTargets.isEmptyIgnoringNullReferences()) && parentDocument())
             protect(parentDocument())->didRemoveEventTargetNode(*this);
@@ -9435,7 +9435,7 @@ void Document::startTrackingStyleRecalcs()
     m_styleRecalcCount = 0;
 }
 
-#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(TOUCH_EVENT_REGIONS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 bool Document::hasTouchEventHandlers() const
 {
 #if ENABLE(TOUCH_EVENTS) && ENABLE(TOUCH_EVENT_REGIONS)

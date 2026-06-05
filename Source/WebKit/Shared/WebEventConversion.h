@@ -32,7 +32,7 @@
 
 #if ENABLE(IOS_TOUCH_EVENTS)
 #include <WebKitAdditions/PlatformTouchEventIOS.h>
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 #include <WebCore/PlatformTouchEvent.h>
 #include <WebCore/PlatformTouchPoint.h>
 #endif
@@ -50,7 +50,7 @@ enum class WebEventType : uint32_t;
 enum class WebMouseEventButton : int8_t;
 enum class WebEventInputSource : uint8_t;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 class WebTouchEvent;
 class WebTouchPoint;
 #endif
@@ -63,7 +63,7 @@ WebCore::PlatformMouseEvent platform(const WebMouseEvent&);
 WebCore::PlatformWheelEvent NODELETE platform(const WebWheelEvent&);
 WebCore::PlatformKeyboardEvent platform(const WebKeyboardEvent&);
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 WebCore::PlatformTouchEvent platform(const WebTouchEvent&);
 #if !ENABLE(IOS_TOUCH_EVENTS)
 WebCore::PlatformTouchPoint platform(const WebTouchPoint&);

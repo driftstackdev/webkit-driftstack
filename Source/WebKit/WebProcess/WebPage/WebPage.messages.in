@@ -182,7 +182,7 @@ messages -> WebPage WantsAsyncDispatchMessage {
 #if ENABLE(IOS_TOUCH_EVENTS)
     DidBeginTouchPoint(WebCore::FloatPoint locationInRootView)
 #endif
-#if !ENABLE(IOS_TOUCH_EVENTS) && ENABLE(TOUCH_EVENTS)
+#if !ENABLE(IOS_TOUCH_EVENTS) && (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS))
     TouchEvent(WebKit::WebTouchEvent event) -> (enum:uint32_t std::optional<WebKit::WebEventType> eventType, bool handled)
 #endif
 

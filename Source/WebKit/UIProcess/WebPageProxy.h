@@ -1469,7 +1469,7 @@ public:
     void handlePreventableTouchEvent(NativeWebTouchEvent&);
     void handleUnpreventableTouchEvent(const NativeWebTouchEvent&);
 
-#elif ENABLE(TOUCH_EVENTS)
+#elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     void handleTouchEvent(IPC::Connection*, const NativeWebTouchEvent&);
 #endif
 
@@ -3414,7 +3414,7 @@ private:
 #endif
     void updateWheelEventActivityAfterProcessSwap();
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     void touchEventHandlingCompleted(IPC::Connection*, std::optional<WebEventType>, bool handled);
     void updateTouchEventTracking(const WebTouchEvent&);
     WebCore::TrackingType touchEventTrackingType(const WebTouchEvent&) const;

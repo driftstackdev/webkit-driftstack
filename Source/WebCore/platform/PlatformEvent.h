@@ -58,7 +58,7 @@ enum class PlatformEventType : uint8_t {
     // PlatformWheelEvent
     Wheel,
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     // PlatformTouchEvent
     TouchStart,
     TouchMove,

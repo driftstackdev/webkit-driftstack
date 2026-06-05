@@ -338,6 +338,10 @@ private:
 
     void positionInformationDidChange(const InteractionInformationAtPosition&) override;
 
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
+    void doneWithTouchEvent(const WebTouchEvent&, bool wasEventHandled) override;
+#endif
+
     bool isViewVisible(NSView *, NSWindow *) const final;
 
     WeakObjCPtr<NSView> m_view;

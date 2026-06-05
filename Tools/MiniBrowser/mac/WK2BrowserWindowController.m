@@ -979,6 +979,53 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 {
     LOG(@"didFinishNavigation: %@", navigation);
+    // Fork-test: DRIFTSTACK_AUTOTAP=1 → after load, tap the probe's tapZone center (read live from the
+    // page via window.__dsTapZoneCenter, robust to layout) so it fires a native touchstart into A3's oracle.
+    // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard
+    // + the SPI being a no-op-without-impl on non-DRIFTSTACK builds suffices.
+    if (getenv("DRIFTSTACK_AUTOTAP")) {
+        // The iPhone viewport override (innerWidth -> ~402) applies late after didFinishNavigation, so
+        // reading __dsTapZoneCenter too early gets the transient window-width layout and the tap misses the
+        // reflowed tapZone. Poll innerWidth until it is stable across 2 reads (settled), then read center + tap.
+        __block int _attempts = 0;
+        __block double _lastW = -1.0;
+        __block void (^_pollTap)(void) = nil;
+        // Recursive self-referencing block (re-dispatches until settled); leaks once per page load, dev-only tool.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-retain-cycles"
+        _pollTap = ^{
+            [webView evaluateJavaScript:@"(function(){var c=window.__dsTapZoneCenter;return [window.innerWidth, c?c.x:0, c?c.y:0];})()"
+                      completionHandler:^(id result, NSError *error) {
+                _attempts++;
+                if (![result isKindOfClass:[NSArray class]] || [result count] < 3)
+                    return;
+                double w = [result[0] doubleValue], cx = [result[1] doubleValue], cy = [result[2] doubleValue];
+                BOOL settled = (w == _lastW && w > 0);
+                _lastW = w;
+                if (settled || _attempts >= 15) {
+                    // The native touch point is in WINDOW coordinates but cx/cy are web-content coordinates;
+                    // the window chrome (title bar/toolbar) adds a Y offset, so a content-space tap lands too
+                    // high and misses the tapZone. Calibrate empirically: a capture-phase document recorder
+                    // catches the calibration tap's landed clientY, offset = cy - landedY, then re-tap corrected.
+                    [webView evaluateJavaScript:@"(function(){window.__dsNT=null;document.addEventListener('touchstart',function(e){var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||{};window.__dsNT={y:t.clientY};},true);return 0;})()"
+                              completionHandler:^(id ir, NSError *ie){
+                        [webView _dsSimulateTouchDownUpAtPoint:CGPointMake(cx, cy)];
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                            [webView evaluateJavaScript:@"window.__dsNT" completionHandler:^(id cal, NSError *ce){
+                                double landedY = [cal isKindOfClass:[NSDictionary class]] ? [cal[@"y"] doubleValue] : cy;
+                                double cyCorr = cy + (cy - landedY);   // add the measured window-chrome Y offset
+                                [webView _dsSimulateTouchDownUpAtPoint:CGPointMake(cx, cyCorr)];
+                            }];
+                        });
+                    }];
+                } else {
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), _pollTap);
+                }
+            }];
+        };
+#pragma clang diagnostic pop
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), _pollTap);
+    }
 }
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *__nullable credential))completionHandler

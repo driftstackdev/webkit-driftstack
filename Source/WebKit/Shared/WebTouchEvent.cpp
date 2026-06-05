@@ -26,14 +26,14 @@
 #include "config.h"
 #include "WebTouchEvent.h"
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 #include "ArgumentCoders.h"
 #include <WebCore/RemoteFrameGeometryTransformer.h>
 
 namespace WebKit {
 
-#if !PLATFORM(IOS_FAMILY)
+#if !PLATFORM(IOS_FAMILY) && !PLATFORM(DRIFTSTACK)
 
 WebTouchEvent::WebTouchEvent(WebEvent&& event, Vector<WebPlatformTouchPoint>&& touchPoints, Vector<WebTouchEvent>&& coalescedEvents, Vector<WebTouchEvent>&& predictedEvents)
     : WebEvent(WTF::move(event))

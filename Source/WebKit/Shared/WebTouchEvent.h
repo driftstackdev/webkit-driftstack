@@ -35,8 +35,8 @@ class RemoteFrameGeometryTransformer;
 
 namespace WebKit {
 
-#if ENABLE(TOUCH_EVENTS)
-#if PLATFORM(IOS_FAMILY)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
 
 // FIXME: Having "Platform" in the name makes it sound like this event is platform-specific or
 // low-level in some way. That doesn't seem to be the case.
@@ -64,7 +64,7 @@ public:
         , m_phase(phase)
     {
     }
-#if ENABLE(IOS_TOUCH_EVENTS)
+#if ENABLE(IOS_TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     WebPlatformTouchPoint(unsigned identifier, WebCore::DoublePoint locationInRootView, WebCore::DoublePoint previousLocationInRootView, WebCore::DoublePoint locationInViewport, State phase, double radiusX, double radiusY, double rotationAngle, double twist, double force, double altitudeAngle, double azimuthAngle, TouchType touchType)
         : m_identifier(identifier)
         , m_locationInRootView(locationInRootView)
@@ -92,7 +92,7 @@ public:
 
     void transformToRemoteFrameCoordinates(const WebCore::RemoteFrameGeometryTransformer&);
 
-#if ENABLE(IOS_TOUCH_EVENTS)
+#if ENABLE(IOS_TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     void setRadiusX(double radiusX) { m_radiusX = radiusX; }
     double radiusX() const { return m_radiusX; }
     void setRadiusY(double radiusY) { m_radiusY = radiusY; }
@@ -118,7 +118,7 @@ private:
     WebCore::DoublePoint m_previousLocationInRootView;
     WebCore::DoublePoint m_locationInViewport;
     State m_phase { State::Released };
-#if ENABLE(IOS_TOUCH_EVENTS)
+#if ENABLE(IOS_TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     double m_radiusX { 0 };
     double m_radiusY { 0 };
     double m_rotationAngle { 0 };

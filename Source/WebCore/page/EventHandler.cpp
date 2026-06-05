@@ -168,12 +168,12 @@
 #include "DOMTimerHoldingTank.h"
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 #include "TouchEvent.h"
 #include "TouchList.h"
 #endif
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 #include "PlatformTouchEvent.h"
 #endif
 
@@ -269,7 +269,7 @@ static UserGestureType NODELETE userGestureTypeForPlatformEvent(const PlatformMo
     return UserGestureType::Other;
 }
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 static UserGestureType userGestureTypeForPlatformEvent(const PlatformTouchEvent& touchEvent)
 {
     // ...
@@ -281,7 +281,7 @@ static UserGestureType userGestureTypeForPlatformEvent(const PlatformTouchEvent&
 }
 #endif
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 class SyntheticTouchPoint : public PlatformTouchPoint {
 public:
 
@@ -347,7 +347,7 @@ public:
         m_touchPoints.append(SyntheticTouchPoint(event));
     }
 };
-#endif // ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#endif // (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 
 static inline ScrollGranularity NODELETE wheelGranularityToScrollGranularity(unsigned deltaMode)
 {
@@ -363,7 +363,7 @@ static inline ScrollGranularity NODELETE wheelGranularityToScrollGranularity(uns
     }
 }
 
-#if (ENABLE(TOUCH_EVENTS) && !PLATFORM(IOS_FAMILY))
+#if ((ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !PLATFORM(IOS_FAMILY))
 static bool shouldGesturesTriggerActive()
 {
     // If the platform we're on supports GestureTapDown and GestureTapCancel then we'll
@@ -504,7 +504,7 @@ void EventHandler::clear()
     m_capturesDragging = false;
     resetCapturingMouseEventsElement();
     clearLatchedState();
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
     m_originatingTouchPointTargets.clear();
     m_originatingTouchPointDocument = nullptr;
     m_originatingTouchPointTargetKey = 0;
@@ -2023,7 +2023,7 @@ HandleUserInputEventResult EventHandler::handleMousePressEvent(const PlatformMou
     if (page->pageOverlayController().handleMouseEvent(platformMouseEvent))
         return true;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
     if (defaultPrevented)
         return true;
@@ -2300,7 +2300,7 @@ OptionSet<HitTestRequest::Type> EventHandler::getHitTypeForMouseMoveEvent(const 
         hitType.add(HitTestRequest::Type::ReadOnly);
     }
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
     // Treat any mouse move events as readonly if the user is currently touching the screen.
     if (m_touchPressed) {
         hitType.add(HitTestRequest::Type::Active);
@@ -2325,7 +2325,7 @@ HitTestResult EventHandler::getHitTestResultForMouseEvent(const PlatformMouseEve
 
 HandleUserInputEventResult EventHandler::handleMouseMoveEvent(const PlatformMouseEvent& platformMouseEvent, HitTestResult* hitTestResult, bool onlyUpdateScrollbars, OptionSet<HitTestRequest::Type> additionalHitTestTypes)
 {
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
     if (defaultPrevented)
         return true;
@@ -2551,7 +2551,7 @@ HandleUserInputEventResult EventHandler::handleMouseReleaseEvent(const PlatformM
     if (page->pageOverlayController().handleMouseEvent(platformMouseEvent))
         return true;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     bool defaultPrevented = dispatchSyntheticTouchEventIfEnabled(platformMouseEvent);
     if (defaultPrevented)
         return true;
@@ -5404,7 +5404,7 @@ void EventHandler::updateLastScrollbarUnderMouse(Scrollbar* scrollbar, SetOrClea
     }
 }
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 static const AtomString& eventNameForTouchPointState(PlatformTouchPoint::State state)
 {
     switch (state) {
@@ -5667,12 +5667,14 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
 
     return swallowedEvent;
 }
-#endif // ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#endif // (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 bool EventHandler::dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent& platformMouseEvent)
 {
-#if ENABLE(IOS_TOUCH_EVENTS)
+// The fork uses native touch dispatch, not desktop mouse->touch emulation, so it takes
+// the early return-false path (like iOS) — and isTouchEventEmulationEnabled is TOUCH_EVENTS-gated.
+#if ENABLE(IOS_TOUCH_EVENTS) || PLATFORM(DRIFTSTACK)
     UNUSED_PARAM(platformMouseEvent);
     return false;
 #else

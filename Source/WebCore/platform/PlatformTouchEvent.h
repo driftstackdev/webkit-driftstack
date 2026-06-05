@@ -24,7 +24,7 @@
 #include "PlatformTouchPoint.h"
 #include <wtf/Vector.h>
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 
 namespace WebCore {
 

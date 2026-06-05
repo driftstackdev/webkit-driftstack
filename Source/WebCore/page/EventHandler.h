@@ -365,7 +365,7 @@ public:
     static WebEvent *currentEvent();
 #endif
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     WEBCORE_EXPORT Expected<bool, RemoteFrameGeometryTransformer> handleTouchEvent(const PlatformTouchEvent&);
 #endif
 
@@ -519,7 +519,7 @@ private:
 
     bool isInsideScrollbar(const IntPoint&) const;
 
-#if ENABLE(TOUCH_EVENTS)
+#if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
     bool dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent&);
 #endif
     
@@ -776,7 +776,7 @@ private:
     std::optional<WheelScrollGestureState> m_wheelScrollGestureState;
 #endif
 
-#if ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#if (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
     using TouchTargetMap = HashMap<int, RefPtr<EventTarget>>;
     TouchTargetMap m_originatingTouchPointTargets;
     RefPtr<Document> m_originatingTouchPointDocument;
