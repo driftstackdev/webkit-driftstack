@@ -1704,8 +1704,17 @@ Style::PreferredSizePair RenderThemeMac::controlSize(StyleAppearance appearance,
 Style::MinimumSizePair RenderThemeMac::minimumControlSize(StyleAppearance appearance, const FontCascade& font, const Style::MinimumSizePair& zoomedSize, float zoomFactor) const
 {
     switch (appearance) {
-    case StyleAppearance::SquareButton:
     case StyleAppearance::ColorWell:
+#if PLATFORM(DRIFTSTACK)
+        // W1138: a real iPhone-17/Safari-26 color input has NO intrinsic min-height (RenderThemeIOS
+        // gives ColorWell no minimum), unlike the Mac NSColorWell's 15px — so the fork reported
+        // min-height:15px where a real iPhone is 0px. Return 0 for ColorWell only; SquareButton/
+        // DefaultButton/Button keep the 15px Mac min (those already match real iPhone-17).
+        return { 0_css_px, 0_css_px };
+#else
+        [[fallthrough]];
+#endif
+    case StyleAppearance::SquareButton:
     case StyleAppearance::DefaultButton:
     case StyleAppearance::Button:
         return {
