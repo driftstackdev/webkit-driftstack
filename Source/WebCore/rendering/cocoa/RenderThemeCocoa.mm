@@ -3249,6 +3249,22 @@ bool RenderThemeCocoa::adjustMenuListStyleForVectorBasedControls(RenderStyle& st
     if (element && is<HTMLSelectElement>(*element))
         style.setLineHeight(CSS::Keyword::Normal { });
 
+#if PLATFORM(DRIFTSTACK)
+    // W1135: iOS <select> intrinsic metrics. A real iPhone derives these from RenderThemeIOS
+    // (minimumControlSize + applyCommonNonCapsuleBorderRadius), which is IOS_FAMILY-only and
+    // thus absent from the Mac/DRIFTSTACK build — so the fork's menulist got min-height:0 /
+    // border-radius:0 where a real iPhone-17/Safari-26 gives min-height:20px / border-radius:10px
+    // (verified stable across 6 real iPhone-17 refs, W1128). Inject those verified values here in
+    // the vector path the fork executes for menulist, mirroring the systemColor DRIFTSTACK
+    // hardcoded-iOS-palette pattern. Guarded so author-set values still win.
+    if (element && is<HTMLSelectElement>(*element)) {
+        if (style.logicalHeight().isAuto())
+            style.setLogicalMinHeight(Style::MinimumSize::Fixed { 20.f });
+        if (!style.hasExplicitlySetBorderRadius())
+            style.setBorderRadius({ 10_css_px, 10_css_px });
+    }
+#endif
+
     return true;
 }
 
