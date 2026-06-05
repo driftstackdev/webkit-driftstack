@@ -518,15 +518,18 @@
 ;; connection itself. Subsequent slices add port-53/853/8853 denies
 ;; once Phase B/C custom SOCKS5 client is wired (Wave 29-369+).
 ;;
-;; Direct-browse exception (founder 2026-05-31): when the launcher passes
-;; DRIFTSTACK_DIRECT_BROWSE="1" (local dev / inspection, no proxy), these
+;; Direct-egress exception (founder 2026-05-31 / decoupled W1089): when the launcher passes
+;; DRIFTSTACK_DIRECT_BROWSE="1" (local dev / inspection, atlas-off readable) OR
+;; DRIFTSTACK_DIRECT_EGRESS="1" (direct host-IP outbound, atlas UNCHANGED — for
+;; verifying the full bit-identical stack on the real internet with no proxy), these
 ;; DNS denies are SKIPPED — otherwise EVERY external connection fails, even
 ;; by literal IP, because Network.framework's nw_connection consults
 ;; mDNSResponder for endpoint resolution regardless of whether a DNS name
-;; is involved. Production (param != "1") keeps the deny: direct egress is
+;; is involved. Production (neither param "1") keeps the deny: direct egress is
 ;; an intentional hard limitation — proxy/OpenVPN/WireGuard only. The
-;; parameter is set in AuxiliaryProcess::initializeSandbox from getenv.
-(when (not (equal? (param "DRIFTSTACK_DIRECT_BROWSE") "1"))
+;; parameters are set in AuxiliaryProcess::initializeSandbox from getenv.
+(when (and (not (equal? (param "DRIFTSTACK_DIRECT_BROWSE") "1"))
+           (not (equal? (param "DRIFTSTACK_DIRECT_EGRESS") "1")))
     (deny network-outbound (literal "/private/var/run/mDNSResponder"))
     (deny mach-lookup (global-name "com.apple.dnssd.service"))
     (deny mach-lookup (global-name "com.apple.mDNSResponder")))

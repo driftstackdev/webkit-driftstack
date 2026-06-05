@@ -1411,7 +1411,11 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     // a customer proxy (for local inspection of fingerprint/canvas behavior).
     // Off by default → production/cumrig egress posture unchanged.
     static const char* s_directBrowseEnv = getenv("DRIFTSTACK_DIRECT_BROWSE");
-    bool driftstackDirectBrowse = s_directBrowseEnv && s_directBrowseEnv[0] == '1';
+    static const char* s_directEgressEnv = getenv("DRIFTSTACK_DIRECT_EGRESS");
+    // DIRECT_EGRESS (decoupled W1089) = same truly-direct egress (strip proxy + skip SOCKS5)
+    // as DIRECT_BROWSE, but networking-only — atlas stays ON (FP_MODE bit-identical + real internet).
+    bool driftstackDirectBrowse = (s_directBrowseEnv && s_directBrowseEnv[0] == '1')
+        || (s_directEgressEnv && s_directEgressEnv[0] == '1');
     {
         NSDictionary* preDict = configuration.get().connectionProxyDictionary;
         static bool loggedProxyDiagOnce = false;

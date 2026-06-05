@@ -730,6 +730,12 @@ void AuxiliaryProcess::initializeSandbox(const AuxiliaryProcessInitializationPar
     const char* driftstackDirectBrowse = getenv("DRIFTSTACK_DIRECT_BROWSE");
     bool driftstackDirectBrowseOn = driftstackDirectBrowse && driftstackDirectBrowse[0] == '1';
     sandboxParameters.addParameter("DRIFTSTACK_DIRECT_BROWSE"_s, driftstackDirectBrowseOn ? "1"_span : "0"_span);
+    // DRIFTSTACK_DIRECT_EGRESS (decoupled W1089): same DNS-deny skip as DIRECT_BROWSE, but
+    // NETWORKING-ONLY — the atlas sites keep gating on DIRECT_BROWSE, so FP_MODE+DIRECT_EGRESS
+    // = full bit-identical stack (atlas ON) on the real internet with no proxy.
+    const char* driftstackDirectEgress = getenv("DRIFTSTACK_DIRECT_EGRESS");
+    bool driftstackDirectEgressOn = driftstackDirectEgress && driftstackDirectEgress[0] == '1';
+    sandboxParameters.addParameter("DRIFTSTACK_DIRECT_EGRESS"_s, driftstackDirectEgressOn ? "1"_span : "0"_span);
 #endif
 
     if (sandboxParameters.userDirectorySuffix().isNull())
