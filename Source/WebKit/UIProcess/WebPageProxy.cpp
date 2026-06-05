@@ -5053,11 +5053,13 @@ void WebPageProxy::touchEventHandlingCompleted(IPC::Connection* connection, std:
 
 void WebPageProxy::handleTouchEvent(IPC::Connection* connection, const NativeWebTouchEvent& event)
 {
+    WTFLogAlways("[Driftstack-AUTOTAP/UIProcess] handleTouchEvent entered hasRunningProcess=%d", hasRunningProcess());
     if (!hasRunningProcess())
         return;
 
     updateTouchEventTracking(event);
 
+    WTFLogAlways("[Driftstack-AUTOTAP/UIProcess] trackingType=%d (NotTracking=%d) suspended=%d", (int)touchEventTrackingType(event), (int)TrackingType::NotTracking, (int)m_areActiveDOMObjectsAndAnimationsSuspended);
     if (touchEventTrackingType(event) == TrackingType::NotTracking)
         return;
 
@@ -5065,9 +5067,11 @@ void WebPageProxy::handleTouchEvent(IPC::Connection* connection, const NativeWeb
     // and animation on the page itself (kinetic scrolling, tap to zoom) etc, then
     // we do not send any of the events to the page even if is has listeners.
     if (!m_areActiveDOMObjectsAndAnimationsSuspended) {
+        WTFLogAlways("[Driftstack-AUTOTAP/UIProcess] sending Messages::WebPage::TouchEvent");
         internals().touchEventQueue.append(event);
         protect(legacyMainFrameProcess())->startResponsivenessTimer();
         sendWithAsyncReply(Messages::WebPage::TouchEvent(event), [this, protectedThis = Ref { *this }] (IPC::Connection* connection, std::optional<WebEventType> eventType, bool handled) {
+            WTFLogAlways("[Driftstack-AUTOTAP/UIProcess] TouchEvent async reply: eventType-set=%d handled=%d", !!eventType, handled);
             if (!m_pageClient)
                 return;
             if (!eventType) {
