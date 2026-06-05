@@ -2872,6 +2872,23 @@ bool RenderThemeCocoa::adjustTextFieldStyleForVectorBasedControls(RenderStyle& s
     }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // W1136: iOS date/time input intrinsic min-height. A real iPhone-17/Safari-26 gives the
+    // date/time-family inputs a 20px min-height (derived from RenderThemeIOS via the
+    // adjustInputElementButton/localizedDateCache path, which is IOS_FAMILY-only and absent
+    // from the Mac/DRIFTSTACK build) — so the fork left them at min-height:0 → height:18 where a
+    // real iPhone is min-height:20 / height:20 (verified across 6 real iPhone-17 refs, W1128).
+    // Inject the verified min-height for date/time-family inputs ONLY (plain text inputs already
+    // match), which also drives height 18->20. Mirrors the W1135 select injection; guarded so
+    // author-set heights still win.
+    if (RefPtr input = dynamicDowncast<HTMLInputElement>(*element);
+        input && (input->isDateField() || input->isTimeField() || input->isDateTimeLocalField()
+            || input->isMonthField() || input->isWeekField())) {
+        if (style.logicalHeight().isAuto())
+            style.setLogicalMinHeight(Style::MinimumSize::Fixed { 20.f });
+    }
+#endif
+
     return true;
 }
 
