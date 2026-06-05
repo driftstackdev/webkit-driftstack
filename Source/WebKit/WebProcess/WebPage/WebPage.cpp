@@ -4184,7 +4184,6 @@ void WebPage::updatePotentialTapSecurityOrigin(const WebTouchEvent& touchEvent, 
 #elif ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 void WebPage::touchEvent(const WebTouchEvent& touchEvent, CompletionHandler<void(std::optional<WebEventType>, bool)>&& completionHandler)
 {
-    WTFLogAlways("[Driftstack-AUTOTAP/WebProcess] WebPage::touchEvent received type=%d points=%zu", (int)touchEvent.type(), touchEvent.touchPoints().size());
     RefPtr localMainFrame = this->localMainFrame();
     if (!localMainFrame)
         return;

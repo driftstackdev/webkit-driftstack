@@ -984,57 +984,37 @@ static BOOL isJavaScriptURL(NSURL *url)
     // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard
     // + the SPI being a no-op-without-impl on non-DRIFTSTACK builds suffices.
     if (getenv("DRIFTSTACK_AUTOTAP")) {
-        // The iPhone viewport override (innerWidth -> ~402) applies LATE and unpredictably after
-        // didFinishNavigation — reading __dsTapZoneCenter too early gets the transient window-width
-        // layout (e.g. center x=388 @776) and the tap then misses the reflowed 402-wide tapZone.
-        // Poll innerWidth until it's stable across 2 reads (layout settled), THEN read the center + tap.
-        NSLog(@"[Driftstack-AUTOTAP] didFinishNavigation: DRIFTSTACK_AUTOTAP set — settle-polling viewport before tap");
+        // The iPhone viewport override (innerWidth -> ~402) applies late after didFinishNavigation, so
+        // reading __dsTapZoneCenter too early gets the transient window-width layout and the tap misses the
+        // reflowed tapZone. Poll innerWidth until it is stable across 2 reads (settled), then read center + tap.
         __block int _attempts = 0;
         __block double _lastW = -1.0;
         __block void (^_pollTap)(void) = nil;
-        // The poll block re-dispatches itself (recursive self-reference) until the viewport settles.
-        // That is an intentional self-capture; the block leaks once per page load (negligible for this
-        // dev-only fork-test tool) and stops recursing once it taps. Suppress the -Werror retain-cycle.
+        // Recursive self-referencing block (re-dispatches until settled); leaks once per page load, dev-only tool.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Warc-retain-cycles"
         _pollTap = ^{
-            [webView evaluateJavaScript:@"(function(){var c=window.__dsTapZoneCenter;var z=document.getElementById('tapZone');var r=z?z.getBoundingClientRect():{left:0,top:0,width:0,height:0};return [window.innerWidth, c?c.x:0, c?c.y:0, r.left, r.top, r.width, r.height];})()"
+            [webView evaluateJavaScript:@"(function(){var c=window.__dsTapZoneCenter;return [window.innerWidth, c?c.x:0, c?c.y:0];})()"
                       completionHandler:^(id result, NSError *error) {
                 _attempts++;
-                if (![result isKindOfClass:[NSArray class]] || [result count] < 7) {
-                    NSLog(@"[Driftstack-AUTOTAP] poll eval failed result=%@ err=%@", result, error);
+                if (![result isKindOfClass:[NSArray class]] || [result count] < 3)
                     return;
-                }
                 double w = [result[0] doubleValue], cx = [result[1] doubleValue], cy = [result[2] doubleValue];
                 BOOL settled = (w == _lastW && w > 0);
                 _lastW = w;
-                NSLog(@"[Driftstack-AUTOTAP] poll #%d innerWidth=%.0f center=(%.1f,%.1f) rect=[%.0f,%.0f %.0fx%.0f] settled=%d",
-                      _attempts, w, cx, cy, [result[3] doubleValue], [result[4] doubleValue], [result[5] doubleValue], [result[6] doubleValue], settled);
                 if (settled || _attempts >= 15) {
-                    // The native touch point is interpreted in WINDOW coordinates, but cx/cy come from
-                    // getBoundingClientRect (web-content coordinates). The window chrome (title bar/toolbar)
-                    // introduces a Y offset, so a content-space tap lands ~chromeHeight px too high and
-                    // misses the tapZone. Rather than hardcode the chrome height, CALIBRATE empirically:
-                    // a capture-phase document recorder catches the first (calibration) tap's landed
-                    // clientY; offset = cy - landedY; then re-tap at cy+offset so it lands on the tapZone.
-                    [webView evaluateJavaScript:@"(function(){window.__dsNT=null;document.addEventListener('touchstart',function(e){var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||{};window.__dsNT={x:t.clientX,y:t.clientY,rx:t.radiusX,ry:t.radiusY,fz:t.force,tid:(e.target&&(e.target.id||e.target.className))||null};},true);return 'recorder-installed';})()"
+                    // The native touch point is in WINDOW coordinates but cx/cy are web-content coordinates;
+                    // the window chrome (title bar/toolbar) adds a Y offset, so a content-space tap lands too
+                    // high and misses the tapZone. Calibrate empirically: a capture-phase document recorder
+                    // catches the calibration tap's landed clientY, offset = cy - landedY, then re-tap corrected.
+                    [webView evaluateJavaScript:@"(function(){window.__dsNT=null;document.addEventListener('touchstart',function(e){var t=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||{};window.__dsNT={y:t.clientY};},true);return 0;})()"
                               completionHandler:^(id ir, NSError *ie){
-                        NSLog(@"[Driftstack-AUTOTAP] %@ — calibration tap at (%.1f, %.1f)", ir, cx, cy);
                         [webView _dsSimulateTouchDownUpAtPoint:CGPointMake(cx, cy)];
                         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                             [webView evaluateJavaScript:@"window.__dsNT" completionHandler:^(id cal, NSError *ce){
                                 double landedY = [cal isKindOfClass:[NSDictionary class]] ? [cal[@"y"] doubleValue] : cy;
-                                double offY = cy - landedY;                 // window-chrome Y offset
-                                double cyCorr = cy + offY;
-                                NSLog(@"[Driftstack-AUTOTAP] calibration landed y=%.1f (geom rx=%@ ry=%@ fz=%@) → chromeOffsetY=%.1f, corrected tap (%.1f, %.1f)",
-                                      landedY, [cal isKindOfClass:[NSDictionary class]]?cal[@"rx"]:@"?", [cal isKindOfClass:[NSDictionary class]]?cal[@"ry"]:@"?", [cal isKindOfClass:[NSDictionary class]]?cal[@"fz"]:@"?", offY, cx, cyCorr);
+                                double cyCorr = cy + (cy - landedY);   // add the measured window-chrome Y offset
                                 [webView _dsSimulateTouchDownUpAtPoint:CGPointMake(cx, cyCorr)];
-                                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                                    [webView evaluateJavaScript:@"JSON.stringify({nativeTouch:window.__dsNT,forkCheck:window.driftstackForkCheck})"
-                                              completionHandler:^(id r, NSError *e){
-                                        NSLog(@"[Driftstack-AUTOTAP/DIAG] post-corrected-tap: %@ err=%@", r, e);
-                                    }];
-                                });
                             }];
                         });
                     }];
@@ -1045,8 +1025,7 @@ static BOOL isJavaScriptURL(NSURL *url)
         };
 #pragma clang diagnostic pop
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), _pollTap);
-    } else
-        NSLog(@"[Driftstack-AUTOTAP] didFinishNavigation: DRIFTSTACK_AUTOTAP NOT set");
+    }
 }
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *__nullable credential))completionHandler

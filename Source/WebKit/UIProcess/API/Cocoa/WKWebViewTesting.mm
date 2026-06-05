@@ -116,7 +116,6 @@
 // so a tap fires a real touchstart/touchend on the fork. Driven by MiniBrowser's DRIFTSTACK_AUTOTAP hook.
 - (void)_dsSimulateTouchDownUpAtPoint:(CGPoint)point
 {
-    WTFLogAlways("[Driftstack-AUTOTAP/SPI] _dsSimulateTouchDownUpAtPoint (%.1f,%.1f) hasPage=%d", point.x, point.y, !!_page);
     WebCore::DoublePoint loc(point.x, point.y);
     {
         Vector<WebKit::WebPlatformTouchPoint> pts;
@@ -124,7 +123,6 @@
             24.278, 0.0, 0.0, 0.0, 0.0, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
         WebKit::NativeWebTouchEvent down(WebKit::WebEvent { WebKit::WebEventType::TouchStart, OptionSet<WebKit::WebEventModifier> { }, MonotonicTime::now() },
             pts, { }, { }, loc, true, false, 1.f, 0.f);
-        WTFLogAlways("[Driftstack-AUTOTAP/SPI] sending TouchStart down");
         _page->handleTouchEvent(nullptr, down);
     }
     {

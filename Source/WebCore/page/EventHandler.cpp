@@ -347,7 +347,7 @@ public:
         m_touchPoints.append(SyntheticTouchPoint(event));
     }
 };
-#endif // ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#endif // (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 
 static inline ScrollGranularity NODELETE wheelGranularityToScrollGranularity(unsigned deltaMode)
 {
@@ -5565,7 +5565,6 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
         if (!touchTargetNode)
             continue;
         Ref document = touchTargetNode->document();
-        WTFLogAlways("[Driftstack-AUTOTAP/WebProcess] EventHandler touch point: hasTouchEventHandlers=%d", document->hasTouchEventHandlers());
         if (!document->hasTouchEventHandlers())
             continue;
         RefPtr targetFrame = document->frame();
@@ -5661,7 +5660,6 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
 
             Ref<TouchEvent> touchEvent = TouchEvent::create(effectiveTouches.get(), targetTouches.get(), changedTouches[state].m_touches.get(),
                 stateName, downcast<Node>(*target).document().windowProxy(), { }, event.modifiers());
-            WTFLogAlways("[Driftstack-AUTOTAP/WebProcess] dispatching TouchEvent '%s' to JS target", stateName.string().utf8().data());
             target->dispatchEvent(touchEvent);
             swallowedEvent = swallowedEvent || touchEvent->defaultPrevented() || touchEvent->defaultHandled();
         }
@@ -5669,7 +5667,7 @@ Expected<bool, RemoteFrameGeometryTransformer> EventHandler::handleTouchEvent(co
 
     return swallowedEvent;
 }
-#endif // ENABLE(TOUCH_EVENTS) && !ENABLE(IOS_TOUCH_EVENTS)
+#endif // (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)) && !ENABLE(IOS_TOUCH_EVENTS)
 
 #if ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS)
 bool EventHandler::dispatchSyntheticTouchEventIfEnabled(const PlatformMouseEvent& platformMouseEvent)
