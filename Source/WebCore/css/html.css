@@ -445,7 +445,16 @@ input[type="search"] {
     box-sizing: border-box;
 #if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
     border: 1px solid -webkit-control-background;
+#endif
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY)
     background-color: -apple-system-opaque-tertiary-fill;
+#endif
+#if defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK
+    /* W1129: iOS input[type=search] bg = -apple-system-opaque-tertiary-fill, whose CSS keyword is
+       declared IOS_FAMILY-only → undeclared/invalid on the Mac(DRIFTSTACK) build → fell back to white
+       (W242 documented this gap). Substitute the literal iOS light value: rgb(238,238,239), VERIFIED
+       stable across 6 real iPhone-17/Safari-26 refs (W1128). Matches a real iPhone's search-field grey. */
+    background-color: rgb(238, 238, 239);
 #endif
 }
 
