@@ -984,14 +984,20 @@ static BOOL isJavaScriptURL(NSURL *url)
     // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard
     // + the SPI being a no-op-without-impl on non-DRIFTSTACK builds suffices.
     if (getenv("DRIFTSTACK_AUTOTAP")) {
+        NSLog(@"[Driftstack-AUTOTAP] didFinishNavigation: DRIFTSTACK_AUTOTAP set, scheduling tap in 0.4s");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [webView evaluateJavaScript:@"(function(){var c=window.__dsTapZoneCenter;return c?[c.x,c.y]:null;})()"
                       completionHandler:^(id result, NSError *error) {
-                if ([result isKindOfClass:[NSArray class]] && [result count] == 2)
+                NSLog(@"[Driftstack-AUTOTAP] __dsTapZoneCenter eval result=%@ error=%@", result, error);
+                if ([result isKindOfClass:[NSArray class]] && [result count] == 2) {
+                    NSLog(@"[Driftstack-AUTOTAP] tapping at (%@, %@)", result[0], result[1]);
                     [webView _dsSimulateTouchDownUpAtPoint:CGPointMake([result[0] doubleValue], [result[1] doubleValue])];
+                } else
+                    NSLog(@"[Driftstack-AUTOTAP] NO TAP — __dsTapZoneCenter not a 2-array");
             }];
         });
-    }
+    } else
+        NSLog(@"[Driftstack-AUTOTAP] didFinishNavigation: DRIFTSTACK_AUTOTAP NOT set");
 }
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *__nullable credential))completionHandler
