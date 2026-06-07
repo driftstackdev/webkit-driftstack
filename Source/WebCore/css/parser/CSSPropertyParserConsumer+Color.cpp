@@ -806,14 +806,30 @@ bool isColorKeywordAllowed(CSSValueID id, const CSSParserContext& context)
 #if PLATFORM(IOS_FAMILY)
     case CSSValueAppleSystemQuaternaryFill:
 #endif
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
+    // W1411 (INVERSE syscolors tell, fingerprint): on desktop Mac this COCOA opaque fill is UA-sheet-only,
+    // but a real iPhone (and the iOS-impersonating fork) RECOGNIZES it in author CSS (rigorous fork-vs-real
+    // shared-keyword diff W1410). Its VALUE is bit-identical to a real iPhone — both the fork and 13/13
+    // real-device BS captures resolve -apple-system-opaque-secondary-fill = rgb(233,233,234) (W1411
+    // empirical), so recognizing it adds NO value tell. Exclude DRIFTSTACK from this Mac-desktop restriction
+    // so the fork recognizes it like iOS (closes 1 of the 5 W1410 inverse tells).
+    //
+    // NOTE — -apple-system-opaque-fill is deliberately NOT here (it sits in the plain PLATFORM(MAC) block
+    // below): the fork resolves it to the translucent rgba(0, 0, 0, 0.098), whereas a real iPhone returns
+    // opaque rgb(228, 228, 229) (13/13 captures, W1411). Recognizing it on the fork would only swap a
+    // recognition tell for a VALUE tell — it needs a system-color value-table override first, so it stays
+    // restricted + founder-gated alongside the 3 iOS-only-enum tells (indigo / teal /
+    // opaque-secondary-fill-disabled).
+    case CSSValueAppleSystemOpaqueSecondaryFill:
+#endif
 #if PLATFORM(MAC)
     case CSSValueAppleSystemOpaqueFill:
-    case CSSValueAppleSystemOpaqueSecondaryFill:
     // W1407 (fingerprint tell W226/W794): these macOS AppKit color keywords are
     // enable-if=WTF_PLATFORM_MAC in CSSValueKeywords.in, so a real iPhone (IOS_FAMILY) lacks the enum
     // entirely and REJECTS them in author CSS (CSS.supports('color','-apple-system-control-accent')
     // = false). The fork is built PLATFORM(MAC) so the parser would recognize them in AUTHOR CSS =
-    // a 1-bit tell each. Restrict to UASheetMode like OpaqueFill above — RenderThemeMac's internal/
+    // a 1-bit tell each. Restrict to UASheetMode (like OpaqueFill, just above this comment) —
+    // RenderThemeMac's internal/
     // UA-sheet use is unaffected (UASheetMode returns true); only author-CSS recognition flips to
     // false = matches a real iPhone. Does NOT remove the enum (the W227 compile concern is N/A).
     // 10 keywords: W794's set of 9 + QuinaryLabel (the 10th — iOS labels stop at quaternary, Mac
