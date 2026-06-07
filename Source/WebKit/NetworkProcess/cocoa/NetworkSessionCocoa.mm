@@ -1441,8 +1441,8 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     // EG-WK-1.4 Wave 29-313: egress safeguard. When DRIFTSTACK_REQUIRE_PROXY=1
     // AND no SOCKS5 / HTTP proxy is configured for this session, log a
     // CRITICAL warning so production deployments catch missing proxy config
-    // before sessions go live. (Full hard-refuse semantics requires WebContent
-    // load delegate integration — wave 29-313 logs only.)
+    // before sessions go live. (W1402: now also HARD-REFUSES — planning-133 §91 fail-closed —
+    // by routing all egress through a dead SOCKS proxy so the session cannot egress; see below.)
     {
         const char* requireEnv = getenv("DRIFTSTACK_REQUIRE_PROXY");
         bool requireProxy = requireEnv && requireEnv[0] == '1';
@@ -1455,8 +1455,23 @@ ALLOW_DEPRECATED_DECLARATIONS_END
             static bool loggedOnceSafeguard = false;
             if (!loggedOnceSafeguard) {
                 loggedOnceSafeguard = true;
-                WTFLogAlways("[Driftstack-EG-WK-1.4] EGRESS SAFEGUARD WARNING: DRIFTSTACK_REQUIRE_PROXY=1 but no proxy configured — production session should NOT egress without customer proxy");
+                WTFLogAlways("[Driftstack-EG-WK-1.4] EGRESS SAFEGUARD: DRIFTSTACK_REQUIRE_PROXY=1 but no proxy configured — FAIL-CLOSED (routing egress to a dead SOCKS proxy so this session CANNOT egress without a customer proxy)");
             }
+            // EG-WK-1.4 HARD-REFUSE (W1402, planning-133 §91 fail-closed). A session reaching here is
+            // misconfigured: REQUIRE_PROXY=1 yet no SOCKS5/HTTP proxy. The API (EG-API-1.4) + harness
+            // layers are the PRIMARY fail-closed (they refuse to start a no-proxy session), so this
+            // WebKit backstop is INERT in normal operation — it fires only if BOTH upper layers
+            // regressed. Route ALL egress through a dead SOCKS proxy (127.0.0.1:1, nothing listens →
+            // connection-refused) so every request fails and the real Mac fleet IP is never used. This
+            // is defense-in-depth, strictly no-worse-than the prior warn-only on a failure path (the
+            // session stays blocked, not leaking), and is never reached when a proxy IS configured
+            // (the per-session/env proxy-setup below only runs in that case). cumrig is unaffected:
+            // REQUIRE_PROXY is unset there → requireProxy=false → this branch is skipped.
+            configuration.get().connectionProxyDictionary = @{
+                (NSString *)kCFNetworkProxiesSOCKSEnable: @YES,
+                (NSString *)kCFNetworkProxiesSOCKSProxy: @"127.0.0.1",
+                (NSString *)kCFNetworkProxiesSOCKSPort: @1,
+            };
         }
     }
 
