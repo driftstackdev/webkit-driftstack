@@ -43,6 +43,13 @@
 #import <WebKit/_WKWebsiteDataStoreConfiguration.h>
 #import <notify.h>
 #import <objc/runtime.h>
+#import <wtf/Platform.h> // for PLATFORM(DRIFTSTACK) below (preprocessor-only, .m-safe)
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackWebDriverServer.h"
+#import <WebKit/_WKAutomationSession.h>
+#import <WebKit/_WKAutomationSessionConfiguration.h>
+#import <WebKit/_WKAutomationSessionDelegate.h>
+#endif
 
 static const NSString * const kURLArgumentString = @"--url";
 static const NSString * const kSiteIsolationArgumentString = @"--force-site-isolation";
@@ -79,6 +86,16 @@ enum {
 @property (readonly, nonatomic) WKWebViewConfiguration *defaultConfiguration;
 
 @end
+
+#if PLATFORM(DRIFTSTACK)
+// Driftstack item-9: BrowserAppDelegate doubles as the automation-session delegate,
+// handing the in-process WebDriver the existing browser window's web view. The ivar
+// retains the session (its own .delegate is weak).
+@interface BrowserAppDelegate () <_WKAutomationSessionDelegate> {
+    _WKAutomationSession *_driftstackAutomationSession;
+}
+@end
+#endif
 
 @implementation BrowserAppDelegate
 
@@ -539,7 +556,65 @@ static NSNumber *_currentBadge;
         [self newEditorWindow:self];
     else
         [self newWindow:self];
+
+#if PLATFORM(DRIFTSTACK)
+    [self _driftstackSetUpWebDriverIfRequested];
+#endif
 }
+
+#if PLATFORM(DRIFTSTACK)
+// Driftstack item-9: on --enable-webdriver=<sessionId>, create + install an
+// _WKAutomationSession on the shared process pool and start the in-process WebDriver
+// server (writes /tmp/driftstack-webdriver-<sessionId>.port). The harness then drives
+// every intent over W3C WebDriver against this MiniBrowser.
+- (void)_driftstackSetUpWebDriverIfRequested
+{
+    NSString *prefix = @"--enable-webdriver=";
+    NSString *sessionID = nil;
+    for (NSString *arg in [[NSProcessInfo processInfo] arguments]) {
+        if ([arg hasPrefix:prefix]) {
+            sessionID = [arg substringFromIndex:prefix.length];
+            break;
+        }
+    }
+    if (!sessionID.length)
+        return;
+
+    // Ensure a window exists for the automation session to drive.
+    if (![self frontmostBrowserWindowController])
+        [self newWindow:self];
+
+    WKProcessPool *processPool = self.defaultConfiguration.processPool;
+    if (!processPool) {
+        NSLog(@"[Driftstack] WebDriver: no process pool; cannot start automation");
+        return;
+    }
+
+    _WKAutomationSessionConfiguration *configuration = [[_WKAutomationSessionConfiguration alloc] init];
+    _driftstackAutomationSession = [[_WKAutomationSession alloc] initWithConfiguration:configuration];
+    _driftstackAutomationSession.delegate = self;
+    _driftstackAutomationSession.sessionIdentifier = sessionID;
+    [processPool _setAutomationSession:_driftstackAutomationSession];
+
+    DriftstackStartWebDriverServer(sessionID, _driftstackAutomationSession);
+}
+
+#pragma mark _WKAutomationSessionDelegate (item-9)
+
+- (void)_automationSession:(_WKAutomationSession *)automationSession requestNewWebViewWithOptions:(_WKAutomationSessionBrowsingContextOptions)options completionHandler:(void(^)(WKWebView *))completionHandler
+{
+    // Hand back the existing MiniBrowser window's web view (single in-process session).
+    BrowserWindowController *controller = [self frontmostBrowserWindowController];
+    if (![controller isKindOfClass:[WK2BrowserWindowController class]]) {
+        [self newWindow:self];
+        controller = [self frontmostBrowserWindowController];
+    }
+    if ([controller isKindOfClass:[WK2BrowserWindowController class]])
+        completionHandler([(WK2BrowserWindowController *)controller webView]);
+    else
+        completionHandler(nil);
+}
+#endif // PLATFORM(DRIFTSTACK)
 
 - (BrowserWindowController *)frontmostBrowserWindowController
 {
