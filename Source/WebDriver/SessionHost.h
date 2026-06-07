@@ -67,7 +67,10 @@ public:
 
 class SessionHost final
     : public RefCounted<SessionHost>
-#if USE(INSPECTOR_SOCKET_SERVER)
+// Driftstack item-9: the cocoa in-process SessionHost reuses the socket HTTPServer
+// (so USE(INSPECTOR_SOCKET_SERVER) is set) but does NOT speak RemoteInspector — it
+// drives _WKAutomationSession directly — so it must not inherit the socket client.
+#if USE(INSPECTOR_SOCKET_SERVER) && !PLATFORM(DRIFTSTACK)
     , public Inspector::RemoteInspectorConnectionClient
 #endif
 {
@@ -149,7 +152,9 @@ private:
     void didStartAutomationSession(GVariant*);
     void setTargetList(uint64_t connectionID, Vector<Target>&&);
     void sendMessageToFrontend(uint64_t connectionID, uint64_t targetID, const char* message);
-#elif USE(INSPECTOR_SOCKET_SERVER)
+// Driftstack item-9: cocoa is in-process (no RemoteInspector), so it declares none of
+// the socket SessionHost's target-list/dispatchMap machinery — connect is direct.
+#elif USE(INSPECTOR_SOCKET_SERVER) && !PLATFORM(DRIFTSTACK)
     HashMap<String, CallHandler>& dispatchMap() override;
     void didClose(Inspector::RemoteInspectorSocketEndpoint&, Inspector::ConnectionID) final;
     void sendWebInspectorEvent(const String&);
@@ -183,7 +188,7 @@ private:
     GRefPtr<GSubprocess> m_browser;
     RefPtr<SocketConnection> m_socketConnection;
     GRefPtr<GCancellable> m_cancellable;
-#elif USE(INSPECTOR_SOCKET_SERVER)
+#elif USE(INSPECTOR_SOCKET_SERVER) && !PLATFORM(DRIFTSTACK)
     Function<void(bool, std::optional<String>)> m_startSessionCompletionHandler;
     std::optional<Inspector::ConnectionID> m_clientID;
 #if PLATFORM(WIN)
