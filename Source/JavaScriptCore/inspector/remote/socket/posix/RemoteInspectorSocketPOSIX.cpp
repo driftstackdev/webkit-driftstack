@@ -75,6 +75,9 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     int fdListen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (fdListen < 0) {
         LOG_ERROR("socket() failed, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1386] socket() failed errno=%d", errno);
+#endif
         return std::nullopt;
     }
 
@@ -82,6 +85,9 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     int error = setsockopt(fdListen, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
     if (error < 0) {
         LOG_ERROR("setsockopt() SO_REUSEADDR, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1386] setsockopt(SO_REUSEADDR) failed errno=%d", errno);
+#endif
         ::close(fdListen);
         return std::nullopt;
     }
@@ -89,6 +95,9 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     error = setsockopt(fdListen, SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled));
     if (error < 0) {
         LOG_ERROR("setsockopt() SO_REUSEPORT, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1386] setsockopt(SO_REUSEPORT) failed errno=%d (non-fatal, continuing)", errno);
+#endif
 #if PLATFORM(DRIFTSTACK)
         // W1385: the App Sandbox (MiniBrowser item-9 in-process WD server) denies SO_REUSEPORT
         // (ENOPROTOOPT/42) even with the network.server entitlement. SO_REUSEPORT is a port-SHARING
@@ -120,6 +129,9 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     error = ::bind(fdListen, (struct sockaddr*)&address, sizeof(address));
     if (error < 0) {
         LOG_ERROR("bind() failed, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1386] bind(127.0.0.1:%u) failed errno=%d", ntohs(address.sin_port), errno);
+#endif
         ::close(fdListen);
         return std::nullopt;
     }
@@ -127,6 +139,9 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     error = ::listen(fdListen, 1);
     if (error < 0) {
         LOG_ERROR("listen() failed, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1386] listen() failed errno=%d", errno);
+#endif
         ::close(fdListen);
         return std::nullopt;
     }
@@ -161,22 +176,42 @@ bool setup(PlatformSocketType socket)
 {
     if (!setCloseOnExec(socket)) {
         LOG_ERROR("setCloseOnExec() error");
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1387] setup: setCloseOnExec() failed errno=%d", errno);
+#endif
         return false;
     }
 
     if (!setNonBlock(socket)) {
         LOG_ERROR("setNonBlock() error (errno = %d)", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1387] setup: setNonBlock() failed errno=%d", errno);
+#endif
         return false;
     }
 
     if (setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &BufferSize, sizeof(BufferSize))) {
         LOG_ERROR("setsockopt(SO_RCVBUF) error (errno = %d)", errno);
+#if PLATFORM(DRIFTSTACK)
+        // W1387: the App Sandbox (MiniBrowser item-9 in-process WD server) can deny SO_RCVBUF/SO_SNDBUF
+        // (ENOPROTOOPT/42) even with the network.server entitlement. These are buffer-SIZE optimizations
+        // only — the localhost WD control channel (tiny JSON frames) works fine with the kernel defaults,
+        // so treat the failure as non-fatal: keep the socket and continue. Without this, setup() returns
+        // false → setSocket() fails → the ListenerConnection closes the listening fd → isListening()=false
+        // → listenInet() returns nullopt → "failed to listen on 127.0.0.1:<port>" (the W1384 errno=42 we saw).
+        WTFLogAlways("[Driftstack-W1387] setup: setsockopt(SO_RCVBUF) failed errno=%d (non-fatal, continuing)", errno);
+#else
         return false;
+#endif
     }
 
     if (setsockopt(socket, SOL_SOCKET, SO_SNDBUF, &BufferSize, sizeof(BufferSize))) {
         LOG_ERROR("setsockopt(SO_SNDBUF) error (errno = %d)", errno);
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-W1387] setup: setsockopt(SO_SNDBUF) failed errno=%d (non-fatal, continuing)", errno);
+#else
         return false;
+#endif
     }
 
     return true;
@@ -195,6 +230,29 @@ bool isListening(PlatformSocketType socket)
         return out;
 
     LOG_ERROR("getsockopt(SO_ACCEPTCONN) error (errno = %d)", errno);
+#if PLATFORM(DRIFTSTACK)
+    // W1388: under the MiniBrowser App Sandbox (item-9 in-process WD server), getsockopt(SO_ACCEPTCONN)
+    // is denied (ENOPROTOOPT/42) even though the socket IS listening — SO_ACCEPTCONN is a read-only query
+    // the sandbox refuses. This is the ACTUAL item-9 listen failure: Socket::listen() + setup() both
+    // succeed (no W1386/W1387), but this verification query fails → Socket::isListening() returns false
+    // → ListenerConnection::isListening() false → listenInet() returns nullopt → HTTPServer::listen()
+    // returns false → "failed to listen on 127.0.0.1:<port>" with the leftover errno=42 (W1384).
+    // The fd is a valid socket we just successfully bind()+listen()'d, so an unqueryable SO_ACCEPTCONN
+    // means "can't verify", NOT "not listening" — treat it as listening. (The only callers query a socket
+    // we just listen()'d, or are deciding whether to accept on one already accepted into m_listeners.)
+    if (errno == ENOPROTOOPT && isValid(socket)) {
+        // isListening() is polled every worker-thread tick — log only the first time so the
+        // sandbox-fallback is observable without flooding the log (W1388). A benign double-log
+        // race across the worker/main threads is harmless for a diagnostic.
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            WTFLogAlways("[Driftstack-W1388] getsockopt(SO_ACCEPTCONN) ENOPROTOOPT under App Sandbox — treating valid socket as listening (logged once)");
+        }
+        return true;
+    }
+    WTFLogAlways("[Driftstack-W1388] getsockopt(SO_ACCEPTCONN) failed errno=%d (not ENOPROTOOPT) — returning false", errno);
+#endif
     return false;
 }
 
