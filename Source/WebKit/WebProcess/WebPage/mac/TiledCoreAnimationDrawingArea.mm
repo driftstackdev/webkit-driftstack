@@ -80,7 +80,21 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(TiledCoreAnimationDrawingArea);
 
 TiledCoreAnimationDrawingArea::TiledCoreAnimationDrawingArea(WebPage& webPage, const WebPageCreationParameters& parameters)
     : DrawingArea(parameters.drawingAreaIdentifier, webPage)
+#if PLATFORM(DRIFTSTACK)
+    // W1417 (A3-W342 fix — the 2nd occlusion chokepoint, completing W1415): the Mac fleet spawns each
+    // session's fork window occluded/off-screen (behind the gui-client, or behind another session's window
+    // on a >=20-session host) and captures it via ScreenCaptureKit for LiveKit streaming. The drawing area
+    // otherwise starts with painting SUSPENDED whenever the initial activityState lacks IsVisible — which it
+    // does for an occluded-from-spawn window — and resumePainting() only fires on an IsVisible *change*
+    // (an NSWindowDidChangeOcclusionState notification), which never arrives for a window that is occluded
+    // from birth and never un-occludes. Result: 0 composited frames -> 0 published -> black viewer. Start
+    // UNSUSPENDED so the WebContent paints from frame 0 regardless of occlusion. This is the WebProcess-side
+    // companion to the UIProcess W1415 (isViewVisible occlusion gate) and the W1331/W1332 activity-state
+    // chokepoint (which forces isVisible()=true, so the change-path never re-suspends us).
+    , m_isPaintingSuspended(false)
+#else
     , m_isPaintingSuspended(!(parameters.activityState & ActivityState::IsVisible))
+#endif
 {
     m_hostingLayer = [CALayer layer];
     [m_hostingLayer setDelegate:[WebActionDisablingCALayerDelegate shared]];
