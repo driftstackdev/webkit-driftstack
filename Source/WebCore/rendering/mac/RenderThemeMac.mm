@@ -474,12 +474,21 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
     // Buttons/selects resolve text via buttonTextColor→label and bg via html.css→opaque-secondary-fill, so these
     // fix the form-control text/bg to match a real iPhone. Set the iOS values DIRECTLY — NOT a flatten of the Mac
     // base (W226 proved flattening the Mac fill gives rgb(235,235,235) ≠ the iOS rgb(233,233,234)). Light values
-    // VERIFIED vs reference uastylesheet-iPhone_17; label-dark = the documented opaque UIColor.label; the fill's
-    // dark falls through to Mac (residual, pending a real-device dark-mode capture).
+    // VERIFIED vs reference uastylesheet-iPhone_17; label-dark = the documented opaque UIColor.label.
+    // W1416 (2026-06-07): the opaque fills now set BOTH light AND dark to the iOS UIColor.{opaque}SystemFill
+    // values, every one VERIFIED vs real iPhone 17 (vendor.v3-system-colors-probe `systemColors`, 13 BS /aio
+    // captures across Safari 26.4+26.5, unanimous: opaque-fill L rgb(228,228,229)/D rgb(43,43,46),
+    // opaque-secondary-fill L rgb(233,233,234)/D rgb(38,38,41)). opaque-fill is ALSO un-restricted in
+    // isColorKeywordAllowed (W1416) so author CSS recognizes it like iOS — recognition + value land together
+    // (the W1411 pattern). (The remaining iOS-only-enum fills — opaque-tertiary-fill / -disabled / indigo /
+    // teal — are WTF_PLATFORM_IOS_FAMILY-only so their enum is absent on the Mac fork; they need the
+    // keyword-enable cascade before they can be overridden here.)
     if (cssValueID == CSSValueAppleSystemLabel)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 255, 255 } } : Color { SRGBA<uint8_t> { 0, 0, 0 } };
-    if (!useDarkAppearance && cssValueID == CSSValueAppleSystemOpaqueSecondaryFill)
-        return SRGBA<uint8_t> { 233, 233, 234 };
+    if (cssValueID == CSSValueAppleSystemOpaqueFill)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 43, 43, 46 } } : Color { SRGBA<uint8_t> { 228, 228, 229 } };
+    if (cssValueID == CSSValueAppleSystemOpaqueSecondaryFill)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 38, 38, 41 } } : Color { SRGBA<uint8_t> { 233, 233, 234 } };
     // NOTE (W242): input[type=search]'s bg (iOS rgb(238,238,239)) uses -apple-system-opaque-tertiary-fill,
     // whose CSS keyword is enable-if=WTF_PLATFORM_IOS_FAMILY (NOT in the Mac build) — so html.css's rule is
     // invalid on the fork → white. Can't override here (CSSValueAppleSystemOpaqueTertiaryFill is undeclared);
