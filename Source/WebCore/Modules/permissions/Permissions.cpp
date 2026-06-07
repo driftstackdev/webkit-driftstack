@@ -224,6 +224,20 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
                 return;
             }
 
+#if PLATFORM(DRIFTSTACK)
+            // §A row 13 (host-leak-register, W1214): the host Mac TCC store must not leak — a real
+            // iPhone web page never sees geolocation/camera/microphone/screen-wake-lock auto-granted
+            // (all 'prompt', stable ×27 captures). Force the host permission result to Prompt; the
+            // iPhone-matching post-processing below (determineGeolocationPermissionState, the camera/mic
+            // quirk) then runs identically on the Prompt value. Notifications/Push are already forced
+            // Denied above; unsupported names already reject like Safari.
+            if (permissionDescriptor.name == PermissionName::Geolocation
+                || permissionDescriptor.name == PermissionName::Camera
+                || permissionDescriptor.name == PermissionName::Microphone
+                || permissionDescriptor.name == PermissionName::ScreenWakeLock)
+                permissionState = PermissionState::Prompt;
+#endif
+
 #if ENABLE(GEOLOCATION)
             if (permissionDescriptor.name == PermissionName::Geolocation) {
                 if (auto geolocationPermissionState = determineGeolocationPermissionState(*permissionState, document))
@@ -268,6 +282,17 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
 
                 return;
             }
+
+#if PLATFORM(DRIFTSTACK)
+            // §A row 13 (host-leak-register, W1214): mirror the window-path TCC-leak fix in the worker
+            // query path — force geolocation/camera/microphone/screen-wake-lock to Prompt (real iPhone
+            // value, ×27) before the geolocation post-processing, so the Mac host TCC store never leaks.
+            if (permissionDescriptor.name == PermissionName::Geolocation
+                || permissionDescriptor.name == PermissionName::Camera
+                || permissionDescriptor.name == PermissionName::Microphone
+                || permissionDescriptor.name == PermissionName::ScreenWakeLock)
+                permissionState = PermissionState::Prompt;
+#endif
 
 #if ENABLE(GEOLOCATION)
             if (permissionDescriptor.name == PermissionName::Geolocation) {
