@@ -768,6 +768,7 @@ void UserMediaPermissionRequestManagerProxy::processUserMediaPermissionValidRequ
         currentUserMediaRequest->setEligibleVideoDevices(WTF::move(displayDevices));
     }
 
+#if !PLATFORM(DRIFTSTACK)
     if (page->isControlledByAutomation()) {
         if (RefPtr automationSession = page->configuration().processPool().automationSession()) {
             ALWAYS_LOG(LOGIDENTIFIER, currentUserMediaRequest->userMediaID() ? currentUserMediaRequest->userMediaID()->toUInt64() : 0, ", page controlled by automation");
@@ -778,6 +779,19 @@ void UserMediaPermissionRequestManagerProxy::processUserMediaPermissionValidRequ
             return;
         }
     }
+#else
+    // V-AUTOMATION-TELL-CHOKEPOINT (UIProcess extension, W1330 — founder: "the driver
+    // must be 100% undetectable"). Every Driftstack prod session is WebDriver-driven, so
+    // page->isControlledByAutomation() is true in the UIProcess. The upstream shortcut
+    // above auto-resolves getUserMedia (grant/deny) WITHOUT a permission prompt — a real
+    // iPhone always prompts — so taking it would let any site distinguish a driven session
+    // from a real iPhone (gUM resolves with no user interaction). We deliberately DON'T
+    // take the automation shortcut: gUM falls through to the SAME normal-browser permission
+    // flow a non-automated session uses, so driven and non-driven sessions are byte-for-byte
+    // identical on this surface. (Whether that normal flow itself matches iPhone's prompt is
+    // the separate W1214 permission-state item; this only removes the automation-SPECIFIC
+    // tell. Driftstack never grants the fleet Mac's real camera/mic regardless.)
+#endif
 
     if (preferences->mockCaptureDevicesEnabled() && !preferences->mockCaptureDevicesPromptEnabled()) {
         ALWAYS_LOG(LOGIDENTIFIER, currentUserMediaRequest->userMediaID() ? currentUserMediaRequest->userMediaID()->toUInt64() : 0, ", mock devices don't require prompt");
