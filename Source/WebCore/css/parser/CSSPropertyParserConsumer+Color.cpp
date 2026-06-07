@@ -809,6 +809,26 @@ bool isColorKeywordAllowed(CSSValueID id, const CSSParserContext& context)
 #if PLATFORM(MAC)
     case CSSValueAppleSystemOpaqueFill:
     case CSSValueAppleSystemOpaqueSecondaryFill:
+    // W1407 (fingerprint tell W226/W794): these macOS AppKit color keywords are
+    // enable-if=WTF_PLATFORM_MAC in CSSValueKeywords.in, so a real iPhone (IOS_FAMILY) lacks the enum
+    // entirely and REJECTS them in author CSS (CSS.supports('color','-apple-system-control-accent')
+    // = false). The fork is built PLATFORM(MAC) so the parser would recognize them in AUTHOR CSS =
+    // a 1-bit tell each. Restrict to UASheetMode like OpaqueFill above — RenderThemeMac's internal/
+    // UA-sheet use is unaffected (UASheetMode returns true); only author-CSS recognition flips to
+    // false = matches a real iPhone. Does NOT remove the enum (the W227 compile concern is N/A).
+    // 10 keywords: W794's set of 9 + QuinaryLabel (the 10th — iOS labels stop at quaternary, Mac
+    // adds quinary; full-surface CSSValueKeywords.in audit + empirical fork syscolors confirmed
+    // recognized=true on the fork, W1407).
+    case CSSValueAppleSystemControlAccent:
+    case CSSValueAppleSystemAlternateSelectedText:
+    case CSSValueAppleSystemSelectedText:
+    case CSSValueAppleSystemUnemphasizedSelectedText:
+    case CSSValueAppleSystemSelectedTextBackground:
+    case CSSValueAppleSystemUnemphasizedSelectedTextBackground:
+    case CSSValueAppleSystemEvenAlternatingContentBackground:
+    case CSSValueAppleSystemOddAlternatingContentBackground:
+    case CSSValueAppleSystemFindHighlightBackground:
+    case CSSValueAppleSystemQuinaryLabel:
 #endif
     case CSSValueInternalDocumentTextColor:
         switch (context.mode) {
