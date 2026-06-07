@@ -3217,7 +3217,14 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
         // Wave 29-406 §11.B.2 (empirical 2026-05-19 BS Automate fingerprint):
         // iPhone 17 / iPhone 16 Pro Safari 26.4 both → 53248 (vs Mac ANGLE
         // backend's 69632). Hardware-archetype-keyed.
-        return 53248LL;
+        // W1319: version-keyed like the uniform-BLOCKS family (W1318). By the GL ES 3.0
+        // relation COMBINED = FRAGMENT_UNIFORM_BLOCKS×(MAX_UNIFORM_BLOCK_SIZE/4) +
+        // MAX_FRAGMENT_UNIFORM_COMPONENTS: 26.4 = 12×(16384/4)+4096 = 53248; 26.5 (BLOCKS
+        // bump to 16, W1317-confirmed; BLOCK_SIZE 16384 + COMPONENTS 4096 are pass-through
+        // = Mac = iPhone) = 16×4096+4096 = 69632. A flat 53248 at 26.5 contradicts the
+        // fork's OWN MAX_FRAGMENT_UNIFORM_BLOCKS=16 return → self-incoherent. (69632 also
+        // equals Mac native, since 26.5 BLOCKS==Mac BLOCKS==16.) Launch (26.4) unchanged.
+        return driftstackWebGLUniformBlocksV265Plus() ? 69632LL : 53248LL;
 #endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_COMBINED_UNIFORM_BLOCKS:
@@ -3236,7 +3243,12 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
 #if PLATFORM(DRIFTSTACK)
         // Wave 29-406 §11.B.2: iPhone Safari 26.4 → 53248 (vs Mac → 69632).
-        return 53248LL;
+        // W1319: version-keyed (see MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS above). GL ES
+        // 3.0: COMBINED = VERTEX_UNIFORM_BLOCKS×(BLOCK_SIZE/4) + VERTEX_UNIFORM_COMPONENTS
+        // → 26.4 = 12×4096+4096 = 53248; 26.5 (BLOCKS=16) = 16×4096+4096 = 69632. Flat
+        // 53248 at 26.5 contradicts the fork's own MAX_VERTEX_UNIFORM_BLOCKS=16. Launch
+        // (26.4) unchanged (V265Plus()==false → 53248).
+        return driftstackWebGLUniformBlocksV265Plus() ? 69632LL : 53248LL;
 #endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_DRAW_BUFFERS:
