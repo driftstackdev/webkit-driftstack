@@ -3157,9 +3157,11 @@ void WebGL2RenderingContext::addMembersToOpaqueRoots(JSC::AbstractSlotVisitor& v
 
 #if PLATFORM(DRIFTSTACK)
 // Per-version profile (BS real-device 2026-05-30): WebGL2 uniform-block limits
-// jumped at Safari 26.5 — ≤26.4 → MAX_FRAGMENT/UNIFORM_BUFFER_BINDINGS/VERTEX
-// uniform-blocks = 12/24/12; ≥26.5 → 16/32/16 (Apple raised them; iPhone 17 family,
-// version-keyed not device-keyed — MAX_SAMPLES is the device-keyed one above). Read
+// jumped at Safari 26.5 — ≤26.4 → MAX_FRAGMENT/VERTEX uniform-blocks = 12,
+// UNIFORM_BUFFER_BINDINGS = 24, COMBINED_UNIFORM_BLOCKS = 24; ≥26.5 → 16/16/32/32
+// respectively (Apple raised them; iPhone 17 family, version-keyed not device-keyed
+// — MAX_SAMPLES is the device-keyed one above). All FOUR use this helper (COMBINED
+// joined at W1318; it had been a flat 24). Read
 // the safari version once per WebContent process from DRIFTSTACK_ARCHETYPE
 // (e.g. "iphone17_ios18_7_safari26_4"); default (no archetype) = launch 26.4 → 12/24/12.
 static bool driftstackWebGLUniformBlocksV265Plus()
@@ -3221,7 +3223,14 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_COMBINED_UNIFORM_BLOCKS:
 #if PLATFORM(DRIFTSTACK)
         // Wave 29-406 §11.B.2: iPhone Safari 26.4 → 24 (vs Mac → 32).
-        return 24;
+        // W1318: version-keyed like its 3 siblings (FRAGMENT/VERTEX/BINDINGS) — the
+        // V265Plus helper was added for those three but COMBINED kept a flat 24 (an
+        // oversight). Real-device BS diff (2026-06-01, fontglyph/aio iPhone-17 pair)
+        // shows COMBINED also jumps 24→32 at 26.5; and the GL ES 3.0 invariant
+        // COMBINED ≥ VERTEX+FRAGMENT requires ≥ 16+16 = 32 once those bump at 26.5,
+        // so a flat 24 on a 26.5 archetype is both a mismatch AND an impossible GL
+        // state. Launch (26.4) is unchanged (V265Plus()==false → 24).
+        return driftstackWebGLUniformBlocksV265Plus() ? 32 : 24;
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
