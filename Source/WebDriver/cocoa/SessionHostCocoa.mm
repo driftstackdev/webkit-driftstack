@@ -17,18 +17,29 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <WebKit/_WKAutomationSession.h>
+#import <wtf/NeverDestroyed.h>
+#import <wtf/RetainPtr.h>
 #import <wtf/UUID.h>
 #import <wtf/text/WTFString.h>
 
 namespace WebDriver {
 
-SessionHost::~SessionHost()
+// The one in-process automation session (one per MiniBrowser, set before the WD
+// server starts). RetainPtr keeps it alive for the process. Accessed only on the
+// main thread (MiniBrowser sets it at launch; SessionHosts read it on connect).
+static RetainPtr<_WKAutomationSession>& sharedInProcessAutomationSession()
 {
+    static NeverDestroyed<RetainPtr<_WKAutomationSession>> session;
+    return session.get();
 }
 
-void SessionHost::setAutomationSession(_WKAutomationSession *session)
+void SessionHost::setSharedInProcessAutomationSession(_WKAutomationSession *session)
 {
-    m_automationSession = session;
+    sharedInProcessAutomationSession() = session;
+}
+
+SessionHost::~SessionHost()
+{
 }
 
 bool SessionHost::isConnected() const
@@ -38,6 +49,7 @@ bool SessionHost::isConnected() const
 
 void SessionHost::connectToBrowser(Function<void (std::optional<String> error)>&& completionHandler)
 {
+    m_automationSession = sharedInProcessAutomationSession();
     if (!m_automationSession) {
         completionHandler(String("no in-process automation session"_s));
         return;

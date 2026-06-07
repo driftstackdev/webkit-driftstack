@@ -57,6 +57,13 @@ public:
 
     int run(int argc, char** argv);
 
+#if PLATFORM(DRIFTSTACK)
+    // Item-9 in-process: listen on an already-bound free port without taking over the
+    // runloop (MiniBrowser hosts the server on its main runloop). Returns false if the
+    // socket could not be bound.
+    bool driftstackListenInProcess(const String& host, uint16_t port);
+#endif
+
     static void platformInit();
     static bool platformCompareBrowserVersions(const String&, const String&);
 

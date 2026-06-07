@@ -97,6 +97,17 @@ static void printUsageStatement(const char* programName)
     SAFE_PRINTF("               --replace-on-new-session  Replace the existing session on new session request\n");
 }
 
+#if PLATFORM(DRIFTSTACK)
+bool WebDriverService::driftstackListenInProcess(const String& host, uint16_t port)
+{
+    // In-process (MiniBrowser item-9): the socket endpoint schedules on the CURRENT
+    // runloop — the app's already-running main runloop — so, unlike run(), we do NOT
+    // call RunLoop::run() (that would block the app). Incoming WebDriver requests are
+    // dispatched to the command handlers on the main thread as they arrive.
+    return m_server.listen(host, port);
+}
+#endif
+
 int WebDriverService::run(int argc, char** argv)
 {
     String portString;

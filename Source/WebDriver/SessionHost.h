@@ -91,10 +91,13 @@ public:
     bool isConnected() const;
 
 #if PLATFORM(DRIFTSTACK)
-    // Driftstack item-9: hand the in-process automation session to the SessionHost
-    // (MiniBrowser creates it via -[WKProcessPool _setAutomationSession:] before
-    // starting the WD server). connectToBrowser then wires the response channel.
-    void setAutomationSession(_WKAutomationSession *);
+    // Driftstack item-9: the in-process automation session. One MiniBrowser process
+    // hosts exactly one session (per --enable-webdriver=<sessionId>), so it is shared
+    // process-globally: MiniBrowser sets it (after -[WKProcessPool _setAutomationSession:])
+    // BEFORE starting the WD server; each lazily-created SessionHost picks it up in
+    // connectToBrowser. (SessionHost is created per newSession inside WebDriverService,
+    // which is platform-agnostic and cannot itself hold an _WKAutomationSession.)
+    static void setSharedInProcessAutomationSession(_WKAutomationSession *);
 #endif
 
     const String& sessionID() const LIFETIME_BOUND { return m_sessionID; }
