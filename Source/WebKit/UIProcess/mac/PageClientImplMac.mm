@@ -203,7 +203,21 @@ void PageClientImpl::makeFirstResponder()
 bool PageClientImpl::isViewVisible(NSView *view, NSWindow *viewWindow) const
 {
     auto windowIsOccluded = [&]()->bool {
+#if PLATFORM(DRIFTSTACK)
+        // W1415 (A3-W336 fix): the Mac fleet captures each session's WebContent window via
+        // ScreenCaptureKit and streams it over LiveKit. A fully-occluded window — behind the
+        // gui-client, behind another session's window on a >=20-session host, or any overlap on
+        // the founder's demo Mac — MUST keep compositing, or its captured IOSurface goes stale =
+        // 0 frames published = black viewer. SCStream captures a window's content regardless of
+        // occlusion, but WebKit otherwise STOPS PAINTING into an occluded window (isViewVisible
+        // -> false -> non-visible activity state -> drawing area pauses). Never report the window
+        // as occluded so the fork keeps painting off-screen/occluded. This makes the UIProcess
+        // visibility gate consistent with the WebProcess-side W1331/W1332 foreground chokepoint
+        // (both already force "visible"), so it is also coherence-neutral for fingerprinting.
+        return false;
+#else
         return m_impl && m_impl->windowOcclusionDetectionEnabled() && (viewWindow.occlusionState & NSWindowOcclusionStateVisible) != NSWindowOcclusionStateVisible;
+#endif
     };
 
     RELEASE_LOG(ActivityState, "PageClientImpl %p isViewVisible(): viewWindow %p, window visible %d, view hidden %d, window occluded %d", this, viewWindow, viewWindow.isVisible, view.isHiddenOrHasHiddenAncestor, windowIsOccluded());
