@@ -104,7 +104,11 @@ bool WebDriverService::driftstackListenInProcess(const String& host, uint16_t po
     // runloop — the app's already-running main runloop — so, unlike run(), we do NOT
     // call RunLoop::run() (that would block the app). Incoming WebDriver requests are
     // dispatched to the command handlers on the main thread as they arrive.
-    return m_server.listen(host, port);
+    errno = 0;
+    bool ok = m_server.listen(host, port);
+    if (!ok)
+        WTFLogAlways("[Driftstack] driftstackListenInProcess: m_server.listen(%s,%u) FAILED, errno=%d", host.utf8().data(), port, errno); // W1384 diag
+    return ok;
 }
 #endif
 

@@ -89,8 +89,17 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
     error = setsockopt(fdListen, SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled));
     if (error < 0) {
         LOG_ERROR("setsockopt() SO_REUSEPORT, errno = %d", errno);
+#if PLATFORM(DRIFTSTACK)
+        // W1385: the App Sandbox (MiniBrowser item-9 in-process WD server) denies SO_REUSEPORT
+        // (ENOPROTOOPT/42) even with the network.server entitlement. SO_REUSEPORT is a port-SHARING
+        // optimization (multiple listeners on one port) — the single in-process listener does NOT
+        // need it, so treat its absence as non-fatal: keep the SO_REUSEADDR'd socket and continue
+        // to bind()+listen() (those work under network.server). Without this, listen() aborts here.
+        (void)error;
+#else
         ::close(fdListen);
         return std::nullopt;
+#endif
     }
 
 #if PLATFORM(PLAYSTATION)
