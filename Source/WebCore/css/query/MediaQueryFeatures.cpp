@@ -504,7 +504,15 @@ static const IdentifierSchema& invertedColorsFeatureSchema()
                     return true;
                 if (frame->settings().forcedColorsAreInvertedAccessibilityValue() == ForcedAccessibilityValue::Off)
                     return false;
+#if PLATFORM(DRIFTSTACK)
+                // §A row 5 (host-leak-register, W713): pin the SCREEN fallback to not-inverted —
+                // a real iPhone (default settings) reports `inverted-colors: none`. The host macOS
+                // Invert-Colors accessibility state must not leak through on the Mac fleet. The
+                // forced-colors accessibility checks above still apply (customer/archetype-controllable).
+                return false;
+#else
                 return screenHasInvertedColors();
+#endif
             }();
 
             return MatchingIdentifiers { isInverted ? CSSValueInverted : CSSValueNone };
@@ -526,9 +534,18 @@ static const IntegerSchema& monochromeFeatureSchema()
                     return true;
                 if (frame->settings().forcedDisplayIsMonochromeAccessibilityValue() == ForcedAccessibilityValue::Off)
                     return false;
+#if PLATFORM(DRIFTSTACK)
+                // §A row 6 (host-leak-register, W713): pin the SCREEN fallback to not-monochrome —
+                // a real iPhone reports `monochrome: 0` (color display). The host display's monochrome
+                // state must not leak on the Mac fleet. The forcedDisplayIsMonochrome accessibility
+                // checks above still apply (customer/archetype-controllable).
+                (void)localFrame;
+                return false;
+#else
                 if (localFrame)
                     return screenIsMonochrome(protect(localFrame->view()).get());
                 return false;
+#endif
             }();
 
             return isMonochrome && localFrame ? screenDepthPerComponent(protect(localFrame->view()).get()) : 0;
