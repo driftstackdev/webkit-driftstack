@@ -362,6 +362,26 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
                  || [identifier isEqualToString:@"com.apple.voice.super-compact.bn-IN.Paya"])) {
                 identifier = [identifier stringByReplacingOccurrencesOfString:@"super-compact" withString:@"compact"];
             }
+            // W1414 (2026-06-07) — iphone17 launch-archetype Samantha tier (Mac-host-leak).
+            // The V-657 remap above is iphone16pro-ONLY, so for the iphone17 launch archetype
+            // it does NOT fire and the fork exposes the HOST Mac's Samantha tier. Since ~May 2026
+            // the Mac registers Samantha as `compact` (the V-657 "Mac returns these as super-compact"
+            // note is now stale, W623), but a real iPhone 17 / iOS 18.7 / Safari 26.4 reports
+            // `super-compact.en-US.Samantha` — unanimous across 27 BS /aio captures (10× Version/26.4
+            // + 17× 26.5; W620-624). This is a DEVICE difference, not a source conflict: iPhone 16 Pro
+            // genuinely = compact (the physical V-657 REF, W621), iPhone 17 = super-compact. So this is
+            // a SEPARATE archetype-gated remap, NOT a revert of V-657 (which stays correct for 16 Pro).
+            // Bounded to Samantha ONLY — the other 67/68 voices already match real iphone17 natively
+            // (W624; Geeta/Alpana/Paya are compact on BOTH the Mac and real iphone17). The match is on
+            // the `compact` identifier so it's a no-op if a future macOS reverts Samantha to super-compact.
+            static const bool iphone17NeedsSamanthaSuperCompact = []() {
+                const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+                if (!env || !env[0]) return false;
+                return [[NSString stringWithUTF8String:env] isEqualToString:@"iphone17_ios18_7_safari26_4"];
+            }();
+            if (iphone17NeedsSamanthaSuperCompact
+                && [identifier isEqualToString:@"com.apple.voice.compact.en-US.Samantha"])
+                identifier = @"com.apple.voice.super-compact.en-US.Samantha";
             if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
                 displayName = @"Wobble";
             else if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Hysterical"])
