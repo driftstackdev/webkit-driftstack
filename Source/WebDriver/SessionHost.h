@@ -45,6 +45,14 @@ typedef struct _GSubprocess GSubprocess;
 #endif
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// Driftstack item-9: in-process WebDriver server. The SessionHost drives the
+// MiniBrowser's _WKAutomationSession DIRECTLY (no glib subprocess, no socket
+// RemoteInspector) via the _driftstack* SPI on _WKAutomationSession.
+#include <wtf/RetainPtr.h>
+OBJC_CLASS _WKAutomationSession;
+#endif
+
 namespace WebDriver {
 
 struct ConnectToBrowserAsyncData;
@@ -81,6 +89,13 @@ public:
 
     void setHostAddress(const String& ip, uint16_t port) { m_targetIp = ip; m_targetPort = port; }
     bool isConnected() const;
+
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack item-9: hand the in-process automation session to the SessionHost
+    // (MiniBrowser creates it via -[WKProcessPool _setAutomationSession:] before
+    // starting the WD server). connectToBrowser then wires the response channel.
+    void setAutomationSession(_WKAutomationSession *);
+#endif
 
     const String& sessionID() const LIFETIME_BOUND { return m_sessionID; }
     const Capabilities& capabilities() const LIFETIME_BOUND { return m_capabilities; }
@@ -171,6 +186,11 @@ private:
 #if PLATFORM(WIN)
     WTF::Win32Handle m_browserHandle;
 #endif
+#elif PLATFORM(DRIFTSTACK)
+    // Driftstack item-9 in-process: the automation session lives in THIS process
+    // (one per MiniBrowser). No subprocess/socket/target-list — connect is direct.
+    RetainPtr<_WKAutomationSession> m_automationSession;
+    bool m_connected { false };
 #endif
 };
 
