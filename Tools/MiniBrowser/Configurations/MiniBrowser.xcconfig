@@ -29,5 +29,38 @@ INFOPLIST_FILE = mac/Info.plist
 EXCLUDED_SOURCE_FILE_NAMES[sdk=iphone*] = *
 EXCLUDED_SOURCE_FILE_NAMES[sdk=macosx*] = $(EXCLUDED_SOURCE_FILE_NAMES_$(WK_PLATFORM_NAME))
 EXCLUDED_SOURCE_FILE_NAMES_maccatalyst = *
-OTHER_LDFLAGS[sdk=macosx*] = $(inherited) -framework Cocoa -framework PDFKit -framework UniformTypeIdentifiers -framework WebKit
+// ── Driftstack item-9 drive-bridge: in-process W3C-WebDriver server compiled into MiniBrowser ──
+// The WebDriver C++ sources (Source/WebDriver/*) are added to this target's Sources phase. Header
+// order matters: Source/WebDriver MUST precede MiniBrowser's own dir so `#include "config.h"` resolves
+// to Source/WebDriver/config.h (which, BUILDING_WITH_CMAKE undefined under Xcode, just pulls wtf/Platform.h).
+// $(BUILT_PRODUCTS_DIR)/usr/local/include = WTF/bmalloc forwarding headers (canonical, per WebKitTestRunner).
+// The JSC inspector/remote/socket dirs supply RemoteInspectorSocketEndpoint.h (not forwarded on cocoa).
+// mac/DriftstackWDForwarding holds a `JavaScriptCore` symlink → the JSC socket-inspector source dir, so the
+// socket WD headers' `<JavaScriptCore/RemoteInspectorSocketEndpoint.h>` / `RemoteInspectorConnectionClient.h`
+// resolve (those aren't exported into the cocoa JavaScriptCore.framework). Non-socket <JavaScriptCore/*> still
+// resolve from the framework (no name overlap). See DriftstackWDForwarding/README.md.
+// The WTF/bmalloc forwarding headers ($(BUILT_PRODUCTS_DIR)/usr/local/include) + JSC PrivateHeaders are added as
+// -isystem (via OTHER_CPLUSPLUSFLAGS below), NOT here — WTF builds itself with a long list of warnings suppressed
+// (-Wno-shorten-64-to-32 etc.), but MiniBrowser doesn't, so instantiating WTF string/hash templates in the WD TUs
+// trips -Werror in WTF's OWN headers. Treating them as system headers suppresses those (they aren't our code to
+// lint) in one shot — and also covers the wtf/Assertions.h LOG-redefinition. The WebDriver/forwarding/derived dirs
+// stay -I (searched first) so `config.h` resolves to Source/WebDriver/config.h, not JSC PrivateHeaders' config.h.
+HEADER_SEARCH_PATHS = $(SRCROOT)/mac/DriftstackWDForwarding $(SRCROOT)/mac/DriftstackWDDerived $(SRCROOT)/../../Source/WebDriver $(SRCROOT)/../../Source/WebDriver/socket $(SRCROOT)/../../Source/WebDriver/cocoa $(SRCROOT)/../../Source/JavaScriptCore/inspector $(SRCROOT)/../../Source/JavaScriptCore/inspector/remote $(SRCROOT)/../../Source/JavaScriptCore/inspector/remote/socket $(inherited);
+// OTHER_CFLAGS (NOT OTHER_CPLUSPLUSFLAGS) so this also covers AppDelegate.m — a plain .m (ObjC) file that includes
+// <wtf/Platform.h> for the PLATFORM(DRIFTSTACK) `--enable-webdriver` guard. Xcode applies OTHER_CFLAGS to ALL
+// C-family (C/ObjC/C++/ObjC++); OTHER_CPLUSPLUSFLAGS would skip the .m file → 'wtf/Platform.h' not found.
+// Source/WTF as a LATE -isystem: the POSIX socket transport (RemoteInspectorSocketPOSIX.cpp) needs
+// <wtf/UniStdExtras.h>, which isn't forwarded into the cocoa WTF header set. Placed AFTER usr/local/include
+// so the forwarded/built headers still win for everything that IS forwarded; only the non-forwarded gaps
+// (UniStdExtras etc.) fall through to the canonical source.
+OTHER_CFLAGS = $(inherited) -isystem "$(BUILT_PRODUCTS_DIR)/usr/local/include" -isystem "$(SRCROOT)/../../Source/WTF" -isystem "$(BUILT_PRODUCTS_DIR)/JavaScriptCore.framework/PrivateHeaders"
+// USE_INSPECTOR_SOCKET_SERVER=1: enables the WD socket HTTPServer + RemoteInspectorSocketEndpoint path
+// (cocoa defaults it OFF). The W1323/5a SessionHost decoupling makes the cocoa SessionHost win even with this set.
+// USE_INSPECTOR_SOCKET_SERVER=1 enables the socket HTTPServer/RemoteInspectorSocketEndpoint path (cocoa defaults OFF).
+// ENABLE_WEBDRIVER_BIDI=0 forces BIDI off (cocoa defaults it ON at PlatformEnableCocoa.h:1041, but that's `#if
+// !defined` so this -D wins). BIDI pulls a glib include (`<wtf/glib/GTypedefs.h>`, WebDriverService.cpp:55) +
+// WebSocketServer deps we don't build; classic drive doesn't need it (per the build-integration spec).
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) USE_INSPECTOR_SOCKET_SERVER=1 ENABLE_WEBDRIVER_BIDI=0;
+// JavaScriptCore link added for RemoteInspectorSocketEndpoint (WebKit already linked for the _WK* SPI).
+OTHER_LDFLAGS[sdk=macosx*] = $(inherited) -framework Cocoa -framework PDFKit -framework UniformTypeIdentifiers -framework WebKit -framework JavaScriptCore
 STRIP_STYLE = debugging;

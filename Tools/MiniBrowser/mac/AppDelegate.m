@@ -584,7 +584,13 @@ static NSNumber *_currentBadge;
     if (![self frontmostBrowserWindowController])
         [self newWindow:self];
 
+    // WKProcessPool is deprecated for multi-pool use ("no longer has any effect"), but the single
+    // default pool's `_setAutomationSession:` SPI is still the canonical automation-wiring path —
+    // mirroring upstream MiniBrowser's own deprecation-suppressed WKProcessPool SPI usage (e.g. :259).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     WKProcessPool *processPool = self.defaultConfiguration.processPool;
+#pragma clang diagnostic pop
     if (!processPool) {
         NSLog(@"[Driftstack] WebDriver: no process pool; cannot start automation");
         return;
@@ -594,7 +600,10 @@ static NSNumber *_currentBadge;
     _driftstackAutomationSession = [[_WKAutomationSession alloc] initWithConfiguration:configuration];
     _driftstackAutomationSession.delegate = self;
     _driftstackAutomationSession.sessionIdentifier = sessionID;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [processPool _setAutomationSession:_driftstackAutomationSession];
+#pragma clang diagnostic pop
 
     DriftstackStartWebDriverServer(sessionID, _driftstackAutomationSession);
 }

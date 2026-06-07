@@ -23,8 +23,17 @@
 /* Begin PBXBuildFile section */
 		0FE643A1161FA8940059E3FF /* BrowserWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 0FE643A0161FA8940059E3FF /* BrowserWindowController.m */; };
 		0FE643A4161FAC660059E3FF /* WK1BrowserWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 0FE643A3161FAC660059E3FF /* WK1BrowserWindowController.m */; };
+		1487B2E1C8BCE8D30A895094 /* WebDriverAtoms.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 303F5E429BC73ABE4758108A /* WebDriverAtoms.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		18F96A48F9E2A0D8046F6466 /* HTTPServer.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 4D70C0C156F94BE5CA1E7A20 /* HTTPServer.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		20EC56E640AAB135582211B6 /* LoggingUnix.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D715F02BA32B8C838A2C21C5 /* LoggingUnix.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		21A1C472174978CCC98EC5DC /* RemoteInspectorSocketPOSIX.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 556B60F56F9A5B25C912DA6D /* RemoteInspectorSocketPOSIX.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		22D8880FC89E783A7A6235C3 /* SessionHost.cpp in Sources */ = {isa = PBXBuildFile; fileRef = FDBC8C4FC2135E09ABF41505 /* SessionHost.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
 		256AC3DA0F4B6AC300CF3369 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 256AC3D90F4B6AC300CF3369 /* AppDelegate.m */; };
+		29031FA9FD86CEFC7C5A5333 /* Logging.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 22BDF7D16C030384553BAF6F /* Logging.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
 		2DC37343198B62D300EC33E9 /* SettingsController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2DC37342198B62D300EC33E9 /* SettingsController.m */; };
+		3CD43BBC790F0DCBF50AA68E /* HTTPParser.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7880475ABFAF380963FC8623 /* HTTPParser.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		402435FC82C1D95B9A316B16 /* WebDriverService.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CB0025D42467E8BE57000DAC /* WebDriverService.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		41A64ABEDAF687917FBA6B19 /* CapabilitiesSocket.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 5D87BE8E423FD778A9AD360C /* CapabilitiesSocket.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
 		511AAEB72A8C1E77007ECBEE /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 511AAEB62A8C1E77007ECBEE /* UserNotifications.framework */; };
 		513EA7BF2ECFE34900828F2A /* HistoryButton.m in Sources */ = {isa = PBXBuildFile; fileRef = 513EA7BE2ECFE34900828F2A /* HistoryButton.m */; };
 		51E244FA11EFCE07008228D1 /* MBToolbarItem.m in Sources */ = {isa = PBXBuildFile; fileRef = 51E244F911EFCE07008228D1 /* MBToolbarItem.m */; };
@@ -32,10 +41,19 @@
 		72945D0229B7F204006ACF75 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72945D0129B7F204006ACF75 /* QuartzCore.framework */; };
 		7CA379421AC381C10079DC37 /* ExtensionManagerWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 7CA379401AC381C10079DC37 /* ExtensionManagerWindowController.m */; };
 		7CA379431AC381C10079DC37 /* ExtensionManagerWindowController.xib in Resources */ = {isa = PBXBuildFile; fileRef = 7CA379411AC381C10079DC37 /* ExtensionManagerWindowController.xib */; };
+		7F851EEE36100B5554E73229 /* RemoteInspectorSocketEndpoint.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C99BDFCD51F08865BB54423C /* RemoteInspectorSocketEndpoint.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		8B6671E5D060C0B8FCB175A9 /* HTTPServerSocket.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 403F03ED3461C58F08664147 /* HTTPServerSocket.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		8F7DB06C89D4CCFABE378408 /* CommandResult.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C5F3C57CE9FBDC899E67A746 /* CommandResult.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		908403EF47BEDF9569F8593B /* LogInitialization.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 5AFE40107D93E3C769576003 /* LogInitialization.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		999BFF06C65CB54A9B4EEF25 /* UniStdExtrasUnix.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B0C17753F360AE7FB5D346D0 /* UniStdExtrasUnix.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
 		BC329487116A92E2008635D0 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = BC329486116A92E2008635D0 /* main.m */; };
 		BC329498116A941B008635D0 /* WK2BrowserWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = BC329497116A941B008635D0 /* WK2BrowserWindowController.m */; };
 		BC72B89511E57E07001EB4EA /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 1DDD58150DA1D0A300B32029 /* MainMenu.xib */; };
 		BC72B89611E57E0F001EB4EA /* BrowserWindow.xib in Resources */ = {isa = PBXBuildFile; fileRef = BC3294A2116A9852008635D0 /* BrowserWindow.xib */; };
+		DCAA51E46F30390718E511C1 /* WebDriverServiceCocoa.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 269BB9E177C1CF542A360B75 /* WebDriverServiceCocoa.cpp */; settings = {COMPILER_FLAGS = "-DNDEBUG -Wno-macro-redefined"; }; };
+		DCACFE854918207B3548EDE0 /* DriftstackWebDriverServer.mm in Sources */ = {isa = PBXBuildFile; fileRef = FEFDB92F282DA14EE769C1F2 /* DriftstackWebDriverServer.mm */; settings = {COMPILER_FLAGS = "-DNDEBUG -Wno-macro-redefined"; }; };
+		E4488ABE28D3DA34372AE1B7 /* Session.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 04FD13FD6AA323FE82337D52 /* Session.cpp */; settings = {COMPILER_FLAGS = "-Wno-error -DNDEBUG -Wno-macro-redefined"; }; };
+		FEC8E9116D1961B2BDBBD5DF /* SessionHostCocoa.mm in Sources */ = {isa = PBXBuildFile; fileRef = C411F30251688E549F1DF3C1 /* SessionHostCocoa.mm */; settings = {COMPILER_FLAGS = "-DNDEBUG -Wno-macro-redefined"; }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -49,6 +67,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		04FD13FD6AA323FE82337D52 /* Session.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = Session.cpp; path = ../../Source/WebDriver/Session.cpp; sourceTree = "<group>"; };
+		06886F562366A9489EB2BA0F /* RemoteInspectorConnectionClient.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = RemoteInspectorConnectionClient.cpp; path = ../../Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorConnectionClient.cpp; sourceTree = "<group>"; };
 		071430922CE16E0500430FFA /* MiniBrowser-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MiniBrowser-Bridging-Header.h"; sourceTree = "<group>"; };
 		0FE6439F161FA8940059E3FF /* BrowserWindowController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = BrowserWindowController.h; path = mac/BrowserWindowController.h; sourceTree = "<group>"; };
 		0FE643A0161FA8940059E3FF /* BrowserWindowController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = BrowserWindowController.m; path = mac/BrowserWindowController.m; sourceTree = "<group>"; };
@@ -56,26 +76,37 @@
 		0FE643A3161FAC660059E3FF /* WK1BrowserWindowController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = WK1BrowserWindowController.m; path = mac/WK1BrowserWindowController.m; sourceTree = "<group>"; };
 		1AFFEF761860EE6800DA465E /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		1AFFEF781860EE6800DA465E /* CoreData.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreData.framework; path = System/Library/Frameworks/CoreData.framework; sourceTree = SDKROOT; };
+		1BC1C322CEACC84EFA10CEB8 /* RemoteInspectorSocket.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = RemoteInspectorSocket.cpp; path = ../../Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocket.cpp; sourceTree = "<group>"; };
 		1DDD58150DA1D0A300B32029 /* MainMenu.xib */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = MainMenu.xib; path = mac/MainMenu.xib; sourceTree = "<group>"; };
+		22BDF7D16C030384553BAF6F /* Logging.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = Logging.cpp; path = ../../Source/WebDriver/Logging.cpp; sourceTree = "<group>"; };
 		256AC3D80F4B6AC300CF3369 /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = mac/AppDelegate.h; sourceTree = "<group>"; };
 		256AC3D90F4B6AC300CF3369 /* AppDelegate.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = AppDelegate.m; path = mac/AppDelegate.m; sourceTree = "<group>"; };
 		256AC3F00F4B6AF500CF3369 /* MiniBrowser_Prefix.pch */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = MiniBrowser_Prefix.pch; path = mac/MiniBrowser_Prefix.pch; sourceTree = "<group>"; };
+		269BB9E177C1CF542A360B75 /* WebDriverServiceCocoa.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = WebDriverServiceCocoa.cpp; path = ../../Source/WebDriver/cocoa/WebDriverServiceCocoa.cpp; sourceTree = "<group>"; };
 		29B97324FDCFA39411CA2CEA /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		29B97325FDCFA39411CA2CEA /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
 		2DC37341198B62D300EC33E9 /* SettingsController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = SettingsController.h; path = mac/SettingsController.h; sourceTree = "<group>"; };
 		2DC37342198B62D300EC33E9 /* SettingsController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = SettingsController.m; path = mac/SettingsController.m; sourceTree = "<group>"; };
+		303F5E429BC73ABE4758108A /* WebDriverAtoms.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = WebDriverAtoms.cpp; path = mac/DriftstackWDDerived/WebDriverAtoms.cpp; sourceTree = "<group>"; };
 		37BAF90620218053000EA879 /* MiniBrowser.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MiniBrowser.entitlements; sourceTree = "<group>"; };
+		403F03ED3461C58F08664147 /* HTTPServerSocket.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = HTTPServerSocket.cpp; path = ../../Source/WebDriver/socket/HTTPServerSocket.cpp; sourceTree = "<group>"; };
+		4D70C0C156F94BE5CA1E7A20 /* HTTPServer.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = HTTPServer.cpp; path = ../../Source/WebDriver/HTTPServer.cpp; sourceTree = "<group>"; };
 		511AAEB62A8C1E77007ECBEE /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		513EA7BD2ECFE34900828F2A /* HistoryButton.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = HistoryButton.h; path = mac/HistoryButton.h; sourceTree = "<group>"; };
 		513EA7BE2ECFE34900828F2A /* HistoryButton.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = HistoryButton.m; path = mac/HistoryButton.m; sourceTree = "<group>"; };
 		51E244F811EFCE07008228D1 /* MBToolbarItem.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MBToolbarItem.h; sourceTree = "<group>"; };
 		51E244F911EFCE07008228D1 /* MBToolbarItem.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = MBToolbarItem.m; sourceTree = "<group>"; };
+		556B60F56F9A5B25C912DA6D /* RemoteInspectorSocketPOSIX.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = RemoteInspectorSocketPOSIX.cpp; path = ../../Source/JavaScriptCore/inspector/remote/socket/posix/RemoteInspectorSocketPOSIX.cpp; sourceTree = "<group>"; };
+		5AFE40107D93E3C769576003 /* LogInitialization.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = LogInitialization.cpp; path = ../../Source/WebDriver/LogInitialization.cpp; sourceTree = "<group>"; };
 		5C9332AE24C1349C0036DECE /* SecurityInterface.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SecurityInterface.framework; path = System/Library/Frameworks/SecurityInterface.framework; sourceTree = SDKROOT; };
+		5D87BE8E423FD778A9AD360C /* CapabilitiesSocket.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = CapabilitiesSocket.cpp; path = ../../Source/WebDriver/socket/CapabilitiesSocket.cpp; sourceTree = "<group>"; };
 		72945D0129B7F204006ACF75 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		7880475ABFAF380963FC8623 /* HTTPParser.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = HTTPParser.cpp; path = ../../Source/WebDriver/socket/HTTPParser.cpp; sourceTree = "<group>"; };
 		7CA3793F1AC381C10079DC37 /* ExtensionManagerWindowController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ExtensionManagerWindowController.h; path = mac/ExtensionManagerWindowController.h; sourceTree = "<group>"; };
 		7CA379401AC381C10079DC37 /* ExtensionManagerWindowController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = ExtensionManagerWindowController.m; path = mac/ExtensionManagerWindowController.m; sourceTree = "<group>"; };
 		7CA379411AC381C10079DC37 /* ExtensionManagerWindowController.xib */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.xib; name = ExtensionManagerWindowController.xib; path = mac/ExtensionManagerWindowController.xib; sourceTree = "<group>"; };
 		8D1107320486CEB800E47090 /* MiniBrowser.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MiniBrowser.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0C17753F360AE7FB5D346D0 /* UniStdExtrasUnix.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = UniStdExtrasUnix.cpp; path = ../../Source/WTF/wtf/unix/UniStdExtrasUnix.cpp; sourceTree = "<group>"; };
 		BC329486116A92E2008635D0 /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = mac/main.m; sourceTree = "<group>"; };
 		BC329496116A941B008635D0 /* WK2BrowserWindowController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = WK2BrowserWindowController.h; path = mac/WK2BrowserWindowController.h; sourceTree = "<group>"; };
 		BC329497116A941B008635D0 /* WK2BrowserWindowController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = WK2BrowserWindowController.m; path = mac/WK2BrowserWindowController.m; sourceTree = "<group>"; };
@@ -84,7 +115,14 @@
 		BCA8CBDD11E578A000812FB7 /* Base.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		BCA8CBDE11E578A000812FB7 /* DebugRelease.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = DebugRelease.xcconfig; sourceTree = "<group>"; };
 		BCA8CBDF11E578A000812FB7 /* MiniBrowser.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = MiniBrowser.xcconfig; sourceTree = "<group>"; };
+		C411F30251688E549F1DF3C1 /* SessionHostCocoa.mm */ = {isa = PBXFileReference; includeInIndex = 1; name = SessionHostCocoa.mm; path = ../../Source/WebDriver/cocoa/SessionHostCocoa.mm; sourceTree = "<group>"; };
+		C5F3C57CE9FBDC899E67A746 /* CommandResult.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = CommandResult.cpp; path = ../../Source/WebDriver/CommandResult.cpp; sourceTree = "<group>"; };
+		C99BDFCD51F08865BB54423C /* RemoteInspectorSocketEndpoint.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = RemoteInspectorSocketEndpoint.cpp; path = ../../Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocketEndpoint.cpp; sourceTree = "<group>"; };
+		CB0025D42467E8BE57000DAC /* WebDriverService.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = WebDriverService.cpp; path = ../../Source/WebDriver/WebDriverService.cpp; sourceTree = "<group>"; };
+		D715F02BA32B8C838A2C21C5 /* LoggingUnix.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = LoggingUnix.cpp; path = ../../Source/WebDriver/unix/LoggingUnix.cpp; sourceTree = "<group>"; };
 		DD403C5328500F6400D899FC /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = WebKit.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		FDBC8C4FC2135E09ABF41505 /* SessionHost.cpp */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.cpp.cpp; name = SessionHost.cpp; path = ../../Source/WebDriver/SessionHost.cpp; sourceTree = "<group>"; };
+		FEFDB92F282DA14EE769C1F2 /* DriftstackWebDriverServer.mm */ = {isa = PBXFileReference; includeInIndex = 1; name = DriftstackWebDriverServer.mm; path = mac/DriftstackWebDriverServer.mm; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,7 +184,7 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		29B97314FDCFA39411CA2CEA /* MiniBrowser */ = {
+		29B97314FDCFA39411CA2CEA = {
 			isa = PBXGroup;
 			children = (
 				256AC3F00F4B6AF500CF3369 /* MiniBrowser_Prefix.pch */,
@@ -155,6 +193,7 @@
 				BCA8CBDA11E5787800812FB7 /* Configurations */,
 				29B97323FDCFA39411CA2CEA /* Frameworks */,
 				19C28FACFE9D520D11CA2CBB /* Products */,
+				A2D3D387FF2468E597B6422E /* DriftstackWebDriver */,
 			);
 			name = MiniBrowser;
 			sourceTree = "<group>";
@@ -181,6 +220,33 @@
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
+		};
+		A2D3D387FF2468E597B6422E /* DriftstackWebDriver */ = {
+			isa = PBXGroup;
+			children = (
+				CB0025D42467E8BE57000DAC /* WebDriverService.cpp */,
+				04FD13FD6AA323FE82337D52 /* Session.cpp */,
+				C5F3C57CE9FBDC899E67A746 /* CommandResult.cpp */,
+				FDBC8C4FC2135E09ABF41505 /* SessionHost.cpp */,
+				22BDF7D16C030384553BAF6F /* Logging.cpp */,
+				5AFE40107D93E3C769576003 /* LogInitialization.cpp */,
+				403F03ED3461C58F08664147 /* HTTPServerSocket.cpp */,
+				7880475ABFAF380963FC8623 /* HTTPParser.cpp */,
+				5D87BE8E423FD778A9AD360C /* CapabilitiesSocket.cpp */,
+				C411F30251688E549F1DF3C1 /* SessionHostCocoa.mm */,
+				FEFDB92F282DA14EE769C1F2 /* DriftstackWebDriverServer.mm */,
+				303F5E429BC73ABE4758108A /* WebDriverAtoms.cpp */,
+				C99BDFCD51F08865BB54423C /* RemoteInspectorSocketEndpoint.cpp */,
+				1BC1C322CEACC84EFA10CEB8 /* RemoteInspectorSocket.cpp */,
+				06886F562366A9489EB2BA0F /* RemoteInspectorConnectionClient.cpp */,
+				4D70C0C156F94BE5CA1E7A20 /* HTTPServer.cpp */,
+				D715F02BA32B8C838A2C21C5 /* LoggingUnix.cpp */,
+				269BB9E177C1CF542A360B75 /* WebDriverServiceCocoa.cpp */,
+				556B60F56F9A5B25C912DA6D /* RemoteInspectorSocketPOSIX.cpp */,
+				B0C17753F360AE7FB5D346D0 /* UniStdExtrasUnix.cpp */,
+			);
+			name = DriftstackWebDriver;
+			sourceTree = SOURCE_ROOT;
 		};
 		BCA8CBDA11E5787800812FB7 /* Configurations */ = {
 			isa = PBXGroup;
@@ -239,7 +305,8 @@
 			knownRegions = (
 				en,
 			);
-			mainGroup = 29B97314FDCFA39411CA2CEA /* MiniBrowser */;
+			mainGroup = 29B97314FDCFA39411CA2CEA;
+			productRefGroup = 19C28FACFE9D520D11CA2CBB /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -276,6 +343,24 @@
 				2DC37343198B62D300EC33E9 /* SettingsController.m in Sources */,
 				0FE643A4161FAC660059E3FF /* WK1BrowserWindowController.m in Sources */,
 				BC329498116A941B008635D0 /* WK2BrowserWindowController.m in Sources */,
+				402435FC82C1D95B9A316B16 /* WebDriverService.cpp in Sources */,
+				E4488ABE28D3DA34372AE1B7 /* Session.cpp in Sources */,
+				8F7DB06C89D4CCFABE378408 /* CommandResult.cpp in Sources */,
+				22D8880FC89E783A7A6235C3 /* SessionHost.cpp in Sources */,
+				29031FA9FD86CEFC7C5A5333 /* Logging.cpp in Sources */,
+				908403EF47BEDF9569F8593B /* LogInitialization.cpp in Sources */,
+				8B6671E5D060C0B8FCB175A9 /* HTTPServerSocket.cpp in Sources */,
+				3CD43BBC790F0DCBF50AA68E /* HTTPParser.cpp in Sources */,
+				41A64ABEDAF687917FBA6B19 /* CapabilitiesSocket.cpp in Sources */,
+				FEC8E9116D1961B2BDBBD5DF /* SessionHostCocoa.mm in Sources */,
+				DCACFE854918207B3548EDE0 /* DriftstackWebDriverServer.mm in Sources */,
+				1487B2E1C8BCE8D30A895094 /* WebDriverAtoms.cpp in Sources */,
+				7F851EEE36100B5554E73229 /* RemoteInspectorSocketEndpoint.cpp in Sources */,
+				18F96A48F9E2A0D8046F6466 /* HTTPServer.cpp in Sources */,
+				20EC56E640AAB135582211B6 /* LoggingUnix.cpp in Sources */,
+				DCAA51E46F30390718E511C1 /* WebDriverServiceCocoa.cpp in Sources */,
+				21A1C472174978CCC98EC5DC /* RemoteInspectorSocketPOSIX.cpp in Sources */,
+				999BFF06C65CB54A9B4EEF25 /* UniStdExtrasUnix.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

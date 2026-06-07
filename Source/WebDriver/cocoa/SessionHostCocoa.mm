@@ -88,10 +88,11 @@ void SessionHost::sendMessageToBackend(const String& message)
     [m_automationSession _driftstackDispatchMessageFromRemote:message.createNSString().get()];
 }
 
-void SessionHost::inspectorDisconnected()
-{
-    m_connected = false;
-}
+// NOTE: inspectorDisconnected() is defined in the shared SessionHost.cpp (it finishes pending
+// commands with an error + notifies BIDI observers — the canonical cross-platform behavior). We
+// must NOT redefine it here (ODR — caused a duplicate-symbol link error). The in-process drive
+// binds the session to the process lifecycle, so the m_connected reset this used to do is benign
+// to drop (disconnect ≈ shutdown; the shared handler already fails outstanding commands).
 
 } // namespace WebDriver
 
