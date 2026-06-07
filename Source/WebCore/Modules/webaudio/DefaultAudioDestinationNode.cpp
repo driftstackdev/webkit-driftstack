@@ -226,7 +226,17 @@ void DefaultAudioDestinationNode::close(CompletionHandler<void()>&& completionHa
 
 unsigned DefaultAudioDestinationNode::maxChannelCount() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // §A row 10 (host-leak-register, W717/W723): a real iPhone reports
+    // audioContext.destination.maxChannelCount = 2 (stereo; stable across 27 captures). The host
+    // Mac's audio device channel count (a multichannel interface would report more) must not leak.
+    // Pin to 2; setChannelCount() below then clamps to 2 exactly as iOS does. Only the real-time
+    // DefaultAudioDestinationNode is host-bound — OfflineAudioDestinationNode returns its
+    // constructor numberOfChannels (not host), so it is untouched.
+    return 2;
+#else
     return AudioDestination::maxChannelCount();
+#endif
 }
 
 ExceptionOr<void> DefaultAudioDestinationNode::setChannelCount(unsigned channelCount)
