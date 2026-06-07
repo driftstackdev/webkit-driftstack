@@ -35,6 +35,35 @@
 #import <WebCore/WebCoreObjCExtras.h>
 #import <wtf/WeakObjCPtr.h>
 
+#if PLATFORM(DRIFTSTACK)
+#import <JavaScriptCore/InspectorFrontendChannel.h>
+#import <wtf/BlockPtr.h>
+#import <wtf/RunLoop.h>
+#import <wtf/text/WTFString.h>
+
+namespace {
+// Driftstack item-9 drive-bridge: a FrontendChannel that forwards the automation
+// backend's responses to an ObjC block. Owned for the process lifetime of the
+// in-process WD server (one automation session per MiniBrowser); never disconnected
+// before process exit (mirrors RemoteInspector's channel ownership). sendMessageToFrontend
+// is invoked by the session on the main thread; the block (SessionHostCocoa) routes the
+// response back to the WD Session.
+class DriftstackBlockFrontendChannel final : public Inspector::FrontendChannel {
+public:
+    explicit DriftstackBlockFrontendChannel(void (^handler)(NSString *))
+        : m_handler(handler) { }
+    ConnectionType connectionType() const final { return ConnectionType::Remote; }
+    void sendMessageToFrontend(const String& message) final
+    {
+        if (auto handler = m_handler.get())
+            handler(message.createNSString().get());
+    }
+private:
+    BlockPtr<void(NSString *)> m_handler;
+};
+} // namespace
+#endif // PLATFORM(DRIFTSTACK)
+
 @implementation _WKAutomationSession {
     RetainPtr<_WKAutomationSessionConfiguration> _configuration;
     WeakObjCPtr<id <_WKAutomationSessionDelegate>> _delegate;
@@ -125,6 +154,30 @@
     protect(*_session)->markEventAsSynthesizedForAutomation(event);
 }
 #endif
+
+#if PLATFORM(DRIFTSTACK)
+#pragma mark Driftstack item-9 drive-bridge (in-process WebDriver server SPI)
+
+- (void)_driftstackConnectWithMessageHandler:(void (^)(NSString *responseJSON))handler
+{
+    // The WD server's socket thread may call this; the automation backend lives on the
+    // main thread, so marshal the connect there. The channel outlives this call (process
+    // lifetime), so a raw new is intentional — it is never disconnected before exit.
+    auto* channel = new DriftstackBlockFrontendChannel(handler);
+    RunLoop::mainSingleton().dispatch([session = Ref { *_session }, channel] {
+        session->connect(*channel, /* isAutomaticConnection */ false, /* immediatelyPause */ false);
+    });
+}
+
+- (void)_driftstackDispatchMessageFromRemote:(NSString *)message
+{
+    // Marshal onto the main thread (the WD server calls this off its socket thread).
+    // isolatedCopy so the String crosses the thread boundary safely.
+    RunLoop::mainSingleton().dispatch([session = Ref { *_session }, message = String(message).isolatedCopy()]() mutable {
+        session->dispatchMessageFromRemote(WTF::move(message));
+    });
+}
+#endif // PLATFORM(DRIFTSTACK)
 
 #pragma mark WKObject protocol implementation
 

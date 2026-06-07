@@ -53,6 +53,15 @@ WK_CLASS_AVAILABLE(macos(10.12), ios(10.0))
 - (void)markEventAsSynthesizedForAutomation:(NSEvent *)event;
 #endif
 
+// Driftstack (item-9 drive-bridge): SPI letting an in-process W3C-WebDriver server
+// (SessionHostCocoa) drive this automation session DIRECTLY — no RemoteInspector/XPC
+// transport. -_driftstackConnectWithMessageHandler: installs a FrontendChannel whose
+// backend responses invoke `handler`; -_driftstackDispatchMessageFromRemote: feeds an
+// inbound Automation protocol message to the backend. Both marshal onto the main thread
+// internally, so the WD server may call them from its own socket thread.
+- (void)_driftstackConnectWithMessageHandler:(void (^)(NSString *responseJSON))handler;
+- (void)_driftstackDispatchMessageFromRemote:(NSString *)message;
+
 @end
 
 NS_ASSUME_NONNULL_END
