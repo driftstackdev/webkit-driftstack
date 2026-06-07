@@ -319,8 +319,17 @@ static const IdentifierSchema& colorGamutFeatureSchema()
         [](auto& context) {
             // FIXME: At some point we should start detecting displays that support more colors.
             MatchingIdentifiers identifiers { CSSValueSRGB };
+#if PLATFORM(DRIFTSTACK)
+            // §A row 1 (host-leak-register, W599/600): iPhone 17 has a P3 wide-gamut display →
+            // color-gamut always matches {srgb, p3}. A headless/non-P3 fleet host (the host screen
+            // check is the leak — a Mac Studio with no display attached can report sRGB) must not
+            // leak a narrower gamut. Pin P3.
+            (void)context;
+            identifiers.append(CSSValueP3);
+#else
             if (screenSupportsExtendedColor(protect(protect(context.document->frame())->mainFrame().virtualView()).get()))
                 identifiers.append(CSSValueP3);
+#endif
             return identifiers;
         }
     };
@@ -418,7 +427,14 @@ static const IdentifierSchema& dynamicRangeFeatureSchema()
                     return true;
                 if (frame->settings().forcedSupportsHighDynamicRangeValue() == ForcedAccessibilityValue::Off)
                     return false;
+#if PLATFORM(DRIFTSTACK)
+                // §A row 2 (host-leak-register, W599/600): iPhone 17 supports HDR (dynamic-range:
+                // high). A headless/SDR fleet host must not leak 'standard' (the screen-HDR check is
+                // the host leak). Pin the screen fallback true; the forced On/Off above is retained.
+                return true;
+#else
                 return screenSupportsHighDynamicRange(protect(frame->mainFrame().virtualView()).get());
+#endif
             }();
 
             MatchingIdentifiers identifiers { CSSValueStandard };
@@ -628,7 +644,13 @@ static const IdentifierSchema& prefersContrastFeatureSchema()
                 case ForcedAccessibilityValue::Off:
                     return false;
                 case ForcedAccessibilityValue::System:
+#if PLATFORM(DRIFTSTACK)
+                    // §A row 4 (host-leak-register, W600): iPhone default = no-preference. The host
+                    // macOS Increase-Contrast state must not leak (the forced On/Off above is retained).
+                    return false;
+#else
                     return Theme::singleton().userPrefersContrast();
+#endif
                 }
                 return false;
             }();
@@ -670,7 +692,13 @@ static const IdentifierSchema& prefersReducedMotionFeatureSchema()
                 case ForcedAccessibilityValue::Off:
                     return false;
                 case ForcedAccessibilityValue::System:
+#if PLATFORM(DRIFTSTACK)
+                    // §A row 3 (host-leak-register, W600): iPhone default = no-preference. The host
+                    // macOS Reduce-Motion state must not leak (the forced On/Off above is retained).
+                    return false;
+#else
                     return Theme::singleton().userPrefersReducedMotion();
+#endif
                 }
                 return false;
             }();
