@@ -516,20 +516,26 @@ using namespace JSC;
 using namespace WebCore;
 
 #if PLATFORM(DRIFTSTACK)
-// V-VISIBILITY-CHOKEPOINT (W1331, founder "the driver must be 100% undetectable"): every
-// Driftstack session is a WebDriver-driven MiniBrowser on a multi-session/headless fleet Mac,
-// so its window is typically NOT the foreground key window → WebContent would observe the page
-// as hidden/occluded and report document.visibilityState='hidden' + document.hidden=true +
-// requestAnimationFrame paused (and, at construction, the prerender state). A real iPhone Safari
-// foreground tab is ALWAYS visibilityState='visible' / hidden=false / rAF@60fps. Force the
-// foreground-visible activity bits on every WebContent activity-state application regardless of
-// the real window state, so the whole visibility surface stays coherent (visible + rAF-runs +
-// not-prerender together — fixing the getter alone would leave rAF paused = its own tell). Focus
-// bits (IsFocused/WindowIsActive) are deliberately NOT forced: document.hasFocus() is not a
-// probed surface and they have broader autoplay/IME side effects.
-static OptionSet<ActivityState> driftstackForceForegroundVisible(OptionSet<ActivityState> state)
+// V-FOREGROUND-CHOKEPOINT (W1331 visibility + W1332 focus; founder "the driver must be 100%
+// undetectable"): every Driftstack session is a WebDriver-driven MiniBrowser on a multi-session/
+// headless fleet Mac, so its window is typically NOT the foreground key window → WebContent would
+// observe the page as hidden/occluded/unfocused and report document.visibilityState='hidden' +
+// document.hidden=true + requestAnimationFrame paused + document.hasFocus()=false (and, at
+// construction, prerender). A real iPhone Safari foreground tab is ALWAYS visible + focused:
+// visibilityState='visible' / hidden=false / rAF@60fps / hasFocus()=true. Force the full
+// foreground-FOCUSED activity bits on every WebContent activity-state application regardless of
+// the real window state, so the surface stays coherent — visible+focused together (visible alone
+// is iPhone-incoherent: a visible foreground tab is also focused; and fixing only a getter would
+// leave rAF paused = its own tell). Forcing the bits CONSISTENTLY means they never change, so no
+// spurious focus/blur/visibilitychange events fire after construction. (W1332 adds IsFocused/
+// WindowIsActive: hasFocus() IS a probed surface [media-events-animation] — the W1331 "not probed"
+// note was wrong — and FocusController.isActive/isFocused read exactly these bits + setFocused
+// points the focused frame at the main frame, so this yields hasFocus()=true. Foreground-focus is
+// the correct impersonation state for autoplay/selection-color/IME too.)
+static OptionSet<ActivityState> driftstackForceForeground(OptionSet<ActivityState> state)
 {
-    state.add({ ActivityState::IsVisible, ActivityState::IsVisibleOrOccluded, ActivityState::IsInWindow });
+    state.add({ ActivityState::IsVisible, ActivityState::IsVisibleOrOccluded, ActivityState::IsInWindow,
+                ActivityState::WindowIsActive, ActivityState::IsFocused });
     return state;
 }
 #endif
@@ -1154,9 +1160,9 @@ WebPage::WebPage(PageIdentifier pageID, WebPageCreationParameters&& parameters)
 #endif
 
 #if PLATFORM(DRIFTSTACK)
-    // V-VISIBILITY-CHOKEPOINT: present as a foreground iPhone tab from construction (avoids the
-    // initial hidden→prerender state on a non-foreground fleet window). See helper above.
-    m_activityState = driftstackForceForegroundVisible(m_activityState);
+    // V-FOREGROUND-CHOKEPOINT: present as a foreground+focused iPhone tab from construction (avoids
+    // the initial hidden/prerender/unfocused state on a non-foreground fleet window). See helper.
+    m_activityState = driftstackForceForeground(m_activityState);
 #endif
     // If the page is created off-screen, its visibilityState should be prerender.
     page->setActivityState(m_activityState);
@@ -4495,10 +4501,10 @@ void WebPage::setActivityState(OptionSet<ActivityState> activityState, ActivityS
     LOG_WITH_STREAM(ActivityState, stream << "WebPage " << identifier().toUInt64() << " setActivityState to " << activityState);
 
 #if PLATFORM(DRIFTSTACK)
-    // V-VISIBILITY-CHOKEPOINT: keep the page foreground-visible regardless of the UIProcess
-    // window state (see helper above), so a non-foreground fleet window never flips
-    // visibilityState→hidden / pauses rAF mid-session.
-    activityState = driftstackForceForegroundVisible(activityState);
+    // V-FOREGROUND-CHOKEPOINT: keep the page foreground+focused regardless of the UIProcess window
+    // state (see helper above), so a non-foreground fleet window never flips visibilityState→hidden
+    // / pauses rAF / drops hasFocus mid-session.
+    activityState = driftstackForceForeground(activityState);
 #endif
 
     auto changed = m_activityState ^ activityState;
