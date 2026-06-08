@@ -62,6 +62,7 @@ void SessionHost::connectToBrowser(Function<void (std::optional<String> error)>&
     // deliberate process-lifetime retain (matches the channel's own ownership).
     RefPtr<SessionHost> protectedThis = this;
     [m_automationSession _driftstackConnectWithMessageHandler:^(NSString *responseJSON) {
+        NSLog(@"[Driftstack-WD-DIAG] <- backend response (len=%lu): %@", (unsigned long)responseJSON.length, [responseJSON substringToIndex:MIN((NSUInteger)160, responseJSON.length)]);  // W1631 trace
         protectedThis->dispatchMessage(String(responseJSON));
     }];
 
@@ -85,6 +86,7 @@ void SessionHost::sendMessageToBackend(const String& message)
     // no SendMessageToBackend/connectionID/targetID envelope (WebAutomationSession::
     // dispatchMessageFromRemote expects the raw message, same as the RemoteInspector
     // path delivers post-unwrap).
+    NSLog(@"[Driftstack-WD-DIAG] -> backend command (len=%u): %s", message.length(), message.utf8().data());  // W1631 trace
     [m_automationSession _driftstackDispatchMessageFromRemote:message.createNSString().get()];
 }
 
