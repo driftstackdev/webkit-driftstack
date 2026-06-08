@@ -24,6 +24,14 @@
 
 namespace WebDriver {
 
+// W1633: the W1631 in-process WebDriver trace, gated OFF by default (set DS_WD_DIAG=1 to enable).
+// It localized the W1631 navigate hang (fixed W1632); kept as an opt-in diagnostic for future WD work.
+static bool driftstackWDDiagEnabled()
+{
+    static bool enabled = getenv("DS_WD_DIAG") != nullptr;
+    return enabled;
+}
+
 // The one in-process automation session (one per MiniBrowser, set before the WD
 // server starts). RetainPtr keeps it alive for the process. Accessed only on the
 // main thread (MiniBrowser sets it at launch; SessionHosts read it on connect).
@@ -62,7 +70,8 @@ void SessionHost::connectToBrowser(Function<void (std::optional<String> error)>&
     // deliberate process-lifetime retain (matches the channel's own ownership).
     RefPtr<SessionHost> protectedThis = this;
     [m_automationSession _driftstackConnectWithMessageHandler:^(NSString *responseJSON) {
-        NSLog(@"[Driftstack-WD-DIAG] <- backend response (len=%lu): %@", (unsigned long)responseJSON.length, [responseJSON substringToIndex:MIN((NSUInteger)160, responseJSON.length)]);  // W1631 trace
+        if (driftstackWDDiagEnabled())
+            NSLog(@"[Driftstack-WD-DIAG] <- backend response (len=%lu): %@", (unsigned long)responseJSON.length, [responseJSON substringToIndex:MIN((NSUInteger)160, responseJSON.length)]);  // W1631 trace (DS_WD_DIAG)
         protectedThis->dispatchMessage(String(responseJSON));
     }];
 
@@ -86,7 +95,8 @@ void SessionHost::sendMessageToBackend(const String& message)
     // no SendMessageToBackend/connectionID/targetID envelope (WebAutomationSession::
     // dispatchMessageFromRemote expects the raw message, same as the RemoteInspector
     // path delivers post-unwrap).
-    NSLog(@"[Driftstack-WD-DIAG] -> backend command (len=%u): %s", message.length(), message.utf8().data());  // W1631 trace
+    if (driftstackWDDiagEnabled())
+        NSLog(@"[Driftstack-WD-DIAG] -> backend command (len=%u): %s", message.length(), message.utf8().data());  // W1631 trace (DS_WD_DIAG)
     [m_automationSession _driftstackDispatchMessageFromRemote:message.createNSString().get()];
 }
 
