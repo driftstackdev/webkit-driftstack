@@ -567,6 +567,16 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return Color { SRGBA<uint8_t> { 142, 142, 147 } };
     if (cssValueID == CSSValueAppleSystemHeaderText)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 255, 255 } } : Color { SRGBA<uint8_t> { 0, 0, 0 } };
+
+    // W1457 (2026-06-08): the last 2 syscolor divergences — the selected-content backgrounds. iOS returns the
+    // INACTIVE/gray content-selection colors here (rgb(209,209,214) light / rgb(58,58,60) dark, both keywords),
+    // where Mac returns the active accent-blue (selected) / a lighter gray (unemphasized). VERIFIED-SAFE to
+    // override: the ACTUAL text-selection rendering uses platformActiveSelectionBackgroundColor →
+    // [NSColor selectedTextBackgroundColor] (this file, ~L300), INDEPENDENT of this CSS-keyword systemColor
+    // path — so this changes only the keyword VALUE a page reads, not selection rendering. Values verified vs
+    // real iphone17. Completes the system-color palette (0 divergences). Canvas-safe (atlas-served, W1452).
+    if (cssValueID == CSSValueAppleSystemSelectedContentBackground || cssValueID == CSSValueAppleSystemUnemphasizedSelectedContentBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 58, 58, 60 } } : Color { SRGBA<uint8_t> { 209, 209, 214 } };
 #endif
 
     auto& cache = colorCache(options);
