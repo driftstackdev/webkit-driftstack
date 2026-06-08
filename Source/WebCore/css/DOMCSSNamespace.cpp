@@ -54,19 +54,23 @@ bool DOMCSSNamespace::supports(Document& document, const String& property, const
     auto propertyNameWithoutWhitespace = property;
 
 #if PLATFORM(DRIFTSTACK)
-    // V-260: iPhone Safari 26.4 returns false for these properties even though
-    // Mac WebKit ships them enabled. Empirical: V-259 BS Automate iOS 18.6
-    // CSS.supports() reference vs local fork capture — 3 divergences. Block
-    // these properties unconditionally on PLATFORM(DRIFTSTACK) to match iPhone.
+    // V-260 / W1460 CORRECTION: the original V-259 CSS.supports() reference was iOS 18.6 (a Family-A
+    // archetype), which genuinely lacks these — so returning false is correct THERE. But the block was
+    // UNCONDITIONAL, wrongly forcing false on the 26.4 LAUNCH archetype too, where a real iPhone-17 /
+    // Safari-26.4 returns TRUE (W1450 /aio diff vs real). This unconditional short-circuit — running
+    // BEFORE isExposed/parseValue — is precisely the "settings don't propagate / needs a backport"
+    // mystery of W1451/W1453: every settings layer WAS enabled, but this override returned false first.
+    // Gate it on the per-archetype settings: Family A (anchor/scroll-driven disabled by the WebPage.cpp
+    // Family-A hook) still returns false; 26.4 (settings default-true) falls through to isExposed /
+    // parseValue and returns the real true. (isExposed already gates anchor-name on
+    // cssAnchorPositioningEnabled; the version-keyed block documents intent + covers the
+    // animation-timeline VALUE, which isExposed does not gate.)
     auto folded = property.convertToASCIILowercase();
-    if (folded == "anchor-name"_s || folded == "position-anchor"_s)
+    if ((folded == "anchor-name"_s || folded == "position-anchor"_s) && !document.settings().cssAnchorPositioningEnabled())
         return false;
-    if (folded == "animation-timeline"_s) {
-        // iPhone iOS 18.6 disables scroll()/view() timeline functions.
-        // Plain 'auto' / 'none' still parse on iPhone, but 'scroll()' returns false.
-        if (value.contains("scroll("_s) || value.contains("view("_s))
-            return false;
-    }
+    if (folded == "animation-timeline"_s && !document.settings().scrollDrivenAnimationsEnabled()
+        && (value.contains("scroll("_s) || value.contains("view("_s)))
+        return false;
 #endif
 
     CSSPropertyID propertyID = cssPropertyID(propertyNameWithoutWhitespace);
