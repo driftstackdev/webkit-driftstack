@@ -138,7 +138,13 @@ static bool shouldUseSfProConstantOnePixelAdjustment(CTFontRef font)
         || caseInsensitiveCompare(familyName.get(), CFSTR(".AppleSystemUIFont"))
         || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro"))
         || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro Display"))
-        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro Text"));
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Pro Text"))
+        // W1434: SF Mono (the system monospace, `ui-monospace` → `.AppleSystemUIFontMonospaced`) is part of
+        // the SF system-font family + shares the same iOS-vs-Mac vertical-metric divergence. The h1 UA default
+        // (`font-family: ui-monospace`) at 32px was +1 too SHORT (fork 38 vs real 39) precisely because SF Mono
+        // wasn't in this list → no +1 (W1431/W1432). Adding it (with the size guard at the call site) matches iOS.
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".AppleSystemUIFontMonospaced"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Mono"));
 }
 #endif
 
@@ -238,7 +244,15 @@ void Font::platformInit()
 #if PLATFORM(DRIFTSTACK)
     // P-track #46 v2 (wave 29-291): constant +1 adjustment for SF Pro
     // variants (NOT the 15% kLineHeightAdjustment). Env-gated.
-    if (adjustment == 0 && shouldUseSfProConstantOnePixelAdjustment(ctFont.get()))
+    // W1434 (2026-06-07): the +1 was calibrated at large sizes (72pt: fork 86→87) but OVER-applies at small
+    // sizes — empirically (iOS-26.5-sim vs Mac CoreText, W1431) SF system-font ceil-lineSpacing already
+    // matches iOS at 11px (both 14) so the +1 there makes the fork 15 = the input/select/textarea/number
+    // form-control over-shoot (real iPhone 14). It is still NEEDED at the canvas-validated sizes (≥12px, e.g.
+    // 14/32px where iOS's larger descent crosses a ceil boundary). Gate the +1 to pointSize >= 12: this fixes
+    // every form-control delta (all 5 SF-Pro controls are 11px; h1 SF Mono is 32px, now hooked above) while
+    // leaving the canvas byte-identical — the canvas text shapes use sans-serif at 12px+ and ZERO monospace
+    // (W1433 disjoint-region analysis), so nothing the canvas renders changes. Validated cumrig-schema-preserving.
+    if (adjustment == 0 && pointSize >= 12.0f && shouldUseSfProConstantOnePixelAdjustment(ctFont.get()))
         adjustment = 1;
 #endif
 
