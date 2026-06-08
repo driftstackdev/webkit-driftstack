@@ -884,6 +884,22 @@ void WebLocalFrameLoaderClient::dispatchDidReachLayoutMilestone(OptionSet<WebCor
         WebLocalFrameLoaderClient_RELEASE_LOG_FORWARDABLE(Layout, WebLocalFrameLoaderClientDispatchDidFirstVisuallyNonEmptyLayout);
         webPage->injectedBundleLoaderClient().didFirstVisuallyNonEmptyLayoutForFrame(*webPage, m_frame, userData);
         webPage->send(Messages::WebPageProxy::DidFirstVisuallyNonEmptyLayoutForFrame(m_frame->frameID(), UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get()), WallTime::now()));
+#if PLATFORM(DRIFTSTACK)
+        // W1435 (A3 W369/W370): emit a one-shot stderr token at the MAIN frame's first visually-non-empty
+        // paint. The Mac fleet harness (BrowserProcess) drains the fork's stderr and WAITS for this token
+        // before calling SCStream.startCapture — guaranteeing the window has a composited IOSurface to attach
+        // to, which fixes the intermittent first-attempt startCapture hang (A3 W360-367). Purely additive: a
+        // fork without it falls back to the harness retry loop (no regression). One-shot per process (the
+        // fleet spawns one page per fork process). Token literal + greppable per A3's contract.
+        if (m_frame->isMainFrame()) {
+            static bool s_driftstackPaintReadyEmitted = false;
+            if (!s_driftstackPaintReadyEmitted) {
+                s_driftstackPaintReadyEmitted = true;
+                fprintf(stderr, "DRIFTSTACK_PAINT_READY\n");
+                fflush(stderr);
+            }
+        }
+#endif
     }
 }
 
