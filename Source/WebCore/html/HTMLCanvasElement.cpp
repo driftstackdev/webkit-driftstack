@@ -1440,7 +1440,12 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // so atlasSubstituted is implicitly false. AFP fires correctly as
     // intended (atlas-miss path). Tag standardized to [Driftstack-AFP-
     // Fallback-Fired] across all 3 hook sites.
-    if (s_afpFallbackEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+    // Non-text cold-miss (empty lastFillText = shapes/gradients/composite, no
+    // glyph dispatch) must NOT collapse to the content-blind AFP solid color:
+    // native CG render is bit-identical Mac==iPhone for non-text (13/13 canonical
+    // ops hash-match the real-device /aio ref), so fall through to `encoded`.
+    // Text still routes the fallback until the per-glyph iOS atlas covers it.
+    if (s_afpFallbackEnabled && !lastFillText().isEmpty() && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpEncoded = encodeDataURL(noiseImage.get(), encodingMIMEType, quality);
             if (!afpEncoded.isEmpty()) {
@@ -1621,7 +1626,11 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     // §9: gate AFP on !atlasSubstituted — without this, AFP overwrites
     // V510/Layer B v2 substituted bytes and priority-bin atlas hits don't
     // reach the customer's blob (cumrig stays 1593/2 instead of 1595/0).
+    // Non-text cold-miss (empty lastFillText) falls through to the native
+    // blobData (bit-identical Mac==iPhone for non-text); only text routes the
+    // content-blind AFP fallback, until the per-glyph iOS atlas covers it.
     if (s_afpFallbackEnabledToBlob && !atlasSubstituted && !blobData.isEmpty()
+        && !lastFillText().isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
