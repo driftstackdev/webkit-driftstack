@@ -1869,19 +1869,31 @@ _Pragma("clang diagnostic pop")
         WebCore::ResourceResponse response { URL(url), String("text/html"_s), -1, String("UTF-8"_s) };
         response.setHTTPStatusCode(statusCode);
 
+        // W1517 — the pure-h1 path previously delivered the RAW body (gzip/br/zstd
+        // UNDECODED, unlike the h2/h3 chokepoints at .331). Collect headers into a Vector
+        // and run the shared decoder, which decodes the body + strips content-encoding/
+        // length, then set the (stripped) headers on the response so WebCore doesn't
+        // re-decode or mismatch content-length.
+        Vector<std::pair<String, String>> h1headers;
         for (NSUInteger i = 1; i < [headerLines count]; i++) {
             NSString* line = headerLines[i];
             NSRange c = [line rangeOfString:@":"];
             if (c.location == NSNotFound) continue;
             NSString* key = [line substringToIndex:c.location];
             NSString* val = [[line substringFromIndex:c.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-            response.setHTTPHeaderField(String::fromUTF8([key UTF8String]), String::fromUTF8([val UTF8String]));
+            h1headers.append({ String::fromUTF8([key UTF8String]), String::fromUTF8([val UTF8String]) });
         }
+        Vector<uint8_t> h1body;
+        h1body.resize([bodyBytes length]);
+        if ([bodyBytes length])
+            memcpy(h1body.mutableSpan().data(), [bodyBytes bytes], [bodyBytes length]);
+        WebKit::driftstackDecodeContentEncoding(h1body, h1headers);  // .331 chokepoint — pure-h1 (W1517)
+        for (auto& [k, v] : h1headers)
+            response.setHTTPHeaderField(k, v);
 
         if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
-        // Dispatch callbacks. Use NSData spans for SharedBuffer.
-        auto bodySpan = unsafeMakeSpan(static_cast<const uint8_t*>([bodyBytes bytes]), static_cast<size_t>([bodyBytes length]));
-        auto bodyBuffer = WebCore::SharedBuffer::create(bodySpan);
+        // Dispatch callbacks. Use the DECODED body for SharedBuffer.
+        auto bodyBuffer = WebCore::SharedBuffer::create(h1body.span());
         auto* clientPtr = m_task.client();
         if (!clientPtr)
             return;
