@@ -208,8 +208,16 @@ static const std::pair<const char*, const char*> kHpackStatic[] = {
     { ":status", "500" },
     { "accept-charset", "" },
     // Wave 29-499.262 — re-enabled gzip+deflate+br after fixing streaming
-    // decoder via compression_stream API. iPhone Safari 26 sends exactly
-    // "gzip, deflate, br" — bit-identical fingerprint restored.
+    // decoder via compression_stream API.
+    // W1483 CORRECTION: this is bit-identical to Safari 26.0-26.2, but NOT to the
+    // 26.4 LAUNCH archetype. Safari 26.3+ (incl iOS 26.4) ALSO advertises zstd →
+    // real 26.4 Accept-Encoding = "gzip, deflate, br, zstd" (verified: WebKit zstd
+    // full support landed Safari 26.3; browserleaks-ip V-229). The fork omits zstd
+    // because this custom Path-B loader cannot DECODE it (no COMPRESSION_ZSTD in
+    // libcompression on the 26.5 SDK, no system/bundled libzstd) — advertising an
+    // encoding we can't decode would corrupt zstd responses. SURFACED Accept-Encoding
+    // divergence (founder-queue): closing it needs libzstd bundled into the loader's
+    // decode path, then "zstd" appended here + in DriftstackNetworkLoader.mm for 26.4.
     { "accept-encoding", "gzip, deflate, br" },
     { "accept-language", "" },
     { "accept-ranges", "" },
