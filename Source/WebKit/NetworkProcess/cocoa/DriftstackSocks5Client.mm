@@ -119,16 +119,18 @@ static int connectToProxy(const Socks5Endpoint& proxy)
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: socket() failed errno=%d", errno);
         return -1;
     }
-    // W1530 (A3 W448 isolation): bound the SOCKS5 CONNECT handshake recvs with a
-    // timeout — this was the ONE unbounded recv in the Path-B load path (the
-    // session UDP probe + the TLS-13 handshake already set SO_RCVTIMEO; this one
-    // didn't). Against a CHAINED gost that accepts the TCP connection (curl-TCP
-    // works) but stalls the SOCKS5 CONNECT reply, recvAll() blocked FOREVER →
-    // 25s WebContent pageLoad timeout → blank page (broke item-9 drive bridge +
-    // streaming). On timeout recvAll returns false → performHandshake fails fast
-    // (load errors instead of hanging). 8s is generous (a working chain replies
-    // in <2s); the TLS-13 client re-sets/clears its own timeout once it owns the
-    // fd, so the data phase is unaffected.
+    // W1531: defensive timeout on the SOCKS5 CONNECT handshake recvs. The session
+    // UDP probe (NetworkSessionCocoa) and the TLS-1.3 handshake reads already bound
+    // their reads with SO_RCVTIMEO; connectToProxy() did not, leaving one unbounded
+    // blocking recv on the control socket. If a proxy ever accepts the TCP
+    // connection but stalls the SOCKS5 reply, recvAll() would block until the ~25s
+    // WebContent pageLoad timeout. 8s bounds it to a fast failure → recvAll returns
+    // false → performHandshake fails (load errors instead of stalling). 8s is
+    // generous (a working chain replies in <2s); the TLS-1.3 client re-sets and
+    // clears its own timeout once it owns the fd, so the data phase is unaffected.
+    // (Robustness hygiene — NOT a fix for the A3-W448 "fork SOCKS5 load hang",
+    // which W450 retracted as a probe-env artifact: the fork loads correctly through
+    // both single-hop [W1516] and 2-hop [A2-W200] SOCKS5 chains.)
     struct timeval socks5HandshakeTimeout { 8, 0 };
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
@@ -305,15 +307,16 @@ Socks5Result DriftstackSocks5Client::udpAssociate(Socks5UdpRelayChannel& out)
     }
     int fd = m_impl->socketFd;
 
-    // W1530 (A3 W448 isolation): bound the UDP_ASSOCIATE reply recv with a
-    // timeout. A CHAINED SOCKS5 proxy (per-session gost → upstream) accepts the
-    // TCP control connection (curl-TCP gets 200 through it) but may NEVER reply
-    // to UDP_ASSOCIATE (no UDP forwarding through the chain) → recvAll(hdr) below
-    // blocked FOREVER and hung the entire WebContent load (broke item-9 drive
-    // bridge + streaming). On timeout recvAll returns false → UdpAssociateFailed
-    // → the caller's graceful TCP-only fallback (Slice16.7.a) proceeds instead of
-    // hanging. Cleared on EVERY return path so the data/fallback phase keeps an
-    // un-timed (blocking) socket. A working proxy replies in <1s, so 4s is safe.
+    // W1531: defensive timeout on the UDP_ASSOCIATE reply recv. A chained SOCKS5
+    // proxy (per-session relay → upstream) accepts the TCP control connection but
+    // may never reply to UDP_ASSOCIATE (no UDP forwarding through the chain) →
+    // recvAll(hdr) below would block until the pageLoad timeout. On timeout recvAll
+    // returns false → UdpAssociateFailed → the caller's graceful TCP-only fallback
+    // (Slice16.7.a) proceeds instead of stalling. Cleared on EVERY return path so
+    // the data/fallback phase keeps an un-timed (blocking) socket. A working proxy
+    // replies in <1s, so 4s is safe. (Robustness hygiene; same defensive pass as
+    // connectToProxy above — NOT a fix for A3-W448, retracted W450 as a probe
+    // artifact.)
     struct timeval udpProbeTimeout { 4, 0 };
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &udpProbeTimeout, sizeof(udpProbeTimeout));
     auto clearUdpProbeTimeout = makeScopeExit([fd]() {
