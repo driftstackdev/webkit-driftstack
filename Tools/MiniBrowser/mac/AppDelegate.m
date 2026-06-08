@@ -124,7 +124,21 @@ static BOOL enabledForFeature(_WKFeature *feature)
     static WKWebsiteDataStore *dataStore;
 
     if (!dataStore) {
-        _WKWebsiteDataStoreConfiguration *configuration = [[_WKWebsiteDataStoreConfiguration alloc] init];
+        // W1419 (A3-W237 fix — P0 cross-tenant storage isolation): the fleet spawns ONE fork process per
+        // session and the harness sets DRIFTSTACK_DATA_DIR to a per-session directory. Root the ENTIRE
+        // WKWebsiteDataStore (cookies, localStorage, IndexedDB, network cache, service workers, general
+        // storage, …) under that dir via -initWithDirectory: so each session's persisted state lives on its
+        // own disk path = no cross-tenant leak. Without it every session on the host shares the default
+        // container store (cookies/localStorage/IndexedDB visible across tenants). Self-gating: only the
+        // DRIFTSTACK harness sets the env, so upstream MiniBrowser behaviour is unchanged. (-initWithDirectory:
+        // is WK_API_AVAILABLE macos(15.2); the fleet runs macOS 26.x.)
+        _WKWebsiteDataStoreConfiguration *configuration;
+        const char *driftstackDataDir = getenv("DRIFTSTACK_DATA_DIR");
+        if (driftstackDataDir && driftstackDataDir[0]) {
+            NSURL *driftstackDataURL = [NSURL fileURLWithPath:[NSString stringWithUTF8String:driftstackDataDir] isDirectory:YES];
+            configuration = [[_WKWebsiteDataStoreConfiguration alloc] initWithDirectory:driftstackDataURL];
+        } else
+            configuration = [[_WKWebsiteDataStoreConfiguration alloc] init];
         configuration.networkCacheSpeculativeValidationEnabled = YES;
 
         // Push will only function if someone has taken the step to install the test daemon service, or otherwise host it manually.
