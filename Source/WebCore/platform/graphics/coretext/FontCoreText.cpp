@@ -258,8 +258,24 @@ void Font::platformInit()
     // every form-control delta (all 5 SF-Pro controls are 11px; h1 SF Mono is 32px, now hooked above) while
     // leaving the canvas byte-identical — the canvas text shapes use sans-serif at 12px+ and ZERO monospace
     // (W1433 disjoint-region analysis), so nothing the canvas renders changes. Validated cumrig-schema-preserving.
-    if (adjustment == 0 && pointSize >= 12.0f && shouldUseSfProConstantOnePixelAdjustment(ctFont.get()))
-        adjustment = 1;
+    // W1440/W1452: replace the heuristic +1 with iOS-EXACT SF-family vertical
+    // metrics. iOS CoreText SF Pro/Mono are perfectly linear (ascent 0.95215*size,
+    // descent 0.24121*size, leading 0; W1431/W1440 14-size iOS-sim sweep) vs Mac
+    // CoreText (0.96680/0.21094). The Mac ratios + the constant +1 matched iOS at
+    // only 6/14 sizes (over by 1px at 12/15/16/18.72/19/20, +2 at 24); the iOS
+    // ratios match at EVERY size -> closes the universal block-element line-height
+    // tell (W1439: p/ul/ol/blockquote/hr/fieldset/legend/h3 + the 11px form
+    // controls + h1@32 SF Mono) in one override. Canvas-SAFE: the canvas
+    // measureText + fingerprint10x are ATLAS-served via DRIFTSTACK_MEASURE_TEXT_
+    // OVERRIDE / DRIFTSTACK_CANVAS_FP10X_OVERRIDE (this live FontCoreText ascent
+    // is only the fallback for override-uncovered fonts -- CanvasRenderingContext
+    // 2DBase.cpp:3456/3479 serve covered fonts from the atlas), so changing it
+    // affects only line LAYOUT, not canvas pixels. Validated before/after (W1452).
+    if (shouldUseSfProConstantOnePixelAdjustment(ctFont.get())) {
+        ascent = 0.95215f * pointSize;
+        descent = 0.24121f * pointSize;
+        adjustment = 0; // the iOS ratios subsume the +1 at every size
+    }
 #endif
 
     lineGap = ceilf(lineGap);
