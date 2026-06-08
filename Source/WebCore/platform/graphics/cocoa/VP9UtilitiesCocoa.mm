@@ -211,12 +211,26 @@ static bool isVP9HardwareDecoderAvailabilityKnown()
 
 bool isVP9DecoderAvailable()
 {
+#if PLATFORM(DRIFTSTACK)
+    // W1477: the iPhone 17 / iOS 26.4 archetype has NO VP9 decode in the AVFoundation/WebM playback
+    // paths — real iOS returns canPlayType('video/webm; codecs="vp9"/"vp09…"') = "" (vs the fork's
+    // "probably") and reports VP9 unsupported in (Managed)MediaSource. A19 has no VP9 hardware decoder
+    // and iOS does not enable the software VP9 decoder for these paths. The Mac fleet is BATTERYLESS,
+    // so shouldEnableSWVP9Decoder() (= isSWDecodersAlwaysEnabled() || (!vp9HW && !systemHasBattery()))
+    // turns ON the SW VP9 decoder → the fork leaks VP9 the iPhone archetype does not have. Match iPhone:
+    // no VP9 decode. The ONLY callers are isVP9CodecConfigurationRecordSupported (this file) +
+    // SourceBufferParserWebM — i.e. the WebM/MSE playback path. WebCodecs VP9 (VideoDecoder::isVPXSupported)
+    // and WebRTC VP9 (libwebrtc registerWebKitVP9Decoder) are SEPARATE paths that do NOT call this and
+    // stay supported = real iPhone (verified W1476 coherence map).
+    return false;
+#else
     if (isSWDecodersAlwaysEnabled())
         return true;
 #if PLATFORM(IOS) || PLATFORM(VISION)
     return vp9HardwareDecoderAvailable();
 #else
     return (shouldEnableSWVP9Decoder() && VideoDecoder::isVPXSupported()) || vp9HardwareDecoderAvailable();
+#endif
 #endif
 }
 

@@ -1169,6 +1169,18 @@ bool MediaSource::isTypeSupported(ScriptExecutionContext& context, const String&
     if (contentType.containerType().isEmpty())
         return false;
 
+#if PLATFORM(DRIFTSTACK)
+    // W1477: the iPhone 17 / iOS 26.4 archetype reports VP9 UNSUPPORTED in (Managed)MediaSource —
+    // real iOS managedMediaSource.isTypeSupported('video/mp4; codecs="vp09…"') = false (vs the fork's
+    // true). The MSE/MP4 path resolves through MediaPlayer::supportsType → AVFoundation, which decodes
+    // VP9 on the Mac fleet but NOT on the iPhone, and (unlike the WebM path) does NOT consult
+    // isVP9DecoderAvailable() — so it needs this separate gate. Short-circuit any VP9 codec to
+    // unsupported, matching iOS. WebCodecs VP9 + WebRTC VP9 + MediaRecorder VP9 are separate paths and
+    // remain supported = real iPhone (W1476 coherence map). vp09=MP4 codec id, vp9=WebM codec id.
+    if (codecs.contains("vp09"_s) || codecs.contains("vp9"_s))
+        return false;
+#endif
+
     // 3. If type contains a media type or media subtype that the MediaSource does not support, then return false.
     // 4. If type contains at a codec that the MediaSource does not support, then return false.
     // 5. If the MediaSource does not support the specified combination of media type, media subtype, and codecs then return false.
