@@ -526,6 +526,26 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 44, 44, 46 } } : Color { SRGBA<uint8_t> { 255, 255, 255 } };
     if (cssValueID == CSSValueAppleSystemTertiaryGroupedBackground)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 44, 44, 46 } } : Color { SRGBA<uint8_t> { 242, 242, 247 } };
+
+    // W1455 (2026-06-08): the legacy CSS2 standard system colors. iOS Safari returns these as FIXED
+    // web-standard OPAQUE values (real schemeVaries=false — identical light AND dark), where Mac themes
+    // them per-appearance (often translucent NSColor rgba: e.g. GrayText rgba(0,0,0,0.247), ButtonText
+    // rgba(0,0,0,0.847)). That is both a value tell AND a scheme-coherence tell (a detector toggling
+    // prefers-color-scheme sees the fork vary these while real iPhone keeps them fixed). Return the iOS
+    // fixed values (verified vs real iphone17 `systemColors`, schemeVaries=false), one value for both
+    // appearances. These are the CSS-keyword VALUES a page reads via `color: ButtonText` etc.; iOS form
+    // controls render via the -apple-system palette (W1413), so this is a value/coherence fix, not a
+    // control-rendering change (validated: no form-control regression). Canvas-safe (atlas-served, W1452).
+    if (cssValueID == CSSValueGraytext)
+        return Color { SRGBA<uint8_t> { 128, 128, 128 } };
+    if (cssValueID == CSSValueButtonface)
+        return Color { SRGBA<uint8_t> { 192, 192, 192 } };
+    if (cssValueID == CSSValueButtontext || cssValueID == CSSValueFieldtext || cssValueID == CSSValueHighlighttext)
+        return Color { SRGBA<uint8_t> { 0, 0, 0 } };
+    if (cssValueID == CSSValueField)
+        return Color { SRGBA<uint8_t> { 255, 255, 255 } };
+    if (cssValueID == CSSValueHighlight)
+        return Color { SRGBA<uint8_t> { 181, 213, 255 } };
 #endif
 
     auto& cache = colorCache(options);
