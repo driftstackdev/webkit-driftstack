@@ -144,7 +144,13 @@ static bool shouldUseSfProConstantOnePixelAdjustment(CTFontRef font)
         // (`font-family: ui-monospace`) at 32px was +1 too SHORT (fork 38 vs real 39) precisely because SF Mono
         // wasn't in this list → no +1 (W1431/W1432). Adding it (with the size guard at the call site) matches iOS.
         || caseInsensitiveCompare(familyName.get(), CFSTR(".AppleSystemUIFontMonospaced"))
-        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Mono"));
+        || caseInsensitiveCompare(familyName.get(), CFSTR("SF Mono"))
+        // W1436: the fork's resolved monospace CTFont reports its family as `.SF NS Mono` (the internal
+        // WebKit/CoreText name for SF Mono), NOT `.AppleSystemUIFontMonospaced` (the NSFont API name) — so the
+        // W1434 entries above didn't match h1 (stayed +1 too short). Add the `.SF NS Mono` variants. Canvas-safe:
+        // the canvas validation uses ZERO monospace at any size (W1433).
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".SF NS Mono"))
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".SFNSMono"));
 }
 #endif
 
