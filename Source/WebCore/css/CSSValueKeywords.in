@@ -317,12 +317,19 @@ accentcolortext
 -apple-system-selected-text-background enable-if=WTF_PLATFORM_MAC
 -apple-system-unemphasized-selected-text-background enable-if=WTF_PLATFORM_MAC
 -apple-system-find-highlight-background enable-if=WTF_PLATFORM_MAC
--apple-system-indigo enable-if=WTF_PLATFORM_IOS_FAMILY
--apple-system-teal enable-if=WTF_PLATFORM_IOS_FAMILY
+// W1418 (DRIFTSTACK fork): a real iPhone recognizes these -apple-system colors in AUTHOR CSS (13 BS /aio
+// captures, rec=True) but upstream gates them WTF_PLATFORM_IOS_FAMILY-only, so the Mac fork lacked the enum
+// entirely = an inverse syscolors tell (W1410: CSS.supports false on fork / true on real). The CSS-values
+// generator can't see WTF_PLATFORM_DRIFTSTACK (same limit as the IDL preprocessor, f7e9e741), so enable for
+// COCOA — the fork is always built COCOA and always impersonates iOS; RenderThemeMac::systemColor returns the
+// verified iOS RGB (light+dark) for each under PLATFORM(DRIFTSTACK). quaternary-fill/opaque-separator are left
+// IOS_FAMILY-only: the probe never tested them so real-device author-CSS recognition is unverified (don't enable blind).
+-apple-system-indigo enable-if=WTF_PLATFORM_COCOA
+-apple-system-teal enable-if=WTF_PLATFORM_COCOA
 -apple-system-opaque-fill enable-if=WTF_PLATFORM_COCOA
 -apple-system-opaque-secondary-fill enable-if=WTF_PLATFORM_COCOA
--apple-system-opaque-secondary-fill-disabled enable-if=WTF_PLATFORM_IOS_FAMILY
--apple-system-opaque-tertiary-fill enable-if=WTF_PLATFORM_IOS_FAMILY
+-apple-system-opaque-secondary-fill-disabled enable-if=WTF_PLATFORM_COCOA
+-apple-system-opaque-tertiary-fill enable-if=WTF_PLATFORM_COCOA
 -apple-system-quaternary-fill enable-if=WTF_PLATFORM_IOS_FAMILY
 -apple-system-opaque-separator enable-if=WTF_PLATFORM_IOS_FAMILY
 -webkit-control-background enable-if=WTF_PLATFORM_COCOA

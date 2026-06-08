@@ -489,11 +489,21 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 43, 43, 46 } } : Color { SRGBA<uint8_t> { 228, 228, 229 } };
     if (cssValueID == CSSValueAppleSystemOpaqueSecondaryFill)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 38, 38, 41 } } : Color { SRGBA<uint8_t> { 233, 233, 234 } };
-    // NOTE (W242): input[type=search]'s bg (iOS rgb(238,238,239)) uses -apple-system-opaque-tertiary-fill,
-    // whose CSS keyword is enable-if=WTF_PLATFORM_IOS_FAMILY (NOT in the Mac build) — so html.css's rule is
-    // invalid on the fork → white. Can't override here (CSSValueAppleSystemOpaqueTertiaryFill is undeclared);
-    // enabling the keyword for DRIFTSTACK would over-recognize it in AUTHOR css (iOS keeps it UA-internal) = a
-    // new tell. Deferred — needs UA-sheet-scoped keyword enabling or an html.css color substitution.
+    // W1418 (2026-06-07): the remaining 4 iOS-only-enum syscolors, now COCOA-enabled for the fork in
+    // CSSValueKeywords.in (so the CSSValueID exists) + recognized in author CSS like a real iPhone. Return the
+    // iOS UIColor values (light AND dark), every one VERIFIED vs real iPhone 17 (vendor.v3-system-colors-probe
+    // `systemColors`, 13 BS /aio captures across Safari 26.4+26.5, rec=True + values unanimous). This closes
+    // the last 3 of the 5 W1410 inverse syscolor tells (indigo / teal / opaque-secondary-fill-disabled) plus
+    // opaque-tertiary-fill (the old W242 "iOS keeps it UA-internal" note was WRONG — real iPhone recognizes it
+    // in author CSS, rec=True, and uses it for input[type=search] bg rgb(238,238,239)).
+    if (cssValueID == CSSValueAppleSystemIndigo)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 109, 124, 255 } } : Color { SRGBA<uint8_t> { 97, 85, 245 } };
+    if (cssValueID == CSSValueAppleSystemTeal)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 0, 210, 224 } } : Color { SRGBA<uint8_t> { 0, 195, 208 } };
+    if (cssValueID == CSSValueAppleSystemOpaqueSecondaryFillDisabled)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 29, 29, 31 } } : Color { SRGBA<uint8_t> { 238, 238, 239 } };
+    if (cssValueID == CSSValueAppleSystemOpaqueTertiaryFill)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 28, 28, 30 } } : Color { SRGBA<uint8_t> { 238, 238, 239 } };
 #endif
 
     auto& cache = colorCache(options);
