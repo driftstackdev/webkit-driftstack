@@ -191,25 +191,44 @@ std::span<const uint8_t> DriftstackAudioAtlas::entryFor(std::span<const uint8_t,
         if (cmp < 0) lo = mid + 1;
         else if (cmp > 0) hi = mid;
         else {
-            // Hit! Verify shape matches caller's AudioBuffer.
-            if (e.sampleRate != expectedSampleRate
-                || e.channelCount != expectedChannelCount
-                || e.framesPerChannel != expectedFramesPerChannel) {
-                static unsigned shapeMismatch = 0;
-                if (++shapeMismatch <= 50) {
-                    WTFLogAlways("[Driftstack-DASA-SHAPE-MISMATCH] expected sr=%u ch=%u frames=%u; captured sr=%u ch=%u frames=%u; falling through",
-                        expectedSampleRate, expectedChannelCount, expectedFramesPerChannel,
-                        e.sampleRate, e.channelCount, e.framesPerChannel);
-                }
-                return { };
+            // W1652: key match at mid. The graph-hash excludes the OfflineAudioContext SHAPE
+            // (sampleRate/frames), so the SAME graph can appear at MULTIPLE shapes (e.g. FPJS-classic
+            // e24f21a1 rendered at 5000@44100, 8000@48000, AND 44100@44100). Entries are sorted by
+            // (key, then shape), so same-key entries are contiguous — scan the block for the entry
+            // whose shape matches the caller's buffer (was: single shape-check → only one shape/key).
+            auto matchShape = [&](const auto& cand, size_t idx) -> std::span<const uint8_t> {
+                if (cand.sampleRate != expectedSampleRate
+                    || cand.channelCount != expectedChannelCount
+                    || cand.framesPerChannel != expectedFramesPerChannel)
+                    return { };
+                uint32_t expectedBytes = cand.framesPerChannel * cand.channelCount * 4;
+                static unsigned hits = 0;
+                if (++hits <= 50)
+                    WTFLogAlways("[Driftstack-DASA-HIT] sr=%u ch=%u frames=%u bytes=%u (entry %zu of %zu)",
+                        cand.sampleRate, cand.channelCount, cand.framesPerChannel, expectedBytes, idx, m_numEntries);
+                return m_dataPayloadSpan.subspan(cand.dataOffset, expectedBytes);
+            };
+            if (auto r = matchShape(e, mid); !r.empty())
+                return r;
+            for (size_t i = mid; i-- > 0; ) {
+                auto cand = readAudioEntry(m_indexSpan, i);
+                if (compareAudioHash(cand.graphConfigHash, graphConfigHash))
+                    break;
+                if (auto r = matchShape(cand, i); !r.empty())
+                    return r;
             }
-            uint32_t expectedBytes = e.framesPerChannel * e.channelCount * 4;
-            static unsigned hits = 0;
-            if (++hits <= 50)
-                WTFLogAlways("[Driftstack-DASA-HIT] sr=%u ch=%u frames=%u bytes=%u (entry %zu of %zu)",
-                    e.sampleRate, e.channelCount, e.framesPerChannel, expectedBytes,
-                    mid, m_numEntries);
-            return m_dataPayloadSpan.subspan(e.dataOffset, expectedBytes);
+            for (size_t i = mid + 1; i < m_numEntries; ++i) {
+                auto cand = readAudioEntry(m_indexSpan, i);
+                if (compareAudioHash(cand.graphConfigHash, graphConfigHash))
+                    break;
+                if (auto r = matchShape(cand, i); !r.empty())
+                    return r;
+            }
+            static unsigned shapeMismatch = 0;
+            if (++shapeMismatch <= 50)
+                WTFLogAlways("[Driftstack-DASA-SHAPE-MISMATCH] key matched but no same-key entry has shape sr=%u ch=%u frames=%u; falling through",
+                    expectedSampleRate, expectedChannelCount, expectedFramesPerChannel);
+            return { };
         }
     }
 
