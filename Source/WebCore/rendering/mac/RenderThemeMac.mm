@@ -563,6 +563,11 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 235, 235, 245, 40 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 45 } };
     if (cssValueID == CSSValueAppleSystemSeparator || cssValueID == CSSValueAppleSystemContainerBorder || cssValueID == CSSValueAppleSystemGrid)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 84, 84, 88, 128 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 31 } };
+    // W1594: opaque-separator — the OPAQUE (no-alpha) separator. VERIFIED vs real iphone17/26.4 (W1578
+    // system-colors probe): light rgb(231,231,232) / dark rgb(42,42,44). Closes the last syscolor
+    // divergence (detection-verdict syscolor#24). Canvas-safe (atlas-served, W1452).
+    if (cssValueID == CSSValueAppleSystemOpaqueSeparator)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 42, 42, 44 } } : Color { SRGBA<uint8_t> { 231, 231, 232 } };
     if (cssValueID == CSSValueAppleSystemGray)
         return Color { SRGBA<uint8_t> { 142, 142, 147 } };
     if (cssValueID == CSSValueAppleSystemHeaderText)

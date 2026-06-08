@@ -331,7 +331,12 @@ accentcolortext
 -apple-system-opaque-secondary-fill-disabled enable-if=WTF_PLATFORM_COCOA
 -apple-system-opaque-tertiary-fill enable-if=WTF_PLATFORM_COCOA
 -apple-system-quaternary-fill enable-if=WTF_PLATFORM_IOS_FAMILY
--apple-system-opaque-separator enable-if=WTF_PLATFORM_IOS_FAMILY
+// W1594 (DRIFTSTACK fork): opaque-separator now BS-VERIFIED recognized in real iphone17/26.4 author CSS
+// (W1578 system-colors probe: rec=True, light rgb(231,231,232) / dark rgb(42,42,44), schemeVaries) — the
+// W1418 "probe never tested it, don't enable blind" gate is resolved, so enable for COCOA (the fork is
+// always built COCOA + impersonates iOS); RenderThemeMac::systemColor returns the verified iOS RGB under
+// PLATFORM(DRIFTSTACK). quaternary-fill stays IOS_FAMILY-only (still unverified — no probe coverage).
+-apple-system-opaque-separator enable-if=WTF_PLATFORM_COCOA
 -webkit-control-background enable-if=WTF_PLATFORM_COCOA
 activebuttontext
 -webkit-activelink
