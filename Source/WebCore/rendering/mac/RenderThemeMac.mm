@@ -504,6 +504,28 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 29, 29, 31 } } : Color { SRGBA<uint8_t> { 238, 238, 239 } };
     if (cssValueID == CSSValueAppleSystemOpaqueTertiaryFill)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 28, 28, 30 } } : Color { SRGBA<uint8_t> { 238, 238, 239 } };
+
+    // W1454 (2026-06-08): the -apple-system-* BACKGROUND palette. Mac's NSColor collapses ALL dark backgrounds
+    // to rgb(30,30,30) and renders the grouped backgrounds white in light, where iOS has a distinct hierarchy
+    // (primary 0,0,0 / secondary 28,28,30 / tertiary 44,44,46 in dark; grouped 242,242,247 in light). Set the
+    // iOS UIColor.system*Background values (light AND dark), each VERIFIED vs real iPhone 17
+    // (vendor.v3-system-colors-probe `systemColors`). Keywords are already WTF_PLATFORM_COCOA-recognized, so this
+    // is a pure VALUE override (no CSSValueKeywords change). Closes the W1450-diff background divergence (a CSS
+    // system-color fingerprint surface). The selected-content-background variants are SURFACED separately
+    // (selection semantics + larger value delta). Canvas-safe: canvas measureText/fp10x are atlas-served (W1452).
+    if (cssValueID == CSSValueAppleSystemBackground || cssValueID == CSSValueAppleSystemControlBackground
+        || cssValueID == CSSValueAppleSystemTextBackground || cssValueID == CSSValueCanvas)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 0, 0, 0 } } : Color { SRGBA<uint8_t> { 255, 255, 255 } };
+    if (cssValueID == CSSValueAppleSystemGroupedBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 0, 0, 0 } } : Color { SRGBA<uint8_t> { 242, 242, 247 } };
+    if (cssValueID == CSSValueAppleSystemSecondaryBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 28, 28, 30 } } : Color { SRGBA<uint8_t> { 242, 242, 247 } };
+    if (cssValueID == CSSValueAppleSystemSecondaryGroupedBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 28, 28, 30 } } : Color { SRGBA<uint8_t> { 255, 255, 255 } };
+    if (cssValueID == CSSValueAppleSystemTertiaryBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 44, 44, 46 } } : Color { SRGBA<uint8_t> { 255, 255, 255 } };
+    if (cssValueID == CSSValueAppleSystemTertiaryGroupedBackground)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 44, 44, 46 } } : Color { SRGBA<uint8_t> { 242, 242, 247 } };
 #endif
 
     auto& cache = colorCache(options);
