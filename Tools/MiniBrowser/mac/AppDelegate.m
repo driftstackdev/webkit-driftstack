@@ -49,6 +49,12 @@
 #import <WebKit/_WKAutomationSession.h>
 #import <WebKit/_WKAutomationSessionConfiguration.h>
 #import <WebKit/_WKAutomationSessionDelegate.h>
+// W1632: SPI implemented in WKWebView.mm; declared here as a category (not WKWebViewPrivate.h) to avoid a
+// header-cascade rebuild. Flips an existing web view to controlledByAutomation before handing it to the
+// in-process WebDriver session (fixes the W1631 waitForNavigationToComplete hang).
+@interface WKWebView (DriftstackAutomation)
+- (void)_driftstackSetControlledByAutomation:(BOOL)controlled;
+@end
 #endif
 
 static const NSString * const kURLArgumentString = @"--url";
@@ -632,9 +638,11 @@ static NSNumber *_currentBadge;
         [self newWindow:self];
         controller = [self frontmostBrowserWindowController];
     }
-    if ([controller isKindOfClass:[WK2BrowserWindowController class]])
-        completionHandler([(WK2BrowserWindowController *)controller webView]);
-    else
+    if ([controller isKindOfClass:[WK2BrowserWindowController class]]) {
+        WKWebView *automationWebView = [(WK2BrowserWindowController *)controller webView];
+        [automationWebView _driftstackSetControlledByAutomation:YES]; // W1632: fix navigationOccurredForFrame
+        completionHandler(automationWebView);
+    } else
         completionHandler(nil);
 }
 #endif // PLATFORM(DRIFTSTACK)

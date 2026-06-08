@@ -5232,6 +5232,19 @@ static void convertAndAddHighlight(Vector<Ref<WebCore::SharedMemory>>& buffers, 
         protect(provisionalPageProxy->process())->requestTermination(WebKit::ProcessTerminationReason::RequestedByClient);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W1632: set controlledByAutomation on an EXISTING web view (post-creation). The in-process WebDriver
+// (item-9) hands the existing MiniBrowser web view to the automation session, but that view was created
+// WITHOUT the automation config, so isControlledByAutomation()=false → WebPageProxy never calls
+// navigationOccurredForFrame → Automation.waitForNavigationToComplete hangs (W1631 root-cause). Flipping it
+// here makes the page automation-tracked (and applies the DRIFTSTACK automation overrides for verification).
+- (void)_driftstackSetControlledByAutomation:(BOOL)controlled
+{
+    if (_page)
+        _page->setControlledByAutomation(controlled);
+}
+#endif
+
 - (void)_takePDFSnapshotWithConfiguration:(WKSnapshotConfiguration *)snapshotConfiguration completionHandler:(void (^)(NSData *, NSError *))completionHandler
 {
     THROW_IF_SUSPENDED;
