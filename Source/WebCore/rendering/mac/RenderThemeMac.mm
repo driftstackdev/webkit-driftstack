@@ -991,6 +991,24 @@ static std::span<const IntSize, 4> NODELETE popupButtonSizes()
 
 static std::span<const int, 4> NODELETE popupButtonPadding(NSControlSize size)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W1458: iOS menulists have ZERO internal VERTICAL padding. RenderThemeIOS::
+    // platformPopupInternalPaddingBox applies emToPx(1)+borderTop to ONE HORIZONTAL edge only
+    // (top/bottom = 0); the select HEIGHT comes from the min-height clamp (=20 for the 11px launch
+    // select, W1413). Mac's {top:2,bottom:3} padding is exactly why the fork select was 21 (line-box
+    // 14 + vertical-padding 5 + border 2) where a real iPhone-17 is 20. Zero the vertical padding to
+    // match iOS's MECHANISM (not a blind -1px guess, W1437) → height = max(14+0+2, min-height 20) =
+    // 20 = real. Horizontal (the dropdown-arrow area) kept as Mac — select WIDTH is not a flagged
+    // tell, and a separate iOS-emToPx horizontal port would be a width arc. Closes the last
+    // form-control delta. Selects-only (popupButtonPadding is popup-button-specific).
+    static constexpr std::array padding {
+        std::array { 0, 26, 0, 8 },
+        std::array { 0, 23, 0, 8 },
+        std::array { 0, 22, 0, 10 },
+        std::array { 0, 26, 0, 8 },
+    };
+    return padding[size];
+#else
     static constexpr std::array padding {
         std::array { 2, 26, 3, 8 },
         std::array { 2, 23, 3, 8 },
@@ -998,6 +1016,7 @@ static std::span<const int, 4> NODELETE popupButtonPadding(NSControlSize size)
         std::array { 2, 26, 3, 8 },
     };
     return padding[size];
+#endif
 }
 
 // Checkboxes and radio buttons
