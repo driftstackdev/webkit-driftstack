@@ -2945,7 +2945,15 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             const char* env = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED");
             return env && env[0] == '1';
         }();
-        if (s_afpGetImageData) {
+        // Non-text cold-miss (lastFillText empty = shapes/gradients/images, no
+        // glyph dispatch) must NOT take the content-blind AFP fallback: that
+        // collapses every distinct non-text canvas to one solid-color buffer
+        // (distinct=1 — a detectable canvas-blocking tell). Native CG render is
+        // bit-identical Mac==iPhone for non-text content (W1155: 13/13 shapes),
+        // so on a non-text miss we fall through to the native bytes below. Text
+        // (non-empty lastFillText) still routes the fallback until the per-glyph
+        // iOS atlas covers the state — its native Mac metrics ARE divergent.
+        if (s_afpGetImageData && !canvasBase().lastFillTextForDispatch().isEmpty()) {
             if (RefPtr afpBuffer = canvasBase().createImageForNoiseInjection()) {
                 auto afpFormat = PixelBufferFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, afpBuffer->colorSpace() };
                 if (RefPtr afpPixels = dynamicDowncast<ByteArrayPixelBuffer>(afpBuffer->getPixelBuffer(afpFormat, imageDataRect))) {
