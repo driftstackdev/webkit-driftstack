@@ -546,6 +546,27 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
         return Color { SRGBA<uint8_t> { 255, 255, 255 } };
     if (cssValueID == CSSValueHighlight)
         return Color { SRGBA<uint8_t> { 181, 213, 255 } };
+
+    // W1456 (2026-06-08): the -apple-system label hierarchy + separators/grid/border + gray/header-text.
+    // iOS tints these from the label base rgb(60,60,67) light / rgb(235,235,245) dark at specific alphas
+    // (secondary 0.6, tertiary/placeholder 0.298, quaternary 0.176 L / 0.157 D); separators/grid/border use
+    // rgb(60,60,67)/0.12 light + rgb(84,84,88)/0.5 dark; gray is scheme-FIXED rgb(142,142,147); header-text
+    // is OPAQUE. Mac instead tints from black/white (rgba(0,0,0,a)/rgba(255,255,255,a)) — a value tell. The
+    // 8-bit alphas are chosen to serialize to the EXACT real getComputedStyle string (minimal round-tripping
+    // decimal: 0.6=153, 0.298=76, 0.176=45, 0.157=40, 0.12=31, 0.5=128). Every value VERIFIED vs real iphone17
+    // `systemColors`. Canvas-safe (atlas-served, W1452). (selected-content-background variants still deferred.)
+    if (cssValueID == CSSValueAppleSystemSecondaryLabel)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 235, 235, 245, 153 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 153 } };
+    if (cssValueID == CSSValueAppleSystemTertiaryLabel || cssValueID == CSSValueAppleSystemPlaceholderText)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 235, 235, 245, 76 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 76 } };
+    if (cssValueID == CSSValueAppleSystemQuaternaryLabel)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 235, 235, 245, 40 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 45 } };
+    if (cssValueID == CSSValueAppleSystemSeparator || cssValueID == CSSValueAppleSystemContainerBorder || cssValueID == CSSValueAppleSystemGrid)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 84, 84, 88, 128 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 31 } };
+    if (cssValueID == CSSValueAppleSystemGray)
+        return Color { SRGBA<uint8_t> { 142, 142, 147 } };
+    if (cssValueID == CSSValueAppleSystemHeaderText)
+        return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 255, 255 } } : Color { SRGBA<uint8_t> { 0, 0, 0 } };
 #endif
 
     auto& cache = colorCache(options);
