@@ -25,6 +25,8 @@
 #import <errno.h>
 #import <netinet/in.h>
 #import <sys/socket.h>
+#import <sys/time.h>
+#import <wtf/Scope.h>
 #import <unistd.h>
 #import <wtf/Assertions.h>
 #import <wtf/cocoa/SpanCocoa.h>
@@ -117,6 +119,19 @@ static int connectToProxy(const Socks5Endpoint& proxy)
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: socket() failed errno=%d", errno);
         return -1;
     }
+    // W1530 (A3 W448 isolation): bound the SOCKS5 CONNECT handshake recvs with a
+    // timeout — this was the ONE unbounded recv in the Path-B load path (the
+    // session UDP probe + the TLS-13 handshake already set SO_RCVTIMEO; this one
+    // didn't). Against a CHAINED gost that accepts the TCP connection (curl-TCP
+    // works) but stalls the SOCKS5 CONNECT reply, recvAll() blocked FOREVER →
+    // 25s WebContent pageLoad timeout → blank page (broke item-9 drive bridge +
+    // streaming). On timeout recvAll returns false → performHandshake fails fast
+    // (load errors instead of hanging). 8s is generous (a working chain replies
+    // in <2s); the TLS-13 client re-sets/clears its own timeout once it owns the
+    // fd, so the data phase is unaffected.
+    struct timeval socks5HandshakeTimeout { 8, 0 };
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
     if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
             hostUtf8.data(), unsigned(proxy.port), errno);
@@ -289,6 +304,22 @@ Socks5Result DriftstackSocks5Client::udpAssociate(Socks5UdpRelayChannel& out)
             return h;
     }
     int fd = m_impl->socketFd;
+
+    // W1530 (A3 W448 isolation): bound the UDP_ASSOCIATE reply recv with a
+    // timeout. A CHAINED SOCKS5 proxy (per-session gost → upstream) accepts the
+    // TCP control connection (curl-TCP gets 200 through it) but may NEVER reply
+    // to UDP_ASSOCIATE (no UDP forwarding through the chain) → recvAll(hdr) below
+    // blocked FOREVER and hung the entire WebContent load (broke item-9 drive
+    // bridge + streaming). On timeout recvAll returns false → UdpAssociateFailed
+    // → the caller's graceful TCP-only fallback (Slice16.7.a) proceeds instead of
+    // hanging. Cleared on EVERY return path so the data/fallback phase keeps an
+    // un-timed (blocking) socket. A working proxy replies in <1s, so 4s is safe.
+    struct timeval udpProbeTimeout { 4, 0 };
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &udpProbeTimeout, sizeof(udpProbeTimeout));
+    auto clearUdpProbeTimeout = makeScopeExit([fd]() {
+        struct timeval noTimeout { 0, 0 };
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &noTimeout, sizeof(noTimeout));
+    });
 
     // [VER=5, CMD=UDP_ASSOC, RSV=0, ATYP=IPV4, 0.0.0.0, port=0]
     // RFC 1928 §4 — DST.ADDR/PORT in UDP_ASSOCIATE request are the LOCAL
