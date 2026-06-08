@@ -251,6 +251,30 @@ bool RemoteLayerBackingStoreCollection::markInProcessBackingStoreVolatile(Remote
 {
     ASSERT(!m_inLayerFlush);
 
+#if PLATFORM(DRIFTSTACK)
+    // W1430 (A3 W357-364): the Mac fleet captures each session's WebContent window via ScreenCaptureKit and
+    // streams it over LiveKit. This is the SINGLE chokepoint for ALL backing-store volatility — the
+    // process-suspension path (markAllBackingStoreVolatile), the reachability path
+    // (markBackingStoreVolatileAfterReachabilityChange), and the volatility-timer path all funnel here.
+    // Marking the FRONT buffer volatile/purgeable (below) purges the exact IOSurface ScreenCaptureKit reads,
+    // so an off-screen/idle fleet window delivers 0 frames — and A3's W364 diagnostic RULED OUT process
+    // suspension, leaving exactly this (the reachability/timer paths fire volatility WITHOUT suspending the
+    // WebProcess). Suppress volatility entirely under DRIFTSTACK so the captured window's IOSurfaces stay
+    // LIVE. Trade-off: the WebContent holds its layer memory while idle — correct for an always-captured
+    // fleet session (reclaimed when the session/process ends). Returns true (claim success) so the
+    // retry/completion logic settles. One-shot stderr marker so A3 can confirm this path fires (grep
+    // [FORK-ERR]); its presence + frames-now means volatility was the blocker, its presence + still-0 means
+    // the no-active-display path (A3's virtual display) is the remaining cause.
+    static bool s_volatilitySuppressLogged = false;
+    if (!s_volatilitySuppressLogged) {
+        s_volatilitySuppressLogged = true;
+        fprintf(stderr, "[FORK-ERR] DRIFTSTACK W1430: backing-store volatility SUPPRESSED (keeping IOSurface live for SCStream capture)\n");
+    }
+    UNUSED_PARAM(backingStore);
+    UNUSED_PARAM(markingBehavior);
+    UNUSED_PARAM(now);
+    return true;
+#else
     if (markingBehavior.contains(VolatilityMarkingBehavior::ConsiderTimeSinceLastDisplay)) {
         auto timeSinceLastDisplay = now - backingStore.lastDisplayTime();
         if (timeSinceLastDisplay < volatileBackingStoreAgeThreshold) {
@@ -275,6 +299,7 @@ bool RemoteLayerBackingStoreCollection::markInProcessBackingStoreVolatile(Remote
     }
 
     return successfullyMadeBackingStoreVolatile;
+#endif
 }
 
 void RemoteLayerBackingStoreCollection::backingStoreBecameUnreachable(RemoteLayerBackingStore& backingStore)
