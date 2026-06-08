@@ -1665,6 +1665,7 @@
 		4010C18CCD35071DB5F953F8 /* DriftstackTurn.mm in Sources */ = {isa = PBXBuildFile; fileRef = 61A5E263B86783E835328E06 /* DriftstackTurn.mm */; };
 		D34D16F68103D989806462A4 /* DriftstackHttp3.mm in Sources */ = {isa = PBXBuildFile; fileRef = 0B99CA2A3C6E0261F434ECD1 /* DriftstackHttp3.mm */; };
 		F581C277516357A8ACA00B14 /* DriftstackHttp2.mm in Sources */ = {isa = PBXBuildFile; fileRef = 71B1EC1A3BC52110B57D3089 /* DriftstackHttp2.mm */; };
+		A22BE5B307B29929DDF52483 /* zstddeclib.c in Sources */ = {isa = PBXBuildFile; fileRef = 49E6FB02B2FC73440A3FD33C /* zstddeclib.c */; settings = {COMPILER_FLAGS = "-w -fvisibility=hidden -DZSTDLIB_VISIBLE= -DZSTDERRORLIB_VISIBLE="; }; };
 		8B351F5DED27D3A569FBD953 /* DriftstackNetworkLoader.mm in Sources */ = {isa = PBXBuildFile; fileRef = 103B6C5F11B2A81E070B85A8 /* DriftstackNetworkLoader.mm */; };
 		50DCD6C5E1F30FF6DF9B336E /* DriftstackSocks5TCPFramer.mm in Sources */ = {isa = PBXBuildFile; fileRef = ECC66E90E9E179A9753E38AC /* DriftstackSocks5TCPFramer.mm */; };
 		726952E02B7F4636009E5F0C /* WebExtensionAPIWebPageRuntime.h in Headers */ = {isa = PBXBuildFile; fileRef = 726952DF2B7F4636009E5F0C /* WebExtensionAPIWebPageRuntime.h */; };
@@ -7311,6 +7312,7 @@
 		61A5E263B86783E835328E06 /* DriftstackTurn.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackTurn.mm; sourceTree = "<group>"; };
 		0B99CA2A3C6E0261F434ECD1 /* DriftstackHttp3.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackHttp3.mm; sourceTree = "<group>"; };
 		71B1EC1A3BC52110B57D3089 /* DriftstackHttp2.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackHttp2.mm; sourceTree = "<group>"; };
+		49E6FB02B2FC73440A3FD33C /* zstddeclib.c */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.c; path = "zstd/zstddeclib.c"; sourceTree = "<group>"; };
 		103B6C5F11B2A81E070B85A8 /* DriftstackNetworkLoader.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackNetworkLoader.mm; sourceTree = "<group>"; };
 		ECC66E90E9E179A9753E38AC /* DriftstackSocks5TCPFramer.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5TCPFramer.mm; sourceTree = "<group>"; };
 		860A5EA0FD5FBC32B5398AC3 /* WKImmersiveEnvironmentDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKImmersiveEnvironmentDelegate.h; sourceTree = "<group>"; };
@@ -15143,6 +15145,7 @@
 				0B99CA2A3C6E0261F434ECD1 /* DriftstackHttp3.mm */,
 				3891D23395CBF11A8D3CB4B4 /* DriftstackHttp2.h */,
 				71B1EC1A3BC52110B57D3089 /* DriftstackHttp2.mm */,
+				49E6FB02B2FC73440A3FD33C /* zstddeclib.c */,
 				B277D1ED181BCC0F51A0016F /* DriftstackNetworkLoader.h */,
 				103B6C5F11B2A81E070B85A8 /* DriftstackNetworkLoader.mm */,
 				A865D7AC3B233DE22ADEFE92 /* DriftstackSocks5TCPFramer.h */,
@@ -22432,6 +22435,7 @@
 				4010C18CCD35071DB5F953F8 /* DriftstackTurn.mm in Sources */,
 				D34D16F68103D989806462A4 /* DriftstackHttp3.mm in Sources */,
 				F581C277516357A8ACA00B14 /* DriftstackHttp2.mm in Sources */,
+				A22BE5B307B29929DDF52483 /* zstddeclib.c in Sources */,
 				8B351F5DED27D3A569FBD953 /* DriftstackNetworkLoader.mm in Sources */,
 				50DCD6C5E1F30FF6DF9B336E /* DriftstackSocks5TCPFramer.mm in Sources */,
 				DE7ED8486B859B9E5DF84AA2 /* DriftstackSocks5URLProtocol.mm in Sources */,

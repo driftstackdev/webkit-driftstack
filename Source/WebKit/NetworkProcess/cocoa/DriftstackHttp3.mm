@@ -33,6 +33,7 @@
 
 #import <arpa/inet.h>
 #import <compression.h>  // Wave 29-499.329 — br (Content-Encoding) decode for h3 responses
+#import "zstd/zstd.h"  // W1515 — zstd decode for h3 responses (matches the h2 shared path)
 #import <dlfcn.h>
 #import <netinet/in.h>
 #import <stdlib.h>
@@ -2981,6 +2982,28 @@ static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
             if (n > 0 && n < cap) { out.resize(n); ok = true; break; }
             if (!n) break;
             cap *= 2;
+        }
+    } else if (enc == "zstd"_s) {
+        // W1515 — vendored zstd decoder; same streaming grow-loop as the h2 shared path
+        // (driftstackDecodeContentEncoding). Lets h3 self-decode zstd so the h3
+        // "gzip, deflate, br, zstd" Accept-Encoding is honoured without corrupting responses.
+        if (ZSTD_DStream* ds = ZSTD_createDStream()) {
+            ZSTD_initDStream(ds);
+            ZSTD_inBuffer in = { resp.body.span().data(), resp.body.size(), 0 };
+            size_t cap = std::max<size_t>(resp.body.size() * 4, 64 * 1024);
+            out.resize(cap);
+            size_t written = 0;
+            for (;;) {
+                if (written == cap) { cap *= 2; out.resize(cap); }
+                ZSTD_outBuffer outb = { out.mutableSpan().data() + written, cap - written, 0 };
+                size_t rv = ZSTD_decompressStream(ds, &outb, &in);
+                if (ZSTD_isError(rv)) break;
+                written += outb.pos;
+                if (!rv) { ok = true; break; }
+                if (in.pos == in.size && !outb.pos) { ok = true; break; }
+            }
+            if (ok) out.resize(written);
+            ZSTD_freeDStream(ds);
         }
     } else
         return;

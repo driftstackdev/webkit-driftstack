@@ -28,6 +28,7 @@
 #import <compression.h>
 #import <dlfcn.h>
 #import <zlib.h>  // Wave 29-499.263 — system libz for gzip/deflate decode
+#import "zstd/zstd.h"  // W1515 — vendored zstd v1.5.7 decompressor for Content-Encoding: zstd
 #import <wtf/Assertions.h>
 #import <wtf/MonotonicTime.h>
 #import <wtf/StdLibExtras.h>
@@ -209,16 +210,14 @@ static const std::pair<const char*, const char*> kHpackStatic[] = {
     { "accept-charset", "" },
     // Wave 29-499.262 — re-enabled gzip+deflate+br after fixing streaming
     // decoder via compression_stream API.
-    // W1483 CORRECTION: this is bit-identical to Safari 26.0-26.2, but NOT to the
-    // 26.4 LAUNCH archetype. Safari 26.3+ (incl iOS 26.4) ALSO advertises zstd →
-    // real 26.4 Accept-Encoding = "gzip, deflate, br, zstd" (verified: WebKit zstd
-    // full support landed Safari 26.3; browserleaks-ip V-229). The fork omits zstd
-    // because this custom Path-B loader cannot DECODE it (no COMPRESSION_ZSTD in
-    // libcompression on the 26.5 SDK, no system/bundled libzstd) — advertising an
-    // encoding we can't decode would corrupt zstd responses. SURFACED Accept-Encoding
-    // divergence (founder-queue): closing it needs libzstd bundled into the loader's
-    // decode path, then "zstd" appended here + in DriftstackNetworkLoader.mm for 26.4.
-    { "accept-encoding", "gzip, deflate, br" },
+    // Real iOS 26.4 Safari Accept-Encoding = "gzip, deflate, br, zstd" (WebKit zstd
+    // support landed Safari 26.3; verified browserleaks-ip V-229 + the W1512 tls-full
+    // real-device capture). W1515 CLOSED the prior divergence: vendored libzstd
+    // (NetworkProcess/cocoa/zstd/zstddeclib.c) is bundled into the loader decode path
+    // (driftstackDecodeContentEncoding here + driftstackDecompressHttp3Body for h3), so
+    // the fork now both advertises AND decodes zstd — no response corruption. Decode
+    // logic validated bit-exact (W1513/W1514, 85B + 266KB).
+    { "accept-encoding", "gzip, deflate, br, zstd" },
     { "accept-language", "" },
     { "accept-ranges", "" },
     { "accept", "" },
@@ -635,8 +634,32 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
             if (!n) break;                                              // hard failure
             cap *= 2;                                                   // n==cap ⇒ maybe truncated, grow
         }
+    } else if (enc == "zstd"_s) {
+        // W1515 — vendored zstd v1.5.7 decoder (NetworkProcess/cocoa/zstd/zstddeclib.c).
+        // Streaming decompress + grow loop (mirrors the gzip branch) so high-ratio/large
+        // bodies aren't truncated. Logic validated bit-exact W1513/W1514 (85B + 266KB)
+        // against this exact amalgamation. Lets the fork advertise + honour the real-iPhone
+        // "gzip, deflate, br, zstd" Accept-Encoding (W1512) without corrupting zstd responses.
+        if (ZSTD_DStream* ds = ZSTD_createDStream()) {
+            ZSTD_initDStream(ds);
+            ZSTD_inBuffer in = { body.span().data(), body.size(), 0 };
+            size_t cap = std::max<size_t>(body.size() * 4, 64 * 1024);
+            out.resize(cap);
+            size_t written = 0;
+            for (;;) {
+                if (written == cap) { cap *= 2; out.resize(cap); }
+                ZSTD_outBuffer outb = { out.mutableSpan().data() + written, cap - written, 0 };
+                size_t rv = ZSTD_decompressStream(ds, &outb, &in);
+                if (ZSTD_isError(rv)) break;
+                written += outb.pos;
+                if (!rv) { ok = true; break; }                            // a frame completed
+                if (in.pos == in.size && !outb.pos) { ok = true; break; } // input drained
+            }
+            if (ok) out.resize(written);
+            ZSTD_freeDStream(ds);
+        }
     } else
-        return;  // unknown encoding (e.g. zstd) — we never advertise it; leave as-is
+        return;  // unknown encoding — leave as-is
 
     if (!ok) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.331] decode FAILED enc=%s in=%zu first=0x%02x", enc.utf8().data(), body.size(), body.isEmpty() ? 0 : body[0]);

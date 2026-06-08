@@ -788,7 +788,7 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
     if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
     if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
-    h2req.extraHeaders.append({ "accept-encoding"_s, getOrDefault("accept-encoding"_s, "gzip, deflate, br"_s) });
+    h2req.extraHeaders.append({ "accept-encoding"_s, getOrDefault("accept-encoding"_s, "gzip, deflate, br, zstd"_s) });
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
     if (webkitHdrs.contains("priority"_s)) h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
@@ -1072,7 +1072,7 @@ void DriftstackNetworkLoader::resume()
                 h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
                 if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
                 if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
-                h3req.extraHeaders.append({ "accept-encoding"_s, orDefault("accept-encoding"_s, "gzip, deflate, br"_s) });
+                h3req.extraHeaders.append({ "accept-encoding"_s, orDefault("accept-encoding"_s, "gzip, deflate, br, zstd"_s) });
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
                 if (wk.contains("priority"_s)) h3req.extraHeaders.append({ "priority"_s, wk.get("priority"_s) });
@@ -1464,7 +1464,7 @@ void DriftstackNetworkLoader::resume()
             if (webkitHdrs.contains("sec-fetch-dest"_s))
                 h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
             h2req.extraHeaders.append({ "accept-encoding"_s,
-                getOrDefault("accept-encoding"_s, "gzip, deflate, br"_s) });
+                getOrDefault("accept-encoding"_s, "gzip, deflate, br, zstd"_s) });
             if (webkitHdrs.contains("sec-fetch-mode"_s))
                 h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
