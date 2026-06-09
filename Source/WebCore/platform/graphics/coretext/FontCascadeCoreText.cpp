@@ -804,9 +804,15 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // CGContextClipToMask applies mask in current
                         // transform coordinates. Anchor at glyph position
                         // (top-left of 64x64 box).
+                        // W1782: the atlas capture renders the glyph at (8,46)
+                        // within the 64x64 cell (sim-safari-glyph-capture: fillText
+                        // at x=8, baseline y=46 from cell top), NOT centered. The
+                        // prior (anchor-32, anchor-32+ptSize/2) assumed a centered
+                        // capture → painted the glyph off-canvas. Align the cell so
+                        // the glyph's (8,46) lands at the pen anchor (x, baseline y).
                         CGRect dstRect = CGRectMake(
-                            anchorPoint.x() - 32.0,
-                            anchorPoint.y() - 32.0 + static_cast<CGFloat>(ptSize) / 2.0,
+                            anchorPoint.x() - 8.0,
+                            anchorPoint.y() - 46.0,
                             64, 64);
                         CGContextClipToMask(destCG, dstRect, maskImg.get());
                         // Fill the rect with current fillStyle color. This
