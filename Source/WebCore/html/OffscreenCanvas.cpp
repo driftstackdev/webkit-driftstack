@@ -434,7 +434,14 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
     }();
     // §9: gate AFP on !atlasSubstituted — same fix as HTMLCanvasElement::toBlob
     // to prevent AFP from overwriting V510/Layer B v2 substituted bytes.
+    // W1796: native-for-non-text — mirror the W1507 HTMLCanvasElement fallback gate
+    // that this OffscreenCanvas site MISSED. A shape-only OffscreenCanvas (no
+    // fillText) must NOT get content-blind AFP noise: 27 real iPhone-17/26.4 captures
+    // show the shape-only cross-context hash DETERMINISTIC + coherent (3181fb20,
+    // main==SharedWorker), so noising it is a detectable cross-context lie. Text
+    // canvases keep the fallback (real Safari does noise text/tracker canvas, W1542).
     if (s_afpFallbackEnabledWorker && !atlasSubstituted && !blobData.isEmpty()
+        && !lastFillText().isEmpty()
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         if (RefPtr noiseImage = createImageForNoiseInjection()) {
             auto afpBlobData = encodeData(noiseImage.get(), encodingMIMEType, quality);
