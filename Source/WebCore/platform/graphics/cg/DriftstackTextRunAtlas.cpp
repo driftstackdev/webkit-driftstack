@@ -489,6 +489,18 @@ uint16_t driftstackMapFontToId(const Font& font)
             { ".AppleSimplifiedChineseFont-Regular", 22 }, { ".AppleSimplifiedChineseFont", 22 },
             { ".AppleJapaneseFont-Regular", 23 },          { ".AppleJapaneseFont", 23 },
             { ".AppleKoreanFont-Regular", 24 },            { ".AppleKoreanFont", 24 },
+            // W1770: world-script fallback fonts (fork WebKit-cascade names per V-583B
+            // diag — NOT the native-CT .SF* names). Each → a dedicated font_id so the
+            // per-glyph atlas can key + substitute the iOS glyph (closure pending capture).
+            { ".SFArabic-Regular", 25 },          { ".SFHebrew-Regular", 26 },
+            { ".SFArmenian-Regular", 27 },        { ".SFGeorgian-Regular", 28 },
+            { "KohinoorDevanagari-Regular", 29 }, { "KohinoorGujarati-Regular", 30 },
+            { "KohinoorTelugu-Regular", 31 },     { "MuktaMahee-Regular", 32 },
+            { "TamilSangamMN", 33 },              { "NotoSansKannada-Regular", 34 },
+            { "MalayalamSangamMN", 35 },          { "SinhalaSangamMN", 36 },
+            { ".ThonburiUI-Regular", 37 },        { "LaoSangamMN", 38 },
+            { "KhmerSangamMN", 39 },              { "NotoSansMyanmar-Regular", 40 },
+            { "KefaIII-Regular", 41 },            { ".AppleIndicFont-Regular", 42 },
         };
         for (const auto& e : kAsianUiFonts) {
             if (eq(psBuf, e.name) || eq(familyBuf, e.name))
