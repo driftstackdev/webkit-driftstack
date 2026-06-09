@@ -783,8 +783,15 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     std::array<uint8_t, 64 * 64> maskBuf;
                     auto atlasPx = unsafeMakeSpan(hit->pixels, 64 * 64);
                     auto maskSpan = unsafeMakeSpan(maskBuf.data(), 64 * 64);
-                    for (size_t i = 0; i < 64 * 64; ++i)
-                        maskSpan[i] = static_cast<uint8_t>(255 - atlasPx[i]);
+                    // W1783: env-controlled vertical flip for CG-coordinate
+                    // calibration (canvas y-down CTM draws CGImages flipped).
+                    static const bool v790lFlip = std::getenv("DRIFTSTACK_V790L_FLIP")
+                        && std::getenv("DRIFTSTACK_V790L_FLIP")[0] == '1';
+                    for (size_t row = 0; row < 64; ++row) {
+                        size_t srcRow = v790lFlip ? (63 - row) : row;
+                        for (size_t col = 0; col < 64; ++col)
+                            maskSpan[row * 64 + col] = static_cast<uint8_t>(255 - atlasPx[srcRow * 64 + col]);
+                    }
 
                     // Create a CGImage from the mask buffer. Per Apple docs,
                     // CGContextClipToMask accepts either an alpha-only mask
@@ -810,6 +817,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         // prior (anchor-32, anchor-32+ptSize/2) assumed a centered
                         // capture → painted the glyph off-canvas. Align the cell so
                         // the glyph's (8,46) lands at the pen anchor (x, baseline y).
+                        // W1783: top-left at (anchor.x - glyphLeft=8, anchor.y -
+                        // glyphAscent=46) — mirrors the working V-770.A text-run
+                        // blit's (anchor - abbLeft, anchor - abbAscent). The mask is
+                        // flipped vertically (DRIFTSTACK_V790L_FLIP) because
+                        // CGContextClipToMask draws the mask in the opposite Y
+                        // orientation from the text-run's CGContextDrawImage.
                         CGRect dstRect = CGRectMake(
                             anchorPoint.x() - 8.0,
                             anchorPoint.y() - 46.0,
