@@ -29,6 +29,7 @@
 #import "SettingsController.h"
 #import <PDFKit/PDFDocument.h>
 #import <QuartzCore/CATextLayer.h>
+#import <QuartzCore/CAAnimation.h>
 #import <SecurityInterface/SFCertificateTrustPanel.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WKFrameInfo.h>
@@ -97,6 +98,56 @@ static const int testFooterBannerHeight = 58;
 @interface WK2BrowserWindowController () <NSTextFinderBarContainer, _WKFindDelegate, NSSearchFieldDelegate, WKNavigationDelegate, WKUIDelegate, WKUIDelegatePrivate, _WKIconLoadingDelegate>
 @end
 
+// Driftstack: iOS-Simulator-style touch presentation. A passthrough overlay that
+// (a) hides the Mac arrow cursor over the web view and (b) flashes a translucent
+// tap ring at each click point — so the browser looks like an iPhone (a tap, no
+// cursor) rather than a Mac. Gated behind DRIFTSTACK_IOS_CURSOR.
+@interface DriftstackTapOverlayView : NSView
+- (void)driftstackFlashTapAt:(NSPoint)point;
+@end
+
+@implementation DriftstackTapOverlayView {
+    NSTrackingArea *_trackingArea;
+}
+- (NSView *)hitTest:(NSPoint)point { return nil; } // events pass through to the WKWebView below
+- (void)updateTrackingAreas
+{
+    [super updateTrackingAreas];
+    if (_trackingArea)
+        [self removeTrackingArea:_trackingArea];
+    _trackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect)
+        owner:self userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+}
+- (void)mouseEntered:(NSEvent *)event { [NSCursor hide]; }
+- (void)mouseExited:(NSEvent *)event { [NSCursor unhide]; }
+- (void)driftstackFlashTapAt:(NSPoint)point
+{
+    CGFloat radius = 21.0;
+    CALayer *ring = [CALayer layer];
+    ring.frame = CGRectMake(point.x - radius, point.y - radius, radius * 2, radius * 2);
+    ring.cornerRadius = radius;
+    ring.backgroundColor = [[NSColor colorWithCalibratedWhite:0.5 alpha:0.40] CGColor];
+    ring.borderColor = [[NSColor colorWithCalibratedWhite:0.35 alpha:0.75] CGColor];
+    ring.borderWidth = 1.5;
+    [self.layer addSublayer:ring];
+    CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    scale.fromValue = @0.5;
+    scale.toValue = @1.25;
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @1.0;
+    fade.toValue = @0.0;
+    CAAnimationGroup *group = [CAAnimationGroup animation];
+    group.animations = @[scale, fade];
+    group.duration = 0.34;
+    [ring addAnimation:group forKey:@"driftstackTap"];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.34 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [ring removeFromSuperlayer];
+    });
+}
+@end
+
 @implementation WK2BrowserWindowController {
     WKWebViewConfiguration *_configuration;
     WKWebView *_webView;
@@ -132,6 +183,27 @@ static const int testFooterBannerHeight = 58;
 
     [_webView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     [containerView addSubview:_webView];
+
+    // Driftstack: install the iOS-Simulator-style tap overlay (Mac cursor hidden +
+    // a tap ring flashed on each click) when DRIFTSTACK_IOS_CURSOR is set. The
+    // overlay is hitTest-transparent, so every click still reaches the WKWebView
+    // (and the fork's native touch synthesis) unchanged.
+    if (getenv("DRIFTSTACK_IOS_CURSOR")) {
+        DriftstackTapOverlayView *tapOverlay = [[DriftstackTapOverlayView alloc] initWithFrame:[containerView bounds]];
+        tapOverlay.wantsLayer = YES;
+        [tapOverlay setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        [containerView addSubview:tapOverlay positioned:NSWindowAbove relativeTo:_webView];
+        __weak DriftstackTapOverlayView *weakTapOverlay = tapOverlay;
+        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *event) {
+            DriftstackTapOverlayView *overlay = weakTapOverlay;
+            if (overlay && event.window == overlay.window) {
+                NSPoint point = [overlay convertPoint:event.locationInWindow fromView:nil];
+                if (NSPointInRect(point, [overlay bounds]))
+                    [overlay driftstackFlashTapAt:point];
+            }
+            return event;
+        }];
+    }
 
     [progressIndicator bind:NSHiddenBinding toObject:_webView withKeyPath:@"loading" options:@{ NSValueTransformerNameBindingOption : NSNegateBooleanTransformerName }];
     [progressIndicator bind:NSValueBinding toObject:_webView withKeyPath:@"estimatedProgress" options:nil];
