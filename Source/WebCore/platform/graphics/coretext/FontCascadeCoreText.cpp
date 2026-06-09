@@ -910,7 +910,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 auto v790lPhaseAt = [&](const FloatPoint& pt) -> uint32_t {
                     CGPoint dev = CGPointApplyAffineTransform(CGPointMake(pt.x(), pt.y()), v790lCtm);
                     double xf = dev.x - std::floor(dev.x), yf = dev.y - std::floor(dev.y);
-                    int xb = static_cast<int>(std::floor(std::min(xf, 0.99999) * 3.0)); // thirds: 0,1,2
+                    int xb = (xf >= 0.5) ? 1 : 0; // W1789: HALVES — iOS canvas snaps sub-pixel x to a 2-phase half-pixel grid (W1788); was thirds
                     int yb = (yf > 1e-4) ? 1 : 0;                                        // integer-y vs fractional-y
                     return static_cast<uint32_t>((yb << 4) | xb);
                 };
