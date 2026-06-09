@@ -780,63 +780,44 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // stride 64). After inversion: pixel=0 means glyph fully
                     // opaque, pixel=255 means background fully transparent —
                     // matches CGContextClipToMask alpha semantics.
-                    std::array<uint8_t, 64 * 64> maskBuf;
+                    // W1784: build a premultiplied RGBA image — black glyph
+                    // (RGB=0) with the atlas ink (255-max(RGB) convention) as the
+                    // alpha — and CGContextDrawImage it at (anchor.x - glyphLeft=8,
+                    // anchor.y - glyphAscent=46), mirroring the WORKING V-770.A
+                    // text-run blit (CGContextDrawImage in unflipped device space,
+                    // which closes the cumrig). Replaces the CGContextClipToMask
+                    // path whose orientation/clip semantics produced a wrong render
+                    // (W1782/W1783). Black premultiplied = (0,0,0,alpha).
+                    std::array<uint8_t, 64 * 64 * 4> rgba;
                     auto atlasPx = unsafeMakeSpan(hit->pixels, 64 * 64);
-                    auto maskSpan = unsafeMakeSpan(maskBuf.data(), 64 * 64);
-                    // W1783: env-controlled vertical flip for CG-coordinate
-                    // calibration (canvas y-down CTM draws CGImages flipped).
-                    static const bool v790lFlip = std::getenv("DRIFTSTACK_V790L_FLIP")
-                        && std::getenv("DRIFTSTACK_V790L_FLIP")[0] == '1';
-                    for (size_t row = 0; row < 64; ++row) {
-                        size_t srcRow = v790lFlip ? (63 - row) : row;
-                        for (size_t col = 0; col < 64; ++col)
-                            maskSpan[row * 64 + col] = static_cast<uint8_t>(255 - atlasPx[srcRow * 64 + col]);
+                    auto rgbaSpan = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
+                    for (size_t i = 0; i < 64 * 64; ++i) {
+                        rgbaSpan[i * 4 + 0] = 0;
+                        rgbaSpan[i * 4 + 1] = 0;
+                        rgbaSpan[i * 4 + 2] = 0;
+                        rgbaSpan[i * 4 + 3] = atlasPx[i];
                     }
-
-                    // Create a CGImage from the mask buffer. Per Apple docs,
-                    // CGContextClipToMask accepts either an alpha-only mask
-                    // image OR a grayscale image (treated as alpha).
-                    RetainPtr<CFDataRef> maskData = adoptCF(CFDataCreate(
-                        kCFAllocatorDefault, maskBuf.data(),
-                        64 * 64));
+                    RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(
+                        kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
                     RetainPtr<CGDataProviderRef> dataProvider = adoptCF(
-                        CGDataProviderCreateWithCFData(maskData.get()));
-                    RetainPtr<CGImageRef> maskImg = adoptCF(CGImageMaskCreate(
-                        64, 64, 8, 8, 64,
-                        dataProvider.get(),
-                        nullptr, false));
-                    if (maskImg) {
+                        CGDataProviderCreateWithCFData(rgbaData.get()));
+                    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateDeviceRGB());
+                    RetainPtr<CGImageRef> glyphImg = adoptCF(CGImageCreate(
+                        64, 64, 8, 32, 64 * 4, colorSpace.get(),
+                        kCGImageAlphaPremultipliedLast,
+                        dataProvider.get(), nullptr, false, kCGRenderingIntentDefault));
+                    if (glyphImg) {
                         CGContextRef destCG = context.platformContext();
                         CGContextSaveGState(destCG);
-                        // CGContextClipToMask applies mask in current
-                        // transform coordinates. Anchor at glyph position
-                        // (top-left of 64x64 box).
-                        // W1782: the atlas capture renders the glyph at (8,46)
-                        // within the 64x64 cell (sim-safari-glyph-capture: fillText
-                        // at x=8, baseline y=46 from cell top), NOT centered. The
-                        // prior (anchor-32, anchor-32+ptSize/2) assumed a centered
-                        // capture → painted the glyph off-canvas. Align the cell so
-                        // the glyph's (8,46) lands at the pen anchor (x, baseline y).
-                        // W1783: top-left at (anchor.x - glyphLeft=8, anchor.y -
-                        // glyphAscent=46) — mirrors the working V-770.A text-run
-                        // blit's (anchor - abbLeft, anchor - abbAscent). The mask is
-                        // flipped vertically (DRIFTSTACK_V790L_FLIP) because
-                        // CGContextClipToMask draws the mask in the opposite Y
-                        // orientation from the text-run's CGContextDrawImage.
                         CGRect dstRect = CGRectMake(
                             anchorPoint.x() - 8.0,
                             anchorPoint.y() - 46.0,
                             64, 64);
-                        CGContextClipToMask(destCG, dstRect, maskImg.get());
-                        // Fill the rect with current fillStyle color. This
-                        // paints through the mask: where mask=0 (former
-                        // atlas pixel=255=white-bg) → no paint; where mask=
-                        // 255 (former atlas pixel=0=black-text) → paint.
-                        CGContextFillRect(destCG, dstRect);
+                        CGContextDrawImage(destCG, dstRect, glyphImg.get());
                         CGContextRestoreGState(destCG);
                         WTFLogAlways("[V-790.L] per-glyph atlas HIT "
                                      "font_id=%u pt=%u cp=U+%04x pos=%u "
-                                     "— alpha-mask iPhone substitution",
+                                     "— DrawImage iPhone substitution",
                                      static_cast<unsigned>(fontId),
                                      static_cast<unsigned>(ptSize),
                                      static_cast<unsigned>(cp),
