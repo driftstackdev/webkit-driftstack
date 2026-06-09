@@ -791,11 +791,19 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     std::array<uint8_t, 64 * 64 * 4> rgba;
                     auto atlasPx = unsafeMakeSpan(hit->pixels, 64 * 64);
                     auto rgbaSpan = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
-                    for (size_t i = 0; i < 64 * 64; ++i) {
-                        rgbaSpan[i * 4 + 0] = 0;
-                        rgbaSpan[i * 4 + 1] = 0;
-                        rgbaSpan[i * 4 + 2] = 0;
-                        rgbaSpan[i * 4 + 3] = atlasPx[i];
+                    // W1785: flip rows — the canvas y-down CTM draws raw CGImages
+                    // upside-down (unlike the text-run's PNG via CGImageSource which
+                    // auto-orients). Pre-flip so DrawImage lands right-side-up.
+                    for (size_t row = 0; row < 64; ++row) {
+                        size_t srcRow = 63 - row;
+                        for (size_t col = 0; col < 64; ++col) {
+                            size_t di = row * 64 + col;
+                            uint8_t ink = atlasPx[srcRow * 64 + col];
+                            rgbaSpan[di * 4 + 0] = 0;
+                            rgbaSpan[di * 4 + 1] = 0;
+                            rgbaSpan[di * 4 + 2] = 0;
+                            rgbaSpan[di * 4 + 3] = ink;
+                        }
                     }
                     RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(
                         kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
