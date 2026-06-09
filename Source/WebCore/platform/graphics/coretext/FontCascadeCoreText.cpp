@@ -979,47 +979,44 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // To align with fork's cursor (baseline origin):
                     //   PNG.x = cursor.x() - (32 - ptSize/2)
                     //   PNG.y = cursor.y() - 40
-                    const CGFloat anchorXOffset = 32.0 - static_cast<CGFloat>(ptSize) / 2.0;
-                    const CGFloat anchorYOffset = 40.0;
 
                     FloatPoint cursor = anchorPoint;
                     for (size_t i = 0; i < glyphs.size(); ++i) {
-                        std::array<uint8_t, 64 * 64> alphaMask;
+                        // W1786: same DrawImage + row-flip fix as the N1 path (W1785).
+                        // Build a premultiplied RGBA (black + row-flipped ink-alpha)
+                        // and DrawImage at (cursor.x - 8, cursor.y - 46) — the
+                        // capture's glyph origin (8,46). Replaces the ClipToMask +
+                        // manual-flip path whose positioning (centered x,
+                        // anchorYOffset=40) was wrong (cf. N1 W1782-1785).
+                        std::array<uint8_t, 64 * 64 * 4> rgba;
                         auto src = unsafeMakeSpan(v790lPlans[i].pixels, 64 * 64);
-                        for (size_t k = 0; k < 64 * 64; ++k)
-                            alphaMask[k] = 255 - src[k];
-
-                        RetainPtr<CGContextRef> maskCtx = adoptCF(
-                            CGBitmapContextCreate(
-                                alphaMask.data(),
-                                64, 64, 8, 64,
-                                nullptr,
-                                kCGImageAlphaOnly));
-                        if (!maskCtx) {
-                            cursor.move(advances[i].width, advances[i].height);
-                            continue;
+                        auto rgbaSpan = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
+                        for (size_t row = 0; row < 64; ++row) {
+                            size_t srcRow = 63 - row;
+                            for (size_t col = 0; col < 64; ++col) {
+                                size_t di = row * 64 + col;
+                                rgbaSpan[di * 4 + 0] = 0;
+                                rgbaSpan[di * 4 + 1] = 0;
+                                rgbaSpan[di * 4 + 2] = 0;
+                                rgbaSpan[di * 4 + 3] = src[srcRow * 64 + col];
+                            }
                         }
-                        RetainPtr<CGImageRef> maskImg = adoptCF(
-                            CGBitmapContextCreateImage(maskCtx.get()));
-                        if (!maskImg) {
-                            cursor.move(advances[i].width, advances[i].height);
-                            continue;
+                        RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(
+                            kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
+                        RetainPtr<CGDataProviderRef> dp = adoptCF(
+                            CGDataProviderCreateWithCFData(rgbaData.get()));
+                        RetainPtr<CGColorSpaceRef> cs = adoptCF(CGColorSpaceCreateDeviceRGB());
+                        RetainPtr<CGImageRef> glyphImg = adoptCF(CGImageCreate(
+                            64, 64, 8, 32, 64 * 4, cs.get(),
+                            kCGImageAlphaPremultipliedLast,
+                            dp.get(), nullptr, false, kCGRenderingIntentDefault));
+                        if (glyphImg) {
+                            CGContextSaveGState(destCG);
+                            CGContextDrawImage(destCG,
+                                CGRectMake(cursor.x() - 8.0, cursor.y() - 46.0, 64, 64),
+                                glyphImg.get());
+                            CGContextRestoreGState(destCG);
                         }
-
-                        // Position PNG top-left at (cursor.x - anchorXOffset, cursor.y - anchorYOffset)
-                        // Use V-655 mask-tint pattern: translate + Y-flip + clip + fill.
-                        const CGFloat drawX = cursor.x() - anchorXOffset;
-                        const CGFloat drawY = cursor.y() - anchorYOffset;
-                        CGContextSaveGState(destCG);
-                        CGContextTranslateCTM(destCG, drawX, drawY);
-                        CGContextTranslateCTM(destCG, 0.f, 64.f);
-                        CGContextScaleCTM(destCG, 1.f, -1.f);
-                        CGContextClipToMask(destCG,
-                            CGRectMake(0.f, 0.f, 64.f, 64.f), maskImg.get());
-                        CGContextFillRect(destCG,
-                            CGRectMake(0.f, 0.f, 64.f, 64.f));
-                        CGContextRestoreGState(destCG);
-
                         cursor.move(advances[i].width, advances[i].height);
                     }
                     static unsigned v790lMultiSubLog = 0;
