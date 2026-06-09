@@ -1012,8 +1012,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             dp.get(), nullptr, false, kCGRenderingIntentDefault));
                         if (glyphImg) {
                             CGContextSaveGState(destCG);
+                            // W1787: floor to integer pixel (mirrors the V-770.A
+                            // text-run blit's std::floor(anchor)) — the cursor is
+                            // fractional after advance accumulation; the iOS canvas
+                            // snaps glyph origins to integer (V-102 subpixel-off).
                             CGContextDrawImage(destCG,
-                                CGRectMake(cursor.x() - 8.0, cursor.y() - 46.0, 64, 64),
+                                CGRectMake(std::floor(cursor.x()) - 8.0, std::floor(cursor.y()) - 46.0, 64, 64),
                                 glyphImg.get());
                             CGContextRestoreGState(destCG);
                         }
