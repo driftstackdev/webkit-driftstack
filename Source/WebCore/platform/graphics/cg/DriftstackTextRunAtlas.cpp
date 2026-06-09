@@ -473,6 +473,29 @@ uint16_t driftstackMapFontToId(const Font& font)
         }
     }
 
+    // W1761: Asian system fallback fonts the Mac fleet's WebKit cascade resolves for
+    // CJK/Kana/Hangul (not in the atlas font table — verified via the fork's V-583B/
+    // V-770A diag, NOT macOS CTFontCreateForString which gives different names).
+    // Mapped to dedicated font_ids so the V-790.L per-glyph atlas can key Asian
+    // glyphs — the STORED pixels are the iOS glyph (sim-rendered == real iPhone per
+    // W1509); this is only the lookup key. Additive (existing ids 0-21 untouched;
+    // fires only after the atlas table already missed, i.e. previously UINT16_MAX).
+    {
+        auto eq = [](const char* a, const char* b) {
+            while (*a && *a == *b) { ++a; ++b; }
+            return *a == *b;
+        };
+        static const struct { const char* name; uint16_t id; } kAsianUiFonts[] = {
+            { ".AppleSimplifiedChineseFont-Regular", 22 }, { ".AppleSimplifiedChineseFont", 22 },
+            { ".AppleJapaneseFont-Regular", 23 },          { ".AppleJapaneseFont", 23 },
+            { ".AppleKoreanFont-Regular", 24 },            { ".AppleKoreanFont", 24 },
+        };
+        for (const auto& e : kAsianUiFonts) {
+            if (eq(psBuf, e.name) || eq(familyBuf, e.name))
+                return e.id;
+        }
+    }
+
     // V-770.A.14/.15: surface each distinct missing-font NAME once. A small
     // ring of seen names (kMaxDistinct=64 slots) avoids unbounded growth +
     // runaway log spam. Lookup is linear scan; expected steady-state distinct
