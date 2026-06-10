@@ -75,6 +75,7 @@ enum SettingsId : uint16_t {
     kSettingInitialWindowSize     = 0x4,
     kSettingMaxFrameSize          = 0x5,
     kSettingMaxHeaderListSize     = 0x6,
+    kSettingEnableConnectProtocol = 0x8,  // RFC 8441 — WS-over-h2 Extended CONNECT
     kSettingNoRfc7540Priorities   = 0x9,
 };
 
@@ -1660,6 +1661,275 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] HTTP/2 pooled stream %u completed: status=%d, body=%zu bytes (failed=%d)",
         streamId, resp.statusCode, resp.body.size(), resp.failed ? 1 : 0);
     return resp;
+}
+
+// ===== Wave 29-499.352 — RFC 8441 WebSocket-over-HTTP/2 (Extended CONNECT) =====
+
+DriftstackHttp2ConnectStream::DriftstackHttp2ConnectStream(const DriftstackHttp2Transport& t)
+    : m_transport(t)
+{
+}
+
+DriftstackHttp2ConnectStream::~DriftstackHttp2ConnectStream() = default;
+
+int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
+{
+    const DriftstackHttp2Transport* tp = &m_transport;
+    if (!sslWriteAll(nullptr, tp, reinterpret_cast<const uint8_t*>(kHttp2Preface), sizeof(kHttp2Preface) - 1))
+        return -1;
+
+    // SETTINGS (iPhone values — same as the one-shot path for fingerprint parity).
+    Vector<uint8_t> sp;
+    auto pushSetting = [&](uint16_t id, uint32_t v) {
+        sp.append(static_cast<uint8_t>(id >> 8)); sp.append(static_cast<uint8_t>(id & 0xff));
+        sp.append(static_cast<uint8_t>((v >> 24) & 0xff)); sp.append(static_cast<uint8_t>((v >> 16) & 0xff));
+        sp.append(static_cast<uint8_t>((v >> 8) & 0xff)); sp.append(static_cast<uint8_t>(v & 0xff));
+    };
+    pushSetting(kSettingEnablePush, 0);
+    pushSetting(kSettingMaxConcurrentStreams, 100);
+    pushSetting(kSettingInitialWindowSize, 2097152);
+    pushSetting(kSettingNoRfc7540Priorities, 1);
+    uint8_t sh[9];
+    encodeFrameHeader(sh, sp.size(), kFrameSettings, 0, 0);
+    if (!sslWriteAll(nullptr, tp, sh, 9) || !sslWriteAll(nullptr, tp, sp.span().data(), sp.size()))
+        return -1;
+
+    uint8_t wu[13];
+    encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
+    uint32_t cinc = 10420225;
+    wu[9] = (cinc >> 24) & 0xff; wu[10] = (cinc >> 16) & 0xff; wu[11] = (cinc >> 8) & 0xff; wu[12] = cinc & 0xff;
+    if (!sslWriteAll(nullptr, tp, wu, 13))
+        return -1;
+
+    // Extended CONNECT HEADERS (RFC 8441 §4) — no END_STREAM (stream stays open).
+    Vector<uint8_t> hb;
+    hpackEncodeHeader(hb, ":method"_s, "CONNECT"_s);
+    hpackEncodeHeader(hb, ":protocol"_s, req.protocol);
+    hpackEncodeHeader(hb, ":scheme"_s, "https"_s);
+    hpackEncodeHeader(hb, ":authority"_s, req.authority);
+    hpackEncodeHeader(hb, ":path"_s, req.path);
+    for (auto& [k, v] : req.extraHeaders)
+        hpackEncodeHeader(hb, k.convertToASCIILowercase(), v);
+    uint8_t hh[9];
+    encodeFrameHeader(hh, hb.size(), kFrameHeaders, kFlagEndHeaders, kStreamId);
+    if (!sslWriteAll(nullptr, tp, hh, 9) || !sslWriteAll(nullptr, tp, hb.span().data(), hb.size()))
+        return -1;
+
+    HpackDecoderState hpackDyn;
+    int status = 0;
+    bool gotHeaders = false;
+    while (!gotHeaders) {
+        uint8_t hdr[9];
+        if (!sslReadExact(nullptr, tp, hdr, 9))
+            return -1;
+        uint32_t length; uint8_t type, flags; uint32_t sid;
+        decodeFrameHeader(hdr, length, type, flags, sid);
+        Vector<uint8_t> payload;
+        payload.resize(length);
+        if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
+            return -1;
+        switch (type) {
+        case kFrameSettings:
+            if (!(flags & kFlagAck)) {
+                for (size_t i = 0; i + 6 <= payload.size(); i += 6) {
+                    uint16_t id = (uint16_t(payload[i]) << 8) | payload[i + 1];
+                    uint32_t val = (uint32_t(payload[i + 2]) << 24) | (uint32_t(payload[i + 3]) << 16) | (uint32_t(payload[i + 4]) << 8) | payload[i + 5];
+                    if (id == kSettingEnableConnectProtocol && val == 1)
+                        m_serverEnabledConnectProtocol = true;
+                    if (id == kSettingInitialWindowSize) {
+                        Locker locker { m_writeLock };
+                        m_sendWindow += int64_t(val) - int64_t(m_peerInitialWindow);
+                        m_peerInitialWindow = val;
+                    }
+                }
+                Locker locker { m_writeLock };
+                uint8_t ack[9]; encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
+                sslWriteAll(nullptr, tp, ack, 9);
+            }
+            break;
+        case kFrameWindowUpdate:
+            if (length >= 4) {
+                uint32_t winc = (uint32_t(payload[0] & 0x7f) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3];
+                Locker locker { m_writeLock };
+                m_sendWindow += winc; m_windowCond.notifyAll();
+            }
+            break;
+        case kFramePing:
+            if (!(flags & kFlagAck)) {
+                Locker locker { m_writeLock };
+                uint8_t pong[17] = { 0 }; encodeFrameHeader(pong, 8, kFramePing, kFlagAck, 0);
+                for (size_t i = 0; i < 8 && i < payload.size(); ++i) pong[9 + i] = payload[i];
+                sslWriteAll(nullptr, tp, pong, 17);
+            }
+            break;
+        case kFrameHeaders:
+            if (sid == kStreamId) {
+                Vector<std::pair<String, String>> decoded;
+                size_t cursor = 0, start = 0;
+                if (flags & kFlagPadded) { if (payload.size() < 1) break; start = 1 + payload[0]; }
+                if (flags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
+                cursor = start;
+                while (cursor < payload.size()) {
+                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
+                        break;
+                }
+                for (auto& [k, v] : decoded) {
+                    if (k == ":status"_s) {
+                        status = 0; auto v8 = v.utf8();
+                        for (size_t i = 0; i < v8.length(); ++i) { char c = v8.data()[i]; if (c < '0' || c > '9') break; status = status * 10 + (c - '0'); }
+                    }
+                }
+                if (!status) status = 200; // HPACK Huffman :status fallback
+                if (flags & kFlagEndStream) m_streamEnded = true;
+                gotHeaders = true;
+            }
+            break;
+        case kFrameData:
+            if (sid == kStreamId) {
+                std::span<const uint8_t> ds = payload.span();
+                if (flags & kFlagPadded) { if (ds.size() < 1) break; uint8_t pl = ds[0]; if (size_t(pl) + 1 > ds.size()) break; ds = ds.subspan(1, ds.size() - 1 - pl); }
+                m_dataLeftover.append(ds);
+                if (flags & kFlagEndStream) m_streamEnded = true;
+            }
+            break;
+        case kFrameRstStream:
+            if (sid == kStreamId) return -1;
+            break;
+        case kFrameGoaway:
+            return -1;
+        default:
+            break;
+        }
+    }
+    return status;
+}
+
+int DriftstackHttp2ConnectStream::readData(uint8_t* buf, size_t maxLen)
+{
+    const DriftstackHttp2Transport* tp = &m_transport;
+    if (!m_dataLeftover.isEmpty()) {
+        size_t take = std::min(maxLen, m_dataLeftover.size());
+        memcpy(buf, m_dataLeftover.span().data(), take);
+        Vector<uint8_t> rest;
+        if (take < m_dataLeftover.size())
+            rest.append(m_dataLeftover.span().subspan(take));
+        m_dataLeftover = std::move(rest);
+        return static_cast<int>(take);
+    }
+    if (m_streamEnded)
+        return 0;
+    while (true) {
+        uint8_t hdr[9];
+        if (!sslReadExact(nullptr, tp, hdr, 9))
+            return -1;
+        uint32_t length; uint8_t type, flags; uint32_t sid;
+        decodeFrameHeader(hdr, length, type, flags, sid);
+        Vector<uint8_t> payload;
+        payload.resize(length);
+        if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
+            return -1;
+        switch (type) {
+        case kFrameData:
+            if (sid == kStreamId) {
+                std::span<const uint8_t> ds = payload.span();
+                if (flags & kFlagPadded) { if (ds.size() < 1) break; uint8_t pl = ds[0]; if (size_t(pl) + 1 > ds.size()) break; ds = ds.subspan(1, ds.size() - 1 - pl); }
+                m_recvSinceUpdate += ds.size();
+                if (m_recvSinceUpdate >= (1u << 18)) {
+                    uint32_t inc = static_cast<uint32_t>(m_recvSinceUpdate);
+                    Locker locker { m_writeLock };
+                    uint8_t w[13]; encodeFrameHeader(w, 4, kFrameWindowUpdate, 0, kStreamId);
+                    w[9] = (inc >> 24) & 0xff; w[10] = (inc >> 16) & 0xff; w[11] = (inc >> 8) & 0xff; w[12] = inc & 0xff;
+                    sslWriteAll(nullptr, tp, w, 13);
+                    uint8_t wc[13]; encodeFrameHeader(wc, 4, kFrameWindowUpdate, 0, 0);
+                    wc[9] = w[9]; wc[10] = w[10]; wc[11] = w[11]; wc[12] = w[12];
+                    sslWriteAll(nullptr, tp, wc, 13);
+                    m_recvSinceUpdate = 0;
+                }
+                if (flags & kFlagEndStream) m_streamEnded = true;
+                if (ds.empty()) { if (m_streamEnded) return 0; continue; }
+                size_t take = std::min(maxLen, ds.size());
+                memcpy(buf, ds.data(), take);
+                if (take < ds.size()) m_dataLeftover.append(ds.subspan(take, ds.size() - take));
+                return static_cast<int>(take);
+            }
+            break;
+        case kFrameWindowUpdate:
+            if (length >= 4) {
+                uint32_t winc = (uint32_t(payload[0] & 0x7f) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3];
+                Locker locker { m_writeLock };
+                m_sendWindow += winc; m_windowCond.notifyAll();
+            }
+            break;
+        case kFrameSettings:
+            if (!(flags & kFlagAck)) {
+                for (size_t i = 0; i + 6 <= payload.size(); i += 6) {
+                    uint16_t id = (uint16_t(payload[i]) << 8) | payload[i + 1];
+                    uint32_t val = (uint32_t(payload[i + 2]) << 24) | (uint32_t(payload[i + 3]) << 16) | (uint32_t(payload[i + 4]) << 8) | payload[i + 5];
+                    if (id == kSettingInitialWindowSize) {
+                        Locker locker { m_writeLock };
+                        m_sendWindow += int64_t(val) - int64_t(m_peerInitialWindow);
+                        m_peerInitialWindow = val; m_windowCond.notifyAll();
+                    }
+                }
+                Locker locker { m_writeLock };
+                uint8_t ack[9]; encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
+                sslWriteAll(nullptr, tp, ack, 9);
+            }
+            break;
+        case kFramePing:
+            if (!(flags & kFlagAck)) {
+                Locker locker { m_writeLock };
+                uint8_t pong[17] = { 0 }; encodeFrameHeader(pong, 8, kFramePing, kFlagAck, 0);
+                for (size_t i = 0; i < 8 && i < payload.size(); ++i) pong[9 + i] = payload[i];
+                sslWriteAll(nullptr, tp, pong, 17);
+            }
+            break;
+        case kFrameRstStream:
+            if (sid == kStreamId) return -1;
+            break;
+        case kFrameGoaway:
+            return -1;
+        default:
+            break;
+        }
+    }
+}
+
+bool DriftstackHttp2ConnectStream::sendData(const uint8_t* data, size_t len)
+{
+    const DriftstackHttp2Transport* tp = &m_transport;
+    constexpr size_t kChunk = 16384;
+    size_t off = 0;
+    if (!len) // a zero-length WS write is a no-op (END_STREAM is via close())
+        return true;
+    while (off < len) {
+        Locker locker { m_writeLock };
+        while (m_sendWindow <= 0 && !m_closed)
+            m_windowCond.wait(m_writeLock);
+        if (m_closed)
+            return false;
+        size_t budget = std::min({ kChunk, len - off, static_cast<size_t>(m_sendWindow) });
+        uint8_t dh[9];
+        encodeFrameHeader(dh, budget, kFrameData, 0, kStreamId);
+        if (!sslWriteAll(nullptr, tp, dh, 9) || !sslWriteAll(nullptr, tp, data + off, budget))
+            return false;
+        m_sendWindow -= budget;
+        off += budget;
+    }
+    return true;
+}
+
+void DriftstackHttp2ConnectStream::close()
+{
+    Locker locker { m_writeLock };
+    if (m_closed)
+        return;
+    m_closed = true;
+    const DriftstackHttp2Transport* tp = &m_transport;
+    uint8_t dh[9];
+    encodeFrameHeader(dh, 0, kFrameData, kFlagEndStream, kStreamId);
+    sslWriteAll(nullptr, tp, dh, 9);
+    m_windowCond.notifyAll();
 }
 
 } // namespace WebKit

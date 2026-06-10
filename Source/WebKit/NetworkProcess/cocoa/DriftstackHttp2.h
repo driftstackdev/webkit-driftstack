@@ -100,6 +100,55 @@ struct DriftstackHttp2Transport {
 DriftstackHttp2Response driftstackHttp2ExecuteVia(const DriftstackHttp2Transport& transport,
                                                   const DriftstackHttp2Request& request);
 
+// Wave 29-499.352 — RFC 8441 WebSocket-over-HTTP/2 (Extended CONNECT). Opens a
+// single long-lived h2 stream with :method=CONNECT + :protocol=websocket and
+// tunnels arbitrary bytes (the caller layers RFC 6455 framing on top — same
+// framing as the h1.1 path, only the handshake differs). Reuses the engine's
+// HPACK + frame helpers. The connection (TLS, h2-ALPN) is owned by the caller and
+// supplied via the transport read/write fns.
+struct DriftstackHttp2ConnectRequest {
+    String authority;   // "host:port"
+    String path;        // "/chat?x=1"
+    String protocol;    // "websocket"
+    Vector<std::pair<String, String>> extraHeaders;  // sec-websocket-version, origin, sec-websocket-protocol, cookie…
+};
+
+class DriftstackHttp2ConnectStream {
+public:
+    explicit DriftstackHttp2ConnectStream(const DriftstackHttp2Transport&);
+    ~DriftstackHttp2ConnectStream();
+
+    // Sends preface+SETTINGS+WINDOW_UPDATE + the CONNECT HEADERS, then reads
+    // frames until the response HEADERS. Returns the :status (200 = WS tunnel
+    // open) or -1 on transport/RST/GOAWAY error. Records whether the server
+    // advertised SETTINGS_ENABLE_CONNECT_PROTOCOL.
+    int open(const DriftstackHttp2ConnectRequest&);
+    bool serverEnabledConnectProtocol() const { return m_serverEnabledConnectProtocol; }
+
+    // Tunnel read: returns the next inbound DATA payload bytes (≤ maxLen), 0 on
+    // clean stream end, -1 on error. Processes SETTINGS/PING/WINDOW_UPDATE inline
+    // and replenishes our receive window so long streams don't stall.
+    int readData(uint8_t* buf, size_t maxLen);
+    // Tunnel write: sends bytes as an h2 DATA frame on the stream, chunked to the
+    // peer max-frame-size and blocking on the send window (RFC 7540 §6.9).
+    bool sendData(const uint8_t* data, size_t len);
+    // Sends END_STREAM (empty DATA) to close the tunnel write side.
+    void close();
+
+private:
+    DriftstackHttp2Transport m_transport;
+    Lock m_writeLock;
+    Condition m_windowCond;            // signals send-window growth
+    int64_t m_sendWindow { 65535 };    // our stream send window (guarded by m_writeLock)
+    uint32_t m_peerInitialWindow { 65535 };
+    uint64_t m_recvSinceUpdate { 0 };  // bytes received since our last WINDOW_UPDATE
+    Vector<uint8_t> m_dataLeftover;    // inbound DATA decoded but not yet returned by readData
+    bool m_serverEnabledConnectProtocol { false };
+    bool m_streamEnded { false };
+    bool m_closed { false };
+    static constexpr uint32_t kStreamId = 1;
+};
+
 // Wave 29-499.331 — decode Content-Encoding (gzip/deflate/br) in body IN-PLACE and strip the
 // content-encoding/content-length headers. Idempotent: a no-op when there's no content-encoding
 // header (so it's safe to call again after an engine path already decoded). Exposed so the loader
