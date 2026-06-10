@@ -755,7 +755,21 @@ WebGLAny WebGL2RenderingContext::getInternalformatParameter(GCGLenum target, GCG
     // iPhone 16 Pro (A18 Pro) → [4,2]. The Mac GPU's ANGLE backend natively returns [4,2], so
     // without this an iphone17 session reports MAX_SAMPLES=8 but rgba8Samples=[4,2] — an internal
     // inconsistency tell (founder item #18, W290). Mirrors the line-3259 archetype dispatch exactly.
-    if (pname == GraphicsContextGL::SAMPLES && internalformat == GraphicsContextGL::RGBA8) {
+    // W1970: extended to ALL multisampleable color/depth formats (was RGBA8-only). BS-verified
+    // 2026-06-10: the real iphone17 returns the SAME [8,4,2] for EVERY multisampleable format, but
+    // the Mac ANGLE backend natively returns [4,2] for the non-RGBA8 formats → a Mac-host tell
+    // (fork DEPTH24_STENCIL8/RGB10_A2=[4,2] vs real [8,4,2]). Float formats (RGBA16F/32F,
+    // R11F_G11F_B10F) are NOT multisampleable (real returns empty) — excluded; native returns empty.
+    const bool isMultisampleableFormat = internalformat == GraphicsContextGL::RGBA8
+        || internalformat == GraphicsContextGL::R8
+        || internalformat == GraphicsContextGL::RG8
+        || internalformat == GraphicsContextGL::RGB8
+        || internalformat == GraphicsContextGL::SRGB8_ALPHA8
+        || internalformat == GraphicsContextGL::RGB10_A2
+        || internalformat == GraphicsContextGL::DEPTH24_STENCIL8
+        || internalformat == GraphicsContextGL::DEPTH_COMPONENT16
+        || internalformat == GraphicsContextGL::DEPTH_COMPONENT32F;
+    if (pname == GraphicsContextGL::SAMPLES && isMultisampleableFormat) {
         // Cache only the POD decision (a static Vector would need an exit-time destructor,
         // which WebKit forbids — match the int-cached MAX_SAMPLES dispatch). The 2-3 element
         // Vector is built per call (this query is rare).
@@ -763,8 +777,8 @@ WebGLAny WebGL2RenderingContext::getInternalformatParameter(GCGLenum target, GCG
             const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
             return archetype && std::string_view(archetype).find("iphone16pro_") != std::string_view::npos;
         }();
-        Vector<GCGLint> rgba8Samples = s_isIPhone16Pro ? Vector<GCGLint> { 4, 2 } : Vector<GCGLint> { 8, 4, 2 };
-        return toWebGLAny(Int32Array::tryCreate(rgba8Samples.span()));
+        Vector<GCGLint> formatSamples = s_isIPhone16Pro ? Vector<GCGLint> { 4, 2 } : Vector<GCGLint> { 8, 4, 2 };
+        return toWebGLAny(Int32Array::tryCreate(formatSamples.span()));
     }
 #endif
 
