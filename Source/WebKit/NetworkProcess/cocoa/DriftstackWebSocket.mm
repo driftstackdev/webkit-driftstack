@@ -320,6 +320,19 @@ void DriftstackWebSocket::readerLoop()
         case 0x2: // binary
             if (opcode != 0x0)
                 messageOpcode = opcode;
+            // Wave 29-499.353 (security) — cap the assembled message across
+            // fragments. Without this a malicious/compromised WS server can send
+            // unlimited continuation frames (each ≤64MB, FIN=0) → messageBuffer
+            // grows unbounded → OOMs the multi-tenant node (one tenant's WS
+            // connection DoSes the host). 64MB total is generous for any legit WS
+            // message; over it we close 1009 (Message Too Big, RFC 6455 §7.4.1).
+            if (messageBuffer.size() + payload.size() > (64u * 1024 * 1024)) {
+                WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.353] assembled WS message exceeds 64MB cap — closing 1009 (server %s)", m_config.host.utf8().data());
+                m_closed.store(true);
+                if (m_cb.onClose)
+                    m_cb.onClose(1009, "message too big"_s);
+                return;
+            }
             messageBuffer.appendVector(payload);
             if (fin) {
                 if (messageOpcode == 0x1) {
