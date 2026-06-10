@@ -52,6 +52,9 @@ class NetworkSession;
 class NetworkSessionCocoa;
 class NetworkSocketChannel;
 struct SessionSet;
+#if PLATFORM(DRIFTSTACK)
+class DriftstackWebSocket;
+#endif
 
 class WebSocketTask : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<WebSocketTask>, public NetworkTaskCocoa {
     WTF_MAKE_TZONE_ALLOCATED(WebSocketTask);
@@ -100,6 +103,14 @@ private:
     String m_partition;
     WebCore::StoredCredentialsPolicy m_storedCredentialsPolicy { WebCore::StoredCredentialsPolicy::DoNotUse };
     WebCore::SecurityOriginData m_topOrigin;
+
+#if PLATFORM(DRIFTSTACK)
+    // Wave 29-499.351 — when the customer SOCKS5 is active, ws/wss is driven
+    // through this engine (iPhone TLS13 + RFC 6455) instead of m_task (Mac TLS).
+    // When set, the send/close/cancel/resume paths branch to it.
+    std::unique_ptr<DriftstackWebSocket> m_driftstackWS;
+    bool startDriftstackWebSocketIfActive(const WebCore::ResourceRequest&, const WebCore::ClientOrigin&);
+#endif
 };
 
 } // namespace WebKit

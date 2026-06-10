@@ -1594,12 +1594,12 @@ void DriftstackNetworkLoader::resume()
                                 mimeType = (semi != notFound) ? hv.left(semi).trim(deprecatedIsSpaceOrNewline) : hv.trim(deprecatedIsSpaceOrNewline);
                             }
                         }
-                        WebCore::ResourceResponse response { URL(url), WTFMove(mimeType), -1, WTFMove(charset) };
+                        WebCore::ResourceResponse response { URL(url), std::move(mimeType), -1, std::move(charset) };
                         response.setHTTPStatusCode(statusCode);
                         for (auto& [k, v] : headers)
                             response.setHTTPHeaderField(k, v);
                         callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), policy]() mutable {
-                            clientPtr->didReceiveResponse(WTFMove(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                            clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                                 [policy](WebCore::PolicyAction action) mutable {
                                     Locker locker { policy->lock };
                                     policy->use = (action == WebCore::PolicyAction::Use);

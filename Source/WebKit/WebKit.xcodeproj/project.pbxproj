@@ -1656,6 +1656,7 @@
 		71F62F752D076DEE00B591D2 /* RemoteAnimation.h in Headers */ = {isa = PBXBuildFile; fileRef = 71F62F722D076DEE00B591D2 /* RemoteAnimation.h */; };
 		71FB810B2260627E00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h in Headers */ = {isa = PBXBuildFile; fileRef = 71FB810A2260627A00323677 /* WebsiteSimulatedMouseEventsDispatchPolicy.h */; };
 		7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */ = {isa = PBXBuildFile; fileRef = 84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */; };
+		DF77E50CA1B2C3D400000351 /* DriftstackWebSocket.mm in Sources */ = {isa = PBXBuildFile; fileRef = DF77E50CA1B2C3D400000352 /* DriftstackWebSocket.mm */; };
 		A7135D381380C1A482CB2A35 /* DriftstackStun.mm in Sources */ = {isa = PBXBuildFile; fileRef = 836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */; };
 		83087CAE705AC6066DF4EC42 /* DriftstackTLS13Client.mm in Sources */ = {isa = PBXBuildFile; fileRef = 56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */; };
 		2162A02380439E571EAE8383 /* DriftstackTLS13KeySchedule.mm in Sources */ = {isa = PBXBuildFile; fileRef = E0849F192E7CC3E7576360B4 /* DriftstackTLS13KeySchedule.mm */; };
@@ -7303,6 +7304,8 @@
 		848A33AE294AA847002DD640 /* OSX_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = OSX_Private.modulemap; sourceTree = "<group>"; };
 		849944302943E2550086CDBB /* iOS_Private.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = iOS_Private.modulemap; sourceTree = "<group>"; };
 		84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackSocks5Client.mm; sourceTree = "<group>"; };
+		DF77E50CA1B2C3D400000352 /* DriftstackWebSocket.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackWebSocket.mm; sourceTree = "<group>"; };
+		DF77E50CA1B2C3D400000353 /* DriftstackWebSocket.h */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackWebSocket.h; sourceTree = "<group>"; };
 		836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackStun.mm; sourceTree = "<group>"; };
 		56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackTLS13Client.mm; sourceTree = "<group>"; };
 		E0849F192E7CC3E7576360B4 /* DriftstackTLS13KeySchedule.mm */ = {isa = PBXFileReference; includeInIndex = 1; path = DriftstackTLS13KeySchedule.mm; sourceTree = "<group>"; };
@@ -15127,6 +15130,8 @@
 				5C2C6FA727C96FF900CCDA9E /* WKURLSessionTaskDelegate.mm */,
 				086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */,
 				84A5D4A47A31BC5BDB3E5E93 /* DriftstackSocks5Client.mm */,
+				DF77E50CA1B2C3D400000352 /* DriftstackWebSocket.mm */,
+				DF77E50CA1B2C3D400000353 /* DriftstackWebSocket.h */,
 				ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */,
 				836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */,
 				C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */,
@@ -22426,6 +22431,7 @@
 				C14D306924B79BE000480387 /* XPCEndpoint.mm in Sources */,
 				C14D306A24B79BE400480387 /* XPCEndpointClient.mm in Sources */,
 				7261D7E17EC9A8A1809BD822 /* DriftstackSocks5Client.mm in Sources */,
+				DF77E50CA1B2C3D400000351 /* DriftstackWebSocket.mm in Sources */,
 				A7135D381380C1A482CB2A35 /* DriftstackStun.mm in Sources */,
 				83087CAE705AC6066DF4EC42 /* DriftstackTLS13Client.mm in Sources */,
 				2162A02380439E571EAE8383 /* DriftstackTLS13KeySchedule.mm in Sources */,
