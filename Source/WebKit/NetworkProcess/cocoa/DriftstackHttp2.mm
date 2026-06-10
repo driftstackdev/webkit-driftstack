@@ -884,8 +884,15 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     // CFNetwork (Wave .321 streaming-bypass).
     constexpr int kMaxFrames = 500000;
     constexpr size_t kMaxBodyBytes = 128 * 1024 * 1024; // 128 MB safety cap
+    // Wave 29-499.350 — streaming (SSE) state. A streaming request has no frame
+    // ceiling (an EventSource is unbounded); the cap below applies only to the
+    // buffer-all path. onHeaders fires once; the byte counter drives periodic
+    // WINDOW_UPDATE so a long stream never stalls on the receive window.
+    const bool streaming = static_cast<bool>(request.onBodyChunk);
+    bool streamingHeadersFired = false;
+    uint64_t streamingBytesReceived = 0;
     HpackDecoderState hpackDyn; // one-shot: one connection, fresh decode state
-    while (!streamComplete && frameCount < kMaxFrames) {
+    while (!streamComplete && (streaming || frameCount < kMaxFrames)) {
         ++frameCount;
         uint32_t length;
         uint8_t type, frameFlags;
@@ -959,6 +966,17 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     }
                 }
                 if (resp.statusCode == 0) resp.statusCode = 200;  // fallback if HPACK Huffman
+                // Wave 29-499.350 — streaming (SSE): fire onHeaders once the
+                // response HEADERS are parsed, before any body. A false return
+                // (policy declined / loader cancelled) aborts the stream.
+                if (request.onHeaders && !streamingHeadersFired) {
+                    streamingHeadersFired = true;
+                    if (!request.onHeaders(resp.statusCode, resp.headers)) {
+                        resp.failed = true;
+                        resp.errorMessage = "stream cancelled at headers"_s;
+                        return resp;
+                    }
+                }
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;
             }
@@ -976,11 +994,38 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     if (static_cast<size_t>(padLen) + 1 > dataSpan.size()) break;
                     dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
                 }
-                resp.body.append(dataSpan);
-                if (resp.body.size() > kMaxBodyBytes) {
-                    resp.failed = true;
-                    resp.errorMessage = "response body exceeds 128MB cap"_s;
-                    return resp;
+                // Wave 29-499.350 — streaming delivery: hand each DATA frame to
+                // the chunk callback and DON'T accumulate (an infinite SSE body
+                // would otherwise grow unbounded). A false return cancels.
+                if (request.onBodyChunk) {
+                    if (dataSpan.size() && !request.onBodyChunk(dataSpan)) {
+                        resp.failed = true;
+                        resp.errorMessage = "stream cancelled mid-body"_s;
+                        return resp;
+                    }
+                    // RFC 7540 §6.9 — replenish our receive window so the server
+                    // keeps sending (a long stream would otherwise stall at the
+                    // 10MB connection window). ACK both stream + connection.
+                    streamingBytesReceived += dataSpan.size();
+                    if (streamingBytesReceived >= (1u << 20)) {
+                        uint32_t inc = static_cast<uint32_t>(streamingBytesReceived);
+                        uint8_t wu[13];
+                        encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, streamId);
+                        wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
+                        sslWriteAll(ssl, transport, wu, 13);
+                        uint8_t wuc[13];
+                        encodeFrameHeader(wuc, 4, kFrameWindowUpdate, 0, 0);
+                        wuc[9] = (inc >> 24) & 0xff; wuc[10] = (inc >> 16) & 0xff; wuc[11] = (inc >> 8) & 0xff; wuc[12] = inc & 0xff;
+                        sslWriteAll(ssl, transport, wuc, 13);
+                        streamingBytesReceived = 0;
+                    }
+                } else {
+                    resp.body.append(dataSpan);
+                    if (resp.body.size() > kMaxBodyBytes) {
+                        resp.failed = true;
+                        resp.errorMessage = "response body exceeds 128MB cap"_s;
+                        return resp;
+                    }
                 }
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;

@@ -1560,6 +1560,92 @@ void DriftstackNetworkLoader::resume()
             // / wrong-branch shutdown otherwise). handledConnection tracks that we
             // moved the clients out (true even if session-create fails, since the
             // failed session's destruction already freed them).
+            // Wave 29-499.350 — Server-Sent Events / EventSource INCREMENTAL
+            // delivery over PathB v2. EventSource sends Accept: text/event-stream
+            // and the body never ends, so the buffer-all path would hang. Stream
+            // it: didReceiveResponse on the first HEADERS (gated on the policy
+            // decision), didReceiveData per DATA frame, didCompleteWithError when
+            // the server closes. Requires the custom iPhone TLS client (the whole
+            // point is to keep SSE on the iPhone JA4, not bypass to CFNetwork).
+            // Forces a dedicated one-shot connection (never pooled).
+            {
+                String acceptHdr = webkitHdrs.get("accept"_s);
+                bool isSSE = acceptHdr.containsIgnoringASCIICase("text/event-stream"_s);
+                if (isSSE && customTLSClient) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.350] SSE stream → incremental PathB delivery for %s", url.string().utf8().data());
+                    auto* clientPtr = m_task.client();
+                    if (!clientPtr) return;
+                    Ref<DriftstackNetworkLoader> selfRef { *this };
+
+                    struct StreamPolicy {
+                        Lock lock;
+                        Condition cond;
+                        bool received { false };
+                        bool use { false };
+                    };
+                    auto policy = std::make_shared<StreamPolicy>();
+
+                    h2req.onHeaders = [this, policy, clientPtr, url](int statusCode, const Vector<std::pair<String, String>>& headers) -> bool {
+                        if (m_cancelled) return false;
+                        String mimeType = "text/event-stream"_s, charset = "UTF-8"_s;
+                        for (auto& [k, v] : headers) {
+                            if (equalIgnoringASCIICase(k, "content-type"_s)) {
+                                String hv = v; size_t semi = hv.find(';');
+                                mimeType = (semi != notFound) ? hv.left(semi).trim(deprecatedIsSpaceOrNewline) : hv.trim(deprecatedIsSpaceOrNewline);
+                            }
+                        }
+                        WebCore::ResourceResponse response { URL(url), WTFMove(mimeType), -1, WTFMove(charset) };
+                        response.setHTTPStatusCode(statusCode);
+                        for (auto& [k, v] : headers)
+                            response.setHTTPHeaderField(k, v);
+                        callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), policy]() mutable {
+                            clientPtr->didReceiveResponse(WTFMove(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                                [policy](WebCore::PolicyAction action) mutable {
+                                    Locker locker { policy->lock };
+                                    policy->use = (action == WebCore::PolicyAction::Use);
+                                    policy->received = true;
+                                    policy->cond.notifyAll();
+                                });
+                        });
+                        Locker locker { policy->lock };
+                        while (!policy->received)
+                            policy->cond.wait(policy->lock);
+                        return policy->use && !m_cancelled;
+                    };
+                    h2req.onBodyChunk = [this, clientPtr](std::span<const uint8_t> chunk) -> bool {
+                        if (m_cancelled) return false;
+                        auto buf = WebCore::SharedBuffer::create(chunk);
+                        callOnMainRunLoop([clientPtr, buf]() mutable {
+                            clientPtr->didReceiveData(buf.get());
+                        });
+                        return true;
+                    };
+
+                    DriftstackHttp2Transport sseTransport;
+                    sseTransport.ctx = customTLSClient.get();
+                    sseTransport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
+                        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
+                    };
+                    sseTransport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
+                        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
+                    };
+                    DriftstackHttp2Response sseResp = driftstackHttp2ExecuteVia(sseTransport, h2req);
+                    customTLSClient.reset();
+
+                    auto* doneClient = m_task.client();
+                    if (!doneClient) return;
+                    if (!tryBeginCompletion()) return;
+                    WebCore::ResourceError err = sseResp.failed && !m_cancelled
+                        ? WebCore::ResourceError(String("DriftstackNetworkLoader"_s), 0, URL(url), sseResp.errorMessage, WebCore::ResourceError::Type::General)
+                        : WebCore::ResourceError();
+                    callOnMainRunLoop([doneClient, err = WebCore::ResourceError(err)]() mutable {
+                        WebCore::NetworkLoadMetrics metrics;
+                        doneClient->didCompleteWithError(err, metrics);
+                    });
+                    return;
+                }
+            }
+
             DriftstackHttp2Response h2resp;
             bool handledConnection = false;
             if (driftstackH2PoolEnabled() && customTLSClient) {

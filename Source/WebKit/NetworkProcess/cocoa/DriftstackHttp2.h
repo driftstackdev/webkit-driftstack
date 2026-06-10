@@ -32,7 +32,9 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <functional>
 #include <memory>
+#include <span>
 #include <stdint.h>
 #include <wtf/Condition.h>
 #include <wtf/Forward.h>
@@ -55,6 +57,18 @@ struct DriftstackHttp2Request {
     String path;           // "/" or "/api?x=1"
     Vector<std::pair<String, String>> extraHeaders;  // Non-pseudo headers
     Vector<uint8_t> body;  // Empty for GET; encoded for POST
+
+    // Wave 29-499.350 — optional INCREMENTAL delivery (Server-Sent Events /
+    // EventSource). When onBodyChunk is set, the one-shot execute does NOT
+    // accumulate resp.body; it fires onHeaders once when the response HEADERS
+    // arrive, then onBodyChunk per DATA frame, running until the stream ends or
+    // a callback returns false (cancellation). This lets PathB v2 carry an
+    // infinite text/event-stream over the iPhone TLS path instead of bypassing
+    // to CFNetwork (Mac JA4). Unset (the default) = the buffer-all behavior.
+    // Streaming is used ONLY on the one-shot path (the pooled session ignores
+    // these — SSE always takes a dedicated connection).
+    std::function<bool(int statusCode, const Vector<std::pair<String, String>>&)> onHeaders;
+    std::function<bool(std::span<const uint8_t>)> onBodyChunk;
 };
 
 struct DriftstackHttp2Response {

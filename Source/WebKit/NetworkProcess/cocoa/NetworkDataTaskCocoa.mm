@@ -717,22 +717,12 @@ void NetworkDataTaskCocoa::resume()
                 if (second >= 16 && second <= 31) isLoopback = YES;
             }
         }
-        // Wave 29-499.321 — bypass PathB v2 for true-streaming requests
-        // (Server-Sent Events / EventSource). The loader buffers the full
-        // response before delivery, so an infinite text/event-stream would hang
-        // forever. Route these to CFNetwork (which streams + honours nw_proxy_config
-        // SOCKS5 → no leak; same class of TLS-fingerprint nuance as websockets).
-        // Detect via the request Accept header. (Incremental streaming inside
-        // PathB v2 is a tracked follow-up for full TLS-fingerprint consistency.)
-        NSString* accept = [[firstRequest().nsURLRequest(WebCore::HTTPBodyUpdatePolicy::DoNotUpdateHTTPBody) valueForHTTPHeaderField:@"Accept"] lowercaseString];
-        BOOL isEventStream = accept && [accept containsString:@"text/event-stream"];
-        if (isEventStream) {
-            static bool loggedSseOnce = false;
-            if (!loggedSseOnce) {
-                loggedSseOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] bypass PathB v2 for text/event-stream (SSE) — routed via CFNetwork to avoid full-buffer hang");
-            }
-        }
+        // Wave 29-499.350 — SSE / EventSource now streams INSIDE PathB v2 (the
+        // loader delivers per-frame via didReceiveData over the iPhone TLS path —
+        // DriftstackNetworkLoader Wave .350). No longer bypassed to CFNetwork, so
+        // text/event-stream keeps the iPhone JA4 instead of leaking a Mac one.
+        // (Was: bypassed because the loader buffered the full response.)
+        BOOL isEventStream = NO;
         // Wave 29-499.321/.348 — body-eligibility for PathB v2. The loader now
         // resolves FILE parts from disk (Wave .348 driftstackResolveRequestBody),
         // so multipart file uploads stay on PathB v2 (iPhone TLS fingerprint —
