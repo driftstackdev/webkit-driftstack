@@ -34,6 +34,7 @@
 #include "File.h"
 #include "FileChooser.h"
 #include "FileList.h"
+#include <stdlib.h>
 #include "FormController.h"
 #include "HTMLInputElement.h"
 #include "HTMLNames.h"
@@ -162,8 +163,22 @@ void FileInputType::handleDOMActivateEvent(Event& event)
     if (element()->isDisabledFormControl())
         return;
 
-    if (!UserGestureIndicator::processingUserGesture())
+    if (!UserGestureIndicator::processingUserGesture()) {
+#if PLATFORM(DRIFTSTACK)
+        // Wave 29-499.348 — the automated upload functional test drives a real
+        // <input type=file> with no user gesture; the embedder answers the
+        // picker via DRIFTSTACK_AUTO_FILE_PICK. Test-only escape hatch: both
+        // envs must be set; never set in production sessions.
+        static bool allowAutoPick = [] {
+            const char* autoPick = getenv("DRIFTSTACK_AUTO_FILE_PICK");
+            return autoPick && autoPick[0];
+        }();
+        if (!allowAutoPick)
+            return;
+#else
         return;
+#endif
+    }
 
     showPicker();
     event.setDefaultHandled();

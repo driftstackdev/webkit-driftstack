@@ -770,14 +770,105 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
         return resp;
     }
 
-    // 5. Send DATA frame(s) if body present
+    // 5. Send DATA frame(s) if body present — chunked + flow-controlled
+    // (Wave 29-499.349). The previous single-frame send broke every body
+    // > 16384 (exceeds the peer's default SETTINGS_MAX_FRAME_SIZE → instant
+    // connection error) and ignored the 65535-octet initial send windows
+    // (> 64KB = FLOW_CONTROL_ERROR) — uploads/POSTs above 16KB always failed.
+    // Chunks at the 16384 protocol default (always legal); when the send
+    // window is exhausted, reads frames inline: SETTINGS/WINDOW_UPDATE/PING
+    // handled here, response frames for our stream stashed for the main read
+    // loop below (an early response, e.g. 413, also stops the body send like
+    // Safari does).
+    struct PendingFrame {
+        uint8_t hdr[9];
+        Vector<uint8_t> payload;
+    };
+    Vector<PendingFrame> pendingFrames;
+    size_t pendingCursor = 0;
     if (hasBody) {
-        uint8_t dataHeader[9];
-        encodeFrameHeader(dataHeader, request.body.size(), kFrameData, kFlagEndStream, 1);
-        if (!sslWriteAll(ssl, transport,dataHeader, 9) || !sslWriteAll(ssl, transport,request.body.span().data(), request.body.size())) {
-            resp.failed = true;
-            resp.errorMessage = "DATA write failed"_s;
-            return resp;
+        constexpr size_t kMaxDataChunk = 16384;
+        int64_t connSendWindow = 65535;
+        int64_t streamSendWindow = 65535;
+        uint32_t peerInitialWindow = 65535;
+        size_t offset = 0;
+        const size_t total = request.body.size();
+        bool earlyResponse = false;
+        while (offset < total && !earlyResponse) {
+            size_t windowBudget = static_cast<size_t>(std::max<int64_t>(0, std::min(connSendWindow, streamSendWindow)));
+            size_t budget = std::min({ kMaxDataChunk, total - offset, windowBudget });
+            if (!budget) {
+                uint8_t fhdr[9];
+                if (!sslReadExact(ssl, transport, fhdr, 9)) {
+                    resp.failed = true;
+                    resp.errorMessage = "frame read failed while send-window blocked"_s;
+                    return resp;
+                }
+                uint32_t flen;
+                uint8_t ftype, fflags;
+                uint32_t fsid;
+                decodeFrameHeader(fhdr, flen, ftype, fflags, fsid);
+                Vector<uint8_t> fpayload;
+                fpayload.resize(flen);
+                if (flen > 0 && !sslReadExact(ssl, transport, fpayload.mutableSpan().data(), flen)) {
+                    resp.failed = true;
+                    resp.errorMessage = "frame payload read failed while send-window blocked"_s;
+                    return resp;
+                }
+                if (ftype == kFrameWindowUpdate && flen >= 4) {
+                    uint32_t inc = (uint32_t(fpayload[0] & 0x7f) << 24) | (uint32_t(fpayload[1]) << 16) | (uint32_t(fpayload[2]) << 8) | fpayload[3];
+                    if (fsid == 0)
+                        connSendWindow += inc;
+                    else if (fsid == 1)
+                        streamSendWindow += inc;
+                } else if (ftype == kFrameSettings && !(fflags & kFlagAck)) {
+                    // INITIAL_WINDOW_SIZE retro-adjusts open-stream send windows (RFC 7540 §6.9.2).
+                    for (size_t i = 0; i + 6 <= fpayload.size(); i += 6) {
+                        uint16_t id = (uint16_t(fpayload[i]) << 8) | fpayload[i + 1];
+                        uint32_t val = (uint32_t(fpayload[i + 2]) << 24) | (uint32_t(fpayload[i + 3]) << 16) | (uint32_t(fpayload[i + 4]) << 8) | fpayload[i + 5];
+                        if (id == kSettingInitialWindowSize) {
+                            streamSendWindow += int64_t(val) - int64_t(peerInitialWindow);
+                            peerInitialWindow = val;
+                        }
+                    }
+                    uint8_t ack[9];
+                    encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0);
+                    sslWriteAll(ssl, transport, ack, 9);
+                } else if (ftype == kFramePing && !(fflags & kFlagAck)) {
+                    uint8_t pong[17] = { 0 };
+                    encodeFrameHeader(pong, 8, kFramePing, kFlagAck, 0);
+                    for (size_t i = 0; i < 8 && i < fpayload.size(); ++i)
+                        pong[9 + i] = fpayload[i];
+                    sslWriteAll(ssl, transport, pong, 17);
+                } else if (ftype == kFrameGoaway || (ftype == kFrameRstStream && fsid == 1)) {
+                    resp.failed = true;
+                    resp.errorMessage = "GOAWAY/RST_STREAM during body send"_s;
+                    return resp;
+                } else if ((ftype == kFrameHeaders || ftype == kFrameData) && fsid == 1) {
+                    PendingFrame pf;
+                    memcpy(pf.hdr, fhdr, 9);
+                    pf.payload = std::move(fpayload);
+                    pendingFrames.append(std::move(pf));
+                    earlyResponse = true;
+                } else {
+                    PendingFrame pf;
+                    memcpy(pf.hdr, fhdr, 9);
+                    pf.payload = std::move(fpayload);
+                    pendingFrames.append(std::move(pf));
+                }
+                continue;
+            }
+            uint8_t dataHeader[9];
+            bool last = (offset + budget == total);
+            encodeFrameHeader(dataHeader, budget, kFrameData, last ? kFlagEndStream : 0, 1);
+            if (!sslWriteAll(ssl, transport, dataHeader, 9) || !sslWriteAll(ssl, transport, request.body.span().subspan(offset, budget).data(), budget)) {
+                resp.failed = true;
+                resp.errorMessage = "DATA write failed"_s;
+                return resp;
+            }
+            offset += budget;
+            connSendWindow -= budget;
+            streamSendWindow -= budget;
         }
     }
 
@@ -796,23 +887,31 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     HpackDecoderState hpackDyn; // one-shot: one connection, fresh decode state
     while (!streamComplete && frameCount < kMaxFrames) {
         ++frameCount;
-        uint8_t hdr[9];
-        if (!sslReadExact(ssl, transport,hdr, 9)) {
-            resp.failed = true;
-            resp.errorMessage = "frame header read failed"_s;
-            return resp;
-        }
         uint32_t length;
         uint8_t type, frameFlags;
         uint32_t sid;
-        decodeFrameHeader(hdr, length, type, frameFlags, sid);
-
         Vector<uint8_t> payload;
-        payload.resize(length);
-        if (length > 0 && !sslReadExact(ssl, transport,payload.mutableSpan().data(), length)) {
-            resp.failed = true;
-            resp.errorMessage = "frame payload read failed"_s;
-            return resp;
+        // Wave 29-499.349 — frames stashed during the flow-controlled body
+        // send (response frames that arrived while window-blocked) are
+        // processed before reading new ones off the wire.
+        if (pendingCursor < pendingFrames.size()) {
+            auto& pf = pendingFrames[pendingCursor++];
+            decodeFrameHeader(pf.hdr, length, type, frameFlags, sid);
+            payload = std::move(pf.payload);
+        } else {
+            uint8_t hdr[9];
+            if (!sslReadExact(ssl, transport,hdr, 9)) {
+                resp.failed = true;
+                resp.errorMessage = "frame header read failed"_s;
+                return resp;
+            }
+            decodeFrameHeader(hdr, length, type, frameFlags, sid);
+            payload.resize(length);
+            if (length > 0 && !sslReadExact(ssl, transport,payload.mutableSpan().data(), length)) {
+                resp.failed = true;
+                resp.errorMessage = "frame payload read failed"_s;
+                return resp;
+            }
         }
 
         switch (type) {
@@ -1382,6 +1481,18 @@ void DriftstackHttp2Session::readerLoop()
 DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Request& request)
 {
     DriftstackHttp2Response resp;
+
+    // Wave 29-499.349 — the pooled path still single-frames the body (no
+    // chunking/flow control on the shared multiplexed connection yet). A body
+    // > 16384 would exceed the peer's default SETTINGS_MAX_FRAME_SIZE and kill
+    // the WHOLE pooled connection (GOAWAY fails every in-flight stream). Fail
+    // fast instead — the loader falls through to a fresh one-shot connection,
+    // whose body send is chunked + flow-controlled.
+    if (request.body.size() > 16384) {
+        resp.failed = true;
+        resp.errorMessage = "pooled h2 path declines bodies > 16384 (no per-stream flow control); use one-shot"_s;
+        return resp;
+    }
 
     // Build the HEADERS block FIRST — the HPACK encoder is static-table-only (literal
     // WITHOUT indexing; no dynamic table mutation) and writes to this per-call buffer, so it
