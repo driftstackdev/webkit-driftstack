@@ -1701,6 +1701,65 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
     if (!sslWriteAll(nullptr, tp, wu, 13))
         return -1;
 
+    HpackDecoderState hpackDyn;
+
+    // RFC 8441 §3 — a client MUST NOT send Extended CONNECT until it has received
+    // SETTINGS_ENABLE_CONNECT_PROTOCOL. Read frames until the server's first
+    // SETTINGS; if 8441 isn't advertised, return -2 (the caller declines WS-over-h2
+    // cleanly rather than eating a 400 like postman-echo, which negotiates h2 but
+    // doesn't support 8441).
+    bool seenServerSettings = false;
+    while (!seenServerSettings) {
+        uint8_t hdr[9];
+        if (!sslReadExact(nullptr, tp, hdr, 9))
+            return -1;
+        uint32_t length; uint8_t type, flags; uint32_t sid;
+        decodeFrameHeader(hdr, length, type, flags, sid);
+        Vector<uint8_t> payload;
+        payload.resize(length);
+        if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
+            return -1;
+        switch (type) {
+        case kFrameSettings:
+            if (!(flags & kFlagAck)) {
+                for (size_t i = 0; i + 6 <= payload.size(); i += 6) {
+                    uint16_t id = (uint16_t(payload[i]) << 8) | payload[i + 1];
+                    uint32_t val = (uint32_t(payload[i + 2]) << 24) | (uint32_t(payload[i + 3]) << 16) | (uint32_t(payload[i + 4]) << 8) | payload[i + 5];
+                    if (id == kSettingEnableConnectProtocol && val == 1)
+                        m_serverEnabledConnectProtocol = true;
+                    if (id == kSettingInitialWindowSize) {
+                        Locker locker { m_writeLock };
+                        m_sendWindow += int64_t(val) - int64_t(m_peerInitialWindow);
+                        m_peerInitialWindow = val;
+                    }
+                }
+                { Locker locker { m_writeLock }; uint8_t ack[9]; encodeFrameHeader(ack, 0, kFrameSettings, kFlagAck, 0); sslWriteAll(nullptr, tp, ack, 9); }
+                seenServerSettings = true;
+            }
+            break;
+        case kFrameWindowUpdate:
+            if (length >= 4) {
+                uint32_t winc = (uint32_t(payload[0] & 0x7f) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3];
+                Locker locker { m_writeLock }; m_sendWindow += winc;
+            }
+            break;
+        case kFramePing:
+            if (!(flags & kFlagAck)) {
+                Locker locker { m_writeLock };
+                uint8_t pong[17] = { 0 }; encodeFrameHeader(pong, 8, kFramePing, kFlagAck, 0);
+                for (size_t i = 0; i < 8 && i < payload.size(); ++i) pong[9 + i] = payload[i];
+                sslWriteAll(nullptr, tp, pong, 17);
+            }
+            break;
+        case kFrameGoaway:
+            return -1;
+        default:
+            break;
+        }
+    }
+    if (!m_serverEnabledConnectProtocol)
+        return -2; // server negotiated h2 but does not support RFC 8441
+
     // Extended CONNECT HEADERS (RFC 8441 §4) — no END_STREAM (stream stays open).
     Vector<uint8_t> hb;
     hpackEncodeHeader(hb, ":method"_s, "CONNECT"_s);
@@ -1715,7 +1774,6 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
     if (!sslWriteAll(nullptr, tp, hh, 9) || !sslWriteAll(nullptr, tp, hb.span().data(), hb.size()))
         return -1;
 
-    HpackDecoderState hpackDyn;
     int status = 0;
     bool gotHeaders = false;
     while (!gotHeaders) {
@@ -1777,7 +1835,8 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
                     if (k == ":status"_s) {
                         status = 0; auto v8 = v.utf8();
                         for (size_t i = 0; i < v8.length(); ++i) { char c = v8.data()[i]; if (c < '0' || c > '9') break; status = status * 10 + (c - '0'); }
-                    }
+                    } else if (!k.startsWith(':'))
+                        m_responseHeaders.append({ k, v });
                 }
                 if (!status) status = 200; // HPACK Huffman :status fallback
                 if (flags & kFlagEndStream) m_streamEnded = true;

@@ -7,6 +7,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#import "DriftstackHttp2.h"
 #import "DriftstackSocks5Client.h"
 #import "DriftstackTLS13Client.h"
 #import <stdlib.h>
@@ -50,6 +51,10 @@ void DriftstackWebSocket::start()
 
 int DriftstackWebSocket::tlsRead(uint8_t* buf, size_t n)
 {
+    // h2 (RFC 8441): the WS bytes are tunneled in h2 DATA frames — read them via
+    // the CONNECT stream. The RFC 6455 frame parser above is transport-agnostic.
+    if (m_isH2 && m_h2stream)
+        return m_h2stream->readData(buf, n);
     if (m_config.secure && m_tls)
         return m_tls->read(buf, n);
     int fd = m_socks5 ? m_socks5->socketFileDescriptor() : -1;
@@ -60,6 +65,8 @@ int DriftstackWebSocket::tlsRead(uint8_t* buf, size_t n)
 
 bool DriftstackWebSocket::tlsWriteAll(const uint8_t* buf, size_t n)
 {
+    if (m_isH2 && m_h2stream)
+        return m_h2stream->sendData(buf, n);
     size_t off = 0;
     while (off < n) {
         int w;
@@ -114,14 +121,10 @@ bool DriftstackWebSocket::connectAndHandshake()
             return false;
         }
         // The iPhone ClientHello offers ALPN [h3,h2,http/1.1] (JA4 fidelity — we
-        // do NOT narrow it). If the server selects h2, WebSocket requires RFC 8441
-        // Extended CONNECT (tunneled in an h2 stream), NOT the h1.1 Upgrade below.
-        // 8441 is the next slice; until then, decline h2 servers so they fall back
-        // (the opt-in arming gate keeps production on CFNetwork meanwhile).
-        if (m_tls->selectedALPN() == "h2"_s) {
-            WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.351] server negotiated h2 ALPN — WS needs RFC 8441 (not yet implemented); declining %s", m_config.host.utf8().data());
-            return false;
-        }
+        // do NOT narrow it). If the server selected h2, WebSocket rides RFC 8441
+        // Extended CONNECT (tunneled in an h2 stream) instead of the h1.1 Upgrade.
+        if (m_tls->selectedALPN() == "h2"_s)
+            return h2ConnectHandshake();
     }
 
     // RFC 6455 §4.1 client handshake. Sec-WebSocket-Key = base64(16 random bytes).
@@ -200,6 +203,51 @@ bool DriftstackWebSocket::connectAndHandshake()
         m_config.host.utf8().data(), m_config.path.utf8().data());
     if (m_cb.onConnect)
         m_cb.onConnect(statusCode, protocol, respHeaders);
+    return true;
+}
+
+// RFC 8441 — WebSocket over HTTP/2. The TLS connection negotiated h2 ALPN, so the
+// WS handshake is an Extended CONNECT (not an h1.1 Upgrade); after :status 200 the
+// RFC 6455 frames are tunneled in h2 DATA frames (tlsRead/tlsWriteAll route to the
+// CONNECT stream). The ClientHello/JA4 is identical — only the WS bootstrap differs.
+bool DriftstackWebSocket::h2ConnectHandshake()
+{
+    DriftstackHttp2Transport t;
+    t.ctx = m_tls.get();
+    t.readFn = [](void* c, uint8_t* b, size_t n) -> int { return reinterpret_cast<DriftstackTLS13Client*>(c)->read(b, n); };
+    t.writeFn = [](void* c, const uint8_t* b, size_t n) -> int { return reinterpret_cast<DriftstackTLS13Client*>(c)->write(b, n); };
+    m_h2stream = std::make_unique<DriftstackHttp2ConnectStream>(t);
+
+    DriftstackHttp2ConnectRequest req;
+    req.protocol = "websocket"_s;
+    StringBuilder auth;
+    auth.append(m_config.host);
+    if ((m_config.secure && m_config.port != 443) || (!m_config.secure && m_config.port != 80))
+        auth.append(':', String::number(m_config.port));
+    req.authority = auth.toString();
+    req.path = m_config.path.isEmpty() ? "/"_s : m_config.path;
+    req.extraHeaders.append({ "sec-websocket-version"_s, "13"_s });
+    if (!m_config.origin.isEmpty())
+        req.extraHeaders.append({ "origin"_s, m_config.origin });
+    for (auto& [k, v] : m_config.extraHeaders)
+        req.extraHeaders.append({ k, v });
+
+    int status = m_h2stream->open(req);
+    if (status != 200) {
+        WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.352] RFC8441 CONNECT non-200 status=%d (server enableConnectProtocol=%d) for %s",
+            status, m_h2stream->serverEnabledConnectProtocol(), m_config.host.utf8().data());
+        return false;
+    }
+    m_isH2 = true;
+    String protocol;
+    for (auto& [k, v] : m_h2stream->responseHeaders()) {
+        if (equalIgnoringASCIICase(k, "sec-websocket-protocol"_s))
+            protocol = v;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.352] WS-over-h2 (RFC 8441) tunnel OPEN to %s%s via SOCKS5 (iPhone TLS, h2)",
+        m_config.host.utf8().data(), m_config.path.utf8().data());
+    if (m_cb.onConnect)
+        m_cb.onConnect(status, protocol, m_h2stream->responseHeaders());
     return true;
 }
 
@@ -360,6 +408,8 @@ void DriftstackWebSocket::closeConnection(uint16_t code, const String& reason)
     payload.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(r.data()), r.length() });
     sendFrame(0x8, payload.span());
     m_stop.store(true);
+    if (m_h2stream)
+        m_h2stream->close();
     if (m_tls)
         m_tls->shutdown();
 }
@@ -367,6 +417,8 @@ void DriftstackWebSocket::closeConnection(uint16_t code, const String& reason)
 void DriftstackWebSocket::cancel()
 {
     m_stop.store(true);
+    if (m_h2stream)
+        m_h2stream->close();
     if (m_tls)
         m_tls->shutdown();
 }

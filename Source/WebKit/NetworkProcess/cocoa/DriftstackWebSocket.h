@@ -30,6 +30,7 @@ namespace WebKit {
 
 class DriftstackSocks5Client;
 class DriftstackTLS13Client;
+class DriftstackHttp2ConnectStream;
 
 struct DriftstackWebSocketConfig {
     String host;            // ws/wss target host
@@ -74,6 +75,7 @@ public:
 
 private:
     bool connectAndHandshake();   // SOCKS5 + TLS + Upgrade; returns true on 101
+    bool h2ConnectHandshake();    // RFC 8441 Extended CONNECT (ALPN=h2); returns true on 200
     void readerLoop();            // demux incoming frames until close/error
     bool sendFrame(uint8_t opcode, std::span<const uint8_t> payload);
     int tlsRead(uint8_t* buf, size_t n);
@@ -83,6 +85,8 @@ private:
     DriftstackWebSocketCallbacks m_cb;
     std::unique_ptr<DriftstackSocks5Client> m_socks5;
     std::unique_ptr<DriftstackTLS13Client> m_tls;
+    std::unique_ptr<DriftstackHttp2ConnectStream> m_h2stream;  // RFC 8441 tunnel (ALPN=h2)
+    bool m_isH2 { false };
     RefPtr<Thread> m_thread;
     Lock m_writeLock;
     std::atomic<bool> m_stop { false };

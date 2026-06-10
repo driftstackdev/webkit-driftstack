@@ -124,6 +124,7 @@ public:
     // advertised SETTINGS_ENABLE_CONNECT_PROTOCOL.
     int open(const DriftstackHttp2ConnectRequest&);
     bool serverEnabledConnectProtocol() const { return m_serverEnabledConnectProtocol; }
+    const Vector<std::pair<String, String>>& responseHeaders() const { return m_responseHeaders; }
 
     // Tunnel read: returns the next inbound DATA payload bytes (≤ maxLen), 0 on
     // clean stream end, -1 on error. Processes SETTINGS/PING/WINDOW_UPDATE inline
@@ -143,6 +144,7 @@ private:
     uint32_t m_peerInitialWindow { 65535 };
     uint64_t m_recvSinceUpdate { 0 };  // bytes received since our last WINDOW_UPDATE
     Vector<uint8_t> m_dataLeftover;    // inbound DATA decoded but not yet returned by readData
+    Vector<std::pair<String, String>> m_responseHeaders;  // CONNECT response headers (non-pseudo)
     bool m_serverEnabledConnectProtocol { false };
     bool m_streamEnded { false };
     bool m_closed { false };
