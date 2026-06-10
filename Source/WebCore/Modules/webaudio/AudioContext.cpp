@@ -202,14 +202,9 @@ double AudioContext::baseLatency()
 {
     lazyInitialize();
 
-#if PLATFORM(DRIFTSTACK)
-    // W1941: baseLatency = framesPerBuffer()/sampleRate is HOST-BOUND — a fleet Mac with a
-    // 256/512-frame audio I/O buffer leaks baseLatency=0.0053/0.0107, vs real iPhone 0.002667
-    // (the 128-frame render quantum). Report the iPhone's 128-frame value so the host audio
-    // buffer size does not leak. framesPerBuffer() itself is unchanged (only the reported latency).
-    return 128.0 / sampleRate();
-#endif
-
+    // W1943: baseLatency is NOT a host-leak — framesPerBuffer() = m_renderBus->length() =
+    // AudioUtilities::renderQuantumSize = 128 always (host-independent, AudioDestinationResampler),
+    // so this = 128/sampleRate = 0.002667 = real iPhone on every host (per W1106/W1401). No override needed.
     return static_cast<double>(protect(destination())->framesPerBuffer()) / sampleRate();
 }
 
