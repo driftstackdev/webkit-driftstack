@@ -148,6 +148,27 @@ bool DriftstackWebSocket::connectAndHandshake()
         req.append(k, ": "_s, v, "\r\n"_s);
     req.append("\r\n"_s);
 
+    // Wave 29-499.354 (host-leak audit) — confirm the WS handshake carries the
+    // iPhone archetype UA (it shares the customUserAgent source with
+    // navigator.userAgent, so it must), not a Mac UA. Logs forwarded header NAMES
+    // + the UA value only (the UA is public; never log Cookie/auth values per
+    // W1921). One-time ops/audit visibility into what egresses on the WS upgrade.
+    {
+        static bool loggedReqOnce = false;
+        if (!loggedReqOnce) {
+            loggedReqOnce = true;
+            StringBuilder names;
+            String ua;
+            for (auto& [k, v] : m_config.extraHeaders) {
+                names.append(k, ' ');
+                if (equalIgnoringASCIICase(k, "user-agent"_s))
+                    ua = v;
+            }
+            WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.354] WS h1.1 handshake → fwd-header-names=[%s] UA=%s",
+                names.toString().utf8().data(), ua.isEmpty() ? "(none — would be a tell)" : ua.utf8().data());
+        }
+    }
+
     CString reqUtf8 = req.toString().utf8();
     if (!tlsWriteAll(reinterpret_cast<const uint8_t*>(reqUtf8.data()), reqUtf8.length()))
         return false;
