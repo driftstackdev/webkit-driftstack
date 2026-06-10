@@ -354,8 +354,10 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     if (userEnv && userEnv[0] && passEnv) {
         creds.username = WTF::String::fromUTF8(userEnv);
         creds.password = WTF::String::fromUTF8(passEnv);
-        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.3: RFC 1929 user/pass creds set (user='%s', user-len=%u, pass-len=%u)",
-            userEnv, unsigned(creds.username.utf8().length()), unsigned(creds.password.utf8().length()));
+        // W1921: redact the username VALUE from the log (a credential-half identifying the
+        // customer proxy account) — log only its length, matching the password (pass-len).
+        WTFLogAlways("[Driftstack-EG-WK-1.8/SOCK5-URLPROTOCOL] sub-1.7.3: RFC 1929 user/pass creds set (user-len=%u, pass-len=%u)",
+            unsigned(creds.username.utf8().length()), unsigned(creds.password.utf8().length()));
     }
 
     _socks5Client = std::make_unique<WebKit::DriftstackSocks5Client>(proxy, creds);
