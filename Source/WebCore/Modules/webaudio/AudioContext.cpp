@@ -219,6 +219,14 @@ double AudioContext::outputLatency()
 
     if (!isPlaying())
         return 0;
+#if PLATFORM(DRIFTSTACK)
+    // W1941: the non-tracker playing path (below) returns destination()->outputLatency() = the
+    // HOST Mac audio-device latency → leaks the fleet host while audio plays. Return the same
+    // fixed value as the tracker path so the host never leaks via outputLatency, in ANY context.
+    // (The exact real-iPhone outputLatency-while-playing needs a BS capture — the existing
+    // reference was captured at !isPlaying()=0; 512/sampleRate is the established reasonable value.)
+    return 512.0 / sampleRate();
+#endif
     if (noiseInjectionPolicies())
         return 512 / sampleRate(); // A fixed, but reasonable value for most platforms.
 
