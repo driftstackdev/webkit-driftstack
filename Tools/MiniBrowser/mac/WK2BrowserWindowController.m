@@ -872,6 +872,21 @@ static BOOL areEssentiallyEqual(double a, double b)
 
 - (void)webView:(WKWebView *)webView runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSArray<NSURL *> * URLs))completionHandler
 {
+    // Wave 29-499.348 — headless file-pick for the PathB v2 upload functional
+    // test. DRIFTSTACK_AUTO_FILE_PICK=<path> answers any <input type=file>
+    // open-panel with that file, no dialog — lets the automated harness drive a
+    // real disk-backed multipart upload through the network stack.
+    const char* autoPick = getenv("DRIFTSTACK_AUTO_FILE_PICK");
+    if (autoPick && autoPick[0]) {
+        NSString *path = [NSString stringWithUTF8String:autoPick];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            completionHandler(@[[NSURL fileURLWithPath:path]]);
+            return;
+        }
+        completionHandler(nil);
+        return;
+    }
+
     NSOpenPanel *openPanel = [NSOpenPanel openPanel];
 
     openPanel.allowsMultipleSelection = parameters.allowsMultipleSelection;

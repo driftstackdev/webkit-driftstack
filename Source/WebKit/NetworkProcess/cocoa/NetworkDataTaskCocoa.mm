@@ -733,25 +733,41 @@ void NetworkDataTaskCocoa::resume()
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] bypass PathB v2 for text/event-stream (SSE) — routed via CFNetwork to avoid full-buffer hang");
             }
         }
-        // Wave 29-499.321 — bypass PathB v2 for requests whose body contains file
-        // or blob parts. The loader sends FormData::flatten() (omits file/blob
-        // parts), so a multipart file upload would send an INCOMPLETE body. Route
-        // these to CFNetwork (handles multipart natively + honours nw_proxy_config
-        // SOCKS5 → no leak). Pure data bodies (JSON/urlencoded) flatten completely
-        // and stay on PathB v2. (Native multipart assembly in PathB v2 = follow-up.)
+        // Wave 29-499.321/.348 — body-eligibility for PathB v2. The loader now
+        // resolves FILE parts from disk (Wave .348 driftstackResolveRequestBody),
+        // so multipart file uploads stay on PathB v2 (iPhone TLS fingerprint —
+        // closes the W2014-2031 upload half of the TLS split). Bypass to
+        // CFNetwork only remains for: blob elements (not resolvable at this
+        // layer), unreadable/unsizeable files, and oversized uploads (the loader
+        // buffers the body in memory; >256MB rides CFNetwork's streaming path).
         BOOL hasUnflattenableBody = NO;
         if (RefPtr<WebCore::FormData> body = firstRequest().httpBody()) {
+            constexpr uint64_t maxPathBUploadBytes = 256 * 1024 * 1024;
+            uint64_t pathBFileBytes = 0;
             for (auto& el : body->elements()) {
-                if (!std::holds_alternative<Vector<uint8_t>>(el.data)) {
-                    hasUnflattenableBody = YES;
-                    break;
+                if (std::holds_alternative<Vector<uint8_t>>(el.data))
+                    continue;
+                if (auto* fileData = std::get_if<WebCore::FormDataElement::EncodedFileData>(&el.data)) {
+                    auto sz = FileSystem::fileSize(fileData->filename);
+                    if (!sz) {
+                        hasUnflattenableBody = YES;
+                        break;
+                    }
+                    pathBFileBytes += *sz;
+                    if (pathBFileBytes > maxPathBUploadBytes) {
+                        hasUnflattenableBody = YES;
+                        break;
+                    }
+                    continue;
                 }
+                hasUnflattenableBody = YES; // blob element
+                break;
             }
             if (hasUnflattenableBody) {
                 static bool loggedUploadOnce = false;
                 if (!loggedUploadOnce) {
                     loggedUploadOnce = true;
-                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] bypass PathB v2 for file/blob upload body — routed via CFNetwork (flatten omits files)");
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.348] bypass PathB v2 for blob/oversized/unreadable upload body — routed via CFNetwork");
                 }
             }
         }

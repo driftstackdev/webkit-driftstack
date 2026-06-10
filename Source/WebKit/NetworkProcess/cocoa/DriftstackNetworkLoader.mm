@@ -21,6 +21,7 @@
 #import "DriftstackTLS13Client.h"
 #import "DriftstackSocks5Client.h"
 #import <Security/SecureTransport.h>
+#import <wtf/FileSystem.h>
 #import <wtf/HashSet.h>
 #import <wtf/MonotonicTime.h>
 #import <wtf/Scope.h>
@@ -887,6 +888,43 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
     return true;
 }
 
+// Wave 29-499.348 — resolve the request body INCLUDING file parts. flatten()
+// omits EncodedFileData, which forced every multipart file upload off PathB v2
+// onto CFNetwork (Mac TLS fingerprint — the W2014-2031 TLS-split). File parts
+// are read from disk here; the eligibility gate in NetworkDataTaskCocoa caps
+// total file size and still bypasses blob elements (not resolvable at this
+// layer). Returns false if any part can't be read — the caller must FAIL the
+// load; an incomplete body must never go on the wire.
+static bool driftstackResolveRequestBody(WebCore::FormData& formData, Vector<uint8_t>& out)
+{
+    for (auto& element : formData.elements()) {
+        bool ok = WTF::switchOn(element.data,
+            [&](const Vector<uint8_t>& data) {
+                out.appendVector(data);
+                return true;
+            },
+            [&](const WebCore::FormDataElement::EncodedFileData& fileData) {
+                auto contents = FileSystem::readEntireFile(fileData.filename);
+                if (!contents)
+                    return false;
+                size_t start = fileData.fileStart > 0 ? static_cast<size_t>(fileData.fileStart) : 0;
+                if (start > contents->size())
+                    return false;
+                size_t length = contents->size() - start;
+                if (fileData.fileLength >= 0)
+                    length = std::min(length, static_cast<size_t>(fileData.fileLength));
+                out.append(contents->span().subspan(start, length));
+                return true;
+            },
+            [&](const WebCore::FormDataElement::EncodedBlobData&) {
+                return false;
+            });
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // Capture request data on the calling thread; do network work async.
@@ -904,7 +942,22 @@ void DriftstackNetworkLoader::resume()
     Vector<uint8_t> requestBody;
     bool hasRequestBody = false;
     if (RefPtr<WebCore::FormData> fd = m_request.httpBody()) {
-        requestBody = fd->flatten();
+        // Wave 29-499.348 — full body resolution (data + file parts). A failure
+        // here (file vanished/unreadable since the eligibility check) FAILS the
+        // load — never send a partial body.
+        if (!driftstackResolveRequestBody(*fd, requestBody)) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.348] request-body resolution FAILED (file part unreadable) for %s — failing load", url.string().utf8().data());
+            auto* clientPtr = m_task.client();
+            if (clientPtr) {
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "request body file part unreadable"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
+            }
+            return;
+        }
         hasRequestBody = true;
     }
     // Wave 29-499.324 — capture the request URL once on the calling (main) thread.
