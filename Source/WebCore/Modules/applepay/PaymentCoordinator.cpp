@@ -74,6 +74,14 @@ PaymentCoordinator::~PaymentCoordinator() = default;
 
 bool PaymentCoordinator::supportsVersion(Document&, unsigned version) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // Real iPhone Safari 26.4 AND 26.5 both cap Apple Pay at version 14 (verified vs
+    // real iphone17 ×28, W1857). The fork's newer-upstream WebKit natively supports
+    // v15, which over-exposes a newer Safari than the iphone17 archetype — a version
+    // tell. Cap to 14 (matches real on both launch + next minor).
+    if (version > 14)
+        return false;
+#endif
     auto supportsVersion = m_client->supportsVersion(version);
     PAYMENT_COORDINATOR_RELEASE_LOG("supportsVersion(%d) -> %d", version, supportsVersion);
     return supportsVersion;
