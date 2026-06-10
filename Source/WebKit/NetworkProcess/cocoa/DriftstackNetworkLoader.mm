@@ -1565,13 +1565,18 @@ void DriftstackNetworkLoader::resume()
             // and the body never ends, so the buffer-all path would hang. Stream
             // it: didReceiveResponse on the first HEADERS (gated on the policy
             // decision), didReceiveData per DATA frame, didCompleteWithError when
-            // the server closes. Requires the custom iPhone TLS client (the whole
-            // point is to keep SSE on the iPhone JA4, not bypass to CFNetwork).
-            // Forces a dedicated one-shot connection (never pooled).
+            // the server closes. Works over EITHER iPhone-JA4 transport (custom
+            // TLS13 or BoringSSL ssl). Forces a dedicated one-shot connection
+            // (never pooled — an open SSE stream must not block the shared pool).
             {
                 String acceptHdr = webkitHdrs.get("accept"_s);
                 bool isSSE = acceptHdr.containsIgnoringASCIICase("text/event-stream"_s);
-                if (isSSE && customTLSClient) {
+                // Both the custom-TLS13 transport AND the BoringSSL `ssl` path are
+                // iPhone-JA4 production paths and either may be chosen per
+                // connection — SSE streaming must work on both, else it
+                // intermittently falls to the buffer-all path and hangs (Wave .350
+                // originally handled only customTLSClient → flaky SSE).
+                if (isSSE) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.350] SSE stream → incremental PathB delivery for %s", url.string().utf8().data());
                     auto* clientPtr = m_task.client();
                     if (!clientPtr) return;
@@ -1621,16 +1626,28 @@ void DriftstackNetworkLoader::resume()
                         return true;
                     };
 
-                    DriftstackHttp2Transport sseTransport;
-                    sseTransport.ctx = customTLSClient.get();
-                    sseTransport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
-                        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
-                    };
-                    sseTransport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
-                        return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
-                    };
-                    DriftstackHttp2Response sseResp = driftstackHttp2ExecuteVia(sseTransport, h2req);
-                    customTLSClient.reset();
+                    DriftstackHttp2Response sseResp;
+                    if (customTLSClient) {
+                        DriftstackHttp2Transport sseTransport;
+                        sseTransport.ctx = customTLSClient.get();
+                        sseTransport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
+                            return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
+                        };
+                        sseTransport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
+                            return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
+                        };
+                        sseResp = driftstackHttp2ExecuteVia(sseTransport, h2req);
+                        customTLSClient.reset();
+                    } else {
+                        // BoringSSL `ssl` transport (also iPhone JA4). Stream over it,
+                        // then shut down + free the SSL like the normal path does.
+                        sseResp = driftstackHttp2Execute(ssl, h2req);
+#if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
+                        auto& f = boringSSLFns();
+                        if (f.ssl_shutdown) f.ssl_shutdown(ssl);
+                        if (f.ssl_free) f.ssl_free(ssl);
+#endif
+                    }
 
                     auto* doneClient = m_task.client();
                     if (!doneClient) return;
