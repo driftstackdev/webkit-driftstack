@@ -335,6 +335,35 @@ void DriftstackWebSocket::readerLoop()
                 payload[i] ^= maskKey[i & 3];
         }
 
+        // Wave 29-499.355 (hardening) — RFC 6455 §5 compliance against malformed/
+        // malicious server frames. The server is untrusted; a real client closes
+        // 1002 (protocol error) on these, so enforcing matches behavior AND blocks
+        // garbage. (RSV bits are NOT checked here — they're valid under a
+        // negotiated extension like permessage-deflate; see the W2083 surfaced gap.)
+        bool isControl = (opcode & 0x08) != 0;  // 0x8-0xF
+        const char* violation = nullptr;
+        if (opcode >= 0x3 && opcode <= 0x7)
+            violation = "reserved non-control opcode";
+        else if (opcode >= 0xB)
+            violation = "reserved control opcode";
+        else if (isControl && len > 125)
+            violation = "control frame >125 bytes (RFC 6455 §5.5)";
+        else if (isControl && !fin)
+            violation = "fragmented control frame (RFC 6455 §5.5)";
+        else if (opcode == 0x0 && !messageOpcode)
+            violation = "continuation frame with no message in progress";
+        else if ((opcode == 0x1 || opcode == 0x2) && messageOpcode)
+            violation = "new data frame while a fragmented message is in progress";
+        if (violation) {
+            WTFLogAlways("[Driftstack-EG-WK-WS/Wave29-499.355] WS protocol violation: %s — closing 1002 (server %s)", violation, m_config.host.utf8().data());
+            uint8_t cl[2] = { 0x03, 0xEA };  // close code 1002 (protocol error)
+            sendFrame(0x8, std::span<const uint8_t> { cl, sizeof(cl) });
+            m_closed.store(true);
+            if (m_cb.onClose)
+                m_cb.onClose(1002, "protocol error"_s);
+            return;
+        }
+
         switch (opcode) {
         case 0x0: // continuation
         case 0x1: // text
