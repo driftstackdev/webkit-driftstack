@@ -8,7 +8,7 @@
  * substitutes Mac Hiragino as the rendered font for CJK clusters and
  * overrides Mac Hiragino's metrics with PingFang values from this table.
  *
- * Data source: /Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1/Core/PingFang.ttc
+ * Data source: driftstack-fonts/iphone16pro-ios26.4.1/Core/PingFang.ttc  (sibling of the repo root)
  *               PingFang.ttc.NOTES (V-603 fontTools extraction)
  */
 

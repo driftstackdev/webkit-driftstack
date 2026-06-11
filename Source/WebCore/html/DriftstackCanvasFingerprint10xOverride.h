@@ -16,7 +16,7 @@
 //   5. nullptr (no substitution)
 //
 // DO NOT EDIT BY HAND. Regenerate via:
-//   python3 /Users/john/code/driftstack/captures/v3/extract-vendor-canvas-canonical.py
+//   python3 captures/v3/extract-vendor-canvas-canonical.py   (from the driftstack repo root)
 //
 #pragma once
 #include <string_view>
