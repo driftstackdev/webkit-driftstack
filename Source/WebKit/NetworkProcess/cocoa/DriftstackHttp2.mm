@@ -906,9 +906,21 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     const bool streaming = static_cast<bool>(request.onBodyChunk);
     bool streamingHeadersFired = false;
     uint64_t streamingBytesReceived = 0;
+    // W2132: streaming bypasses the kMaxFrames TOTAL cap (a stream is unbounded), so the
+    // flood guard must be a NO-PROGRESS bound instead — abort if this many frames arrive
+    // with no DATA delivered (a malicious server spinning CONTINUATION/PING/control frames
+    // and never sending body would otherwise loop forever, holding a connection + CPU).
+    // Reset on each delivered DATA chunk; legit streams deliver DATA long before this.
+    constexpr int kMaxStreamIdleFrames = 100000;
+    int streamIdleFrames = 0;
     HpackDecoderState hpackDyn; // one-shot: one connection, fresh decode state
     while (!streamComplete && (streaming || frameCount < kMaxFrames)) {
         ++frameCount;
+        if (streaming && ++streamIdleFrames > kMaxStreamIdleFrames) {
+            resp.failed = true;
+            resp.errorMessage = "stream frame-flood: no body progress"_s;
+            return resp;
+        }
         uint32_t length;
         uint8_t type, frameFlags;
         uint32_t sid;
@@ -1018,6 +1030,7 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                         resp.errorMessage = "stream cancelled mid-body"_s;
                         return resp;
                     }
+                    streamIdleFrames = 0; // W2132: body progress — reset the no-progress flood guard
                     // RFC 7540 §6.9 — replenish our receive window so the server
                     // keeps sending (a long stream would otherwise stall at the
                     // 10MB connection window). ACK both stream + connection.
