@@ -1665,6 +1665,13 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
 
 // ===== Wave 29-499.352 — RFC 8441 WebSocket-over-HTTP/2 (Extended CONNECT) =====
 
+// Wave 29-499.356 (security) — per-frame size cap. We advertise no
+// SETTINGS_MAX_FRAME_SIZE (default 16384), so a frame larger than this is
+// non-compliant; a malicious server could claim a 24-bit length (up to 16MB) per
+// frame to force large allocations. 1MB is generous vs the 16KB default while
+// bounding the worst case; over it we abort the stream.
+static constexpr uint32_t kMaxConnectFrameBytes = 1u << 20;
+
 DriftstackHttp2ConnectStream::DriftstackHttp2ConnectStream(const DriftstackHttp2Transport& t)
     : m_transport(t)
 {
@@ -1716,6 +1723,7 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
         uint32_t length; uint8_t type, flags; uint32_t sid;
         decodeFrameHeader(hdr, length, type, flags, sid);
         Vector<uint8_t> payload;
+        if (length > kMaxConnectFrameBytes) return -1;
         payload.resize(length);
         if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
             return -1;
@@ -1783,6 +1791,7 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
         uint32_t length; uint8_t type, flags; uint32_t sid;
         decodeFrameHeader(hdr, length, type, flags, sid);
         Vector<uint8_t> payload;
+        if (length > kMaxConnectFrameBytes) return -1;
         payload.resize(length);
         if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
             return -1;
@@ -1844,12 +1853,11 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
             }
             break;
         case kFrameData:
-            if (sid == kStreamId) {
-                std::span<const uint8_t> ds = payload.span();
-                if (flags & kFlagPadded) { if (ds.size() < 1) break; uint8_t pl = ds[0]; if (size_t(pl) + 1 > ds.size()) break; ds = ds.subspan(1, ds.size() - 1 - pl); }
-                m_dataLeftover.append(ds);
-                if (flags & kFlagEndStream) m_streamEnded = true;
-            }
+            // Wave 29-499.356 (security) — DATA before the response HEADERS is an
+            // h2 protocol violation; a malicious server streaming it here would
+            // grow m_dataLeftover UNBOUNDED → OOM the multi-tenant node. Reject.
+            if (sid == kStreamId)
+                return -1;
             break;
         case kFrameRstStream:
             if (sid == kStreamId) return -1;
@@ -1884,6 +1892,7 @@ int DriftstackHttp2ConnectStream::readData(uint8_t* buf, size_t maxLen)
         uint32_t length; uint8_t type, flags; uint32_t sid;
         decodeFrameHeader(hdr, length, type, flags, sid);
         Vector<uint8_t> payload;
+        if (length > kMaxConnectFrameBytes) return -1;
         payload.resize(length);
         if (length && !sslReadExact(nullptr, tp, payload.mutableSpan().data(), length))
             return -1;
