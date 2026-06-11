@@ -1255,8 +1255,12 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     src = resp.body.span().data() + hdrLen;
                     srcLen = resp.body.size() - hdrLen - 8;  // strip CRC32+ISIZE
                 } else {
-                    // Malformed; fall back to fixed-10 + 8 strip
-                    src = resp.body.span().data() + 10;
+                    // Malformed; fall back to fixed-10 + 8 strip. W2144: clamp the offset to
+                    // the body size so the pointer is never formed PAST-END (technically UB
+                    // even when unused) on a body < 10 bytes — behavior-preserving: off=10
+                    // when size>=10, else off=size with srcLen=0 (the >18 guard already => 0).
+                    size_t off = std::min<size_t>(10, resp.body.size());
+                    src = resp.body.span().data() + off;
                     srcLen = (resp.body.size() > 18) ? resp.body.size() - 18 : 0;
                 }
             }
