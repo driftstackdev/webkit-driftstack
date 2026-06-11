@@ -551,6 +551,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // the founder's launch-env flip silently never reaches getenv() and the
             // MITM defense stays off in production.
             { "DRIFTSTACK_PATHB_TLS_CERT_VALIDATE", getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE") },
+            // W2203: RFC 8441 WS-over-h2 opt-in gate (WebSocketTaskCocoa, the (B)
+            // egress arc). Same class as the cert-validate gate above — consumed in
+            // the NetworkProcess (getenv at WebSocketTaskCocoa.mm), which does NOT
+            // get the __XPC_ mirror. Off by default; forwarded now so the founder's
+            // eventual launch-env flip actually activates WS-over-h2 in production
+            // instead of silently staying on the h1.1 path.
+            { "DRIFTSTACK_WS_PATHB", getenv("DRIFTSTACK_WS_PATHB") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
