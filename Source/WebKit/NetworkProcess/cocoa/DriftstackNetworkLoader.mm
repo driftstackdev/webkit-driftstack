@@ -1065,8 +1065,21 @@ void DriftstackNetworkLoader::resume()
             // POST/PUT here would silently drop its body. Requests with a body
             // fall through to the proven TCP h2/h1 path until h3 body support
             // (nghttp3 data_reader) lands. GET/HEAD have no body.
+            // Wave 29-499.357 — SSE (text/event-stream) must NOT take the h3 path.
+            // driftstackHttp3Execute BUFFERS the whole response, so an infinite
+            // EventSource would HANG forever (h3 + DNS-RR are both on in launch-env,
+            // so this is a live bug for any h3-advertising host — Cloudflare/Google
+            // etc.). The h2/TCP path streams SSE incrementally (Wave .350); exclude
+            // it from h3 exactly like a request body is excluded.
+            bool h3IsSSE = false;
+            for (auto& h : httpHeaders) {
+                if (equalIgnoringASCIICase(h.key, "accept"_s) && h.value.containsIgnoringASCIICase("text/event-stream"_s)) {
+                    h3IsSSE = true;
+                    break;
+                }
+            }
             bool h3bodyless = (equalIgnoringASCIICase(httpMethod, "GET"_s)
-                || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !hasRequestBody;
+                || equalIgnoringASCIICase(httpMethod, "HEAD"_s)) && !hasRequestBody && !h3IsSSE;
             // Wave 29-499.321 — FIRST-CONTACT h3 via DNS HTTPS RR (RFC 9460 type
             // 65), matching real Safari (which queries the HTTPS record and goes
             // straight to h3, before any Alt-Svc response). Alt-Svc only upgrades
