@@ -648,7 +648,14 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                     uint16_t etype = (static_cast<uint16_t>(plaintext[e]) << 8) | plaintext[e + 1];
                     uint16_t elen = (static_cast<uint16_t>(plaintext[e + 2]) << 8) | plaintext[e + 3];
                     e += 4;
-                    if (etype == 16 /*ALPN*/ && elen >= 3) {
+                    // W2197: bounds-check the protoLen read (plaintext[e+2]) BEFORE
+                    // dereferencing. The outer while only guaranteed (e-4)+4 <= size,
+                    // so after `e += 4` e can equal size — reading plaintext[e+2]
+                    // unguarded was an OOB heap read of up to 2 bytes from a crafted
+                    // server EncryptedExtensions (a MITM is the TLS peer pre-cert-
+                    // validation). Require the 3 ALPN length-prefix bytes (e..e+2) to
+                    // be in-bounds; legit ALPN always has them, so no behavior change.
+                    if (etype == 16 /*ALPN*/ && elen >= 3 && e + 3 <= plaintext.size()) {
                         // ALPN: u16 list_length + u8 proto_len + proto bytes
                         uint8_t protoLen = plaintext[e + 2];
                         if (protoLen > 0 && e + 3 + protoLen <= plaintext.size()) {
