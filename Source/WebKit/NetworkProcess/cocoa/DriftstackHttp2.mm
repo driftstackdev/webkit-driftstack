@@ -456,6 +456,13 @@ static Vector<uint8_t> hpackHuffmanDecode(const uint8_t* data, size_t len)
             }
             if (!found) break;
         }
+        // W2131: a complete prefix code consumes every ≤30-bit prefix, so >31 UNCONSUMED
+        // bits means the rest of the stream is invalid / over-long EOS padding (RFC 7541
+        // §5.2). Stop decoding — this also prevents an undefined ≥64-bit shift of the
+        // 64-bit `buffer` (bufferBits could otherwise reach 64+ on a crafted all-1s string,
+        // making `buffer >> (bufferBits - bits)` UB). Legit partial codes leave ≤29 bits.
+        if (bufferBits > 31)
+            break;
     }
     return out;
 }
