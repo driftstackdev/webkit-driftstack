@@ -2952,6 +2952,10 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
 // without this the response (e.g. browserleaks's QUIC test JSON, served Content-Encoding: br)
 // reaches the page as raw brotli → the QUIC test can't read it → "no QUIC". Handles
 // gzip/deflate (zlib 15+32) + br (Apple libcompression), strips content-encoding/length.
+// W2141: cap the DECOMPRESSED size (mirrors the h2 W2140 fix). A malicious server's gzip/zstd
+// bomb (tiny body, ~1000x ratio) would otherwise grow the output UNBOUNDED → OOM. 512MB is
+// generous for any legit response; a bomb is neutralized (decode stops, body left compressed).
+static constexpr size_t kMaxH3DecompressedBytes = 512u * 1024 * 1024;
 static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
 {
     if (resp.body.isEmpty())
@@ -2978,7 +2982,10 @@ static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
                 zs.avail_out = static_cast<uInt>(cap - zs.total_out);
                 int rv = inflate(&zs, Z_FINISH);
                 if (rv == Z_STREAM_END) { ok = true; break; }
-                if ((rv == Z_OK || rv == Z_BUF_ERROR) && zs.avail_out == 0) { cap *= 2; out.resize(cap); continue; }
+                if ((rv == Z_OK || rv == Z_BUF_ERROR) && zs.avail_out == 0) {  // W2141 bomb cap
+                    if (cap >= kMaxH3DecompressedBytes) break;
+                    cap = std::min(cap * 2, kMaxH3DecompressedBytes); out.resize(cap); continue;
+                }
                 break;
             }
             if (ok) out.resize(zs.total_out);
@@ -2992,7 +2999,8 @@ static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
                 resp.body.span().data(), resp.body.size(), nullptr, COMPRESSION_BROTLI);
             if (n > 0 && n < cap) { out.resize(n); ok = true; break; }
             if (!n) break;
-            cap *= 2;
+            if (cap >= kMaxH3DecompressedBytes) break;  // W2141 bomb cap
+            cap = std::min(cap * 2, kMaxH3DecompressedBytes);
         }
     } else if (enc == "zstd"_s) {
         // W1515 — vendored zstd decoder; same streaming grow-loop as the h2 shared path
@@ -3005,7 +3013,10 @@ static void driftstackDecompressHttp3Body(DriftstackHttp3Response& resp)
             out.resize(cap);
             size_t written = 0;
             for (;;) {
-                if (written == cap) { cap *= 2; out.resize(cap); }
+                if (written == cap) {  // W2141 bomb cap
+                    if (cap >= kMaxH3DecompressedBytes) break;
+                    cap = std::min(cap * 2, kMaxH3DecompressedBytes); out.resize(cap);
+                }
                 ZSTD_outBuffer outb = { out.mutableSpan().data() + written, cap - written, 0 };
                 size_t rv = ZSTD_decompressStream(ds, &outb, &in);
                 if (ZSTD_isError(rv)) break;
