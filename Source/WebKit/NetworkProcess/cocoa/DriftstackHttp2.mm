@@ -604,6 +604,12 @@ static bool hpackDecodeOneHeader(const uint8_t* data, size_t len, size_t& cursor
 // did NOT — browserleaks served brotli over a pooled stream → garbage. Handles gzip/deflate
 // (zlib, window 15+32 auto-detect) and br (Apple libcompression), with grow loops so
 // large/high-ratio bodies aren't truncated. Strips content-encoding/content-length after.
+// W2140: cap the DECOMPRESSED size. A malicious server's gzip/zstd bomb (tiny body, ~1000x
+// ratio) would otherwise grow the output buffer UNBOUNDED → OOM the NetworkProcess (a customer
+// browsing a hostile site). 512MB is generous for any legit browser response; a bomb is
+// neutralized (decode stops → ok=false → body left compressed → page breaks, no OOM). Shared
+// with the inline one-shot decoder (driftstackHttp2Execute) below.
+static constexpr size_t kMaxDecompressedBytes = 512u * 1024 * 1024;
 void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<String, String>>& headers)
 {
     if (body.isEmpty())
@@ -632,7 +638,10 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
                 int rv = inflate(&zs, Z_FINISH);
                 if (rv == Z_STREAM_END) { ok = true; break; }
                 if (rv == Z_OK || (rv == Z_BUF_ERROR && zs.avail_out == 0)) {
-                    if (zs.avail_out == 0) { cap *= 2; out.resize(cap); continue; }  // grow + retry
+                    if (zs.avail_out == 0) {  // grow + retry (bounded vs a decompression bomb, W2140)
+                        if (cap >= kMaxDecompressedBytes) break;
+                        cap = std::min(cap * 2, kMaxDecompressedBytes); out.resize(cap); continue;
+                    }
                 }
                 break;  // real error or stalled
             }
@@ -647,7 +656,8 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
                 body.span().data(), body.size(), nullptr, COMPRESSION_BROTLI);
             if (n > 0 && n < cap) { out.resize(n); ok = true; break; }  // n<cap ⇒ complete
             if (!n) break;                                              // hard failure
-            cap *= 2;                                                   // n==cap ⇒ maybe truncated, grow
+            if (cap >= kMaxDecompressedBytes) break;                    // W2140 decompression-bomb cap
+            cap = std::min(cap * 2, kMaxDecompressedBytes);             // n==cap ⇒ maybe truncated, grow
         }
     } else if (enc == "zstd"_s) {
         // W1515 — vendored zstd v1.5.7 decoder (NetworkProcess/cocoa/zstd/zstddeclib.c).
@@ -662,7 +672,10 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
             out.resize(cap);
             size_t written = 0;
             for (;;) {
-                if (written == cap) { cap *= 2; out.resize(cap); }
+                if (written == cap) {  // W2140 decompression-bomb cap
+                    if (cap >= kMaxDecompressedBytes) break;
+                    cap = std::min(cap * 2, kMaxDecompressedBytes); out.resize(cap);
+                }
                 ZSTD_outBuffer outb = { out.mutableSpan().data() + written, cap - written, 0 };
                 size_t rv = ZSTD_decompressStream(ds, &outb, &in);
                 if (ZSTD_isError(rv)) break;
@@ -1163,7 +1176,7 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
         // 15 + 32 = max window + auto-detect gzip/zlib
         int initRv = inflateInit2(&zs, 15 + 32);
         if (initRv == Z_OK) {
-            size_t outCapacity = resp.body.size() * 12;
+            size_t outCapacity = std::min<size_t>(resp.body.size() * 12, kMaxDecompressedBytes); // W2140 bomb cap
             if (outCapacity < 64 * 1024) outCapacity = 64 * 1024;
             Vector<uint8_t> decompressed(outCapacity);
 
@@ -1204,7 +1217,7 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
 
         if (algo) {
             // Allocate generous output buffer (10x input as heuristic)
-            size_t outCapacity = resp.body.size() * 10;
+            size_t outCapacity = std::min<size_t>(resp.body.size() * 10, kMaxDecompressedBytes); // W2140 bomb cap
             if (outCapacity < 64 * 1024) outCapacity = 64 * 1024;
             Vector<uint8_t> decompressed(outCapacity);
 
