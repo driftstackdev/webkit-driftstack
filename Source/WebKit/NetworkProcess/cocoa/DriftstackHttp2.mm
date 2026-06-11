@@ -564,6 +564,13 @@ static bool hpackDecodeOneHeader(const uint8_t* data, size_t len, size_t& cursor
         uint32_t newSize = 0;
         if (!hpackDecodeInteger(data, len, cursor, 5, newSize))
             return false;
+        // RFC 7541 §6.3: the update MUST NOT exceed the client-advertised
+        // SETTINGS_HEADER_TABLE_SIZE; a larger value is a decoding error. We OMIT that
+        // setting (matching the real-iPhone SETTINGS fingerprint), so the limit is the
+        // HPACK default 4096. Without this cap a malicious server's oversized update lets
+        // the dynamic table grow unbounded (evict() never fires) → OOM the NetworkProcess.
+        if (newSize > 4096)
+            return false;
         dyn.maxDynSize = newSize;
         dyn.evict();
         return true;
