@@ -304,7 +304,18 @@ static const IntegerSchema& colorFeatureSchema()
         "color"_s,
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            // §A row 7 (host-leak-register, W2225): the `color` media feature = bits per
+            // color component of the output device. iPhone reports 8 (24-bit; coheres with
+            // the already-pinned screen.colorDepth=24, Screen.cpp:133). screenDepthPerComponent
+            // reads the host window backing store — standard macOS = 8 (matches), but a
+            // deep-color (10-bit) backing store on a fleet host would leak `color: 10`. Pin 8
+            // to be host-INDEPENDENT, consistent with rows 1-6 (the dev-Mac match is not luck).
+            (void)context;
+            return 8;
+#else
             return screenDepthPerComponent(protect(context.document->frame()->mainFrame().virtualView()).get());
+#endif
         }
     };
     return schema;
