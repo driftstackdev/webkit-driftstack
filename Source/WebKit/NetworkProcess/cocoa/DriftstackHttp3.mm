@@ -1591,6 +1591,17 @@ static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t streamId,
     const uint8_t* data, size_t datalen, void* connUserData, void* /*streamUserData*/)
 {
     auto* qc = static_cast<DriftstackQuicConn*>(connUserData);
+    // Wave 29-499.358 (security) — cap the h3 response body at 128MB, matching the
+    // h2 path's kMaxBodyBytes. QUIC/nghttp3 flow control auto-extends as we
+    // consume, so a malicious/compromised h3 server could stream an unbounded GET
+    // response → OOM the multi-tenant node. Over the cap, return -1: nghttp3
+    // treats a nonzero recv_data return as a fatal error and tears down the
+    // connection, and the request fails over to the proven TCP h2/h1 path.
+    constexpr size_t kMaxH3BodyBytes = 128u * 1024 * 1024;
+    if (qc->h3ResponseBody.size() + datalen > kMaxH3BodyBytes) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.358] h3 response body exceeds 128MB cap — aborting stream %lld", (long long)streamId);
+        return -1;
+    }
     qc->h3ResponseBody.append(std::span<const uint8_t> { data, datalen });
     // Wave .322 — per-stream body (additive; key = streamId + 1, see recv_header).
     {
