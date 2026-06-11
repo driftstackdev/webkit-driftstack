@@ -736,6 +736,15 @@ void AuxiliaryProcess::initializeSandbox(const AuxiliaryProcessInitializationPar
     const char* driftstackDirectEgress = getenv("DRIFTSTACK_DIRECT_EGRESS");
     bool driftstackDirectEgressOn = driftstackDirectEgress && driftstackDirectEgress[0] == '1';
     sandboxParameters.addParameter("DRIFTSTACK_DIRECT_EGRESS"_s, driftstackDirectEgressOn ? "1"_span : "0"_span);
+    // W2235 (#54 hardening): the V-582 canvas-dump write-grant (/tmp/v405-dump-mac-postfix)
+    // is needed ONLY when the dev dump is active (DRIFTSTACK_DUMP_CANVAS_DIR set, the env that
+    // gates the WebContent dump code in HTMLCanvasElement.cpp). Expose its presence as a sandbox
+    // param so the profile applies the write-grant ONLY in dev — production (env unset) gets a
+    // strictly read-only WebContent jail (least-privilege; the grant was previously compiled in
+    // unconditionally though prod never writes the dump).
+    const char* driftstackCanvasDump = getenv("DRIFTSTACK_DUMP_CANVAS_DIR");
+    bool driftstackCanvasDumpOn = driftstackCanvasDump && driftstackCanvasDump[0];
+    sandboxParameters.addParameter("DRIFTSTACK_CANVAS_DUMP"_s, driftstackCanvasDumpOn ? "1"_span : "0"_span);
 #endif
 
     if (sandboxParameters.userDirectorySuffix().isNull())
