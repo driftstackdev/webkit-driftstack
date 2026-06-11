@@ -78,19 +78,23 @@
 ;;; embedded for the .Development XPC service used on macOS development
 ;;; builds (per Source/WebKit/DerivedSources.make), so the driftstack
 ;;; allow rules must live here too — not only in com.apple.WebProcess.sb.in.
+;;; V-211: the dev-tree paths derive from (param "HOME_DIR") — provided by
+;;; populateSandboxInitializationParameters on the macOS .Development apply
+;;; path (the only consumer of this profile that has a home dir; a real iOS
+;;; device has no /Users tree, so home-tree rules were dead there either way).
 (allow file-read*
-    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack-fonts"))
     (subpath "/var/driftstack/fonts")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_emoji_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_ascii_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_webgpu_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_audio_atlas"))
     ;;; V-583.K-text: text glyph atlas (single .bin file mmap'd at startup).
     ;;; Mirrors literal rule in WebProcess.sb.in + GPUProcess.sb.in
     ;;; (V-583.K-text sandbox commit). WebContent.sb.in needs same coverage
     ;;; because macOS .Development XPC services load this profile per
     ;;; Source/WebKit/DerivedSources.make:469 (V-582 narrative).
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_glyph_atlas.bin"))
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 #endif
