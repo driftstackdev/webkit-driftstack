@@ -1811,7 +1811,14 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
 
     int status = 0;
     bool gotHeaders = false;
+    // W2134: completes W2132 for the pooled path — bound the pre-HEADERS frame COUNT so a
+    // malicious server stalling HEADERS / flooding control frames can't spin this forever
+    // (per-frame length is already capped at kMaxConnectFrameBytes; a legit server sends a
+    // handful of frames before HEADERS). Tear down on flood.
+    int preHeaderFrames = 0;
     while (!gotHeaders) {
+        if (++preHeaderFrames > 100000)
+            return -1;
         uint8_t hdr[9];
         if (!sslReadExact(nullptr, tp, hdr, 9))
             return -1;
@@ -1912,7 +1919,14 @@ int DriftstackHttp2ConnectStream::readData(uint8_t* buf, size_t maxLen)
     }
     if (m_streamEnded)
         return 0;
+    // W2134: bound the frames read in a single recv call so a server flooding non-DATA
+    // frames (never delivering body) can't spin this loop forever (mirrors W2132's
+    // streaming no-progress guard; this loop returns on each DATA frame so the counter is
+    // per-call). Tear down on flood.
+    int framesThisRead = 0;
     while (true) {
+        if (++framesThisRead > 100000)
+            return -1;
         uint8_t hdr[9];
         if (!sslReadExact(nullptr, tp, hdr, 9))
             return -1;
