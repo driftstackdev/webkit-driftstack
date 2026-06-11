@@ -475,6 +475,15 @@ void DriftstackWebSocket::closeConnection(uint16_t code, const String& reason)
         m_h2stream->close();
     if (m_tls)
         m_tls->shutdown();
+    // W2205: a CLIENT-initiated close (JS ws.close()) must still surface onClose so the
+    // WebKit WebSocketChannel fires the JS `onclose` event. We stopped the read loop
+    // (m_stop) above so it won't deliver the server's echoed close, and the read-loop
+    // fallback is gated by m_closed/m_stop — without this call onClose never fires and
+    // ws.close() leaves the JS close handshake pending forever. m_closed was set via the
+    // exchange() above, so the read loop's own onClose paths stay suppressed (no double
+    // fire). The app supplied the code, so this is a clean close.
+    if (m_cb.onClose)
+        m_cb.onClose(code, reason);
 }
 
 void DriftstackWebSocket::cancel()
