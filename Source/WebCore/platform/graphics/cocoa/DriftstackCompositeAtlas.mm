@@ -7,7 +7,10 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -15,7 +18,20 @@
 
 namespace WebCore {
 
-static const char* kDefaultCompositeAtlasPath = "/Users/john/code/driftstack/reference/driftstack_emoji_atlas/driftstack-composite-atlas.bin";
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* compositeAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_emoji_atlas/driftstack-composite-atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
 
 static constexpr uint8_t kCompositeAtlasMagic[4] = { 'D', 'S', 'E', 'C' };
 static constexpr size_t kEntrySize = 80;          // 64 + 2 + 2 + 4 + 4 + 4
@@ -52,7 +68,7 @@ void DriftstackCompositeAtlas::mapAtlas()
     }
 
     const char* envPath = getenv("DRIFTSTACK_COMPOSITE_ATLAS_PATH");
-    const char* path = envPath ? envPath : kDefaultCompositeAtlasPath;
+    const char* path = envPath ? envPath : compositeAtlasDefaultPath();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

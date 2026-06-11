@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -84,6 +85,18 @@ DriftstackPerGlyphAtlas& DriftstackPerGlyphAtlas::singleton()
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* perGlyphAtlasDefaultPath(const char* relative)
+{
+    const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+    const char* home = std::getenv("HOME");
+    std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+    p += relative;
+    return ::strdup(p.c_str());
+}
+
 bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
 {
     if (m_loaded)
@@ -93,7 +106,7 @@ bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
     if (!resolved)
         resolved = std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_PATH");
     if (!resolved)
-        resolved = "/Users/john/code/driftstack/reference/driftstack_per_glyph_atlas.bin";
+        resolved = perGlyphAtlasDefaultPath("/reference/driftstack_per_glyph_atlas.bin");
 
     bool diag = std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG") != nullptr;
 

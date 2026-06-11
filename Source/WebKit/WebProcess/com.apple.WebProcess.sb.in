@@ -117,49 +117,53 @@
 ;;; DriftstackAsciiAtlas singleton).
 ;;; V-158 / DSWA: WebGPU readback atlas (DriftstackWebGPUAtlas).
 ;;; V-166 / DASA: audio substitution atlas (planned, post-POC-v2).
+;;; V-211: dev-tree paths derive from (param "HOME_DIR") — provided by
+;;; populateSandboxInitializationParameters (AuxiliaryProcessMac.mm) — instead
+;;; of a hardcoded build-machine home directory. Same resolved paths at
+;;; runtime; removes the personal-name literal from this public profile.
 (allow file-read*
-    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack-fonts"))
     (subpath "/var/driftstack/fonts")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_emoji_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_ascii_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_webgpu_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_audio_atlas"))
     ;;; Wave 29-373: canvas-fuzz atlas directory (correctly-named home for
     ;;; V-510 atlas binaries; the legacy driftstack-canvas-fuzz-atlas.bin
     ;;; happens to live in driftstack_audio_atlas/ due to historic naming.
     ;;; The Wave 29-370 family-B atlas lives in this directory.)
-    (subpath "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_canvas_fuzz_atlas"))
     ;;; Wave 29-393: archetype JSON config directory for
     ;;; DriftstackArchetypeConfig::loadFromEnv() default path
     ;;; (operations/archetypes/iphone17_ios18_7_safari26_4.json).
     ;;; Without this allow, Config sandbox-denies the read even when the
     ;;; file is on disk → loadFromEnv silently fails → Phase 2 archetype
     ;;; values unavailable to Wave 29-389 Config-singleton accessor migrations.
-    (subpath "/Users/john/code/driftstack/operations/archetypes")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/operations/archetypes"))
     ;;; V-770 (Wave 28): Driftstack text-run atlas (Rule N v2 Layer A)
-    (subpath "/Users/john/code/driftstack/reference/driftstack_text_run_atlas")
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas"))
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_v1.bin"))
     ;;; Wave 29-286: archetype-suffixed text-run atlas variants (V-770.A V2+)
-    (regex #"^/Users/john/code/driftstack/reference/driftstack_text_run_atlas_[a-z0-9_]+\.bin$")
+    (regex (string-append "^" (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_[a-z0-9_]+\\.bin$"))
     ;;; V-790.L (Wave 29-141): per-glyph exact-substitution atlas
     ;;; (Path A2 — between V-770 Layer A and V-790.V Layer B). Atlas-hit
     ;;; produces sha256 bit-identical iPhone glyph pixels via mmap +
     ;;; binary search (no ML inference path).
-    (literal "/Users/john/code/driftstack/reference/driftstack_per_glyph_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_per_glyph_atlas.bin"))
     ;;; V-790.V (Wave 29-131): Layer B CoreML model dir (.mlpackage +
     ;;; .mlmodelc). WebContent process loads the model on first
     ;;; LayerB::shared() call via MLModel.compileModelAtURL: /
     ;;; modelWithContentsOfURL:. Read-only access to the entire
     ;;; reference/models/ subtree.
-    (subpath "/Users/john/code/driftstack/reference/models")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/models"))
     ;;; V-583.K-text: text glyph atlas (single .bin file mmap'd at startup)
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_glyph_atlas.bin"))
     ;;; V-689 (Wave 25): Driftstack advance atlas (2.7M (font,size,cp)→width entries, 31 MB)
-    (literal "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_advance_atlas.bin"))
     ;;; Wave 29-391: driftstack_font_canonical directory for DRIFTSTACK_FONT_CANONICAL_PATH
     ;;; env var override. Discovered via sandbox-vs-disk audit (same methodology
     ;;; as Wave 29-373 canvas_fuzz_atlas + Wave 29-390.B env-var forwarding).
-    (subpath "/Users/john/code/driftstack/reference/driftstack_font_canonical")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_font_canonical"))
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 ;;; V-582: dev-only canvas dump dir for empirical diff vs iPhone reference.

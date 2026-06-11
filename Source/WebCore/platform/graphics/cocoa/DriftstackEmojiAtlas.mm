@@ -7,7 +7,10 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -17,7 +20,20 @@ namespace WebCore {
 
 // V-088 atlas binary path. Override at runtime via DRIFTSTACK_EMOJI_ATLAS_PATH
 // env var; default resolves to the captured atlas in dev environment.
-static const char* kDefaultAtlasPath = "/Users/john/code/driftstack/reference/driftstack_emoji_atlas/driftstack-emoji-atlas.bin";
+// V-211: the dev-default derives from the environment (DRIFTSTACK_DATA_ROOT,
+// else $HOME/code/driftstack) instead of a hardcoded build-machine home
+// directory. One-time strdup, process lifetime.
+static const char* emojiAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_emoji_atlas/driftstack-emoji-atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
 
 static constexpr uint8_t kAtlasMagic[4] = { 'D', 'S', 'E', 'A' };
 
@@ -52,7 +68,7 @@ void DriftstackEmojiAtlas::mapAtlas()
     }
 
     const char* envPath = getenv("DRIFTSTACK_EMOJI_ATLAS_PATH");
-    const char* path = envPath ? envPath : kDefaultAtlasPath;
+    const char* path = envPath ? envPath : emojiAtlasDefaultPath();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

@@ -9,8 +9,11 @@
 #if PLATFORM(DRIFTSTACK)
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <span>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -33,11 +36,26 @@ DriftstackTextGlyphAtlas::DriftstackTextGlyphAtlas()
     loadAtlas();
 }
 
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* textGlyphAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_text_glyph_atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
+
 void DriftstackTextGlyphAtlas::loadAtlas()
 {
     const char* atlasPath = std::getenv("DRIFTSTACK_TEXT_GLYPH_ATLAS_PATH");
     if (!atlasPath)
-        atlasPath = "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin";
+        atlasPath = textGlyphAtlasDefaultPath();
 
     int fd = open(atlasPath, O_RDONLY);
     if (fd < 0) {

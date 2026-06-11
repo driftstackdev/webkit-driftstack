@@ -10,7 +10,9 @@
 
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -35,11 +37,26 @@ DriftstackAdvanceAtlas::DriftstackAdvanceAtlas()
     loadAtlas();
 }
 
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* advanceAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_advance_atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
+
 void DriftstackAdvanceAtlas::loadAtlas()
 {
     const char* atlasPath = std::getenv("DRIFTSTACK_ADVANCE_ATLAS_PATH");
     if (!atlasPath)
-        atlasPath = "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin";
+        atlasPath = advanceAtlasDefaultPath();
 
     int fd = open(atlasPath, O_RDONLY);
     if (fd < 0) {

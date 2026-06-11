@@ -7,7 +7,10 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -21,7 +24,20 @@ namespace WebCore {
 // files (EmojiAtlas, CompositeAtlas) which the WebKit unify-build mechanism
 // merges into the same translation unit.
 namespace {
-const char* kAsciiAtlasDefaultPath = "/Users/john/code/driftstack/reference/driftstack_ascii_atlas/driftstack-ascii-atlas.bin";
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+const char* asciiAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_ascii_atlas/driftstack-ascii-atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
 constexpr uint8_t kAsciiAtlasMagic[4] = { 'D', 'S', 'A', 'S' };
 constexpr size_t kAsciiAtlasFontNameBytes = 64;
 constexpr size_t kAsciiAtlasEntryBytes = 16;
@@ -66,7 +82,7 @@ void DriftstackAsciiAtlas::mapAtlas()
     }
 
     const char* envPath = getenv("DRIFTSTACK_ASCII_ATLAS_PATH");
-    const char* path = envPath ? envPath : kAsciiAtlasDefaultPath;
+    const char* path = envPath ? envPath : asciiAtlasDefaultPath();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

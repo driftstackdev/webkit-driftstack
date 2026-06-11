@@ -7,7 +7,10 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -17,7 +20,20 @@
 namespace WebCore {
 
 namespace {
-const char* kAudioAtlasDefaultPath = "/Users/john/code/driftstack/reference/driftstack_audio_atlas/driftstack-audio-atlas.bin";
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+const char* audioAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_audio_atlas/driftstack-audio-atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
 constexpr uint8_t kAudioAtlasMagic[4] = { 'D', 'S', 'A', 'A' };
 constexpr uint16_t kAudioAtlasVersion = 1;
 constexpr size_t kAudioAtlasHeaderBytes = 32;
@@ -47,7 +63,7 @@ DriftstackAudioAtlas::~DriftstackAudioAtlas()
 void DriftstackAudioAtlas::mapAtlas()
 {
     const char* envPath = getenv("DRIFTSTACK_AUDIO_ATLAS_PATH");
-    const char* path = envPath ? envPath : kAudioAtlasDefaultPath;
+    const char* path = envPath ? envPath : audioAtlasDefaultPath();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

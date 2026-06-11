@@ -54,13 +54,16 @@
 		  bypasses dyld's interpose redirection, allowing recursion-free
 		  pass-through to the original function.
 
-		  Dev-build absolute path. Production: switch to @executable_path/..
-		  token when NetworkProcess bundles are finalized for harness fleet.
+		  V-211: @executable_path-relative (executable lives at
+		  <build>/com.apple.WebKit.Networking.xpc/Contents/MacOS/, the dylib
+		  three levels up beside the framework). dyld resolves @executable_path
+		  inside DYLD_INSERT_LIBRARIES (verified empirically: constructor fires).
+		  Works for any build location — no build-machine path baked in.
 		-->
 		<key>EnvironmentVariables</key>
 		<dict>
 			<key>DYLD_INSERT_LIBRARIES</key>
-			<string>/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib</string>
+			<string>@executable_path/../../../libDriftstackQuicInterpose.dylib</string>
 		</dict>
 	</dict>
 </dict>

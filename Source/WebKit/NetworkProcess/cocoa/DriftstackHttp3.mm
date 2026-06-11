@@ -38,6 +38,7 @@
 #import <netinet/in.h>
 #import <stdlib.h>
 #import <string.h>
+#import <string>
 #import <zlib.h>  // Wave 29-499.329 — gzip/deflate decode for h3 responses
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
@@ -297,6 +298,20 @@ static void driftstackApplyIphoneQuicSslExt(void* ssl)
 // Resolve BoringSSL QUIC API from libwebrtc.dylib (already loaded as
 // a framework dependency of WebKit; RTLD_DEFAULT finds it). Mirrors
 // the LibreSSL dlsym pattern in DriftstackCrypto.mm but targets the
+// V-211: the dev build-products dir derives from the environment
+// (DRIFTSTACK_BUILD_DIR, else $HOME/code/webkit-driftstack/WebKitBuild/Release)
+// instead of a hardcoded build-machine home directory. One-time strdup per
+// call site, process lifetime.
+static const char* driftstackBuildProductPath(const char* libName)
+{
+    const char* dir = getenv("DRIFTSTACK_BUILD_DIR");
+    const char* home = getenv("HOME");
+    std::string p = (dir && *dir) ? std::string(dir) : std::string(home ? home : "") + "/code/webkit-driftstack/WebKitBuild/Release";
+    p += "/";
+    p += libName;
+    return strdup(p.c_str());
+}
+
 // libwebrtc-bundled BoringSSL re-exports added in Wave 29-499.222.
 static bool resolveBoringSslQuic()
 {
@@ -310,7 +325,7 @@ static bool resolveBoringSslQuic()
     if (!libwebrtcHandle) {
         const char* libwebrtcCandidates[] = {
             "libwebrtc.dylib",
-            "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib",
+            driftstackBuildProductPath("libwebrtc.dylib"),
             "@executable_path/../Frameworks/libwebrtc.dylib",
             nullptr,
         };
@@ -398,7 +413,7 @@ static bool resolveNgtcp2()
     // permits dlopen from sibling locations of the loaded framework.
     const char* candidates[] = {
         "libngtcp2.dylib",
-        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libngtcp2.dylib",  // dev: rewritten @rpath dylib next to WebKit framework
+        driftstackBuildProductPath("libngtcp2.dylib"),  // dev: rewritten @rpath dylib next to WebKit framework
         "/opt/homebrew/lib/libngtcp2.dylib",  // dev install via Homebrew (sandbox often blocks)
         "@executable_path/../Frameworks/libngtcp2.dylib",  // future bundled
         nullptr,
@@ -516,8 +531,8 @@ static bool resolveNgHttp3()
     const char* candidates[] = {
         "libnghttp3.dylib",
         "libnghttp3.9.dylib",
-        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libnghttp3.dylib",  // copy beside WebKit framework (matches ngtcp2 layout)
-        "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libnghttp3.9.dylib",
+        driftstackBuildProductPath("libnghttp3.dylib"),  // copy beside WebKit framework (matches ngtcp2 layout)
+        driftstackBuildProductPath("libnghttp3.9.dylib"),
         "/opt/homebrew/opt/libnghttp3/lib/libnghttp3.9.dylib",
         "/opt/homebrew/lib/libnghttp3.dylib",
         "@executable_path/../Frameworks/libnghttp3.9.dylib",

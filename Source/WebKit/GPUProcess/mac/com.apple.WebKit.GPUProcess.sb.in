@@ -141,22 +141,25 @@
 ;;; process; on macOS that's GPU process. Mirrors WebProcess.sb.in /
 ;;; com.apple.WebKit.WebContent.sb.in subpath rules — same dev/prod path
 ;;; conventions per V-090 / V-117 / V-158 / V-166. (V-582 Path A.)
+;;; V-211: dev-tree paths derive from (param "HOME_DIR") — provided by
+;;; populateSandboxInitializationParameters (AuxiliaryProcessMac.mm) — instead
+;;; of a hardcoded build-machine home directory.
 (allow file-read*
-    (subpath "/Users/john/code/driftstack-fonts")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack-fonts"))
     (subpath "/var/driftstack/fonts")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_emoji_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_ascii_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas")
-    (subpath "/Users/john/code/driftstack/reference/driftstack_audio_atlas")
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_emoji_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_ascii_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_webgpu_atlas"))
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_audio_atlas"))
     ;;; V-583.K-text: text glyph atlas
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_glyph_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_glyph_atlas.bin"))
     ;;; V-770.A: text-run atlas (DSCFA2)
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin")
-    (literal "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin.manifest.json")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_v1.bin"))
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_v1.bin.manifest.json"))
     ;;; V-790.L: per-glyph DSPGA1 atlas
-    (literal "/Users/john/code/driftstack/reference/driftstack_per_glyph_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_per_glyph_atlas.bin"))
     ;;; V-689: advance atlas
-    (literal "/Users/john/code/driftstack/reference/driftstack_advance_atlas.bin")
+    (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_advance_atlas.bin"))
     (subpath "/var/driftstack/atlas")
     (subpath "/var/lib/driftstack/data"))
 #endif

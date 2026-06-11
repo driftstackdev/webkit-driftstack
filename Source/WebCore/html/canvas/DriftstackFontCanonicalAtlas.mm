@@ -11,6 +11,8 @@
 #import <bit>
 #import <fcntl.h>
 #import <stdlib.h>
+#import <string>
+#import <string.h>
 #import <sys/mman.h>
 #import <sys/stat.h>
 #import <unistd.h>
@@ -24,7 +26,20 @@ namespace WebCore {
 
 DriftstackFontCanonicalAtlas::DriftstackFontCanonicalAtlas() = default;
 
-static constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_audio_atlas/v184-font-canonical-v1.bin";
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* fontCanonicalAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_audio_atlas/v184-font-canonical-v1.bin";
+        return strdup(p.c_str());
+    }();
+    return path;
+}
 static constexpr size_t kIndexEntryStride = 48;
 static constexpr size_t kHashBytes = 16;
 static constexpr size_t kHeaderSize = 32;
@@ -70,7 +85,7 @@ void DriftstackFontCanonicalAtlas::loadOnce()
 
     const char* path = getenv("DRIFTSTACK_FONT_CANONICAL_PATH");
     if (!path || !*path)
-        path = kDefaultPath;
+        path = fontCanonicalAtlasDefaultPath();
 
     int fd = ::open(path, O_RDONLY);
     if (fd < 0) {

@@ -54,8 +54,11 @@ namespace WebCore { void runOpSequenceRecorderSelfTestIfRequested(); }
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
 #include <array>
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <span>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -854,13 +857,24 @@ void initV510AtlasOnce()
     // 25.81 MB atlas accumulated through Waves 29-272 → 29-280. Production
     // sessions that don't set DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH now use
     // the launch-archetype-clean atlas by default.
-    constexpr const char* kDefaultPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-family-b-supplemented.bin";
+    // V-211: the dev-default paths derive from the environment
+    // (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a
+    // hardcoded build-machine home directory. One-time strdup, process lifetime.
+    auto fuzzAtlasDefaultPath = [](const char* fileName) -> const char* {
+        const char* root = getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_canvas_fuzz_atlas/";
+        p += fileName;
+        return strdup(p.c_str());
+    };
+    static const char* kDefaultPath = fuzzAtlasDefaultPath("driftstack-canvas-fuzz-atlas-family-b-supplemented.bin");
     // Wave 29-399 §6.A: priority bin default path matches atlas-priority-append.py
     // DEFAULT_OUTPUT_BIN. Same directory as main atlas. atlas-priority-append.py
     // builds this from §4 chain captures (BS-side iPhone canonical bytes for
     // probe signatures emitted in §2). Pre-launch this file may not exist
     // (auto-learn hasn't run yet) — loadAtlasIntoState silently disables.
-    constexpr const char* kDefaultPriorityPath = "/Users/john/code/driftstack/reference/driftstack_canvas_fuzz_atlas/driftstack-canvas-fuzz-atlas-wave29-399-priority.bin";
+    static const char* kDefaultPriorityPath = fuzzAtlasDefaultPath("driftstack-canvas-fuzz-atlas-wave29-399-priority.bin");
 
     // V-511 multi-archetype foundation: orchestrator sets DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
     // explicitly per archetype. WebKit dispatch reads single env var; archetype

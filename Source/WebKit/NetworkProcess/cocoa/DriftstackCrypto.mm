@@ -22,6 +22,7 @@
 #import <dlfcn.h>
 #import <stdlib.h>
 #import <string.h>
+#import <string>
 #import <wtf/Assertions.h>
 
 // Wave 29-499.294 — Apple CommonCrypto GCM oneshot SPI (private on macOS,
@@ -245,7 +246,16 @@ bool driftstackCryptoInit()
         // Wave 29-499.218 — MLKEM768 from libwebrtc.dylib (re-exported via .217)
         // Try multiple dlopen paths since libwebrtc is loaded transitively
         void* webrtcH = dlopen("libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
-        if (!webrtcH) webrtcH = dlopen("/Users/john/code/webkit-driftstack/WebKitBuild/Release/libwebrtc.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!webrtcH) {
+            // V-211: the dev build-products dir derives from the environment
+            // (DRIFTSTACK_BUILD_DIR, else $HOME/code/webkit-driftstack/
+            // WebKitBuild/Release) instead of a hardcoded build-machine home.
+            const char* dir = getenv("DRIFTSTACK_BUILD_DIR");
+            const char* home = getenv("HOME");
+            std::string p = (dir && *dir) ? std::string(dir) : std::string(home ? home : "") + "/code/webkit-driftstack/WebKitBuild/Release";
+            p += "/libwebrtc.dylib";
+            webrtcH = dlopen(p.c_str(), RTLD_NOW | RTLD_GLOBAL);
+        }
         if (webrtcH) {
             f.mlkem768_generate_key = reinterpret_cast<decltype(f.mlkem768_generate_key)>(dlsym(webrtcH, "MLKEM768_generate_key"));
             f.mlkem768_decap = reinterpret_cast<decltype(f.mlkem768_decap)>(dlsym(webrtcH, "MLKEM768_decap"));

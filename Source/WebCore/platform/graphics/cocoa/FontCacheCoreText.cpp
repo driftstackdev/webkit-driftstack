@@ -541,7 +541,18 @@ static void initializeDriftstackIOSFontMapIfNeeded()
     driftstackIOSFontMapInitialized = true;
 
     const char* envDir = getenv("DRIFTSTACK_FONTS_DIR");
-    std::string root = envDir ? envDir : "/Users/john/code/driftstack-fonts/iphone16pro-ios26.4.1";
+    // V-211: the dev-default fonts dir derives from the environment
+    // (DRIFTSTACK_FONTS_ROOT, else $HOME/code/driftstack-fonts) instead of a
+    // hardcoded build-machine home directory.
+    std::string root;
+    if (envDir)
+        root = envDir;
+    else {
+        const char* fontsRoot = getenv("DRIFTSTACK_FONTS_ROOT");
+        const char* home = getenv("HOME");
+        root = (fontsRoot && *fontsRoot) ? std::string(fontsRoot) : std::string(home ? home : "") + "/code/driftstack-fonts";
+        root += "/iphone16pro-ios26.4.1";
+    }
 
     struct stat st;
     if (stat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {

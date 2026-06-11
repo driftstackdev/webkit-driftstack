@@ -40,6 +40,7 @@
 #import <mach/machine.h>
 #import <pal/spi/cocoa/ServersSPI.h>
 #import <spawn.h>
+#import <string>
 #import <sys/param.h>
 #import <sys/stat.h>
 #import <wtf/BlockPtr.h>
@@ -588,7 +589,16 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Path is constructed from the WebKit build dir + the dylib
             // target name (DriftstackQuicInterpose); when Slice 16.4.b.5.b
             // adds the target, the dylib lands here.
-            const char* dylibPath = "/Users/john/code/webkit-driftstack/WebKitBuild/Release/libDriftstackQuicInterpose.dylib";
+            // V-211: the dev build-products dir derives from the environment
+            // (DRIFTSTACK_BUILD_DIR, else $HOME/code/webkit-driftstack/
+            // WebKitBuild/Release) instead of a hardcoded build-machine home.
+            static const char* dylibPath = [] {
+                const char* dir = getenv("DRIFTSTACK_BUILD_DIR");
+                const char* home = getenv("HOME");
+                std::string p = (dir && *dir) ? std::string(dir) : std::string(home ? home : "") + "/code/webkit-driftstack/WebKitBuild/Release";
+                p += "/libDriftstackQuicInterpose.dylib";
+                return strdup(p.c_str());
+            }();
             if (access(dylibPath, R_OK) == 0) {
                 const char* existing = getenv("DYLD_INSERT_LIBRARIES");
                 String combined;

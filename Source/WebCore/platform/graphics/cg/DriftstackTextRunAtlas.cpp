@@ -36,6 +36,18 @@
 namespace WebCore {
 
 #if PLATFORM(DRIFTSTACK)
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+static const char* textRunAtlasDefaultPath(const char* relative)
+{
+    const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+    const char* home = std::getenv("HOME");
+    std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+    p += relative;
+    return ::strdup(p.c_str());
+}
+
 // TD-V-NNN-J.1 (wave 29-222 founder-approved 2026-05-15): scan
 // reference/ for archetype-suffixed atlas files and pick the matching
 // one by runtime archetype.
@@ -58,8 +70,10 @@ static std::string resolveArchetypeAtlasPath()
         return {};
 
     const char* dir = std::getenv("DRIFTSTACK_REFERENCE_DIR");
-    if (!dir || !*dir)
-        dir = "/Users/john/code/driftstack/reference";
+    if (!dir || !*dir) {
+        static const char* defaultDir = textRunAtlasDefaultPath("/reference");
+        dir = defaultDir;
+    }
 
     DIR* d = ::opendir(dir);
     if (!d)
@@ -126,8 +140,10 @@ bool DriftstackTextRunAtlas::loadFromFile(const char* path)
         archetypeOwned = resolveArchetypeAtlasPath();
         if (!archetypeOwned.empty()) resolved = archetypeOwned.c_str();
     }
-    if (!resolved)
-        resolved = "/Users/john/code/driftstack/reference/driftstack_text_run_atlas_v1.bin";
+    if (!resolved) {
+        static const char* legacyDefault = textRunAtlasDefaultPath("/reference/driftstack_text_run_atlas_v1.bin");
+        resolved = legacyDefault;
+    }
 
     bool diag = std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") != nullptr;
     int fd = ::open(resolved, O_RDONLY);

@@ -7,7 +7,10 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -17,7 +20,20 @@
 namespace WebCore {
 
 namespace {
-const char* kWebGPUAtlasDefaultPath = "/Users/john/code/driftstack/reference/driftstack_webgpu_atlas/driftstack-webgpu-atlas.bin";
+// V-211: the dev-default data path derives from the environment
+// (DRIFTSTACK_DATA_ROOT, else $HOME/code/driftstack) instead of a hardcoded
+// build-machine home directory. One-time strdup, process lifetime.
+const char* webgpuAtlasDefaultPath()
+{
+    static const char* path = [] {
+        const char* root = std::getenv("DRIFTSTACK_DATA_ROOT");
+        const char* home = std::getenv("HOME");
+        std::string p = (root && *root) ? std::string(root) : std::string(home ? home : "") + "/code/driftstack";
+        p += "/reference/driftstack_webgpu_atlas/driftstack-webgpu-atlas.bin";
+        return ::strdup(p.c_str());
+    }();
+    return path;
+}
 constexpr uint8_t kWebGPUAtlasMagic[4] = { 'D', 'S', 'W', 'A' };
 constexpr uint16_t kWebGPUAtlasVersion = 1;
 constexpr size_t kWebGPUAtlasHeaderBytes = 32;
@@ -47,7 +63,7 @@ DriftstackWebGPUAtlas::~DriftstackWebGPUAtlas()
 void DriftstackWebGPUAtlas::mapAtlas()
 {
     const char* envPath = getenv("DRIFTSTACK_WEBGPU_ATLAS_PATH");
-    const char* path = envPath ? envPath : kWebGPUAtlasDefaultPath;
+    const char* path = envPath ? envPath : webgpuAtlasDefaultPath();
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
