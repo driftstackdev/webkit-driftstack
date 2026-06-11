@@ -544,6 +544,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // required for h2 connection pooling (the session adopts the custom-TLS
             // connection). Forward (unprefixed) so production NetworkProcess sees it.
             { "DRIFTSTACK_PATHB_V2_CUSTOM_TLS", getenv("DRIFTSTACK_PATHB_V2_CUSTOM_TLS") },
+            // W2200: server-cert validation gate (DriftstackTLS13Client SecTrust,
+            // W2191). The TLS client runs in the NetworkProcess, which does NOT get
+            // the __XPC_ mirror (that reaches WebContent/GPU) — so this MUST be in
+            // the explicit dsEnv[] list, exactly like PATHB_V2_CUSTOM_TLS above, or
+            // the founder's launch-env flip silently never reaches getenv() and the
+            // MITM defense stays off in production.
+            { "DRIFTSTACK_PATHB_TLS_CERT_VALIDATE", getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
