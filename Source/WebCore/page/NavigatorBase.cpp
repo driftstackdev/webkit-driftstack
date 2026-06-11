@@ -150,11 +150,18 @@ String NavigatorBase::vendorSub()
 String NavigatorBase::language()
 {
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-397 D#8 Tier A #3: prefer DriftstackArchetypeConfig::
-    // singleton().lang() when loaded — per-archetype constant locale
-    // regardless of Mac fleet host's system locale. Eliminates fleet-
-    // host-dependent variance in navigator.language (otherwise reflects
-    // NSLocale.preferredLanguages which differs per host).
+    // W2154: when geo-locale sets DRIFTSTACK_APPLELANGUAGES (proxy-exit-IP-
+    // derived; §91.F seeds the WTF preferredLanguagesOverride from it),
+    // navigator.language MUST follow it so it matches Intl.locale +
+    // Accept-Language (which already do) — a non-en proxy must NOT report a
+    // geo↔language mismatch (W2153). defaultLanguage() returns that
+    // deterministic override when set.
+    if (const char* appleLangs = getenv("DRIFTSTACK_APPLELANGUAGES"); appleLangs && appleLangs[0])
+        return defaultLanguage();
+    // Wave 29-397 D#8 Tier A #3: NO geo override (no APPLELANGUAGES) — prefer
+    // DriftstackArchetypeConfig::singleton().lang() so navigator.language is a
+    // per-archetype constant, not the Mac fleet host's NSLocale (per-host
+    // variance). This is the FALLBACK for the no-geo case only.
     if (auto& cfg = DriftstackArchetypeConfig::singleton(); cfg.isLoaded()) {
         if (auto lang = cfg.lang(); !lang.isEmpty())
             return lang;
@@ -166,10 +173,12 @@ String NavigatorBase::language()
 Vector<String> NavigatorBase::languages()
 {
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-397 D#8 Tier A #3: mirror Config wiring for languages
-    // array. Real iPhone Safari typically returns a single-element
-    // array with the primary language; same for the fleet under
-    // Config-archetype consistency.
+    // W2154: mirror language() — geo-derived APPLELANGUAGES wins over the static
+    // archetype lang so navigator.languages is coherent with Intl/Accept-Language
+    // for non-en proxies (W2153). Single-element by design (privacy).
+    if (const char* appleLangs = getenv("DRIFTSTACK_APPLELANGUAGES"); appleLangs && appleLangs[0])
+        return { defaultLanguage() };
+    // Wave 29-397 D#8 Tier A #3: no-geo fallback — per-archetype constant.
     if (auto& cfg = DriftstackArchetypeConfig::singleton(); cfg.isLoaded()) {
         if (auto lang = cfg.lang(); !lang.isEmpty())
             return { lang };
