@@ -13,6 +13,8 @@
 #import "DriftstackCustomTLS.h"
 #import "DriftstackTLS13.h"
 #import "DriftstackCrypto.h"
+#import <Security/Security.h>
+#import <wtf/RetainPtr.h>
 #import <wtf/text/MakeString.h>
 #import <wtf/HexNumber.h>
 
@@ -655,6 +657,63 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         }
                     }
                     e += elen;
+                }
+            }
+
+            // W2191 (#43): server-cert chain validation. The PathB-v2 custom TLS
+            // client did the crypto handshake but never validated the server cert
+            // chain/hostname against the system trust store → it accepted a
+            // self-signed cert (MITM exposure, W2108). Gated DRIFTSTACK_PATHB_TLS_
+            // CERT_VALIDATE=1 (default-off for safe rollout; flip on after egress
+            // verifies legit certs pass). Parses the TLS 1.3 Certificate message
+            // (1B ctx_len + ctx + 3B list_len + [3B cert_len + DER + 2B ext_len + ext]*)
+            // and rejects the connection unless SecTrust evaluates the chain clean
+            // for m_sniHostname.
+            if (hsType == 0x0b) {
+                static const bool s_validateCert = []() {
+                    const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                    return e && e[0] == '1';
+                }();
+                if (s_validateCert) {
+                    size_t cOff = off + 4;
+                    if (cOff >= plaintext.size()) { m_errorMessage = "cert msg too short"_s; return false; }
+                    uint8_t ctxLen = plaintext[cOff];
+                    cOff += 1 + static_cast<size_t>(ctxLen);
+                    if (cOff + 3 > plaintext.size()) { m_errorMessage = "cert msg ctx OOB"_s; return false; }
+                    uint32_t listLen = (static_cast<uint32_t>(plaintext[cOff]) << 16) | (static_cast<uint32_t>(plaintext[cOff + 1]) << 8) | plaintext[cOff + 2];
+                    cOff += 3;
+                    size_t listEnd = cOff + listLen;
+                    if (listEnd > plaintext.size()) { m_errorMessage = "cert list OOB"_s; return false; }
+                    RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+                    while (cOff + 3 <= listEnd) {
+                        uint32_t certLen = (static_cast<uint32_t>(plaintext[cOff]) << 16) | (static_cast<uint32_t>(plaintext[cOff + 1]) << 8) | plaintext[cOff + 2];
+                        cOff += 3;
+                        if (cOff + certLen > listEnd) break;
+                        RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, plaintext.span().data() + cOff, certLen));
+                        RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
+                        if (cert)
+                            CFArrayAppendValue(certArray.get(), cert.get());
+                        cOff += certLen;
+                        if (cOff + 2 > listEnd) break;
+                        uint16_t extLen = (static_cast<uint16_t>(plaintext[cOff]) << 8) | plaintext[cOff + 1];
+                        cOff += 2 + static_cast<size_t>(extLen);
+                    }
+                    if (!CFArrayGetCount(certArray.get())) { m_errorMessage = "no parseable server certs"_s; return false; }
+                    RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, m_sniHostname.createCFString().get()));
+                    SecTrustRef trust = nullptr;
+                    OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
+                    RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
+                    if (st != errSecSuccess || !trustRef) { m_errorMessage = "SecTrustCreateWithCertificates failed"_s; return false; }
+                    CFErrorRef evalErr = nullptr;
+                    bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
+                    if (evalErr)
+                        CFRelease(evalErr);
+                    if (!trusted) {
+                        m_errorMessage = makeString("server cert validation FAILED for "_s, m_sniHostname);
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] CERT VALIDATION FAILED for %s — rejecting (MITM defense)", m_sniHostname.utf8().data());
+                        return false;
+                    }
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] server cert chain validated OK for %s", m_sniHostname.utf8().data());
                 }
             }
 
