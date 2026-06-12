@@ -77,7 +77,10 @@ private:
 
     [[maybe_unused]] NetworkDataTaskCocoa& m_task;
     WebCore::ResourceRequest m_request;
-    bool m_cancelled { false };
+    // W2341 (task #58): atomic — cancel() runs on another thread while the concurrent
+    // dispatch block's read loops poll it (was a plain-bool data race; now also the
+    // cancel signal the poll-slice readers observe, see driftstackCancelAwareTlsRead).
+    std::atomic<bool> m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
     int m_attempt { 0 };  // Wave 29-499.271 — retry counter for transient TLS/H2 failures
     int m_redirectCount { 0 };  // Wave 29-499.344 — 3xx redirect-follow chain guard

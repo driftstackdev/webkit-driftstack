@@ -52,6 +52,14 @@ public:
     // Read application data. Returns bytes read; 0 on EOF; -1 on error.
     int read(uint8_t* buf, size_t maxLen);
 
+    // W2341 (task #58): wait up to timeoutMs for read() to have data without consuming
+    // any bytes (buffered plaintext OR poll(POLLIN) on the fd — record framing can't
+    // tear). Returns 1 = read() won't block on the record header, 0 = timeout (caller
+    // re-checks its cancel flag and loops), -1 = poll error. Lets a blocking read loop
+    // observe cancellation on ITS OWN thread in timeout slices — no cross-thread fd
+    // access (the W2323 TOCTOU), no change to read()'s blocking semantics.
+    int pollReadable(int timeoutMs);
+
     // Get negotiated ALPN protocol (e.g. "h2", "http/1.1").
     const String& selectedALPN() const { return m_selectedALPN; }
 

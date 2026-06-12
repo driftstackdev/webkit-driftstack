@@ -21,6 +21,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <errno.h>
+#import <poll.h>
 #import <string.h>
 #import <sys/socket.h>
 #import <sys/time.h>
@@ -532,6 +533,26 @@ int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
     memcpy(buf, m_readBuffer.span().data(), n);
     m_readBuffer.removeAt(0, n);
     return static_cast<int>(n);
+}
+
+int DriftstackTLS13Client::pollReadable(int timeoutMs)
+{
+    // W2341 (task #58): buffered decrypted plaintext → read() returns immediately.
+    if (!(m_isTLS12 ? m_t12ReadBuffer.isEmpty() : m_readBuffer.isEmpty()))
+        return 1;
+    if (m_fd < 0)
+        return -1;
+    // poll() consumes nothing, so timing out here can never tear TLS record framing
+    // (the hazard of an SO_RCVTIMEO that fires mid-record inside readExact()).
+    struct pollfd pfd { .fd = m_fd, .events = POLLIN, .revents = 0 };
+    int r = ::poll(&pfd, 1, timeoutMs);
+    if (r > 0)
+        return 1;  // readable (incl. HUP/ERR — read() surfaces the actual condition)
+    if (r == 0)
+        return 0;  // timeout tick — caller re-checks its cancel flag and loops
+    if (errno == EINTR)
+        return 0;  // treat as a tick, not an error
+    return -1;
 }
 
 void DriftstackTLS13Client::shutdown()

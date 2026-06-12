@@ -812,6 +812,38 @@ static String driftstackPathBAcceptEncoding()
     return "gzip, deflate, br, zstd"_s;  // Safari >=26.3 (incl the 26.4 launch) + default
 }
 
+// W2341 (task #58, design W2323): cancel-aware read adapter for the PathB custom-TLS transports.
+// cancel() runs on another thread and must NOT touch the fd (it's owned by this dispatch block;
+// a cross-thread shutdown() is a TOCTOU against the block's concurrent close — a closed+reused fd
+// would shut down an UNRELATED connection). So cancellation is observed by the READING thread
+// itself: pollReadable() waits in 1s slices (poll consumes no bytes → record framing can't tear)
+// and re-checks m_cancelled on every timeout tick. A cancelled request returns -1 = transport
+// error → the h2 engine unwinds → the block exits → its thread + fd are reclaimed. Previously an
+// idle-SSE cancel (or a hung server) parked recv() FOREVER and leaked both — gradual resource
+// exhaustion on a long-running node once PathB-v2 is activated.
+struct DriftstackCancelAwareTls {
+    DriftstackTLS13Client* tls;
+    const std::atomic<bool>* cancelled;
+};
+static int driftstackCancelAwareTlsRead(void* ctxIn, uint8_t* buf, size_t n)
+{
+    auto* ctx = static_cast<DriftstackCancelAwareTls*>(ctxIn);
+    for (;;) {
+        if (ctx->cancelled->load(std::memory_order_relaxed))
+            return -1;
+        int r = ctx->tls->pollReadable(1000);
+        if (r > 0)
+            return ctx->tls->read(buf, n);
+        if (r < 0)
+            return -1;
+        // r == 0: timeout tick → loop re-checks cancelled
+    }
+}
+static int driftstackCancelAwareTlsWrite(void* ctxIn, const uint8_t* buf, size_t n)
+{
+    return static_cast<DriftstackCancelAwareTls*>(ctxIn)->tls->write(buf, n);
+}
+
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
 // (pseudo-header order m,s,a,p + canonical real-header order + cookies + cache-
 // validation stripping). Shared by the one-shot path AND the pooled session
@@ -1715,14 +1747,13 @@ void DriftstackNetworkLoader::resume()
 
                     DriftstackHttp2Response sseResp;
                     if (customTLSClient) {
+                        // W2341 (task #58): cancel-aware reads — an idle SSE stream cancelled
+                        // mid-wait must unblock within one poll slice (was: leaked thread+fd).
                         DriftstackHttp2Transport sseTransport;
-                        sseTransport.ctx = customTLSClient.get();
-                        sseTransport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
-                            return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
-                        };
-                        sseTransport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
-                            return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
-                        };
+                        DriftstackCancelAwareTls sseTlsCtx { customTLSClient.get(), &m_cancelled };
+                        sseTransport.ctx = &sseTlsCtx;
+                        sseTransport.readFn = driftstackCancelAwareTlsRead;
+                        sseTransport.writeFn = driftstackCancelAwareTlsWrite;
                         sseResp = driftstackHttp2ExecuteVia(sseTransport, h2req);
                         customTLSClient.reset();
                     } else {
@@ -1769,14 +1800,13 @@ void DriftstackNetworkLoader::resume()
                     h2resp.errorMessage = "h2 session adopt/create failed"_s;
                 }
             } else if (customTLSClient) {
+                // W2341 (task #58): cancel-aware reads (see driftstackCancelAwareTlsRead) —
+                // a slow/hung server can otherwise park this block in recv() past cancel().
                 DriftstackHttp2Transport transport;
-                transport.ctx = customTLSClient.get();
-                transport.readFn = [](void* ctx, uint8_t* buf, size_t n) -> int {
-                    return reinterpret_cast<DriftstackTLS13Client*>(ctx)->read(buf, n);
-                };
-                transport.writeFn = [](void* ctx, const uint8_t* buf, size_t n) -> int {
-                    return reinterpret_cast<DriftstackTLS13Client*>(ctx)->write(buf, n);
-                };
+                DriftstackCancelAwareTls tlsCtx { customTLSClient.get(), &m_cancelled };
+                transport.ctx = &tlsCtx;
+                transport.readFn = driftstackCancelAwareTlsRead;
+                transport.writeFn = driftstackCancelAwareTlsWrite;
                 h2resp = driftstackHttp2ExecuteVia(transport, h2req);
             } else {
                 h2resp = driftstackHttp2Execute(ssl, h2req);
@@ -2032,9 +2062,19 @@ _Pragma("clang diagnostic pop")
             }
             // Connection: close (set above) → server closes after the full response;
             // read() returns <= 0 on close_notify / FIN, terminating the loop.
+            // W2341 (task #58): poll in 1s slices + re-check m_cancelled so a cancel
+            // mid-response (or a server that never closes) can't park this block in
+            // recv() forever (the thread+fd leak). On cancel the partial response is
+            // discarded by the m_cancelled guards downstream.
             NSMutableData* respMutable = [NSMutableData data];
             uint8_t readBuf[4096];
             while (true) {
+                int pr = customTLSClient->pollReadable(1000);
+                if (pr == 0) {
+                    if (m_cancelled) break;
+                    continue;
+                }
+                if (pr < 0) break;
                 int n = customTLSClient->read(readBuf, sizeof(readBuf));
                 if (n <= 0) break;
                 [respMutable appendBytes:readBuf length:static_cast<NSUInteger>(n)];
