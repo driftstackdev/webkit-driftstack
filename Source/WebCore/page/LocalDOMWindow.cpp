@@ -1313,10 +1313,14 @@ bool LocalDOMWindow::offscreenBuffering() const
 int LocalDOMWindow::outerHeight() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // V-074: archetype iPhone 16 Pro / iOS 18.7 Safari 26.4: outer = full screen
-    // height in CSS pixels (874). MiniBrowser's actual NSWindow height on
-    // Mac is unrelated to iPhone — match reference unconditionally.
-    return 874;
+    // V-074 + W2265: on a real iPhone the web view is full-screen, so outerHeight
+    // === screen.height. Derive from the archetype Config (same source + fallback as
+    // Screen::height()) so the multi-model matrix stays coherent — a hardcoded 874
+    // would mismatch screen.height for any non-402x874 archetype (an outer/screen
+    // incoherence tell). MiniBrowser's actual NSWindow height on Mac is unrelated.
+    if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
+        return h;
+    return 874;  // iPhone 17 / 16 Pro portrait fallback when Config not loaded
 #else
     RefPtr frame = this->frame();
     if (!frame)
@@ -1348,8 +1352,13 @@ int LocalDOMWindow::outerHeight() const
 int LocalDOMWindow::outerWidth() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // V-074: archetype iPhone 16 Pro outer width = 402 CSS pixels (matches screen.width).
-    return 402;
+    // V-074 + W2265: outerWidth === screen.width on a full-screen iPhone web view.
+    // Derive from the archetype Config (same source + fallback as Screen::width()) so
+    // every matrix model stays coherent; a hardcoded 402 would mismatch screen.width
+    // for any non-402-wide archetype.
+    if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+        return w;
+    return 402;  // iPhone 17 / 16 Pro portrait fallback when Config not loaded
 #else
     RefPtr frame = this->frame();
     if (!frame)
