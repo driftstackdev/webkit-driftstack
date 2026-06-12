@@ -98,6 +98,9 @@ static const int testFooterBannerHeight = 58;
 @interface WK2BrowserWindowController () <NSTextFinderBarContainer, _WKFindDelegate, NSSearchFieldDelegate, WKNavigationDelegate, WKUIDelegate, WKUIDelegatePrivate, _WKIconLoadingDelegate>
 - (void)driftActivateWebView:(WKWebView *)webView;
 - (void)driftRunTabsSelfTest;
+- (void)driftToggleTabOverview:(id)sender;
+- (void)driftSelectTab:(NSButton *)sender;
+- (void)driftOverviewNewTab:(id)sender;
 @end
 
 // Driftstack: multi-tab MODEL for the iOS-26 chrome (gated DRIFTSTACK_SAFARI_CHROME) — the (B)
@@ -221,6 +224,7 @@ static const int testFooterBannerHeight = 58;
     WKWebView *_webView;                  // ALWAYS the active tab (DriftstackTabManager keeps it aimed here)
     DriftstackTabManager *_tabManager;    // Driftstack iOS-26 chrome multi-tab model (gated)
     __weak WKWebView *_driftWiredWebView; // the tab currently carrying the shared chrome wiring (KVO/bindings/delegates)
+    NSView *_driftTabOverlay;             // the iOS-style tab-overview overlay (nil when closed)
     BOOL _zoomTextOnly;
     BOOL _isPrivateBrowsingWindow;
 
@@ -290,6 +294,94 @@ static const int testFooterBannerHeight = 58;
     [self updateTextFieldFromURL:webView.URL];
     [self updateTitle:webView.title];
     [self updateLockButtonIcon:webView.hasOnlySecureContent];
+
+    // W1397: re-point the text finder at the active tab — find-on-page must search the VISIBLE tab,
+    // not whichever tab was active when the finder was first created (W1391 follow-gap). No-op until
+    // the find bar is first used (`_textFinder` lazily created in `_showFindBar`).
+    if (_textFinder)
+        _textFinder.client = webView;
+}
+
+// Driftstack: the iOS-style TAB OVERVIEW (B2) — toggled by the bottom-bar tabs button. A full-content
+// glass overlay listing the open tabs as cards (title + URL), tap a card to switch, "+ New Tab" to open
+// one. Gated DRIFTSTACK_SAFARI_CHROME (the bar that hosts the button is too). Cards show text now;
+// snapshot thumbnails are a later polish. All tab state comes from the DriftstackTabManager; switching
+// reuses -driftActivateWebView: (the W1390 engine), so the chrome + content follow correctly.
+- (void)driftToggleTabOverview:(id)sender
+{
+    if (_driftTabOverlay) {            // toggle closed
+        [_driftTabOverlay removeFromSuperview];
+        _driftTabOverlay = nil;
+        return;
+    }
+    NSView *content = self.window.contentView;
+    if (!content || !_tabManager)
+        return;
+
+    NSVisualEffectView *overlay = [[NSVisualEffectView alloc] initWithFrame:content.bounds];
+    overlay.material = NSVisualEffectMaterialHUDWindow;
+    overlay.state = NSVisualEffectStateActive;                       // never greys (same always-active rule as the bar)
+    overlay.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+    overlay.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+    CGFloat W = content.bounds.size.width, H = content.bounds.size.height;
+    NSTextField *titleLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"%lu Tab%@",
+                                                            (unsigned long)_tabManager.count,
+                                                            _tabManager.count == 1 ? @"" : @"s"]];
+    titleLabel.font = [NSFont boldSystemFontOfSize:20];
+    titleLabel.alignment = NSTextAlignmentCenter;
+    titleLabel.frame = NSMakeRect(0, H - 56, W, 28);
+    titleLabel.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    [overlay addSubview:titleLabel];
+
+    NSColor *oxblood = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
+    const CGFloat cardH = 60, gap = 12, sideMargin = 24;
+    CGFloat y = H - 56 - 24 - cardH;
+    for (NSInteger i = 0; i < (NSInteger)_tabManager.count; i++) {
+        WKWebView *wv = [_tabManager webViewAtIndex:i];
+        NSString *t = wv.title.length ? wv.title : (wv.URL.absoluteString.length ? wv.URL.absoluteString : @"New Tab");
+        NSButton *card = [NSButton buttonWithTitle:t target:self action:@selector(driftSelectTab:)];
+        card.tag = i;
+        card.bezelStyle = NSBezelStyleRegularSquare;
+        card.frame = NSMakeRect(sideMargin, y, W - 2 * sideMargin, cardH);
+        card.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+        card.wantsLayer = YES;
+        card.layer.cornerRadius = 12;
+        card.layer.borderWidth = (i == _tabManager.activeIndex) ? 2.0 : 0.0;   // highlight the active tab
+        card.layer.borderColor = oxblood.CGColor;
+        card.contentTintColor = (i == _tabManager.activeIndex) ? oxblood : nil;
+        [overlay addSubview:card];
+        y -= (cardH + gap);
+    }
+
+    NSButton *plus = [NSButton buttonWithTitle:@"+  New Tab" target:self action:@selector(driftOverviewNewTab:)];
+    plus.frame = NSMakeRect(sideMargin, 28, W - 2 * sideMargin, 44);
+    plus.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    plus.contentTintColor = oxblood;
+    [overlay addSubview:plus];
+
+    [content addSubview:overlay positioned:NSWindowAbove relativeTo:nil];
+    _driftTabOverlay = overlay;
+}
+
+- (void)driftSelectTab:(NSButton *)sender
+{
+    WKWebView *wv = [_tabManager switchToIndex:sender.tag];
+    if (wv)
+        [self driftActivateWebView:wv];
+    [self driftToggleTabOverview:nil];   // dismiss the overview
+}
+
+- (void)driftOverviewNewTab:(id)sender
+{
+    WKWebView *wv = [[WKWebView alloc] initWithFrame:[containerView bounds] configuration:_configuration];
+    [wv setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    wv.hidden = YES;
+    [containerView addSubview:wv];
+    [_tabManager addTab:wv];
+    [self driftActivateWebView:wv];
+    [wv loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"about:blank"]]];
+    [self driftToggleTabOverview:nil];   // dismiss → reveal the fresh tab
 }
 
 // Driftstack (gated DRIFTSTACK_TABS_SELFTEST): deterministic, screenshot-verifiable exercise of the
@@ -310,11 +402,19 @@ static const int testFooterBannerHeight = 58;
         [tabB loadHTMLString:@"<html><body style=\"font:48px -apple-system;padding:40px;color:#722F37\">DRIFTSTACK TAB B</body></html>" baseURL:[NSURL URLWithString:@"https://tab-b.driftstack.test/"]];
         NSLog(@"[Driftstack/MiniBrowser] tabs self-test: opened+activated tab B (count=%lu, active=%ld)", (unsigned long)self->_tabManager.count, (long)self->_tabManager.activeIndex);
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             WKWebView *tab0 = [self->_tabManager switchToIndex:0];
             if (tab0)
                 [self driftActivateWebView:tab0];
             NSLog(@"[Driftstack/MiniBrowser] tabs self-test: switched back to tab 0 (active=%ld)", (long)self->_tabManager.activeIndex);
+
+            // Phase 3 (W1397): open the tab OVERVIEW so its card grid is screenshot-verifiable
+            // WITHOUT a click (focus/z-order-independent — the W1390 self-test pattern). Opened ~5s in
+            // (well before a standalone MiniBrowser's ~8s self-exit) so a capture lands while it's up.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [self driftToggleTabOverview:nil];
+                NSLog(@"[Driftstack/MiniBrowser] tabs self-test: opened tab overview (tabs=%lu)", (unsigned long)self->_tabManager.count);
+            });
         });
     });
 }

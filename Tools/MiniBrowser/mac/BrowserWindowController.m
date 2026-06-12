@@ -226,7 +226,22 @@
     // Row 2 (bottom of bar): back / forward on the left, share on the right (iOS toolbar row).
     if (backButton) { backButton.frame = NSMakeRect(18, 10, 34, 34); [bar addSubview:backButton]; }
     if (forwardButton) { forwardButton.frame = NSMakeRect(64, 10, 34, 34); [bar addSubview:forwardButton]; }
-    if (share) { share.frame = NSMakeRect(W - 52, 10, 34, 34); [bar addSubview:share]; }
+    if (share) { share.frame = NSMakeRect(W - 98, 10, 34, 34); [bar addSubview:share]; }
+    // W1397: iOS Safari TABS button (far-right of the toolbar row) → toggles the custom tab overview.
+    // Only shown when this controller implements the overview (the WK2 controller); NSSelectorFromString
+    // avoids an undeclared-selector warning in this base file (the action lives in WK2BrowserWindowController).
+    SEL tabsSel = NSSelectorFromString(@"driftToggleTabOverview:");
+    if ([self respondsToSelector:tabsSel]) {
+        NSButton *tabsButton = [NSButton buttonWithImage:([NSImage imageWithSystemSymbolName:@"square.on.square" accessibilityDescription:@"Tabs"]
+                                                            ?: [NSImage imageNamed:NSImageNameListViewTemplate])
+                                                  target:self action:tabsSel];
+        tabsButton.frame = NSMakeRect(W - 52, 10, 34, 34);
+        tabsButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+        tabsButton.bordered = NO;
+        tabsButton.image.template = YES;
+        tabsButton.contentTintColor = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
+        [bar addSubview:tabsButton];
+    }
     if (progressIndicator) { progressIndicator.frame = NSMakeRect(W/2 - 12, 12, 24, 24); [bar addSubview:progressIndicator]; }
 
     // Shrink the web content to sit ABOVE the bar (the nib's containerView is the webView's parent).
