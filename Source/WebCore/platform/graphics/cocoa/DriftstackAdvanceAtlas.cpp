@@ -107,6 +107,19 @@ void DriftstackAdvanceAtlas::loadAtlas()
 
     // Skip font table: each entry is { id: uint16, name_len: uint16, name (padded to 4) }
     for (uint32_t i = 0; i < fontCount; ++i) {
+        // W2305: bound the per-entry header read BEFORE dereferencing. fontCount and each
+        // nameLen come from the file, which is UNTRUSTED on corruption (disk fault / partial
+        // R2 sync / interrupted download — the atlas-bounds-guard threat model). Without this,
+        // a bad fontCount (or a nameLen that runs pos past EOF on a prior iteration) makes the
+        // `memcpy(&nameLen, base + pos, 2)` below an OOB heap read → WebContent crash. The
+        // entry-table truncation check further down guards only the ENTRIES, not this header
+        // loop. Require id(2) + nameLen(2) for THIS entry to be in-bounds.
+        if (pos + 4 > static_cast<size_t>(st.st_size)) {
+            munmap(p, st.st_size);
+            WTFLogAlways("[Driftstack-V689] advance atlas font-table truncated (pos=%zu fontIdx=%u/%u exceeds %zu)",
+                pos, i, fontCount, static_cast<size_t>(st.st_size));
+            return;
+        }
         pos += 2; // id
         uint16_t nameLen;
         memcpy(&nameLen, base + pos, 2); pos += 2;
