@@ -144,11 +144,12 @@ double VisualViewport::width() const
 double VisualViewport::height() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // V-074: visualViewport.height = 714 (innerHeight; layout viewport with URL bar).
-    // Wave 29-499 §91.B archetype split (2026-05-20 Task #91): Family A
-    // (Safari ≤26.3) returns 678 due to taller browser chrome; Family B
-    // (Safari 26.4+) returns 714. Mirrors LocalDOMWindow::innerHeight()
-    // post-meta-viewport branch.
+    // V-074 + W2275: visualViewport.height == innerHeight (verified equal on real iPhone, all
+    // models). PREFER the per-(model,Safari-version) real-device inner_height from the archetype
+    // Config (model-specific chrome — W2274); fall back to the Safari-version-keyed 678/714 when
+    // the Config doesn't carry it. Mirrors LocalDOMWindow::innerHeight() exactly.
+    if (auto ih = DriftstackArchetypeConfig::singleton().innerHeight(); ih > 0)
+        return static_cast<double>(ih);
     static double s_height = []() -> double {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype || !archetype[0])

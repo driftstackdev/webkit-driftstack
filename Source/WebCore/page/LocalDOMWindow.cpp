@@ -1423,10 +1423,14 @@ int LocalDOMWindow::innerHeight() const
             return s_legacyHeight;
         }
     }
-    // Wave 29-499 §91.B (2026-05-20 Task #91): meta-viewport-with-default-
-    // chrome path archetype split. Empirical n=3 BS iPhone 16 Pro Safari 18.6
-    // returns 678 (taller Safari chrome). Family B (Safari 26.4+) returns 714
-    // (slimmer chrome). Mirrors VisualViewport::height archetype branch.
+    // Wave 29-499 §91.B + W2275: meta-viewport-with-default-chrome visible height. PREFER the
+    // per-(model,Safari-version) real-device inner_height from the archetype Config (mirrors how
+    // the widths read screenWidth) — the chrome height is MODEL-specific (W2274: iphone14=699,
+    // iphone17=714, iphone17promax=796), so the Safari-only 678/714 split mismatched non-iphone17
+    // models. Fall back to the Safari-version-keyed 678/714 only when the Config doesn't carry
+    // inner_height (un-populated matrix models — no regression vs the prior behavior).
+    if (auto ih = DriftstackArchetypeConfig::singleton().innerHeight(); ih > 0)
+        return ih;
     static int s_metaViewportHeight = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype || !archetype[0])

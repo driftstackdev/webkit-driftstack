@@ -166,6 +166,7 @@ bool DriftstackArchetypeConfig::parseJSON(const String& jsonText)
             m_deviceClass = getString(*device, "device_class"_s);
             m_screenWidth = getInt(*device, "screen_width"_s);
             m_screenHeight = getInt(*device, "screen_height"_s);
+            m_innerHeight = getInt(*device, "inner_height"_s);
             m_devicePixelRatio = getDouble(*device, "device_pixel_ratio"_s);
             m_hardwareConcurrency = getInt(*device, "hardware_concurrency"_s);
             m_memoryGB = getInt(*device, "memory_gb"_s);

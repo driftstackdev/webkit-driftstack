@@ -61,6 +61,7 @@ public:
     String deviceClass() const { return m_deviceClass; }    // e.g. "phone"
     int screenWidth() const { return m_screenWidth; }       // CSS px
     int screenHeight() const { return m_screenHeight; }     // CSS px
+    int innerHeight() const { return m_innerHeight; }       // CSS px, meta-viewport visible height (chrome-adjusted); 0 = Safari-version fallback (W2275)
     double devicePixelRatio() const { return m_devicePixelRatio; }
     int hardwareConcurrency() const { return m_hardwareConcurrency; }
     int memoryGB() const { return m_memoryGB; }
@@ -140,6 +141,7 @@ private:
     String m_deviceClass;
     int m_screenWidth { 0 };
     int m_screenHeight { 0 };
+    int m_innerHeight { 0 };
     double m_devicePixelRatio { 0.0 };
     int m_hardwareConcurrency { 0 };
     int m_memoryGB { 0 };
