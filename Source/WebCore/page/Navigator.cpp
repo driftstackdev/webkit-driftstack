@@ -334,7 +334,19 @@ void Navigator::initializePluginAndMimeTypeArrays()
         return;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // Real iOS Safari shows PDFs inline → navigator.pdfViewerEnabled = true and navigator.plugins
+    // returns the 5 spec-mandated dummy PDF plugins (HTML §8.9.1.6). Force it host-INDEPENDENTLY:
+    // the host path below (canShowMIMEType "application/pdf") reflects the fleet WebKit build's PDF
+    // support (PDFKit / unified-PDF) — a build that disables it would silently flip pdfViewerEnabled
+    // to false + empty navigator.plugins/mimeTypes = an instant iPhone tell. The dummy-plugin
+    // population that follows uses PluginData::dummyPDFPluginInfo(), so it needs no real host plugin
+    // and yields the exact iPhone-Safari plugin set regardless of the fleet build. (Host-read guard
+    // class — same pattern as hardwareConcurrency/platform/colorDepth per W2227.)
+    m_pdfViewerEnabled = true;
+#else
     m_pdfViewerEnabled = frame->loader().client().canShowMIMEType("application/pdf"_s);
+#endif
     if (!m_pdfViewerEnabled) {
         m_plugins = DOMPluginArray::create(*this);
         m_mimeTypes = DOMMimeTypeArray::create(*this);
