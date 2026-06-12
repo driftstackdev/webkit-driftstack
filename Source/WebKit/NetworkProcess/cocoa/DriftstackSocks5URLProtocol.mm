@@ -271,6 +271,19 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     // SOCKS5 proxy (proxy returns REP=0x03 'Network unreachable').
     // Matches iPhone Safari behavior — iOS bypasses VPN/proxy for
     // private-RFC1918 + loopback by default.
+    //
+    // ⚠️ SSRF / TENANT-ISOLATION (W2422, founder-gated task #68 — surfaced+ACKed by A3 W1828):
+    // returning NO here routes loopback/RFC1918 DIRECT via CFNetwork. On a real iPhone that reaches
+    // the user's own device (harmless); on the FLEET 127.0.0.1/RFC1918 is SHARED HOST INFRA (other
+    // WebContent sessions, the harness control plane). The mDNSResponder-deny backstop blocks DNS,
+    // NOT a loopback connect (no DNS needed; sandbox `(allow network* (local tcp))` is unconditional),
+    // so a loopback connect likely SUCCEEDS — a cross-tenant SSRF if the harness nav filter is bypassed
+    // (in-page redirect/fetch/subframe — these skip the harness entirely, per A3 W1828). The harness
+    // (isAllowedNavigateURL, W1356/W1828) is necessary-but-NOT-sufficient. The load-bearing fix is
+    // FORK-side + founder-locked (egress "crash-loud-not-leak" lock 2026-05-17): when the custom SOCKS5
+    // is active (production), REJECT loopback/RFC1918 here instead of direct-connecting, + a production
+    // `(deny network-outbound)` for loopback in NetworkProcess.sb.in — dev (DIRECT_BROWSE / no custom
+    // SOCKS5) keeps the bypass for the checker-server. DO NOT extend this bypass list without that fix.
     NSString *host = url.host.lowercaseString;
     if ([host isEqualToString:@"localhost"]
         || [host hasPrefix:@"127."]
