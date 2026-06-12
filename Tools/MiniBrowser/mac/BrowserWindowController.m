@@ -79,7 +79,12 @@
     // layout-viewport math below is DYNAMIC (measures the actual chrome at runtime) so it self-corrects
     // to the new chrome height — clientHeight==innerHeight stays correct (the file-99 fingerprint).
     if (getenv("DRIFTSTACK_SAFARI_CHROME")) {
-        self.window.titlebarAppearsTransparent = YES;
+        // W1375: do NOT make the titlebar transparent yet — verified by screenshot (W1375) that a
+        // transparent titlebar lets the web content show THROUGH under the floating toolbar (the page
+        // top overlaps the controls). Keep the titlebar OPAQUE; W1371's always-active appearance already
+        // stops the greying, so an opaque always-active titlebar = no grey + no overlap + no traffic
+        // lights. The translucent Safari-26 GLASS look (which wants transparency) needs proper
+        // web-content insetting below the bar — deferred to the glass-styling phase.
         self.window.titleVisibility = NSWindowTitleHidden;
         [self.window standardWindowButton:NSWindowCloseButton].hidden = YES;
         [self.window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
