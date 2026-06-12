@@ -60,10 +60,16 @@ HashMap<String, Inspector::RemoteInspectorConnectionClient::CallHandler>& Sessio
 
 void SessionHost::sendWebInspectorEvent(const String& event)
 {
-    if (!m_clientID)
+    // Capture the optional ONCE: a concurrent didClose() resets m_clientID to std::nullopt, and the
+    // engine builds -fno-exceptions, so a check-then-`.value()` (with the reset landing between the
+    // two) would ABORT with bad_optional_access — the SAME crash class as
+    // HTTPRequestHandler::sendResponse (13b0286985, the founder-#1 manual-touch crash). Capturing +
+    // checking the local makes the send race-safe regardless of a disconnect mid-call.
+    auto clientID = m_clientID;
+    if (!clientID)
         return;
 
-    send(m_clientID.value(), byteCast<uint8_t>(event.utf8().span()));
+    send(*clientID, byteCast<uint8_t>(event.utf8().span()));
 }
 
 #if PLATFORM(WIN)
