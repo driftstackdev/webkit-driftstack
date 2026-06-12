@@ -208,10 +208,11 @@
 
     CGFloat W = cb.size.width;
     // Row 1 (top of bar): the URL "pill" with the lock at its left + reload at its right.
-    if (lockButton) { lockButton.frame = NSMakeRect(12, barH - 40, 28, 28); [bar addSubview:lockButton]; }
+    // W1402 (founder): the standalone lock button is removed — its meaning ("HTTPS") wasn't clear and
+    // iOS Safari doesn't show a separate lock control. The URL pill takes the freed width.
     if (urlText) {
         // W1385: a clean iOS-Safari URL "pill" — borderless, centered, a soft rounded translucent fill.
-        urlText.frame = NSMakeRect(44, barH - 44, W - 88, 34);
+        urlText.frame = NSMakeRect(14, barH - 44, W - 58, 34);   // W1402: lock removed → pill starts at the left edge
         urlText.bordered = NO;
         urlText.bezeled = NO;
         urlText.drawsBackground = NO;
@@ -226,7 +227,8 @@
     // Row 2 (bottom of bar): back / forward on the left, share on the right (iOS toolbar row).
     if (backButton) { backButton.frame = NSMakeRect(18, 10, 34, 34); [bar addSubview:backButton]; }
     if (forwardButton) { forwardButton.frame = NSMakeRect(64, 10, 34, 34); [bar addSubview:forwardButton]; }
-    if (share) { share.frame = NSMakeRect(W - 98, 10, 34, 34); [bar addSubview:share]; }
+    // W1402 (founder): Share button removed — not needed for the session browser; the tabs button is
+    // now the lone right-edge control on the toolbar row (right margin matches back's left margin).
     // W1397: iOS Safari TABS button (far-right of the toolbar row) → toggles the custom tab overview.
     // Only shown when this controller implements the overview (the WK2 controller); NSSelectorFromString
     // avoids an undeclared-selector warning in this base file (the action lives in WK2BrowserWindowController).
@@ -258,7 +260,7 @@
     // SOLE accent, reserved for actions/active states — not large fills, so the bar/pill stay neutral;
     // matches the simulator-toolbar DriftMark for brand coherence). contentTintColor on nil is a no-op.
     NSColor *oxblood = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
-    for (NSButton *b in @[backButton ?: [NSButton new], forwardButton ?: [NSButton new], reloadButton ?: [NSButton new], lockButton ?: [NSButton new], share ?: [NSButton new]]) {
+    for (NSButton *b in @[backButton ?: [NSButton new], forwardButton ?: [NSButton new], reloadButton ?: [NSButton new]]) {
         b.image.template = YES;            // contentTintColor only tints TEMPLATE images
         b.contentTintColor = oxblood;
         b.bordered = NO;                   // ensure the glyph (not a bezel) shows the tint
