@@ -1587,6 +1587,16 @@ public:
 #if ENABLE(IOS_TOUCH_EVENTS)
     Expected<bool, WebCore::RemoteFrameGeometryTransformer> dispatchTouchEvent(WebCore::FrameIdentifier, const WebTouchEvent&);
 #endif
+#if PLATFORM(DRIFTSTACK)
+    // W1405: synthesize the tap→click a real iPhone produces. The fork (Mac) injects native touch via
+    // the WebDriver automation path but has no UIKit tap-gesture recognizer, so a tap fires
+    // touchstart/touchend yet no click → buttons/links never activate (founder "taps don't act"). See
+    // the .cpp impl: on a tap's touchend (no significant move, not preventDefault'd) → hit-test +
+    // completeSyntheticClick(OneFingerTap), exactly as iOS's commitPotentialTap does.
+    void driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent&, bool touchWasHandled);
+    bool m_driftstackPotentialTap { false };
+    WebCore::DoublePoint m_driftstackTapStartPoint;
+#endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);
 

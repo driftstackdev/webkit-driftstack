@@ -4222,8 +4222,63 @@ void WebPage::touchEvent(const WebTouchEvent& touchEvent, CompletionHandler<void
 
     bool handled = handleTouchEvent(localMainFrame->frameID(), touchEvent, m_page.get()).value_or(false);
 
+#if PLATFORM(DRIFTSTACK)
+    driftstackSynthesizeTapClickIfNeeded(touchEvent, handled);
+#endif
+
     completionHandler(touchEvent.type(), handled);
 }
+
+#if PLATFORM(DRIFTSTACK)
+// W1405 (founder #1 "taps don't act"): the fork injects native touch (WebAutomationSessionMac →
+// NativeWebTouchEvent) so touchstart/touchend fire with iPhone geometry — but Mac has no UIKit
+// tap-gesture recognizer (iOS's _WKTouchEventGenerator path) to synthesize the CLICK that activates a
+// button/link. Replicate iOS's commitPotentialTap (WebPageIOS.mm): track the tap; on its touchend, if
+// the finger didn't move past the tap slop AND the page did not preventDefault the touch (a consumed
+// touch suppresses the compatibility click, matching real browsers), hit-test the point and
+// completeSyntheticClick(OneFingerTap) — firing the mousedown/mouseup/click a real iPhone tap produces.
+void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEvent, bool touchWasHandled)
+{
+    constexpr double tapSlop = 10; // px; a tap that drifts more than this is a drag/scroll, not a click
+    auto pos = touchEvent.position();
+    switch (touchEvent.type()) {
+    case WebEventType::TouchStart:
+        m_driftstackPotentialTap = true;
+        m_driftstackTapStartPoint = pos;
+        return;
+    case WebEventType::TouchMove: {
+        auto dx = pos.x() - m_driftstackTapStartPoint.x();
+        auto dy = pos.y() - m_driftstackTapStartPoint.y();
+        if (m_driftstackPotentialTap && (dx * dx + dy * dy) > tapSlop * tapSlop)
+            m_driftstackPotentialTap = false;
+        return;
+    }
+    case WebEventType::TouchEnd:
+        break;
+    default:
+        return;
+    }
+    bool wasTap = m_driftstackPotentialTap;
+    m_driftstackPotentialTap = false;
+    if (!wasTap || touchWasHandled)
+        return;
+    RefPtr localMainFrame = this->localMainFrame();
+    if (!localMainFrame)
+        return;
+    // Fire the compatibility mouse sequence (mousedown→mouseup→click) a real iPhone tap produces — the
+    // same handleMousePress/ReleaseEvent calls completeSyntheticClick makes internally, but inline (its
+    // wrapper is iOS-only). EventHandler hit-tests at the point and dispatches the click on the target,
+    // so a button/link finally activates. SyntheticClickType::OneFingerTap + ForceAtClick + UserDriven
+    // mirror a genuine tap's click (UserDriven, not Automation — no detection tell).
+    auto synthMouseEvent = [&](WebCore::PlatformEvent::Type type) {
+        return WebCore::PlatformMouseEvent { pos, pos, WebCore::MouseButton::Left, type, 1, { },
+            WTF::MonotonicTime::now(), WebCore::ForceAtClick, WebCore::SyntheticClickType::OneFingerTap,
+            WebCore::MouseEventInputSource::UserDriven };
+    };
+    localMainFrame->eventHandler().handleMousePressEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MousePressed));
+    localMainFrame->eventHandler().handleMouseReleaseEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MouseReleased));
+}
+#endif // PLATFORM(DRIFTSTACK)
 #endif
 
 void WebPage::cancelPointer(WebCore::PointerID pointerId, const WebCore::IntPoint& documentPoint)
