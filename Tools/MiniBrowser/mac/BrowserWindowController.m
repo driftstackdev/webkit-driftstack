@@ -78,7 +78,19 @@
     // greying) native URL toolbar is the next increment behind this same gate. The window-size /
     // layout-viewport math below is DYNAMIC (measures the actual chrome at runtime) so it self-corrects
     // to the new chrome height — clientHeight==innerHeight stays correct (the file-99 fingerprint).
-    if (getenv("DRIFTSTACK_SAFARI_CHROME")) {
+    // W1434b: VALUE check, not a bare presence check — a non-empty FALSY value ("0"/"false"/"no"/"off")
+    // must DISABLE the chrome (the operator sets =0 meaning OFF). The harness already normalizes the
+    // forwarded value to "1"/omitted (BrowserProcess.envFlagEnabled, W1434), so production is footgun-free;
+    // this matches that for the BARE-fork path (a direct MiniBrowser launch / the chrome-render-check
+    // oracle, whose CHROME=0 previously ran chrome-ON via the old presence check).
+    const char* driftChromeRaw = getenv("DRIFTSTACK_SAFARI_CHROME");
+    NSString *driftChromeVal = driftChromeRaw
+        ? [[NSString stringWithUTF8String:driftChromeRaw] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].lowercaseString
+        : nil;
+    BOOL driftSafariChromeOn = driftChromeVal.length > 0
+        && ![driftChromeVal isEqualToString:@"0"] && ![driftChromeVal isEqualToString:@"false"]
+        && ![driftChromeVal isEqualToString:@"no"] && ![driftChromeVal isEqualToString:@"off"];
+    if (driftSafariChromeOn) {
         // W1375: do NOT make the titlebar transparent yet — verified by screenshot (W1375) that a
         // transparent titlebar lets the web content show THROUGH under the floating toolbar (the page
         // top overlaps the controls). Keep the titlebar OPAQUE; W1371's always-active appearance already
