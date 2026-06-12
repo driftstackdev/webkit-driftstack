@@ -430,7 +430,7 @@ public:
     WEBCORE_EXPORT void scheduleMouseEventTargetUpdateAfterLayout();
     WEBCORE_EXPORT void dispatchMouseBoundaryEventsAfterFullscreenChange();
 
-    ScrollableArea* enclosingScrollableArea(Node*) const;
+    WEBCORE_EXPORT ScrollableArea* enclosingScrollableArea(Node*) const;   // W1453b: exported for the fork's native touch→scroll (WebProcess)
 
 #if PLATFORM(DRIFTSTACK)
     // V-197: AFP Layer 2 event injection scaffolding per

@@ -4268,7 +4268,7 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                     int sdx = static_cast<int>(std::lround(m_driftstackLastTouchPoint.x() - pos.x()));
                     int sdy = static_cast<int>(std::lround(m_driftstackLastTouchPoint.y() - pos.y()));
                     if (sdx || sdy)
-                        view->scrollBy(WebCore::IntSize(sdx, sdy));
+                        view->scrollBy(WebCore::IntSize(sdx, sdy));   // W1453: native MAIN-frame scroll (page-scroll, verified). Per-element overflow scrollers = W1453b, handed to A1 (the per-move hit-test over-scrolled the page alongside an inner div — scroller-lock/coordinate bug in the scrolling engine).
                 }
             }
         }
