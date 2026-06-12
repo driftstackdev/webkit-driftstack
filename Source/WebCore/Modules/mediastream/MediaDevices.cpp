@@ -433,6 +433,31 @@ void MediaDevices::enumerateDevices(EnumerateDevicesPromise&& promise)
     if (!document)
         return;
 
+#if PLATFORM(DRIFTSTACK)
+    // W2345 (host-leak-register §A row 7b) — force the iPhone-canonical enumerateDevices topology,
+    // host-INDEPENDENT. A real iPhone ALWAYS reports exactly one audioinput + one videoinput
+    // (InputDeviceInfo, empty label/deviceId/groupId pre-permission) and NO audiooutput. The default
+    // path below builds the list from the HOST Mac's capture devices — coincidentally correct on a dev
+    // Mac with a built-in camera+mic, but the production fleet is HEADLESS Mac Studios (no camera/mic):
+    // WebKit emits a pre-permission placeholder only for kinds that HAVE hardware, so the host list is
+    // empty → enumerateDevices()=[] = a per-session tell (no iPhone reports zero cameras). Resolving the
+    // canonical pair directly is host-independent and byte-identical to the dev-Mac pre-permission output
+    // (both all-empty strings, verified W2344), so no regression. getUserMedia is a separate path
+    // (UserMediaRequest, line ~204), unaffected. Order audioinput-then-videoinput = the dev-Mac-verified
+    // order (exact real-device order is a BS-gated refinement per task #62; kind+count is the tell).
+    {
+        auto makeInput = [](CaptureDevice::DeviceType type) {
+            CaptureDeviceWithCapabilities cdwc { CaptureDevice(""_s, type, ""_s), { } };
+            return InputDeviceInfo::create(WTF::move(cdwc), ""_s, ""_s);
+        };
+        Vector<Variant<Ref<MediaDeviceInfo>, Ref<InputDeviceInfo>>> devices;
+        devices.append(makeInput(CaptureDevice::DeviceType::Microphone));
+        devices.append(makeInput(CaptureDevice::DeviceType::Camera));
+        promise.resolve(WTF::move(devices));
+        return;
+    }
+#endif
+
     auto* controller = UserMediaController::from(protect(document->page()).get());
     if (!controller) {
         promise.resolve({ });
