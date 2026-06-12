@@ -93,6 +93,10 @@
         // always-active DRAWING via the appearance-only window subclass (real focus/responder
         // status untouched). isa-swap is layout-safe (subclass adds no ivars).
         object_setClass(self.window, [DriftstackAlwaysActiveWindow class]);
+        // W1378 (founder: "fancier iOS 26 look, url bar at BOTTOM like Safari, tabs"): build the
+        // iOS-26 Safari-style BOTTOM toolbar (translucent glass, always-active). Deferred to the next
+        // runloop so the nib's containerView + the WK2 subclass's webView are created/laid out first.
+        dispatch_async(dispatch_get_main_queue(), ^{ [self installDriftSafariBottomBar]; });
     }
 
     // Driftstack: size the window content to the ACTIVE ARCHETYPE's viewport so
@@ -168,6 +172,59 @@
 
     [share sendActionOn:NSEventMaskLeftMouseDown];
     [super windowDidLoad];
+}
+
+// W1378: the iOS-26 Safari BOTTOM bar. Re-homes the existing controls (IBOutlets = the real control
+// views; their target/action wiring to the WK2 controller stays intact) into a translucent always-
+// active glass bar pinned to the window BOTTOM, and shrinks the web content to sit ABOVE it — the
+// defining iOS-Safari layout (address bar at the bottom). Gated by DRIFTSTACK_SAFARI_CHROME.
+// NOTE (fingerprint): the bar height becomes the chrome; the web-content height (== layout viewport,
+// clientHeight==innerHeight, file-99) must be cumrig-verified before enabling for sessions. First cut
+// — visual layout iterates via the screenshot loop; tabs + scroll-minimize + final glass polish next.
+- (void)installDriftSafariBottomBar
+{
+    NSView *content = self.window.contentView;
+    if (!content)
+        return;
+    const CGFloat barH = 92.0;   // iOS-26 Safari bottom bar: URL-pill row + toolbar-icon row
+    NSRect cb = content.bounds;
+
+    // Drop the native top toolbar (its controls are re-homed below).
+    self.window.toolbar = nil;
+
+    // Translucent always-active glass bar pinned to the bottom (never greys: state = Active).
+    NSVisualEffectView *bar = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, cb.size.width, barH)];
+    bar.material = NSVisualEffectMaterialHeaderView;
+    bar.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+    bar.state = NSVisualEffectStateActive;
+    bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;   // stretch width, pin to bottom
+    [content addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+
+    CGFloat W = cb.size.width;
+    // Row 1 (top of bar): the URL "pill" with the lock at its left + reload at its right.
+    if (lockButton) { lockButton.frame = NSMakeRect(12, barH - 40, 28, 28); [bar addSubview:lockButton]; }
+    if (urlText) {
+        urlText.frame = NSMakeRect(46, barH - 42, W - 92, 32);
+        urlText.bezelStyle = NSTextFieldRoundedBezel;
+        urlText.alignment = NSTextAlignmentCenter;
+        [bar addSubview:urlText];
+    }
+    if (reloadButton) { reloadButton.frame = NSMakeRect(W - 38, barH - 40, 28, 28); [bar addSubview:reloadButton]; }
+    // Row 2 (bottom of bar): back / forward on the left, share on the right (iOS toolbar row).
+    if (backButton) { backButton.frame = NSMakeRect(18, 10, 34, 34); [bar addSubview:backButton]; }
+    if (forwardButton) { forwardButton.frame = NSMakeRect(64, 10, 34, 34); [bar addSubview:forwardButton]; }
+    if (share) { share.frame = NSMakeRect(W - 52, 10, 34, 34); [bar addSubview:share]; }
+    if (progressIndicator) { progressIndicator.frame = NSMakeRect(W/2 - 12, 12, 24, 24); [bar addSubview:progressIndicator]; }
+
+    // Shrink the web content to sit ABOVE the bar (the nib's containerView is the webView's parent).
+    if (containerView) {
+        containerView.frame = NSMakeRect(0, barH, W, cb.size.height - barH);
+        containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
+    if (self.mainContentView && containerView) {
+        self.mainContentView.frame = containerView.bounds;
+        self.mainContentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
 }
 
 - (void)newWindowForTab:(id)sender
