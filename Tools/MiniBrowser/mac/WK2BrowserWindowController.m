@@ -96,6 +96,74 @@ static const int testFooterBannerHeight = 58;
 @end
 
 @interface WK2BrowserWindowController () <NSTextFinderBarContainer, _WKFindDelegate, NSSearchFieldDelegate, WKNavigationDelegate, WKUIDelegate, WKUIDelegatePrivate, _WKIconLoadingDelegate>
+- (void)driftActivateWebView:(WKWebView *)webView;
+- (void)driftRunTabsSelfTest;
+@end
+
+// Driftstack: multi-tab MODEL for the iOS-26 chrome (gated DRIFTSTACK_SAFARI_CHROME) — the (B)
+// approach: real per-tab WKWebViews in ONE window, not macOS window-tabs. Pure index model: it
+// holds the session's WKWebViews + the active index and nothing else; the CONTROLLER owns webview
+// creation, the KVO/binding/delegate wiring, and visibility (see -driftActivateWebView:), so this
+// stays trivially correct + crash-free (no WebKit state touched here). The controller keeps its
+// single `_webView` pointer aimed at -activeWebView, so every existing `_webView` reference (nav,
+// urlText, find bar, mainContentView, …) acts on the active tab with no change. Never empties:
+// -closeActiveTab refuses to remove the last tab. Indices are NSInteger + bounds-checked so a bad
+// index returns nil/-1 rather than trapping (a reusable model fed runtime UI events must not crash).
+@interface DriftstackTabManager : NSObject
+@property (nonatomic, readonly) NSUInteger count;
+@property (nonatomic, readonly) NSInteger activeIndex;
+@property (nonatomic, readonly, nullable) WKWebView *activeWebView;
+- (void)addTab:(WKWebView *)webView;                     // append + make active
+- (nullable WKWebView *)switchToIndex:(NSInteger)index;  // bounds-checked; nil if out of range
+- (NSInteger)closeActiveTab;                             // remove active + pick neighbor; -1 if it would empty
+- (nullable WKWebView *)webViewAtIndex:(NSInteger)index;
+@end
+
+@implementation DriftstackTabManager {
+    NSMutableArray<WKWebView *> *_tabs;
+    NSInteger _activeIndex;
+}
+- (instancetype)init
+{
+    if ((self = [super init])) {
+        _tabs = [NSMutableArray array];
+        _activeIndex = -1;
+    }
+    return self;
+}
+- (NSUInteger)count { return _tabs.count; }
+- (NSInteger)activeIndex { return _activeIndex; }
+- (WKWebView *)activeWebView
+{
+    return (_activeIndex >= 0 && _activeIndex < (NSInteger)_tabs.count) ? _tabs[_activeIndex] : nil;
+}
+- (WKWebView *)webViewAtIndex:(NSInteger)index
+{
+    return (index >= 0 && index < (NSInteger)_tabs.count) ? _tabs[index] : nil;
+}
+- (void)addTab:(WKWebView *)webView
+{
+    if (!webView)
+        return;
+    [_tabs addObject:webView];
+    _activeIndex = (NSInteger)_tabs.count - 1;
+}
+- (WKWebView *)switchToIndex:(NSInteger)index
+{
+    if (index < 0 || index >= (NSInteger)_tabs.count)
+        return nil;
+    _activeIndex = index;
+    return _tabs[index];
+}
+- (NSInteger)closeActiveTab
+{
+    if (_tabs.count <= 1 || _activeIndex < 0 || _activeIndex >= (NSInteger)_tabs.count)
+        return -1;   // never empty — always leave at least one tab
+    [_tabs removeObjectAtIndex:_activeIndex];
+    if (_activeIndex >= (NSInteger)_tabs.count)
+        _activeIndex = (NSInteger)_tabs.count - 1;   // closing the last → previous neighbor
+    return _activeIndex;
+}
 @end
 
 // Driftstack: iOS-Simulator-style touch presentation. A passthrough overlay that
@@ -150,7 +218,9 @@ static const int testFooterBannerHeight = 58;
 
 @implementation WK2BrowserWindowController {
     WKWebViewConfiguration *_configuration;
-    WKWebView *_webView;
+    WKWebView *_webView;                  // ALWAYS the active tab (DriftstackTabManager keeps it aimed here)
+    DriftstackTabManager *_tabManager;    // Driftstack iOS-26 chrome multi-tab model (gated)
+    __weak WKWebView *_driftWiredWebView; // the tab currently carrying the shared chrome wiring (KVO/bindings/delegates)
     BOOL _zoomTextOnly;
     BOOL _isPrivateBrowsingWindow;
 
@@ -169,6 +239,84 @@ static const int testFooterBannerHeight = 58;
     BOOL _usingFindDelegate;
 
     CATextLayer *_pointerLockBanner;
+}
+
+// Driftstack: make `webView` the ACTIVE tab. Moves the SHARED, single-instance chrome — the lone
+// progressIndicator binding, the title/URL/lock/gpu KVO observers, and the nav/UI delegates — off the
+// outgoing tab and onto this one, hides the old + shows the new, then refreshes the URL/title/lock
+// chrome immediately (KVO only fires on CHANGE). Keeping those shared resources on the ACTIVE tab only
+// means a backgrounded tab can neither drive the chrome nor fire delegate callbacks, and tearing its
+// observers down before it can be released avoids the classic KVO-still-registered crash. Idempotent:
+// re-activating the current tab is a no-op (guards against double-registering observers/bindings). For
+// the single-tab (chrome-off / no extra tab) case the very first call is behaviour-identical to the
+// original inline awakeFromNib wiring — same binding/observers/delegates, just applied via this seam.
+- (void)driftActivateWebView:(WKWebView *)webView
+{
+    if (!webView || webView == _driftWiredWebView)
+        return;
+
+    WKWebView *previous = _driftWiredWebView;
+    if (previous) {
+        [progressIndicator unbind:NSHiddenBinding];
+        [progressIndicator unbind:NSValueBinding];
+        @try {
+            [previous removeObserver:self forKeyPath:@"title" context:keyValueObservingContext];
+            [previous removeObserver:self forKeyPath:@"URL" context:keyValueObservingContext];
+            [previous removeObserver:self forKeyPath:@"hasOnlySecureContent" context:keyValueObservingContext];
+            [previous removeObserver:self forKeyPath:@"_gpuProcessIdentifier" context:keyValueObservingContext];
+        } @catch (NSException *exception) {
+            NSLog(@"[Driftstack/MiniBrowser] tab switch: observer teardown skipped (%@)", exception.name);
+        }
+        previous.navigationDelegate = nil;
+        previous.UIDelegate = nil;
+        previous.hidden = YES;
+    }
+
+    _webView = webView;
+    _driftWiredWebView = webView;
+    webView.hidden = NO;
+
+    [progressIndicator bind:NSHiddenBinding toObject:webView withKeyPath:@"loading" options:@{ NSValueTransformerNameBindingOption : NSNegateBooleanTransformerName }];
+    [progressIndicator bind:NSValueBinding toObject:webView withKeyPath:@"estimatedProgress" options:nil];
+
+    [webView addObserver:self forKeyPath:@"title" options:0 context:keyValueObservingContext];
+    [webView addObserver:self forKeyPath:@"URL" options:0 context:keyValueObservingContext];
+    [webView addObserver:self forKeyPath:@"hasOnlySecureContent" options:0 context:keyValueObservingContext];
+    [webView addObserver:self forKeyPath:@"_gpuProcessIdentifier" options:0 context:keyValueObservingContext];
+
+    webView.navigationDelegate = self;
+    webView.UIDelegate = self;
+
+    [self updateTextFieldFromURL:webView.URL];
+    [self updateTitle:webView.title];
+    [self updateLockButtonIcon:webView.hasOnlySecureContent];
+}
+
+// Driftstack (gated DRIFTSTACK_TABS_SELFTEST): deterministic, screenshot-verifiable exercise of the
+// tab ENGINE with NO clicks/keystrokes — open a 2nd tab + activate it (proves the bind→new path), then
+// switch back to tab 0 (proves the unbind-old/rebind-new switch path + that the chrome follows). Each
+// phase is observable by the focus-safe capture loop (scripts/screenshot-minibrowser-chrome.sh). Debug
+// only; compiled in but inert unless the env var is set (and the whole chrome is itself gated).
+- (void)driftRunTabsSelfTest
+{
+    NSView *container = containerView;   // capture the ivar outside the block (avoid -Wimplicit-retain-self)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        WKWebView *tabB = [[WKWebView alloc] initWithFrame:[container bounds] configuration:self->_configuration];
+        [tabB setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+        tabB.hidden = YES;
+        [container addSubview:tabB];
+        [self->_tabManager addTab:tabB];
+        [self driftActivateWebView:tabB];
+        [tabB loadHTMLString:@"<html><body style=\"font:48px -apple-system;padding:40px;color:#722F37\">DRIFTSTACK TAB B</body></html>" baseURL:[NSURL URLWithString:@"https://tab-b.driftstack.test/"]];
+        NSLog(@"[Driftstack/MiniBrowser] tabs self-test: opened+activated tab B (count=%lu, active=%ld)", (unsigned long)self->_tabManager.count, (long)self->_tabManager.activeIndex);
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            WKWebView *tab0 = [self->_tabManager switchToIndex:0];
+            if (tab0)
+                [self driftActivateWebView:tab0];
+            NSLog(@"[Driftstack/MiniBrowser] tabs self-test: switched back to tab 0 (active=%ld)", (long)self->_tabManager.activeIndex);
+        });
+    });
 }
 
 - (void)awakeFromNib
@@ -205,16 +353,14 @@ static const int testFooterBannerHeight = 58;
         }];
     }
 
-    [progressIndicator bind:NSHiddenBinding toObject:_webView withKeyPath:@"loading" options:@{ NSValueTransformerNameBindingOption : NSNegateBooleanTransformerName }];
-    [progressIndicator bind:NSValueBinding toObject:_webView withKeyPath:@"estimatedProgress" options:nil];
-
-    [_webView addObserver:self forKeyPath:@"title" options:0 context:keyValueObservingContext];
-    [_webView addObserver:self forKeyPath:@"URL" options:0 context:keyValueObservingContext];
-    [_webView addObserver:self forKeyPath:@"hasOnlySecureContent" options:0 context:keyValueObservingContext];
-    [_webView addObserver:self forKeyPath:@"_gpuProcessIdentifier" options:0 context:keyValueObservingContext];
-
-    _webView.navigationDelegate = self;
-    _webView.UIDelegate = self;
+    // Driftstack: register tab 0 with the multi-tab manager and route the shared chrome (the lone
+    // progressIndicator binding + the title/URL/lock/gpu KVO observers + the nav/UI delegates) through
+    // -driftActivateWebView: so it can MOVE between tabs. _webView stays the single active-tab pointer.
+    // Behaviour-identical to the original inline wiring for the single-tab case (same binding/observers/
+    // delegates) — the seam only matters once a 2nd tab exists (iOS-26 chrome, gated).
+    _tabManager = [[DriftstackTabManager alloc] init];
+    [_tabManager addTab:_webView];
+    [self driftActivateWebView:_webView];
 
     SettingsController *settingsController = [[NSApplication sharedApplication] browserAppDelegate].settingsController;
     // This setting installs the new WK2 Icon Loading Delegate and tests that mechanism by
@@ -235,6 +381,10 @@ static const int testFooterBannerHeight = 58;
     _webView._usePlatformFindUI = NO;
 
     _zoomTextOnly = NO;
+
+    // Driftstack (gated DRIFTSTACK_TABS_SELFTEST): screenshot-verifiable tab-engine self-test (B1).
+    if (getenv("DRIFTSTACK_TABS_SELFTEST"))
+        [self driftRunTabsSelfTest];
 }
 
 - (id)windowWillReturnFieldEditor:(NSWindow *)sender toObject:(id)client
