@@ -412,7 +412,17 @@ static const int testFooterBannerHeight = 58;
     WKWebView *wv = [[WKWebView alloc] initWithFrame:[containerView bounds] configuration:_configuration];
     [wv setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     wv.hidden = YES;
-    [containerView addSubview:wv];
+    // W1446 (W1390 increment-2 z-order): a new tab's webView added with the default (topmost) z-order
+    // would cover the iOS tap-ring overlay (DRIFTSTACK_IOS_CURSOR, added above _webView) once this tab
+    // is activated → the tap-ring vanishes. Insert BELOW the overlay if present so the ring stays on top.
+    DriftstackTapOverlayView *existingOverlay = nil;
+    for (NSView *sub in containerView.subviews) {
+        if ([sub isKindOfClass:[DriftstackTapOverlayView class]]) { existingOverlay = (DriftstackTapOverlayView *)sub; break; }
+    }
+    if (existingOverlay)
+        [containerView addSubview:wv positioned:NSWindowBelow relativeTo:existingOverlay];
+    else
+        [containerView addSubview:wv];
     [_tabManager addTab:wv];
     [self driftActivateWebView:wv];
     [wv loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:@"about:blank"]]];
@@ -471,7 +481,17 @@ static const int testFooterBannerHeight = 58;
     // a tap ring flashed on each click) when DRIFTSTACK_IOS_CURSOR is set. The
     // overlay is hitTest-transparent, so every click still reaches the WKWebView
     // (and the fork's native touch synthesis) unchanged.
-    if (getenv("DRIFTSTACK_IOS_CURSOR")) {
+    // W1446: VALUE check, not bare presence (same footgun class as SAFARI_CHROME W1434b) — a non-empty
+    // FALSY value ("0"/"false"/"no"/"off") must DISABLE the tap ring, not enable it. (This env is
+    // bare-fork/dev-only — the harness never forwards it — but keep the gate semantics consistent.)
+    const char* iosCursorRaw = getenv("DRIFTSTACK_IOS_CURSOR");
+    NSString *iosCursorVal = iosCursorRaw
+        ? [[NSString stringWithUTF8String:iosCursorRaw] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].lowercaseString
+        : nil;
+    BOOL iosCursorOn = iosCursorVal.length > 0
+        && ![iosCursorVal isEqualToString:@"0"] && ![iosCursorVal isEqualToString:@"false"]
+        && ![iosCursorVal isEqualToString:@"no"] && ![iosCursorVal isEqualToString:@"off"];
+    if (iosCursorOn) {
         DriftstackTapOverlayView *tapOverlay = [[DriftstackTapOverlayView alloc] initWithFrame:[containerView bounds]];
         tapOverlay.wantsLayer = YES;
         [tapOverlay setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
