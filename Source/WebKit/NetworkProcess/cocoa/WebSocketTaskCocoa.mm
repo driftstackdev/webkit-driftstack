@@ -254,12 +254,15 @@ bool WebSocketTask::startDriftstackWebSocketIfActive(const WebCore::ResourceRequ
     const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
     if (!customSocks5 || customSocks5[0] != '1' || !proxyEnv || !proxyEnv[0])
         return false;
-    // Wave 29-499.351 — OPT-IN until RFC 8441 (WS-over-h2) lands. Modern servers
-    // negotiate h2 ALPN, which the h1.1-Upgrade engine can't carry (it declines
-    // h2 → the connection fails rather than falling back). Arming for all ws/wss
-    // now would REGRESS WebSocket to those servers (they work today via CFNetwork).
-    // DRIFTSTACK_WS_PATHB=1 enables it for the http/1.1-server functional gate +
-    // future 8441 rollout; production stays on CFNetwork until 8441 is verified.
+    // Wave 29-499.351/.352 — OPT-IN egress WebSocket path (custom SOCKS5 + iPhone-TLS).
+    // RFC 8441 (WS-over-h2) HAS LANDED (.352): on a wss:// TLS connection the iPhone
+    // ClientHello offers ALPN [h3,h2,http/1.1]; if the server selects h2 the WS rides
+    // RFC 8441 Extended CONNECT (DriftstackHttp2ConnectStream — WS frames tunneled in h2
+    // DATA, flow-control-correct), otherwise the h1.1 Upgrade engine. So the path now
+    // carries BOTH h2 and h1.1 servers with no regression (an h2-negotiated wss failed
+    // before .352 too — the h1.1 engine can't frame over h2). DRIFTSTACK_WS_PATHB=1 arms
+    // it; it stays default-off (production on CFNetwork) until the egress functional gate
+    // verifies WS-over-h2 end-to-end against a real 8441 server over the SOCKS5 path.
     const char* wsPathB = getenv("DRIFTSTACK_WS_PATHB");
     if (!wsPathB || wsPathB[0] != '1')
         return false;
