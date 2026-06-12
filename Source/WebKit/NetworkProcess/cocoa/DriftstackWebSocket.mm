@@ -324,16 +324,32 @@ void DriftstackWebSocket::readerLoop()
         uint8_t maskKey[4] = { 0, 0, 0, 0 };
         if (masked && !wsReadExact(this, m_readBuffer, rd, maskKey, 4, m_stop))
             break;
+        // W2390 (fidelity + hardening) — RFC 6455 §5.1: a server MUST NOT mask
+        // frames; a conformant client (real iOS Safari / the system
+        // NSURLSessionWebSocketTask path this custom deframer stands in for)
+        // closes 1002 on a masked server frame. Accepting+unmasking it is a
+        // behavioral divergence a WS detection server can probe (send a masked
+        // frame: real Safari closes 1002, an accept = not-Safari). Reject HERE —
+        // before the payload alloc — so a malicious masked frame also can't force
+        // the 64MB allocation below. Mirrors the §5.5 violation enforcement.
+        if (masked) {
+            WTFLogAlways("[Driftstack-EG-WK-WS/W2390] masked frame from server (RFC 6455 §5.1) — closing 1002 (server %s)", m_config.host.utf8().data());
+            uint8_t cl[2] = { 0x03, 0xEA };  // close code 1002 (protocol error)
+            sendFrame(0x8, std::span<const uint8_t> { cl, sizeof(cl) });
+            m_closed.store(true);
+            if (m_cb.onClose)
+                m_cb.onClose(1002, "protocol error"_s);
+            return;
+        }
         if (len > (64u * 1024 * 1024)) // 64MB single-frame cap
             break;
         Vector<uint8_t> payload;
         payload.grow(static_cast<size_t>(len));
         if (len && !wsReadExact(this, m_readBuffer, rd, payload.mutableSpan().data(), len, m_stop))
             break;
-        if (masked) {
-            for (size_t i = 0; i < payload.size(); ++i)
-                payload[i] ^= maskKey[i & 3];
-        }
+        // (No unmask: server frames are never masked — the W2390 guard above
+        // closes 1002 on any masked frame before reaching here, so the maskKey
+        // is always zero and the payload is already plaintext per RFC 6455 §5.1.)
 
         // Wave 29-499.355 (hardening) — RFC 6455 §5 compliance against malformed/
         // malicious server frames. The server is untrusted; a real client closes
