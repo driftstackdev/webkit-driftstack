@@ -197,6 +197,21 @@ int compareWebGPUHash(const std::array<uint8_t, 16>& a, std::span<const uint8_t,
     return 0;
 }
 
+// W2394 (hardening) — bounds-safe data-payload slice, same class as the audio atlas
+// (DriftstackAudioAtlas::boundedAudioPayload). The header validation bounds the INDEX
+// region, but each entry's OWN dataOffset (byte 20) + readbackByteCount into the data
+// payload were sliced via subspan WITHOUT a bound → a corrupt/truncated atlas (valid
+// header, partial R2 sync) with an out-of-range entry → OOB subspan that aborts/UB-reads
+// WebContent. NOTE the entryFor `readbackByteCount == expected` check does NOT save us:
+// a matching size with a bad dataOffset still OOBs. Validate in 64-bit BEFORE subspan;
+// return {} on any out-of-range/degenerate entry → caller falls through to native readback.
+std::span<const uint8_t> boundedWebGPUPayload(std::span<const uint8_t> payload, uint32_t dataOffset, uint32_t byteCount)
+{
+    if (!byteCount || uint64_t(dataOffset) + byteCount > payload.size())
+        return { };
+    return payload.subspan(dataOffset, byteCount);
+}
+
 } // anonymous namespace
 
 std::span<const uint8_t> DriftstackWebGPUAtlas::entryFor(std::span<const uint8_t, 16> commandSequenceHash,
@@ -223,11 +238,19 @@ std::span<const uint8_t> DriftstackWebGPUAtlas::entryFor(std::span<const uint8_t
                 }
                 return { };
             }
+            auto pcm = boundedWebGPUPayload(m_dataPayloadSpan, e.dataOffset, e.readbackByteCount);
+            if (pcm.empty()) {
+                static unsigned oob = 0;
+                if (++oob <= 50)
+                    WTFLogAlways("[Driftstack-DSWA-OOB] entry %zu of %zu out-of-range (dataOffset=%u bytes=%u vs payload=%zu) — skipping (corrupt/truncated atlas)",
+                        mid, m_numEntries, e.dataOffset, e.readbackByteCount, m_dataPayloadSpan.size());
+                return { };
+            }
             static unsigned hits = 0;
             if (++hits <= 50)
                 WTFLogAlways("[Driftstack-DSWA-HIT] bytes=%u (entry %zu of %zu)",
                     e.readbackByteCount, mid, m_numEntries);
-            return m_dataPayloadSpan.subspan(e.dataOffset, e.readbackByteCount);
+            return pcm;
         }
     }
 
@@ -269,11 +292,19 @@ std::span<const uint8_t> DriftstackWebGPUAtlas::entryByByteCount(uint32_t expect
     }
 
     auto e = readWebGPUEntry(m_indexSpan, firstMatch);
+    auto pcm = boundedWebGPUPayload(m_dataPayloadSpan, e.dataOffset, e.readbackByteCount);
+    if (pcm.empty()) {
+        static unsigned oob = 0;
+        if (++oob <= 50)
+            WTFLogAlways("[Driftstack-DSWA-OOB-by-bytecount] entry %zu of %zu out-of-range (dataOffset=%u bytes=%u vs payload=%zu) — skipping (corrupt/truncated atlas)",
+                firstMatch, m_numEntries, e.dataOffset, e.readbackByteCount, m_dataPayloadSpan.size());
+        return { };
+    }
     static unsigned hits = 0;
     if (++hits <= 50)
         WTFLogAlways("[Driftstack-DSWA-HIT-by-bytecount] bytes=%u (entry %zu of %zu)",
             e.readbackByteCount, firstMatch, m_numEntries);
-    return m_dataPayloadSpan.subspan(e.dataOffset, e.readbackByteCount);
+    return pcm;
 }
 
 } // namespace WebCore

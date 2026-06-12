@@ -209,8 +209,16 @@ std::span<const uint8_t> DriftstackEmojiAtlas::entryForCodepointAndStrike(uint32
             for (size_t i = start; i < m_numEntries; ++i) {
                 auto ie = readEntry(m_indexSpan, i);
                 if (ie.codepoint != codepoint) break;
-                if (ie.strikeIdx == strikeIdx)
+                if (ie.strikeIdx == strikeIdx) {
+                    // W2394: bound the per-entry payload slice. The header validates the INDEX
+                    // region, but a corrupt/truncated atlas (partial R2 sync) can carry a valid
+                    // header + an entry whose offsetInPayload+pngBytesLen runs past the payload →
+                    // OOB subspan → WebContent abort on a canvas glyph draw. 64-bit check; on any
+                    // out-of-range entry return {} (= glyph miss → caller falls back), no crash.
+                    if (uint64_t(ie.offsetInPayload) + ie.pngBytesLen > m_dataPayloadSpan.size())
+                        return { };
                     return m_dataPayloadSpan.subspan(ie.offsetInPayload, ie.pngBytesLen);
+                }
             }
             return { };
         }

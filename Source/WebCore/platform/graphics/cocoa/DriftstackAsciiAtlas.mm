@@ -370,8 +370,15 @@ std::span<const uint8_t> DriftstackAsciiAtlas::entryFor(const String& fontCssNam
         else if (e.subpixelQuant > subpixelQuant) hi = mid;
         else if (e.colorIndex < colorIdx) lo = mid + 1;
         else if (e.colorIndex > colorIdx) hi = mid;
-        else
+        else {
+            // W2394: bound the per-entry payload slice (header validates only the INDEX region).
+            // A corrupt/truncated atlas (partial R2 sync) with a valid header + an entry whose
+            // dataOffset+pngLen exceeds the payload → OOB subspan → WebContent abort on a canvas
+            // glyph draw. 64-bit check; on OOB return {} (= glyph miss → caller falls back).
+            if (uint64_t(e.dataOffset) + e.pngLen > m_dataPayloadSpan.size())
+                return { };
             return m_dataPayloadSpan.subspan(e.dataOffset, e.pngLen);
+        }
     }
     return { };
 }

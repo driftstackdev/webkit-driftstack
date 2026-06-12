@@ -313,13 +313,19 @@ std::span<const uint8_t> DriftstackAudioAtlas::entryByShape(uint32_t sampleRate,
     }
 
     auto e = readAudioEntry(m_indexSpan, firstMatch);
-    uint32_t expectedBytes = e.framesPerChannel * e.channelCount * 4;
+    auto pcm = boundedAudioPayload(m_dataPayloadSpan, e.dataOffset, e.framesPerChannel, e.channelCount);
+    if (pcm.empty()) {
+        static unsigned oob = 0;
+        if (++oob <= 50)
+            WTFLogAlways("[Driftstack-DASA-OOB-by-shape] entry %zu of %zu out-of-range (dataOffset=%u frames=%u ch=%u vs payload=%zu) — skipping (corrupt/truncated atlas)",
+                firstMatch, m_numEntries, e.dataOffset, e.framesPerChannel, e.channelCount, m_dataPayloadSpan.size());
+        return { };
+    }
     static unsigned hits = 0;
     if (++hits <= 50)
-        WTFLogAlways("[Driftstack-DASA-HIT-by-shape] sr=%u ch=%u frames=%u bytes=%u (entry %zu of %zu)",
-            e.sampleRate, e.channelCount, e.framesPerChannel, expectedBytes,
-            firstMatch, m_numEntries);
-    return m_dataPayloadSpan.subspan(e.dataOffset, expectedBytes);
+        WTFLogAlways("[Driftstack-DASA-HIT-by-shape] sr=%u ch=%u frames=%u bytes=%zu (entry %zu of %zu)",
+            e.sampleRate, e.channelCount, e.framesPerChannel, pcm.size(), firstMatch, m_numEntries);
+    return pcm;
 }
 
 } // namespace WebCore

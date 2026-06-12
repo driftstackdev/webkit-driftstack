@@ -229,8 +229,15 @@ std::span<const uint8_t> DriftstackCompositeAtlas::entryForSequenceAndStrike(std
             for (size_t i = start; i < m_numEntries; ++i) {
                 auto ie = readCompositeEntry(m_indexSpan, i);
                 if (compareBytes(ie.sequenceBytes, sequenceUtf8) != 0) break;
-                if (ie.strikeIdx == strikeIdx)
+                if (ie.strikeIdx == strikeIdx) {
+                    // W2394: bound the per-entry payload slice (header validates only the INDEX
+                    // region). A corrupt/truncated atlas (partial R2 sync) with a valid header +
+                    // an entry whose offsetInPayload+pngBytesLen exceeds the payload → OOB subspan
+                    // → WebContent abort on a canvas glyph draw. 64-bit check; skip on OOB.
+                    if (uint64_t(ie.offsetInPayload) + ie.pngBytesLen > m_dataPayloadSpan.size())
+                        return { };
                     return m_dataPayloadSpan.subspan(ie.offsetInPayload, ie.pngBytesLen);
+                }
             }
             return { };
         }
