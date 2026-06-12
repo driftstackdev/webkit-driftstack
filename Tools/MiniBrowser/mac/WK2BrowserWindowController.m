@@ -100,6 +100,7 @@ static const int testFooterBannerHeight = 58;
 - (void)driftRunTabsSelfTest;
 - (void)driftToggleTabOverview:(id)sender;
 - (void)driftSelectTab:(NSButton *)sender;
+- (void)driftCloseTab:(NSButton *)sender;
 - (void)driftOverviewNewTab:(id)sender;
 @end
 
@@ -119,6 +120,7 @@ static const int testFooterBannerHeight = 58;
 - (void)addTab:(WKWebView *)webView;                     // append + make active
 - (nullable WKWebView *)switchToIndex:(NSInteger)index;  // bounds-checked; nil if out of range
 - (NSInteger)closeActiveTab;                             // remove active + pick neighbor; -1 if it would empty
+- (NSInteger)closeTabAtIndex:(NSInteger)index;           // remove tab i, fix activeIndex; -1 if OOB / would empty
 - (nullable WKWebView *)webViewAtIndex:(NSInteger)index;
 @end
 
@@ -160,11 +162,18 @@ static const int testFooterBannerHeight = 58;
 }
 - (NSInteger)closeActiveTab
 {
-    if (_tabs.count <= 1 || _activeIndex < 0 || _activeIndex >= (NSInteger)_tabs.count)
-        return -1;   // never empty — always leave at least one tab
-    [_tabs removeObjectAtIndex:_activeIndex];
-    if (_activeIndex >= (NSInteger)_tabs.count)
-        _activeIndex = (NSInteger)_tabs.count - 1;   // closing the last → previous neighbor
+    return [self closeTabAtIndex:_activeIndex];
+}
+- (NSInteger)closeTabAtIndex:(NSInteger)index
+{
+    if (_tabs.count <= 1 || index < 0 || index >= (NSInteger)_tabs.count)
+        return -1;   // never empty; out-of-range = no-op
+    [_tabs removeObjectAtIndex:index];
+    if (index < _activeIndex)
+        _activeIndex -= 1;                            // a tab BEFORE the active one closed → shift the active left
+    else if (index == _activeIndex && _activeIndex >= (NSInteger)_tabs.count)
+        _activeIndex = (NSInteger)_tabs.count - 1;    // closed the active AND it was last → previous neighbor
+    // (index == _activeIndex but not last: _activeIndex now points at the next tab — correct, no change)
     return _activeIndex;
 }
 @end
@@ -351,6 +360,17 @@ static const int testFooterBannerHeight = 58;
         card.layer.borderColor = oxblood.CGColor;
         card.contentTintColor = (i == _tabManager.activeIndex) ? oxblood : nil;
         [overlay addSubview:card];
+        // Per-card CLOSE (×) — iOS overview lets you close a tab from here. Added AFTER the card so it
+        // sits on top at the right edge (a click on the × closes; elsewhere on the card switches).
+        // Hidden when only one tab remains (closeTabAtIndex refuses to empty — never a dead-end ×).
+        if (_tabManager.count > 1) {
+            NSButton *closeBtn = [NSButton buttonWithTitle:@"✕" target:self action:@selector(driftCloseTab:)];
+            closeBtn.tag = i;
+            closeBtn.bordered = NO;
+            closeBtn.frame = NSMakeRect(W - sideMargin - 40, y + (cardH - 28) / 2, 28, 28);
+            closeBtn.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+            [overlay addSubview:closeBtn];
+        }
         y -= (cardH + gap);
     }
 
@@ -370,6 +390,21 @@ static const int testFooterBannerHeight = 58;
     if (wv)
         [self driftActivateWebView:wv];
     [self driftToggleTabOverview:nil];   // dismiss the overview
+}
+
+- (void)driftCloseTab:(NSButton *)sender
+{
+    WKWebView *closing = [_tabManager webViewAtIndex:sender.tag];
+    NSInteger newActive = [_tabManager closeTabAtIndex:sender.tag];
+    if (newActive < 0)
+        return;                              // refused (last tab) — nothing to do
+    [closing removeFromSuperview];           // drop the closed tab's webview from the container
+    WKWebView *active = [_tabManager activeWebView];
+    if (active)
+        [self driftActivateWebView:active];  // no-op if the active tab didn't change (idempotent guard)
+    // Rebuild the overview to reflect the new tab set (close → reopen).
+    [self driftToggleTabOverview:nil];
+    [self driftToggleTabOverview:nil];
 }
 
 - (void)driftOverviewNewTab:(id)sender
