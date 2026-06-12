@@ -188,6 +188,25 @@ int compareAudioHash(const std::array<uint8_t, 16>& a, std::span<const uint8_t, 
     return 0;
 }
 
+// W2394 (hardening) — bounds-safe data-payload slice. The header validation in
+// mapAtlas() bounds the INDEX region, but each entry carries its OWN dataOffset
+// (byte 28) + size (framesPerChannel*channelCount*4) into the data payload, which
+// were NOT checked before the subspan. A truncated/corrupt atlas (disk fault,
+// partial R2 sync, interrupted download) with a valid header but an out-of-range
+// entry → an OOB subspan that RELEASE_ASSERT-aborts WebContent (availability
+// hazard on the multi-tenant fleet) or UB-reads past the mmap. Validate in 64-bit
+// (the uint32 frames*channels*4 product can wrap) BEFORE subspan; on any out-of-
+// range/degenerate entry return {} → caller falls through to native audio (safe).
+// Mirrors the W2164 TextRunAtlas `blobOffset+blobSize > m_blobSize` check.
+std::span<const uint8_t> boundedAudioPayload(std::span<const uint8_t> payload,
+    uint32_t dataOffset, uint32_t framesPerChannel, uint32_t channelCount)
+{
+    uint64_t bytes = uint64_t(framesPerChannel) * channelCount * 4;
+    if (!bytes || uint64_t(dataOffset) + bytes > payload.size())
+        return { };
+    return payload.subspan(dataOffset, static_cast<size_t>(bytes));
+}
+
 } // anonymous namespace
 
 std::span<const uint8_t> DriftstackAudioAtlas::entryFor(std::span<const uint8_t, 16> graphConfigHash,
@@ -217,12 +236,19 @@ std::span<const uint8_t> DriftstackAudioAtlas::entryFor(std::span<const uint8_t,
                     || cand.channelCount != expectedChannelCount
                     || cand.framesPerChannel != expectedFramesPerChannel)
                     return { };
-                uint32_t expectedBytes = cand.framesPerChannel * cand.channelCount * 4;
+                auto pcm = boundedAudioPayload(m_dataPayloadSpan, cand.dataOffset, cand.framesPerChannel, cand.channelCount);
+                if (pcm.empty()) {
+                    static unsigned oob = 0;
+                    if (++oob <= 50)
+                        WTFLogAlways("[Driftstack-DASA-OOB] entry %zu of %zu out-of-range (dataOffset=%u frames=%u ch=%u vs payload=%zu) — skipping (corrupt/truncated atlas)",
+                            idx, m_numEntries, cand.dataOffset, cand.framesPerChannel, cand.channelCount, m_dataPayloadSpan.size());
+                    return { };
+                }
                 static unsigned hits = 0;
                 if (++hits <= 50)
-                    WTFLogAlways("[Driftstack-DASA-HIT] sr=%u ch=%u frames=%u bytes=%u (entry %zu of %zu)",
-                        cand.sampleRate, cand.channelCount, cand.framesPerChannel, expectedBytes, idx, m_numEntries);
-                return m_dataPayloadSpan.subspan(cand.dataOffset, expectedBytes);
+                    WTFLogAlways("[Driftstack-DASA-HIT] sr=%u ch=%u frames=%u bytes=%zu (entry %zu of %zu)",
+                        cand.sampleRate, cand.channelCount, cand.framesPerChannel, pcm.size(), idx, m_numEntries);
+                return pcm;
             };
             if (auto r = matchShape(e, mid); !r.empty())
                 return r;
