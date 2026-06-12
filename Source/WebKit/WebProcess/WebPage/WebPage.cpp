@@ -4245,12 +4245,34 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     case WebEventType::TouchStart:
         m_driftstackPotentialTap = true;
         m_driftstackTapStartPoint = pos;
+        m_driftstackLastTouchPoint = pos;
         return;
     case WebEventType::TouchMove: {
         auto dx = pos.x() - m_driftstackTapStartPoint.x();
         auto dy = pos.y() - m_driftstackTapStartPoint.y();
         if (m_driftstackPotentialTap && (dx * dx + dy * dy) > tapSlop * tapSlop)
             m_driftstackPotentialTap = false;
+        // W1453 (founder directive — NATIVE touch-drag scroll, NOT a JS executeScript scrollBy): once
+        // the finger has moved past the tap slop it's a SCROLL, not a tap. macOS WebKit has no UIKit
+        // pan-gesture recognizer driving the scrolling tree from injected touches, so synthetic
+        // touchmove fires but the page doesn't move. Scroll it HERE in the WebProcess by this move's
+        // delta (finger up → content down) — an engine-level scroll firing a genuine trusted scroll
+        // event, no page-side JS, no `wheel` event (iPhone touch-scroll fires neither). The injected
+        // touchmove above stays the realistic touch SIGNAL; this is the 1:1 native consequence (scroll
+        // analogue of the W1405 tap→click synthesis). (First cut: the MAIN frame view — the dominant
+        // page-scroll case; per-element overflow scrollers via hit-test→enclosingScrollableArea are a
+        // refinement to land with A1, who owns the scrolling engine.)
+        if (!m_driftstackPotentialTap) {
+            if (RefPtr localMainFrame = this->localMainFrame()) {
+                if (auto* view = localMainFrame->view()) {
+                    int sdx = static_cast<int>(std::lround(m_driftstackLastTouchPoint.x() - pos.x()));
+                    int sdy = static_cast<int>(std::lround(m_driftstackLastTouchPoint.y() - pos.y()));
+                    if (sdx || sdy)
+                        view->scrollBy(WebCore::IntSize(sdx, sdy));
+                }
+            }
+        }
+        m_driftstackLastTouchPoint = pos;
         return;
     }
     case WebEventType::TouchEnd:

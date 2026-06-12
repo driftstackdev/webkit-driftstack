@@ -1596,6 +1596,7 @@ public:
     void driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent&, bool touchWasHandled);
     bool m_driftstackPotentialTap { false };
     WebCore::DoublePoint m_driftstackTapStartPoint;
+    WebCore::DoublePoint m_driftstackLastTouchPoint;   // W1453: prev touch point for native touch-drag scroll deltas
 #endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);
