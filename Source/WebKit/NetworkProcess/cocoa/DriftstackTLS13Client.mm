@@ -536,7 +536,18 @@ int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
 
 void DriftstackTLS13Client::shutdown()
 {
-    // TODO: send close_notify alert
+    // W2314: actively unblock a reader thread parked in a BLOCKING recv(). read() clears
+    // SO_RCVTIMEO for the app-data phase (restores blocking reads so slow/idle pooled
+    // connections aren't cut off), so a DriftstackWebSocket cancel()/destructor on an idle or
+    // unresponsive-server connection would otherwise block waitForCompletion() FOREVER —
+    // m_stop is unchecked inside the recv() syscall, and the previous stub did nothing, leaking
+    // the reader thread + its fd (resource exhaustion on the fleet once DRIFTSTACK_WS_PATHB is
+    // enabled). shutdown(SHUT_RDWR) forces the blocked recv() to return → the reader checks
+    // m_stop → exits → the thread joins. SHUT_RDWR does NOT close the fd (the socket owner
+    // close()s it), so no double-close. (close_notify is skipped — an abrupt transport close is
+    // acceptable for teardown.)
+    if (m_fd >= 0)
+        ::shutdown(m_fd, SHUT_RDWR);
 }
 
 bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
