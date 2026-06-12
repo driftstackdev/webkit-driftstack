@@ -119,6 +119,7 @@
             // would override this). Re-assert the size on the next runloop turn
             // (after display) so the archetype viewport always wins.
             self.window.restorable = NO;
+            __weak typeof(self) weakSelf = self;
             // Lock the window to the archetype viewport: a real iPhone cannot be
             // resized or maximized, and a larger/maximized window would leak the
             // host viewport (CSS layout viewport, matchMedia, getBoundingClientRect
@@ -150,20 +151,40 @@
                     // real webView height, derive the chrome, and resize so the
                     // webView == the layout viewport (clientHeight == innerHeight).
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                        // The web layout viewport (documentElement.clientHeight) is
-                        // the contentView area NOT obscured by the title bar/toolbar
-                        // (the WKWebView frame fills the whole content but the web
-                        // content is inset). That obscured band = contentView.height
-                        // - contentLayoutRect.height. Size the window so the
-                        // unobscured area == the iPhone layout viewport.
-                        CGFloat contentH = weakWindow.contentView.frame.size.height;
-                        CGFloat unobscuredH = weakWindow.contentLayoutRect.size.height;
-                        CGFloat chrome = contentH - unobscuredH;
-                        if (chrome < 0)
-                            chrome = 0;
-                        NSLog(@"[Driftstack-WindowSize] content=%.0f unobscured=%.0f chrome=%.0f -> window content=%.0f (target viewport=%d)",
-                            contentH, unobscuredH, chrome, (double)(layoutViewportHeight + chrome), layoutViewportHeight);
-                        [weakWindow setContentSize:NSMakeSize(w, layoutViewportHeight + chrome)];
+                        typeof(self) strongSelf = weakSelf;
+                        NSWindow *win = weakWindow;
+                        if (!strongSelf || !win)
+                            return;
+                        // W1421 (fingerprint FIX): documentElement.clientHeight == the WEB VIEW's
+                        // FRAME height (the layout viewport), so the window must be sized so the
+                        // web view == layoutViewportHeight exactly. The OLD measure
+                        // (contentView.height - contentLayoutRect.height) saw ONLY the title-bar
+                        // band (~32px) — it was BLIND to the Driftstack bottom bar, which insets
+                        // the web container (containerView) by barH (92px) under DRIFTSTACK_SAFARI_CHROME.
+                        // Result, proven empirically: clientHeight = layoutViewport - 92 (782 vs 874)
+                        // = a file-99 tell whenever the chrome is on. Fix: derive the chrome from the
+                        // ACTUAL web view (its origin.y == the bottom-bar height, 0 when chrome off)
+                        // PLUS the title-bar band, then DETERMINISTICALLY pin the web-view frame to
+                        // the layout viewport — do NOT rely on autoresize propagating the resize
+                        // (empirically it did not; the window is non-resizable so an explicit frame
+                        // sticks).
+                        CGFloat contentH = win.contentView.frame.size.height;
+                        NSView *web = strongSelf->containerView ?: strongSelf.mainContentView;
+                        CGFloat barH = web ? web.frame.origin.y : 0;                       // bottom-bar height (0 = chrome off)
+                        CGFloat titleInset = contentH - win.contentLayoutRect.size.height; // title-bar band
+                        if (barH < 0) barH = 0;
+                        if (titleInset < 0) titleInset = 0;
+                        CGFloat targetContent = layoutViewportHeight + barH + titleInset;
+                        [win setContentSize:NSMakeSize(w, targetContent)];
+                        // Pin the web view to EXACTLY the layout viewport, above the bottom bar.
+                        if (strongSelf->containerView) {
+                            strongSelf->containerView.autoresizingMask = NSViewNotSizable;
+                            strongSelf->containerView.frame = NSMakeRect(0, barH, w, layoutViewportHeight);
+                            if (strongSelf.mainContentView)
+                                strongSelf.mainContentView.frame = strongSelf->containerView.bounds;
+                        }
+                        NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f -> window content=%.0f web-view=%d (target viewport=%d)",
+                            contentH, barH, titleInset, (double)targetContent, layoutViewportHeight, layoutViewportHeight);
                     });
                 }
             });
