@@ -121,9 +121,31 @@ void DriftstackCompositeAtlas::mapAtlas()
         return;
     }
 
+    // W2307: bound the strike-table read (24 + numStrikes*4 bytes; numStrikes capped at 16 above,
+    // but the floor may be smaller on a truncated file → OOB readU32 via unchecked operator[]).
+    if (bytesSpan.size() < 24 + static_cast<size_t>(numStrikes) * 4) {
+        WTFLogAlways("[Driftstack] CompositeAtlas: strike table truncated (numStrikes=%u fileSize=%zu)", numStrikes, bytesSpan.size());
+        munmap(base, st.st_size);
+        close(fd);
+        return;
+    }
     m_strikes.reserveInitialCapacity(numStrikes);
     for (uint32_t i = 0; i < numStrikes; ++i)
         m_strikes.append(readU32(24 + 4 * i));
+
+    // W2307: validate the index/data layout BEFORE the subspans. Unvalidated, a corrupt
+    // indexOffset/numEntries/dataOffset makes bytesSpan.subspan() OOB (UB), and m_indexSpan is
+    // binary-searched on EVERY lookup (readCompositeEntry → subspan) → OOB per lookup. The layout
+    // check the sibling span-atlas parsers have was MISSING here (same gap as EmojiAtlas). size_t-cast
+    // so numEntries*kEntrySize can't overflow uint32.
+    if (static_cast<size_t>(indexOffset) + static_cast<size_t>(numEntries) * kEntrySize > bytesSpan.size()
+        || dataOffset > bytesSpan.size()) {
+        WTFLogAlways("[Driftstack] CompositeAtlas: index/data layout invalid (indexOffset=%u numEntries=%u dataOffset=%u fileSize=%zu)",
+            indexOffset, numEntries, dataOffset, bytesSpan.size());
+        munmap(base, st.st_size);
+        close(fd);
+        return;
+    }
 
     m_indexSpan = bytesSpan.subspan(indexOffset, numEntries * kEntrySize);
     m_dataPayloadSpan = bytesSpan.subspan(dataOffset);

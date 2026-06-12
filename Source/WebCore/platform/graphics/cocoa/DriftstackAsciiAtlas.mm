@@ -233,6 +233,18 @@ void DriftstackAsciiAtlas::mapAtlas()
     // Font table follows (color table for v3, header for v1/v2).
     size_t fontTableOffset = (version == 3) ? (colorTableOffset + colorTableBytes) : headerBytes;
 
+    // W2307: the font-name loop below reads bytesSpan[off + len] with off up to
+    // fontTableOffset + numFonts*kAsciiAtlasFontNameBytes, but the layout validation
+    // (indexOffset/dataOffset, line ~246) runs AFTER this loop. On a corrupt/truncated atlas
+    // (valid header, numFonts up to its 64 cap, but no font-table bytes) that read goes OOB
+    // (≈ numFonts*64 ≤ 4 KB past EOF) → WebContent crash on the multi-tenant fleet. unsafeMakeSpan
+    // means operator[] is unchecked in release, so bound the table BEFORE reading it.
+    if (fontTableOffset + static_cast<size_t>(numFonts) * kAsciiAtlasFontNameBytes > bytesSpan.size()) {
+        WTFLogAlways("[Driftstack] AsciiAtlas: font table truncated (off=%zu numFonts=%u fileSize=%zu)",
+            fontTableOffset, numFonts, bytesSpan.size());
+        munmap(base, st.st_size); close(fd); return;
+    }
+
     // Parse font_table (64 bytes per entry, zero-padded UTF-8).
     m_fontNames.reserveInitialCapacity(numFonts);
     for (uint32_t i = 0; i < numFonts; ++i) {

@@ -124,9 +124,32 @@ void DriftstackEmojiAtlas::mapAtlas()
         return;
     }
 
+    // W2307: bound the strike-table read (24 + numStrikes*4 bytes). numStrikes is capped at 16
+    // above, but the header floor may be < that on a truncated file → OOB readU32 (unsafeMakeSpan
+    // → unchecked operator[] in release).
+    if (bytesSpan.size() < 24 + static_cast<size_t>(numStrikes) * 4) {
+        WTFLogAlways("[Driftstack] EmojiAtlas: strike table truncated (numStrikes=%u fileSize=%zu)", numStrikes, bytesSpan.size());
+        munmap(base, st.st_size);
+        close(fd);
+        return;
+    }
     m_strikes.reserveInitialCapacity(numStrikes);
     for (uint32_t i = 0; i < numStrikes; ++i)
         m_strikes.append(readU32(24 + 4 * i));
+
+    // W2307: validate the index/data layout BEFORE the subspans. Unvalidated, a corrupt
+    // indexOffset/numEntries/dataOffset makes bytesSpan.subspan() OOB (UB), and m_indexSpan is
+    // binary-searched on EVERY emoji lookup → OOB per lookup. The layout check the sibling
+    // span-atlas parsers all have (Ascii/Audio/FontCanonical) was entirely MISSING here. size_t-cast
+    // so numEntries*16 can't overflow uint32.
+    if (static_cast<size_t>(indexOffset) + static_cast<size_t>(numEntries) * 16 > bytesSpan.size()
+        || dataOffset > bytesSpan.size()) {
+        WTFLogAlways("[Driftstack] EmojiAtlas: index/data layout invalid (indexOffset=%u numEntries=%u dataOffset=%u fileSize=%zu)",
+            indexOffset, numEntries, dataOffset, bytesSpan.size());
+        munmap(base, st.st_size);
+        close(fd);
+        return;
+    }
 
     m_indexSpan = bytesSpan.subspan(indexOffset, numEntries * 16);
     m_dataPayloadSpan = bytesSpan.subspan(dataOffset);
