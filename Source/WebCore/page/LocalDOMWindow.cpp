@@ -1478,6 +1478,12 @@ int LocalDOMWindow::innerWidth() const
         if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit)
             return 980;
     }
+    // W2266: width=device-width (the common case) → innerWidth === device-width === screen.width.
+    // Derive from the archetype Config (matching Screen::width()/availWidth()/outerWidth() W2265) so
+    // the multi-model matrix stays coherent — a hardcoded 402 mismatches screen.width for any
+    // non-402-wide model (e.g. iPhone 15/16 at 393). Launch archetype (iphone17) Config=402, unchanged.
+    if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+        return w;
     return 402;
 #else
     if (!frame())

@@ -29,6 +29,9 @@
 #include "Chrome.h"
 #include "ChromeClient.h"
 #include "ContextDestructionObserver.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
 #include "DocumentPage.h"
 #include "DocumentView.h"
 #include "Event.h"
@@ -121,7 +124,13 @@ double VisualViewport::pageTop() const
 double VisualViewport::width() const
 {
 #if PLATFORM(DRIFTSTACK)
-    // V-074: visualViewport.width = 402 matching iPhone 16 Pro CSS layout viewport.
+    // V-074 + W2266: visualViewport.width === the CSS layout-viewport width === screen.width
+    // (device-width). Derive from the archetype Config (matching innerWidth/outerWidth/availWidth)
+    // so the matrix stays coherent — a hardcoded 402 mismatches screen.width for any non-402-wide
+    // model. Launch archetype (iphone17) Config=402, unchanged. (height() stays Safari-version-keyed
+    // at 714/678 — the chrome-adjusted visible height, NOT screen.height.)
+    if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+        return static_cast<double>(w);
     return 402;
 #else
     if (!frame())
