@@ -619,7 +619,25 @@ static HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>& driftstackH2Pool
 [[maybe_unused]] static void driftstackH2PoolSet(const String& origin, RefPtr<WebKit::DriftstackHttp2Session>&& session)
 {
     Locker locker { driftstackH2PoolLock() };
-    driftstackH2Pool().set(origin, std::move(session));
+    // W2342: sweep DEAD sessions on every insert. A pooled session whose reader thread has
+    // exited (peer GOAWAY / FIN / transport error → isAlive()==false) otherwise lingers in this
+    // map — holding its TLS client, hence its socket fd in CLOSE_WAIT — until the NEXT request to
+    // THAT SAME origin evicts it via driftstackH2PoolGet (:614). An origin visited once then never
+    // revisited keeps its dead session's fd until the WebContent process exits → slow fd
+    // accumulation on a long-lived session that browses many one-off hosts. The reader THREAD is
+    // already reclaimed on death (it drops its self-ref when readerLoop returns — that leak class is
+    // the W2341/#58 fix's sibling); this only reclaims the lingering fd. Sweeping here bounds it: any
+    // new pooling clears every dead entry across all origins. Alive sessions are untouched (no reuse
+    // regression). O(pool size) under the lock, negligible (pool is per-WebContent, dozens of origins).
+    auto& pool = driftstackH2Pool();
+    Vector<String> dead;
+    for (auto& [key, sess] : pool) {
+        if (!sess || !sess->isAlive())
+            dead.append(key);
+    }
+    for (auto& key : dead)
+        pool.remove(key);
+    pool.set(origin, std::move(session));
 }
 
 // Wave 29-499.321 (Phase 2.5) — pending-connection coalescing. Prevents the
