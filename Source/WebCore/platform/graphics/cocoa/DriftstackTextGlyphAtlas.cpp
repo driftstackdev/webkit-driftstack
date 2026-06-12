@@ -78,6 +78,19 @@ void DriftstackTextGlyphAtlas::loadAtlas()
 
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     auto* base = static_cast<const uint8_t*>(p);
+    const size_t fileSize = static_cast<size_t>(st.st_size);
+
+    // W2306: the atlas file is UNTRUSTED on corruption (disk fault / partial R2 sync /
+    // interrupted download). Bound every header-derived read so a truncated/corrupt atlas
+    // can't OOB-read → WebContent crash (same class fixed for the advance atlas W2305; this
+    // canonical text-glyph atlas had NO post-header bounds + an unchecked font-table base[pos]
+    // read, and m_index is binary-searched so a truncated entry-table = OOB on every lookup).
+    // Fixed header = magic(4) + version(2) + fontCount(2) = 8 bytes.
+    if (fileSize < 8) {
+        munmap(p, st.st_size);
+        WTFLogAlways("[Driftstack-V583K-text] atlas too small (%zu bytes)", fileSize);
+        return;
+    }
 
     // Magic check
     if (base[0] != 'D' || base[1] != 'T' || base[2] != 'G' || base[3] != 'A') {
@@ -97,21 +110,39 @@ void DriftstackTextGlyphAtlas::loadAtlas()
 
     uint16_t fontCount;
     memcpy(&fontCount, base + pos, 2); pos += 2;
-    // Skip font table
+    // Skip font table — bound each entry's header read (id(2) + nameLen(1)) BEFORE deref.
     for (uint16_t i = 0; i < fontCount; ++i) {
+        if (pos + 3 > fileSize) {
+            munmap(p, st.st_size);
+            WTFLogAlways("[Driftstack-V583K-text] atlas font-table truncated (pos=%zu fontIdx=%u/%u exceeds %zu)", pos, i, fontCount, fileSize);
+            return;
+        }
         pos += 2; // id
         uint8_t nameLen = base[pos]; pos += 1;
         pos += nameLen;
     }
 
+    // glyphCount(4) read bound.
+    if (pos + 4 > fileSize) {
+        munmap(p, st.st_size);
+        WTFLogAlways("[Driftstack-V583K-text] atlas truncated before glyphCount (pos=%zu exceeds %zu)", pos, fileSize);
+        return;
+    }
     uint32_t glyphCount;
     memcpy(&glyphCount, base + pos, 4); pos += 4;
 
+    // Entry-table truncation bound — m_index is binary-searched + iterated, so it MUST be
+    // fully in-bounds (cast glyphCount to size_t first so the multiply can't overflow uint32).
+    if (pos + static_cast<size_t>(glyphCount) * sizeof(DriftstackTextGlyphEntry) > fileSize) {
+        munmap(p, st.st_size);
+        WTFLogAlways("[Driftstack-V583K-text] atlas entry-table truncated (glyphCount=%u pos=%zu exceeds %zu)", glyphCount, pos, fileSize);
+        return;
+    }
     m_index = reinterpret_cast<const DriftstackTextGlyphEntry*>(base + pos);
     m_indexCount = glyphCount;
     pos += sizeof(DriftstackTextGlyphEntry) * glyphCount;
 
-    m_pngBlob = base + pos;
+    m_pngBlob = base + pos;  // pos <= fileSize guaranteed by the entry-table bound above
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
     m_atlasData = base;
@@ -152,8 +183,16 @@ std::span<const uint8_t> DriftstackTextGlyphAtlas::lookup(uint16_t fontId, uint1
     if (!entry)
         return { };
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-    return std::span<const uint8_t>(m_pngBlob + entry->pngOffset, entry->pngSize);
+    // W2306: bound the blob slice — a corrupt entry (valid index but garbage pngOffset/pngSize,
+    // e.g. from a partial R2 sync) must not yield an OOB span → OOB read when the PNG is decoded.
+    // Blob region = [m_pngBlob, m_atlasData + m_atlasSize); size_t-promote so the add can't wrap.
+    const size_t blobAvail = m_atlasSize - static_cast<size_t>(m_pngBlob - m_atlasData);
+    const bool inBounds = static_cast<size_t>(entry->pngOffset) + entry->pngSize <= blobAvail;
+    std::span<const uint8_t> result = inBounds
+        ? std::span<const uint8_t>(m_pngBlob + entry->pngOffset, entry->pngSize)
+        : std::span<const uint8_t>();
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+    return result;
 }
 
 std::vector<uint32_t> DriftstackTextGlyphAtlas::allCodepoints() const
