@@ -261,6 +261,7 @@
 #include <WebCore/HighlightRegistry.h>
 #include <WebCore/HistoryController.h>
 #include <WebCore/HistoryItem.h>
+#include <WebCore/HitTestRequest.h>
 #include <WebCore/HitTestResult.h>
 #include <WebCore/ImageAnalysisQueue.h>
 #include <WebCore/ImageOverlay.h>
@@ -323,6 +324,7 @@
 #include <WebCore/SWClientConnection.h>
 #include <WebCore/ScriptController.h>
 #include <WebCore/ScriptDisallowedScope.h>
+#include <WebCore/ScrollableArea.h>
 #include <WebCore/SecurityPolicy.h>
 #include <WebCore/SelectionRestorationMode.h>
 #include <WebCore/SerializedScriptValue.h>
@@ -4267,8 +4269,33 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                 if (auto* view = localMainFrame->view()) {
                     int sdx = static_cast<int>(std::lround(m_driftstackLastTouchPoint.x() - pos.x()));
                     int sdy = static_cast<int>(std::lround(m_driftstackLastTouchPoint.y() - pos.y()));
-                    if (sdx || sdy)
-                        view->scrollBy(WebCore::IntSize(sdx, sdy));   // W1453: native MAIN-frame scroll (page-scroll, verified). Per-element overflow scrollers = W1453b, handed to A1 (the per-move hit-test over-scrolled the page alongside an inner div — scroller-lock/coordinate bug in the scrolling engine).
+                    if (sdx || sdy) {
+                        // W2402 (A1, per A3's W1453b hand-off — the scrolling engine is A1's domain):
+                        // native touch-drag scroll targets the LOCKED enclosing scrollable area of the
+                        // touch-START point, not always the main frame. A3's first cut re-hit-tested the
+                        // CURRENT point each move → as the finger left an inner div the target switched to
+                        // the page → BOTH scrolled (the W1453b "scroller-lock bug"). Fix: hit-test the FIXED
+                        // start point (m_driftstackTapStartPoint — locked for the whole drag, can't switch
+                        // mid-drag) → its enclosing scrollable area; scroll THAT inner overflow:scroll
+                        // element, OR if there is none the main frame view (A3's W1453 page-scroll, preserved
+                        // exactly). SINGLE target — never both. (Overscroll CHAINING div→page at the inner
+                        // limit is a documented follow-up: it needs a scroll-RANGE check, because
+                        // scrollPosition() is NOT synchronously updated after scrollToPositionWithoutAnimation
+                        // — a post-scroll-delta "consumed" chain leaves remaining==full and over-scrolls the
+                        // page, which was this fix's own first cut.) Coordinate space: touchEvent.position()
+                        // is already content-space, used DIRECTLY by WebPageIOS.mm:803 hitTestResultAtPoint
+                        // (no windowToContents — the unneeded conversion was A3's coordinate bug).
+                        WebCore::ScrollableArea* area = nullptr;
+                        auto htr = localMainFrame->eventHandler().hitTestResultAtPoint(
+                            WebCore::flooredIntPoint(m_driftstackTapStartPoint),
+                            { WebCore::HitTestRequest::Type::ReadOnly, WebCore::HitTestRequest::Type::Active, WebCore::HitTestRequest::Type::DisallowUserAgentShadowContent });
+                        if (RefPtr node = htr.innerNode())
+                            area = localMainFrame->eventHandler().enclosingScrollableArea(node.get());
+                        if (area && area != static_cast<WebCore::ScrollableArea*>(view))
+                            area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(area->scrollPosition().x() + sdx, area->scrollPosition().y() + sdy));
+                        else
+                            view->scrollBy(WebCore::IntSize(sdx, sdy));   // W1453: native MAIN-frame scroll (A3's behavior — no inner scroller under the locked start point)
+                    }
                 }
             }
         }
