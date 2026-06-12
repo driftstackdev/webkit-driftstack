@@ -746,6 +746,52 @@ static HashSet<String>& driftstackH2PoolPending()
     driftstackH3Pool().remove(origin);
 }
 
+// W2337 (task #59) — the PathB custom-egress Accept-Language. The ResourceRequest carries NO
+// accept-language on this path (WebCore-Cocoa defers it to CFNetwork, which PathB bypasses — W2327),
+// so whatever this returns IS the byte shipped on the wire. Derive it from DRIFTSTACK_APPLELANGUAGES
+// (the env the harness sets from the proxy-exit geo, gated on DRIFTSTACK_EGRESS_PROBE — A3 W1352) so a
+// geo session's Accept-Language FOLLOWS navigator.language/Intl instead of being a fixed en-US (the
+// W2327 incoherence). Format = the real-iPhone V-229 pattern: list[0] (region-primary, implicit q=1.0)
+// then ",list[i];q=(1.0-0.1*i)". For "en-US,en" this yields exactly "en-US,en;q=0.9" = the prior
+// literal fallback (V-229), so the v1.0/en-US path is BYTE-IDENTICAL (env unset → the literal below).
+// Input contract drift-locked harness-side (A3 W1351: ≥2 well-formed tags, region-qualified [0]).
+// CAVEAT (task #48, BS-gated): the CFNetwork multi-tag/CJK minimization (ja-JP→ja) is NOT modeled here
+// — byte-exact for the Latin 2-element locales; coherent-not-yet-byte-exact for ja/zh/no until #48.
+static String driftstackPathBAcceptLanguage()
+{
+    const char* al = getenv("DRIFTSTACK_APPLELANGUAGES");
+    if (!al || !al[0])
+        return "en-US,en;q=0.9"_s;
+    Vector<String> tags;
+    Vector<char> cur;
+    for (const char* p = al; ; ++p) {
+        if (*p == ',' || *p == '\0') {
+            if (!cur.isEmpty()) {
+                cur.append('\0');
+                tags.append(String::fromUTF8(cur.span().data()));
+                cur.clear();
+            }
+            if (*p == '\0')
+                break;
+        } else if (*p != ' ')   // GeoLocale tags carry no spaces; defensively drop any
+            cur.append(*p);
+    }
+    if (tags.isEmpty())
+        return "en-US,en;q=0.9"_s;
+    StringBuilder out;
+    out.append(tags[0]);  // primary, implicit q=1.0
+    for (size_t i = 1; i < tags.size(); ++i) {
+        int q = 10 - static_cast<int>(i);  // 0.9, 0.8, ... (single iPhone-style decimal)
+        if (q < 1)
+            q = 1;
+        out.append(","_s);
+        out.append(tags[i]);
+        out.append(";q=0."_s);
+        out.append(String::number(q));
+    }
+    return out.toString();
+}
+
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
 // (pseudo-header order m,s,a,p + canonical real-header order + cookies + cache-
 // validation stripping). Shared by the one-shot path AND the pooled session
@@ -793,7 +839,7 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
     if (webkitHdrs.contains("priority"_s)) h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
-    h2req.extraHeaders.append({ "accept-language"_s, getOrDefault("accept-language"_s, "en-US,en;q=0.9"_s) });
+    h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
     for (auto& header : httpHeaders) {
         String lower = header.key.convertToASCIILowercase();
         if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s || lower.startsWith(':')
@@ -1142,7 +1188,7 @@ void DriftstackNetworkLoader::resume()
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
                 if (wk.contains("priority"_s)) h3req.extraHeaders.append({ "priority"_s, wk.get("priority"_s) });
-                h3req.extraHeaders.append({ "accept-language"_s, orDefault("accept-language"_s, "en-US,en;q=0.9"_s) });
+                h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
                 // cookies
                 if (auto nsURLPtr = url.createNSURL()) {
                     NSArray<NSHTTPCookie*>* cookies = [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookiesForURL:nsURLPtr.get()];
@@ -1538,7 +1584,7 @@ void DriftstackNetworkLoader::resume()
             if (webkitHdrs.contains("priority"_s))
                 h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
             h2req.extraHeaders.append({ "accept-language"_s,
-                getOrDefault("accept-language"_s, "en-US,en;q=0.9"_s) });
+                driftstackPathBAcceptLanguage() });
 
             // Forward any OTHER WebKit headers (referer, cookie was set
             // earlier, content-type for POST, etc.) — preserved in their
