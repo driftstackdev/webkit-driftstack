@@ -67,6 +67,16 @@ enum FrameFlag : uint8_t {
     kFlagPriority       = 0x20,
 };
 
+// W2415 — receive-side per-frame size cap. We advertise NO SETTINGS_MAX_FRAME_SIZE (matching the
+// real-iPhone akamai SETTINGS fingerprint: 2,3,4,9), so the default 16384 applies and a compliant
+// server MUST NOT send a frame whose payload exceeds it (RFC 7540 §4.2 — else FRAME_SIZE_ERROR).
+// Without a cap the loop `payload.resize(length)`'d an attacker-chosen 24-bit length (up to 16MB)
+// per frame off a malicious/compromised upstream — a transient over-alloc + slowloris buffer.
+// The RFC 8441 ConnectStream paths already cap at kMaxConnectFrameBytes (1MB); the one-shot +
+// pooled request loops did not. Cap them at the same 1MB (well above any legit 16384 frame, so it
+// never rejects compliant traffic — only a non-compliant oversized frame).
+static constexpr uint32_t kMaxRecvFrameBytes = 1u << 20;
+
 // SETTINGS identifiers (RFC 7540 §6.5.2)
 enum SettingsId : uint16_t {
     kSettingHeaderTableSize       = 0x1,
@@ -953,6 +963,11 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                 return resp;
             }
             decodeFrameHeader(hdr, length, type, frameFlags, sid);
+            if (length > kMaxRecvFrameBytes) {  // W2415 — reject oversized frame (FRAME_SIZE_ERROR)
+                resp.failed = true;
+                resp.errorMessage = "frame exceeds max receive size"_s;
+                return resp;
+            }
             payload.resize(length);
             if (length > 0 && !sslReadExact(ssl, transport,payload.mutableSpan().data(), length)) {
                 resp.failed = true;
@@ -1447,6 +1462,7 @@ void DriftstackHttp2Session::readerLoop()
         if (!transportReadExact(m_transport, hdr, 9)) { markDeadAndFailAll(); return; }
         uint32_t length; uint8_t type, frameFlags; uint32_t sid;
         decodeFrameHeader(hdr, length, type, frameFlags, sid);
+        if (length > kMaxRecvFrameBytes) { markDeadAndFailAll(); return; }  // W2415 — reject oversized frame
 
         Vector<uint8_t> payload;
         if (length) {
