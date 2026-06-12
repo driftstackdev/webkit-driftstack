@@ -238,12 +238,19 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     // and trigger the DriftstackQuicInterpose dylib (Slice 16.4.b.5/.6).
     //
     // Known trade-off: when HTTPS-skip is active, TCP-only HTTPS
-    // requests (no h3 ALPN from server) flow direct via CFNetwork → IP
-    // leak unless CFNetwork SOCKS5 is RE-ARMED (Wave 29-396 sub-1.9.c
-    // disarmed it to prevent double-routing). Future Slice 16.4.b.7.c
-    // can re-arm CFNetwork SOCKS5 when HTTPS-skip is set so all egress
-    // routes through the proxy, with h3 going via interpose and TCP via
-    // CFNetwork SOCKS5.
+    // requests (no h3 ALPN from server) flow direct via CFNetwork, with
+    // CFNetwork SOCKS5 disarmed (Wave 29-396 sub-1.9.c, to prevent
+    // double-routing). NOTE (W2309): this is NOT an IP leak — the W2277
+    // egress fail-closed (the mDNSResponder mach-lookup DENY in the
+    // NetworkProcess sandbox) makes EVERY direct CFNetwork/nw_connection
+    // egress FAIL, even by literal IP, so a disarmed-SOCKS5 direct request
+    // cannot reach the network at all. The residual is FUNCTIONAL, not a
+    // privacy leak: with HTTPS-skip on, TCP-only HTTPS servers (no h3) get
+    // a failed request rather than proxy routing. Future Slice 16.4.b.7.c
+    // re-arms CFNetwork SOCKS5 when HTTPS-skip is set so TCP-only HTTPS
+    // routes through the proxy (h3 via interpose, TCP via CFNetwork SOCKS5).
+    // Until then keep HTTPS-skip OFF in production (default); the
+    // np-env-forwarding-guard flags it if added to the prod launch-env.
     //
     // Default OFF — URLProtocol keeps Wave 29-396 sub-1.9.a behavior.
     if ([scheme isEqualToString:@"https"]) {
