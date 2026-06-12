@@ -106,8 +106,20 @@ void HTTPRequestHandler::didReceive(RemoteInspectorSocketEndpoint&, ConnectionID
 
 void HTTPRequestHandler::sendResponse(HTTPRequestHandler::Response&& response)
 {
+    // A WebDriver command reply may be dispatched ASYNCHRONOUSLY — e.g. after a performActions
+    // (pointer/touch action sequence) resolves on the session's run loop. If the HTTP client
+    // disconnected in the meantime, didClose() reset m_client to std::nullopt; the engine builds
+    // -fno-exceptions, so an unconditional m_client.value() then ABORTS (bad_optional_access) instead
+    // of throwing, taking down the whole process. There is nothing to send to a closed connection, so
+    // bail out cleanly. (Capture the optional once so a concurrent didClose() can't invalidate it
+    // between the check and the send.)
+    auto client = m_client;
+    if (!client) {
+        reset();
+        return;
+    }
     auto& endpoint = RemoteInspectorSocketEndpoint::singleton();
-    endpoint.send(m_client.value(), byteCast<uint8_t>(packHTTPMessage(WTF::move(response)).utf8().span()));
+    endpoint.send(*client, byteCast<uint8_t>(packHTTPMessage(WTF::move(response)).utf8().span()));
     reset();
 }
 
