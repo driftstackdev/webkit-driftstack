@@ -5107,7 +5107,16 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // store, so they stick until the next updatePreferences() call (at
     // which point this block re-applies them — idempotent).
     //
-    // Family A (Safari ≤26.3) → navigator.gpu must be undefined, not null.
+    // WebGPU gate (this `s_isFamilyAArchetype` lambda, defined below): the hide
+    // fires for PRE-Safari-26 archetypes only (slug contains safari17_…safari25_),
+    // so navigator.gpu is undefined on Safari ≤25 and DEFINED on ALL Safari 26.x
+    // (26.0 / 26.3 / 26.4). NOTE: this WebGPU boundary (pre-26 vs 26.0+) is NOT the
+    // canvas Family-A/B boundary (≤26.3 vs ≥26.4) — they differ; do not conflate.
+    // Founder-research-confirmed 2026-05-19 the gate is Safari-VERSION-keyed (not
+    // per-GPU-model). [Open verification: the empirical basis was Pro-model captures
+    // (16 Pro 18.6 = no WebGPU, 17 26.4 = WebGPU); WebGPU presence on a NON-Pro
+    // A15/A16 model at Safari 26.4 is extrapolated, not directly captured — see the
+    // W2301 matrix surface.] When undefined: navigator.gpu must be undefined, not null.
     // IDL [EnabledBySetting=WebGPUEnabled] in JSNavigatorPrototype::
     // finishCreation reads Document::settingsValues().webGPUEnabled and
     // deletes the accessor when false. With this setter applied here,
