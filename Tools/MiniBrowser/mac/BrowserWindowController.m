@@ -28,6 +28,23 @@
 #import "AppDelegate.h"
 #import "SettingsController.h"
 
+#import <objc/runtime.h>
+
+// Driftstack (W1371): a window that always DRAWS with active (key+main) appearance regardless of
+// real focus, so the chrome NEVER greys/dims when the user focuses another window (the founder's
+// W1370 priority: "window greyed-out/dark when not activated — not user-friendly"). It overrides
+// only the APPEARANCE getters (`hasKeyAppearance`/`hasMainAppearance`) — NOT `isKeyWindow`/
+// `isMainWindow` — so the window's REAL key/main status (focus, first responder, menu routing,
+// text-field editing) is completely UNCHANGED; only the dimming-vs-active DRAWING is forced active.
+// Retrofitted onto the existing nib-loaded window via `object_setClass` (the subclass adds NO ivars,
+// so the object layout is unchanged → a layout-safe isa swap), gated by DRIFTSTACK_SAFARI_CHROME.
+@interface DriftstackAlwaysActiveWindow : NSWindow
+@end
+@implementation DriftstackAlwaysActiveWindow
+- (BOOL)hasKeyAppearance { return YES; }
+- (BOOL)hasMainAppearance { return YES; }
+@end
+
 @interface BrowserWindowController () <NSSharingServicePickerDelegate, NSSharingServiceDelegate> {
     NSTimer *_mainThreadStallTimer;
 }
@@ -67,6 +84,10 @@
         [self.window standardWindowButton:NSWindowCloseButton].hidden = YES;
         [self.window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
         [self.window standardWindowButton:NSWindowZoomButton].hidden = YES;
+        // W1371: stop the chrome greying when the window isn't focused (founder W1370). Force
+        // always-active DRAWING via the appearance-only window subclass (real focus/responder
+        // status untouched). isa-swap is layout-safe (subclass adds no ivars).
+        object_setClass(self.window, [DriftstackAlwaysActiveWindow class]);
     }
 
     // Driftstack: size the window content to the ACTIVE ARCHETYPE's viewport so
