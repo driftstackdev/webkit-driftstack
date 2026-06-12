@@ -194,19 +194,32 @@
 
     // Translucent always-active glass bar pinned to the bottom (never greys: state = Active).
     NSVisualEffectView *bar = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, cb.size.width, barH)];
-    bar.material = NSVisualEffectMaterialHeaderView;
+    bar.material = NSVisualEffectMaterialMenu;                       // W1385: more translucent (Liquid-Glass-er)
     bar.blendingMode = NSVisualEffectBlendingModeWithinWindow;
     bar.state = NSVisualEffectStateActive;
     bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;   // stretch width, pin to bottom
     [content addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+    // W1385: a subtle top hairline separating the bar from the page (iOS toolbars have one).
+    NSView *hairline = [[NSView alloc] initWithFrame:NSMakeRect(0, barH - 0.5, cb.size.width, 0.5)];
+    hairline.wantsLayer = YES;
+    hairline.layer.backgroundColor = NSColor.separatorColor.CGColor;
+    hairline.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    [bar addSubview:hairline];
 
     CGFloat W = cb.size.width;
     // Row 1 (top of bar): the URL "pill" with the lock at its left + reload at its right.
     if (lockButton) { lockButton.frame = NSMakeRect(12, barH - 40, 28, 28); [bar addSubview:lockButton]; }
     if (urlText) {
-        urlText.frame = NSMakeRect(46, barH - 42, W - 92, 32);
-        urlText.bezelStyle = NSTextFieldRoundedBezel;
+        // W1385: a clean iOS-Safari URL "pill" — borderless, centered, a soft rounded translucent fill.
+        urlText.frame = NSMakeRect(44, barH - 44, W - 88, 34);
+        urlText.bordered = NO;
+        urlText.bezeled = NO;
+        urlText.drawsBackground = NO;
         urlText.alignment = NSTextAlignmentCenter;
+        urlText.font = [NSFont systemFontOfSize:13];
+        urlText.wantsLayer = YES;
+        urlText.layer.cornerRadius = 17;
+        urlText.layer.backgroundColor = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.12].CGColor;
         [bar addSubview:urlText];
     }
     if (reloadButton) { reloadButton.frame = NSMakeRect(W - 38, barH - 40, 28, 28); [bar addSubview:reloadButton]; }
@@ -224,6 +237,16 @@
     if (self.mainContentView && containerView) {
         self.mainContentView.frame = containerView.bounds;
         self.mainContentView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    }
+
+    // W1385: Driftstack "Drift touch" — tint the ACTION glyphs Oxblood #722F37 (A2 brand spec, the
+    // SOLE accent, reserved for actions/active states — not large fills, so the bar/pill stay neutral;
+    // matches the simulator-toolbar DriftMark for brand coherence). contentTintColor on nil is a no-op.
+    NSColor *oxblood = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
+    for (NSButton *b in @[backButton ?: [NSButton new], forwardButton ?: [NSButton new], reloadButton ?: [NSButton new], lockButton ?: [NSButton new], share ?: [NSButton new]]) {
+        b.image.template = YES;            // contentTintColor only tints TEMPLATE images
+        b.contentTintColor = oxblood;
+        b.bordered = NO;                   // ensure the glyph (not a bezel) shows the tint
     }
 }
 
