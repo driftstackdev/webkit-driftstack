@@ -52,6 +52,23 @@
     // Enable tabbing - group regular windows together
     self.window.tabbingIdentifier = @"MiniBrowserMainWindow";
 
+    // Driftstack iOS-Safari chrome (W1369) — ENV-GATED `DRIFTSTACK_SAFARI_CHROME`, default OFF so the
+    // production session host stays byte-identical until the custom chrome is fully built + verified.
+    // The whole window is captured into the session stream (SCContentFilter desktopIndependentWindow),
+    // so the macOS title-bar furniture (traffic lights + title text) both looks nothing like iOS Safari
+    // AND greys out when the window isn't key (the founder-reported symptom). Phase-1 foundation: drop
+    // that native furniture. The custom always-active Safari toolbar that fully replaces the (still-
+    // greying) native URL toolbar is the next increment behind this same gate. The window-size /
+    // layout-viewport math below is DYNAMIC (measures the actual chrome at runtime) so it self-corrects
+    // to the new chrome height — clientHeight==innerHeight stays correct (the file-99 fingerprint).
+    if (getenv("DRIFTSTACK_SAFARI_CHROME")) {
+        self.window.titlebarAppearsTransparent = YES;
+        self.window.titleVisibility = NSWindowTitleHidden;
+        [self.window standardWindowButton:NSWindowCloseButton].hidden = YES;
+        [self.window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
+        [self.window standardWindowButton:NSWindowZoomButton].hidden = YES;
+    }
+
     // Driftstack: size the window content to the ACTIVE ARCHETYPE's viewport so
     // the physical render (and screenshots/streams) match the chosen device, and
     // the CSS layout viewport agrees with the JS-reported screen/inner dims.
