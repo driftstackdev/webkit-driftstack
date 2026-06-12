@@ -42,8 +42,15 @@ bool HTTPServer::listen(const std::optional<String>& host, unsigned port)
 
 void HTTPServer::disconnect()
 {
+    // Same closed-connection crash class as sendResponse (13b0286985) / sendWebInspectorEvent
+    // (20c4819fd6): m_server is std::optional<ConnectionID> and is unset if the server never bound
+    // (listen failed) or was already disconnected. An unconditional m_server.value() then ABORTS
+    // (bad_optional_access under -fno-exceptions). Teardown must be a no-op when there is nothing to
+    // disconnect.
+    if (!m_server)
+        return;
     auto& endpoint = RemoteInspectorSocketEndpoint::singleton();
-    endpoint.disconnect(m_server.value());
+    endpoint.disconnect(*m_server);
 }
 
 std::optional<ConnectionID> HTTPServer::doAccept(RemoteInspectorSocketEndpoint& endpoint, PlatformSocketType socket)
