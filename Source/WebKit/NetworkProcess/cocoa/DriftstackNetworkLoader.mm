@@ -792,6 +792,26 @@ static String driftstackPathBAcceptLanguage()
     return out.toString();
 }
 
+// W2340 (refines W2338): the PathB Accept-Encoding, ARCHETYPE-CONDITIONED on the zstd cutover.
+// zstd landed in WebKit/Safari 26.3 (W1483), so family-B archetypes (Safari >=26.3, incl the 26.4
+// launch) advertise "gzip, deflate, br, zstd"; family-A (Safari 17/18/19 + 26.0/26.1/26.2 — pre-26.3)
+// advertise "gzip, deflate, br" (no zstd). W2338 found the loader was shipping the WebProcess Mac
+// "gzip, deflate" (getOrDefault passthrough) and forced the iPhone value, but UNCONDITIONALLY — correct
+// for the 26.4 launch, wrong for the post-launch family-A configs (they'd advertise zstd Safari 18.6
+// never sends). The loader decodes all of gzip/deflate/br/zstd via VENDORED zstd v1.5.7 (W1515/W2326 —
+// NOT macOS libcompression, which has no zstd codec), so advertising the full set is safe at decode time.
+static String driftstackPathBAcceptEncoding()
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (arch && arch[0]) {
+        String a = String::fromUTF8(arch);
+        if (a.contains("safari17_"_s) || a.contains("safari18_"_s) || a.contains("safari19_"_s)
+            || a.contains("safari26_0"_s) || a.contains("safari26_1"_s) || a.contains("safari26_2"_s))
+            return "gzip, deflate, br"_s;  // pre-26.3 archetype = no zstd
+    }
+    return "gzip, deflate, br, zstd"_s;  // Safari >=26.3 (incl the 26.4 launch) + default
+}
+
 // Wave 29-499.321 (Phase 2.5) — build the iPhone-Safari-exact HTTP/2 request
 // (pseudo-header order m,s,a,p + canonical real-header order + cookies + cache-
 // validation stripping). Shared by the one-shot path AND the pooled session
@@ -843,7 +863,7 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     // zstd" (W1512; Accept-Encoding is a forbidden fetch header → browser-set, JS can't override). The PathB
     // loader decodes all of gzip/deflate/br/zstd before WebKit sees the body (W2326), so advertising them is
     // safe. Hardcode the iPhone value so every PathB request (navigation + fetch/XHR) is byte-correct.
-    h2req.extraHeaders.append({ "accept-encoding"_s, "gzip, deflate, br, zstd"_s });
+    h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
     if (webkitHdrs.contains("priority"_s)) h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
@@ -1192,7 +1212,7 @@ void DriftstackNetworkLoader::resume()
                 h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
                 if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
                 if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
-                h3req.extraHeaders.append({ "accept-encoding"_s, "gzip, deflate, br, zstd"_s /* W2338: forced iPhone AE, see h2-builder */ });
+                h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
                 if (wk.contains("priority"_s)) h3req.extraHeaders.append({ "priority"_s, wk.get("priority"_s) });
@@ -1584,7 +1604,7 @@ void DriftstackNetworkLoader::resume()
             if (webkitHdrs.contains("sec-fetch-dest"_s))
                 h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
             h2req.extraHeaders.append({ "accept-encoding"_s,
-                "gzip, deflate, br, zstd"_s /* W2338: forced iPhone AE */ });
+                driftstackPathBAcceptEncoding() });
             if (webkitHdrs.contains("sec-fetch-mode"_s))
                 h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
