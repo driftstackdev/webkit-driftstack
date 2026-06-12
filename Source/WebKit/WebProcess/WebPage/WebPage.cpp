@@ -4255,6 +4255,12 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     }
     case WebEventType::TouchEnd:
         break;
+    case WebEventType::TouchCancel:
+        // W1418: a cancelled touch (system gesture / scroll-takeover) is definitively NOT a tap —
+        // clear the pending-tap state so a later touchEnd can't synthesize a spurious click on the
+        // cancelled sequence. (Without this, TouchCancel fell through to `default` leaving the flag set.)
+        m_driftstackPotentialTap = false;
+        return;
     default:
         return;
     }
