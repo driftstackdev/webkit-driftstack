@@ -43,6 +43,7 @@
 #include "FontInlines.h"
 #include "GlyphBuffer.h"
 #include "GraphicsContext.h"
+#include "NativeImage.h"
 #include "LayoutRect.h"
 #include "Logging.h"
 #include "RenderStyle+GettersInlines.h"
@@ -791,46 +792,72 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     std::array<uint8_t, 64 * 64 * 4> rgba;
                     auto atlasPx = unsafeMakeSpan(hit->pixels, 64 * 64);
                     auto rgbaSpan = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
-                    // W1785: flip rows — the canvas y-down CTM draws raw CGImages
-                    // upside-down (unlike the text-run's PNG via CGImageSource which
-                    // auto-orients). Pre-flip so DrawImage lands right-side-up.
+                    // W2540: top-down, NO row-flip. context.drawNativeImage places the
+                    // image in the canvas (y-down, top-left origin) coordinate system —
+                    // unlike the raw CG bottom-left CGContextDrawImage which needed the
+                    // W1785 flip. This mirrors the PROVEN byte-exact V-770.A text-run blit
+                    // (FontCascade.cpp NativeImage::create + context.drawNativeImage); the
+                    // prior raw-CGContextDrawImage + premultiplied-DeviceRGB compositing
+                    // matched glyph geometry exactly but left ±1 antialiasing-byte diffs
+                    // vs the real device (glyphchardiff "AA-only" class). Escape hatch:
+                    // DRIFTSTACK_V790L_BLIT_RAW=1 restores the raw CGContextDrawImage path.
+                    static const bool v790lBlitRaw = std::getenv("DRIFTSTACK_V790L_BLIT_RAW")
+                        && std::getenv("DRIFTSTACK_V790L_BLIT_RAW")[0] == '1';
+                    // W2541: TINT the atlas coverage mask with the canvas fill color
+                    // (premultiplied), instead of hardcoding black. Sites render text in
+                    // arbitrary colors (glyphchardiff uses #069); a black substitution
+                    // matched the glyph SHAPE/coverage but not the RGB, so getImageData
+                    // hashes differed even on a perfect-geometry glyph. For black fill
+                    // (fr=fg=fb=0) this is identical to the old black blit, so the
+                    // cumrig (black text) is unaffected. Mirrors the text-run mask-tint.
+                    auto [fr, fg, fb, fa] = context.fillColor().toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
                     for (size_t row = 0; row < 64; ++row) {
-                        size_t srcRow = 63 - row;
+                        size_t srcRow = v790lBlitRaw ? (63 - row) : row;
                         for (size_t col = 0; col < 64; ++col) {
                             size_t di = row * 64 + col;
                             uint8_t ink = atlasPx[srcRow * 64 + col];
-                            rgbaSpan[di * 4 + 0] = 0;
-                            rgbaSpan[di * 4 + 1] = 0;
-                            rgbaSpan[di * 4 + 2] = 0;
-                            rgbaSpan[di * 4 + 3] = ink;
+                            float a = (ink / 255.0f) * fa; // coverage × fill alpha
+                            rgbaSpan[di * 4 + 0] = static_cast<uint8_t>(roundf(fr * a * 255.0f));
+                            rgbaSpan[di * 4 + 1] = static_cast<uint8_t>(roundf(fg * a * 255.0f));
+                            rgbaSpan[di * 4 + 2] = static_cast<uint8_t>(roundf(fb * a * 255.0f));
+                            rgbaSpan[di * 4 + 3] = static_cast<uint8_t>(roundf(a * 255.0f));
                         }
                     }
                     RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(
                         kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
                     RetainPtr<CGDataProviderRef> dataProvider = adoptCF(
                         CGDataProviderCreateWithCFData(rgbaData.get()));
-                    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateDeviceRGB());
+                    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(v790lBlitRaw
+                        ? CGColorSpaceCreateDeviceRGB()
+                        : CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
                     RetainPtr<CGImageRef> glyphImg = adoptCF(CGImageCreate(
                         64, 64, 8, 32, 64 * 4, colorSpace.get(),
                         kCGImageAlphaPremultipliedLast,
                         dataProvider.get(), nullptr, false, kCGRenderingIntentDefault));
                     if (glyphImg) {
-                        CGContextRef destCG = context.platformContext();
-                        CGContextSaveGState(destCG);
-                        CGRect dstRect = CGRectMake(
-                            anchorPoint.x() - 8.0,
-                            anchorPoint.y() - 46.0,
-                            64, 64);
-                        CGContextDrawImage(destCG, dstRect, glyphImg.get());
-                        CGContextRestoreGState(destCG);
-                        WTFLogAlways("[V-790.L] per-glyph atlas HIT "
-                                     "font_id=%u pt=%u cp=U+%04x pos=%u "
-                                     "— DrawImage iPhone substitution",
-                                     static_cast<unsigned>(fontId),
-                                     static_cast<unsigned>(ptSize),
-                                     static_cast<unsigned>(cp),
-                                     static_cast<unsigned>(positionClass));
-                        return; // skip Layer B + platform CT raster
+                        if (v790lBlitRaw) {
+                            CGContextRef destCG = context.platformContext();
+                            CGContextSaveGState(destCG);
+                            CGRect dstRect = CGRectMake(
+                                anchorPoint.x() - 8.0, anchorPoint.y() - 46.0, 64, 64);
+                            CGContextDrawImage(destCG, dstRect, glyphImg.get());
+                            CGContextRestoreGState(destCG);
+                            return;
+                        }
+                        RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
+                        if (nativeImg) {
+                            FloatRect destRect(anchorPoint.x() - 8.0, anchorPoint.y() - 46.0, 64, 64);
+                            FloatRect srcRect(0, 0, 64, 64);
+                            context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
+                            WTFLogAlways("[V-790.L] per-glyph atlas HIT "
+                                         "font_id=%u pt=%u cp=U+%04x pos=%u "
+                                         "— drawNativeImage iPhone substitution",
+                                         static_cast<unsigned>(fontId),
+                                         static_cast<unsigned>(ptSize),
+                                         static_cast<unsigned>(cp),
+                                         static_cast<unsigned>(positionClass));
+                            return; // skip Layer B + platform CT raster
+                        }
                     }
                 }
             }
