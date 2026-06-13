@@ -95,6 +95,19 @@ OffscreenCanvasRenderingContext2D::~OffscreenCanvasRenderingContext2D() = defaul
 
 void OffscreenCanvasRenderingContext2D::setFont(const String& newFont)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2483 — record the font op in the V-510 op-sequence, mirroring the main-thread
+    // CanvasRenderingContext2D::setFont. Without this the WORKER's OffscreenCanvas
+    // op-seq omitted the font op → a worker canvas hashed to a DIFFERENT op-seq than
+    // the identical main-thread canvas → the (main-captured) V-510 atlas missed worker
+    // canvases → worker getImageData/toDataURL fell to the Mac-native render while the
+    // main thread served the iPhone-canonical bytes. A fingerprinter that runs canvas
+    // FP in a Worker (the standard way to dodge JS-injection anti-detect tools) would
+    // then see main≠worker — a coherence tell that real iPhone Safari never exhibits
+    // (its CoreGraphics renders a worker canvas identically to a main one). Recorded at
+    // the top, unconditionally, exactly like main so empty/unparseable fonts hash alike.
+    driftstackOpSequenceRecorder().recordSetFont(newFont);
+#endif
     Ref context = *canvasBase().scriptExecutionContext();
 
     if (newFont.isEmpty())
