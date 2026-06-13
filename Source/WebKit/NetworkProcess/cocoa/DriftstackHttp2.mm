@@ -992,17 +992,25 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                 size_t cursor = 0;
                 // Skip padding/priority if present
                 size_t payloadStart = 0;
+                size_t headerEnd = payload.size();
                 if (frameFlags & kFlagPadded) {
+                    // RFC 7540 §6.2 (W2528): Pad Length is a 1-byte FRONT field; the padding bytes
+                    // sit at the END of the payload (mirror the §6.1 DATA-frame trim at kFrameData).
+                    // The header block is [payloadStart, size - padLen). Treating padLen as a front
+                    // offset starts HPACK mid-field → desync → corrupted/dropped response headers.
                     if (payload.size() < 1) break;
-                    payloadStart = 1 + payload[0];  // pad length byte + padding
+                    uint8_t padLen = payload[0];
+                    if (static_cast<size_t>(padLen) + 1 > payload.size()) break;
+                    payloadStart = 1;
+                    headerEnd = payload.size() - padLen;
                 }
                 if (frameFlags & kFlagPriority) {
                     if (payload.size() < payloadStart + 5) break;
                     payloadStart += 5;
                 }
                 cursor = payloadStart;
-                while (cursor < payload.size()) {
-                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
+                while (cursor < headerEnd) {
+                    if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
@@ -1526,11 +1534,15 @@ void DriftstackHttp2Session::readerLoop()
         case kFrameHeaders: {
             Vector<std::pair<String, String>> decoded;
             size_t start = 0;
-            if (frameFlags & kFlagPadded) { if (payload.size() < 1) break; start = 1 + payload[0]; }
+            size_t headerEnd = payload.size();
+            // RFC 7540 §6.2 (W2528): pad length is a FRONT byte, padding is at the END; the header
+            // block is [start, size - padLen). Mirror the §6.1 DATA-frame trim (treating padLen as a
+            // front offset desyncs HPACK → corrupted response headers).
+            if (frameFlags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
             if (frameFlags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
             size_t cursor = start;
-            while (cursor < payload.size()) {
-                if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
+            while (cursor < headerEnd) {
+                if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
                     break;
             }
             Locker locker { m_lock };
@@ -1899,12 +1911,14 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
         case kFrameHeaders:
             if (sid == kStreamId) {
                 Vector<std::pair<String, String>> decoded;
-                size_t cursor = 0, start = 0;
-                if (flags & kFlagPadded) { if (payload.size() < 1) break; start = 1 + payload[0]; }
+                size_t cursor = 0, start = 0, headerEnd = payload.size();
+                // RFC 7540 §6.2 (W2528): pad length is a FRONT byte, padding is at the END; the
+                // header block is [start, size - padLen). Mirror the §6.1 DATA-frame trim.
+                if (flags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
                 if (flags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
                 cursor = start;
-                while (cursor < payload.size()) {
-                    if (!hpackDecodeOneHeader(payload.span().data(), payload.size(), cursor, decoded, hpackDyn))
+                while (cursor < headerEnd) {
+                    if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
