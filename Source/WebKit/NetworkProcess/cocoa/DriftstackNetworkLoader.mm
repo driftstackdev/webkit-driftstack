@@ -916,7 +916,13 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
-    if (webkitHdrs.contains("priority"_s)) h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
+    // W2438 (#61): real iPhone-17 Safari 26.4 sends the RFC 9218 `priority` header on every request
+    // (16/16 BS browserleaks captures = `u=0, i`). On iOS that header is injected by CFNetwork at the
+    // network layer; PathB bypasses CFNetwork, so the WebProcess request has no `priority` and omitting
+    // it is a wire tell. Pass WebKit's value through if present, else FORCE the verified iPhone value.
+    // (u=0 is the verified navigation/document urgency; the per-resource-type urgency matrix for
+    // sub-resources is BS-gated — #61 residual. Regular header → does NOT affect the Akamai H2 hash.)
+    h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s) : "u=0, i"_s });
     h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
     for (auto& header : httpHeaders) {
         String lower = header.key.convertToASCIILowercase();
@@ -1265,7 +1271,9 @@ void DriftstackNetworkLoader::resume()
                 h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
-                if (wk.contains("priority"_s)) h3req.extraHeaders.append({ "priority"_s, wk.get("priority"_s) });
+                // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when
+                // WebKit doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
+                h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s) : "u=0, i"_s });
                 h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
                 // cookies
                 if (auto nsURLPtr = url.createNSURL()) {
@@ -1659,8 +1667,10 @@ void DriftstackNetworkLoader::resume()
                 h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
                 getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
-            if (webkitHdrs.contains("priority"_s))
-                h2req.extraHeaders.append({ "priority"_s, webkitHdrs.get("priority"_s) });
+            // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when WebKit
+            // doesn't supply one — the one-shot path bypasses CFNetwork same as the pool builder above.
+            h2req.extraHeaders.append({ "priority"_s,
+                webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s) : "u=0, i"_s });
             h2req.extraHeaders.append({ "accept-language"_s,
                 driftstackPathBAcceptLanguage() });
 
