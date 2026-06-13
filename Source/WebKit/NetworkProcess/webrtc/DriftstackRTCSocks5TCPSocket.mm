@@ -185,7 +185,30 @@ DriftstackRTCSocks5TCPSocket::DriftstackRTCSocks5TCPSocket(
 
 DriftstackRTCSocks5TCPSocket::~DriftstackRTCSocks5TCPSocket()
 {
-    close();
+    // W2528 (UAF fix): the normal teardown is close() → cancel → (cancel handler) takeSocket →
+    // unique_ptr drop → here, with m_closed already true and the read source already drained — a
+    // no-op. But *this can also be destroyed ABNORMALLY (e.g. NetworkRTCProvider torn down with a
+    // live socket clears its map, dropping the owning unique_ptr WITHOUT close() first). In that
+    // case synchronously cancel + DRAIN the read source before the members below are destroyed, so
+    // no in-flight read handler touches freed state. We are on the destruction thread (NOT
+    // socks5TcpReadQueue) so the wait cannot self-deadlock; m_tornDownInDtor makes the cancel
+    // handler signal m_readDrained instead of calling takeSocket (we are already freeing *this).
+    dispatch_source_t src = nullptr;
+    {
+        Locker locker { m_lock };
+        if (!m_closed) {
+            m_closed = true;
+            m_fd = -1;
+            src = m_readSource;
+            m_readSource = nullptr;
+            if (src)
+                m_tornDownInDtor = true;
+        }
+    }
+    if (src) {
+        dispatch_source_cancel(src);
+        dispatch_semaphore_wait(m_readDrained, DISPATCH_TIME_FOREVER);
+    }
 }
 
 bool DriftstackRTCSocks5TCPSocket::connectViaSocks5(const std::string& host, uint16_t port)
@@ -261,6 +284,8 @@ void DriftstackRTCSocks5TCPSocket::startReadLoop()
     {
         Locker locker { m_lock };
         m_readSource = src;
+        if (!m_readDrained)
+            m_readDrained = dispatch_semaphore_create(0);  // W2528 — dtor-path drain handshake
     }
 
     dispatch_source_set_event_handler(src, ^{
@@ -287,7 +312,27 @@ void DriftstackRTCSocks5TCPSocket::startReadLoop()
     });
 
     dispatch_source_set_cancel_handler(src, ^{
-        // Source cancellation cleanup is done in close()
+        // W2528 (UAF fix) — the cancel handler runs only AFTER the last in-flight read event
+        // handler has returned (dispatch guarantee), so *this can no longer be touched by a
+        // handler. *this is still alive here (close() defers the free to us; the dtor blocks on
+        // m_readDrained until we run). If the destructor is draining us (abnormal teardown), just
+        // signal it and let the dtor finish freeing *this. Otherwise this is a normal close():
+        // free *this on the RTC network thread (takeSocket asserts that thread + drops the owning
+        // unique_ptr — the LibWebRTCSocketClient idiom). Never capture `this` cross-thread.
+        bool inDtor;
+        {
+            Locker l { m_lock };
+            inDtor = m_tornDownInDtor;
+        }
+        if (inDtor) {
+            dispatch_semaphore_signal(m_readDrained);
+            return;
+        }
+        Ref<NetworkRTCProvider> provider = m_rtcProvider.get();
+        auto identifier = m_identifier;
+        provider->callOnRTCNetworkThread([provider, identifier] {
+            provider->takeSocket(identifier);
+        });
     });
 
     dispatch_resume(src);
@@ -339,11 +384,19 @@ void DriftstackRTCSocks5TCPSocket::close()
         m_fd = -1;
         m_readSource = nullptr;
     }
-    if (src)
+    if (src) {
+        // W2528 (UAF fix): do NOT free *this here — the read event handler runs on a concurrent
+        // queue holding a raw `this`, so freeing now (takeSocket) races an in-flight handler →
+        // deref of freed m_tls/m_lock (an untrusted TURN/STUN peer can drive this). dispatch_source_cancel
+        // + the cancel handler guarantee the free (deferred to the RTC thread) happens only AFTER the
+        // last handler returns. Re-entrancy-safe: close() is also called from the read handler at EOF
+        // and cancel is async, so there is no self-wait. The fd (owned by m_socks5Client) stays open
+        // until *this is destroyed by takeSocket → the dtor.
         dispatch_source_cancel(src);
-    // fd is owned by m_socks5Client; its destructor closes it.
+        return;
+    }
+    // No read source was started → no handler can be running; free directly (on the RTC thread).
     m_socks5Client.reset();
-
     Ref { m_rtcProvider.get() }->takeSocket(m_identifier);
 }
 

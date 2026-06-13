@@ -78,7 +78,16 @@ private:
     Lock m_lock;
     int m_fd WTF_GUARDED_BY_LOCK(m_lock) { -1 };
     bool m_closed WTF_GUARDED_BY_LOCK(m_lock) { false };
+    // W2528 (UAF fix): the read event handler runs on a CONCURRENT queue holding a raw `this`
+    // (this socket is unique_ptr/TZONE-owned, NOT RefCounted, so a Ref-capture is impossible).
+    // *this must not be freed while a handler is in flight. close() defers the free to the read
+    // source's CANCEL handler (dispatch runs it only after the last handler returns). The dtor
+    // path (abnormal teardown: provider map cleared with a live socket) can't defer — it sets
+    // m_tornDownInDtor so the cancel handler signals m_readDrained instead of calling takeSocket,
+    // and the dtor synchronously waits for that drain before the members below are destroyed.
+    bool m_tornDownInDtor WTF_GUARDED_BY_LOCK(m_lock) { false };
     dispatch_source_t m_readSource WTF_GUARDED_BY_LOCK(m_lock) { nullptr };
+    dispatch_semaphore_t m_readDrained { nullptr };  // signalled by the cancel handler on the dtor drain path
     std::unique_ptr<DriftstackSocks5Client> m_socks5Client;  // owns fd lifetime
     std::unique_ptr<DriftstackTLS13Client> m_tls;  // Wave 29-499.279 — TURN-TLS wrap (iPhone-byte-exact ClientHello)
 
