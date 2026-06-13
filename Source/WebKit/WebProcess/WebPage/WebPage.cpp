@@ -4282,12 +4282,20 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                         // limit is a documented follow-up: it needs a scroll-RANGE check, because
                         // scrollPosition() is NOT synchronously updated after scrollToPositionWithoutAnimation
                         // — a post-scroll-delta "consumed" chain leaves remaining==full and over-scrolls the
-                        // page, which was this fix's own first cut.) Coordinate space: touchEvent.position()
-                        // is already content-space, used DIRECTLY by WebPageIOS.mm:803 hitTestResultAtPoint
-                        // (no windowToContents — the unneeded conversion was A3's coordinate bug).
+                        // page, which was this fix's own first cut.) Coordinate space (W2448, fixing the
+                        // A3-W1863 regression my W2439 introduced): m_driftstackTapStartPoint is now WINDOW-
+                        // space — W2439 added obscuredContentInsets to the WD touch injection so that
+                        // EventHandler::handleTouchEvent's windowToContents (EventHandler.cpp:5486) lands taps
+                        // correctly. But hitTestResultAtPoint → document->hitTest operates in CONTENT space, so
+                        // this start point must be windowToContents-converted (the SAME conversion WebCore
+                        // applies to the touch). Pre-W2439 position() was content-space so this was a direct
+                        // pass; W2439 flipped the space → the locked-scroller hit-test landed on the wrong
+                        // element → the W1453b over-scroll regressed (div + page both scrolled). The synthetic
+                        // mouse events (tap path) keep window-space since handleMousePress/Release do their own
+                        // windowToContents. The scroll DELTAS (sdx/sdy) are space-agnostic (the inset cancels).
                         WebCore::ScrollableArea* area = nullptr;
                         auto htr = localMainFrame->eventHandler().hitTestResultAtPoint(
-                            WebCore::flooredIntPoint(m_driftstackTapStartPoint),
+                            view->windowToContents(WebCore::flooredIntPoint(m_driftstackTapStartPoint)),
                             { WebCore::HitTestRequest::Type::ReadOnly, WebCore::HitTestRequest::Type::Active, WebCore::HitTestRequest::Type::DisallowUserAgentShadowContent });
                         if (RefPtr node = htr.innerNode())
                             area = localMainFrame->eventHandler().enclosingScrollableArea(node.get());
