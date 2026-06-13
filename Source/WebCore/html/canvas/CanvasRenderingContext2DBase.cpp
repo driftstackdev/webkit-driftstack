@@ -2860,22 +2860,56 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             const char* env = getenv("DRIFTSTACK_GETIMAGEDATA_ATLAS");
             return env && env[0] == '1';
         }();
+        // W2481 — extend the V-510 getImageData serve to PARTIAL-rect (mirror the §90
+        // V-373 path): look up the FULL-canvas V-510 RGBA by op-seq, then slice the
+        // requested (sx,sy,sw,sh). Without this, a sub-region getImageData of a
+        // V-510-only (auto-learned, not-in-V-185) canvas fell to AFP-random while the
+        // full-canvas read + toDataURL serve the iPhone bytes — FPJS's sub-region
+        // noise-sensitivity probe would detect that inconsistency.
         if (s_getImageDataAtlas
             && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
-            && sx == 0 && sy == 0
-            && static_cast<unsigned>(sw) == canvasBase().width()
-            && static_cast<unsigned>(sh) == canvasBase().height()) {
-            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().width(), 0xffff));
-            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(canvasBase().height(), 0xffff));
+            && sw > 0 && sh > 0 && sx >= 0 && sy >= 0
+            && static_cast<unsigned>(sx + sw) <= canvasBase().width()
+            && static_cast<unsigned>(sy + sh) <= canvasBase().height()) {
+            const auto fullW = canvasBase().width();
+            const auto fullH = canvasBase().height();
+            uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(fullW, 0xffff));
+            uint16_t hSig = static_cast<uint16_t>(std::min<unsigned>(fullH, 0xffff));
             String opSeqSha = driftstackOpSequenceSHA256(wSig, hSig);
-            Vector<uint8_t> v510RGBA;
-            if (Driftstack::getV510AtlasRGBAForOpSeq(opSeqSha, sw, sh, v510RGBA)) {
-                WTFLogAlways("[Driftstack-V510-getImageData] HIT (%dx%d opSeq=%s)", sw, sh,
-                    opSeqSha.left(12).utf8().data());
+            Vector<uint8_t> fullRGBA;
+            if (Driftstack::getV510AtlasRGBAForOpSeq(opSeqSha, fullW, fullH, fullRGBA)) {
                 PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
                 IntSize substSize { sw, sh };
-                if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, v510RGBA.span()))
-                    return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+                const bool isFullCanvas = (sx == 0 && sy == 0
+                    && static_cast<unsigned>(sw) == fullW
+                    && static_cast<unsigned>(sh) == fullH);
+                if (isFullCanvas) {
+                    WTFLogAlways("[Driftstack-V510-getImageData] FULL HIT (%dx%d opSeq=%s)", sw, sh,
+                        opSeqSha.left(12).utf8().data());
+                    if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, fullRGBA.span()))
+                        return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+                } else {
+                    // §90-style slice of the full V-510 RGBA (row-major RGBA8).
+                    const size_t subStride = static_cast<size_t>(sw) * 4;
+                    Vector<uint8_t> subRGBA(static_cast<size_t>(sw) * sh * 4);
+                    auto subSpan = subRGBA.mutableSpan();
+                    const auto fullW_s = static_cast<size_t>(fullW);
+                    bool sliceOk = true;
+                    for (int row = 0; row < sh; ++row) {
+                        const size_t srcOffset = ((static_cast<size_t>(sy) + row) * fullW_s + sx) * 4;
+                        const size_t dstOffset = static_cast<size_t>(row) * subStride;
+                        if (srcOffset + subStride > fullRGBA.size()) { sliceOk = false; break; }
+                        auto srcRow = fullRGBA.span().subspan(srcOffset, subStride);
+                        auto dstRow = subSpan.subspan(dstOffset, subStride);
+                        std::copy(srcRow.begin(), srcRow.end(), dstRow.begin());
+                    }
+                    if (sliceOk) {
+                        WTFLogAlways("[Driftstack-V510-getImageData] PARTIAL HIT (canvas %ux%u → sub (%d,%d) %dx%d opSeq=%s)",
+                            fullW, fullH, sx, sy, sw, sh, opSeqSha.left(12).utf8().data());
+                        if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
+                            return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+                    }
+                }
             }
         }
     }
