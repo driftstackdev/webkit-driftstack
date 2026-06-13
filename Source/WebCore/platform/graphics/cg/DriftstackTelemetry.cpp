@@ -71,6 +71,17 @@ DriftstackTelemetryRing& driftstackTelemetryRing()
 // the scaffold gives visibility into hit-rate by surface (AtlasHit /
 // AtlasMiss / etc.) without requiring full IPC wire-up.
 //
+// W2461 audit invariants the V-820.B.1.b wire-up MUST preserve:
+//  (1) PRODUCER STAYS SINGLE-THREADED. This ring is SPSC — tryPush has no
+//      acquire/CAS on m_head, so two concurrent producers would race the
+//      slot write + head bump (lost/duplicated events). The events fire from
+//      glyph/path draw; if those ever run on >1 thread, upgrade to MPSC
+//      (CAS m_head) BEFORE wiring producers in.
+//  (2) NO HOST-IDENTIFYING FIELDS. The payload today is render/atlas internals
+//      only (hashes, font/archetype ids, timings) — no IP/host/serial/user
+//      data. The HTTP POST must not add any, and must egress via the session's
+//      proxy path, never a direct fleet-host connection.
+//
 // Gated by env var DRIFTSTACK_TELEMETRY_DRAIN=1; off by default so cumrig
 // + production traffic isn't spammed.
 
