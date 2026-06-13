@@ -1765,8 +1765,46 @@ RefPtr<VideoFrame> HTMLCanvasElement::toVideoFrame()
                 s_sidVF ? s_sidVF : "<unset>", s_cidVF ? s_cidVF : "<unset>",
                 pageURLVF.left(256).utf8().data());
         }
+        // W2482: V-510 atlas SERVE for toVideoFrame (cross-surface coherence). The
+        // emission above puts this surface in the auto-learn pipeline, but without a
+        // serve a canvas in the V-510 atlas got the §1 AFP salt fill here while
+        // toDataURL/getImageData served the iPhone-canonical bytes → captureStream /
+        // WebCodecs read pixels INCOHERENT with toDataURL on the SAME canvas (an FPJS
+        // cross-surface coherence tell). Fetch the op-seq-keyed atlas RGBA8 and, since
+        // the pixelBuffer is unpremultiplied BGRA8 (line ~1732), swap R<->B in-place so
+        // the VideoFrame carries the same bytes. On hit, skip the AFP miss-fill.
+        // Env-gated DRIFTSTACK_VIDEOFRAME_ATLAS (default OFF until verified bit-exact,
+        // mirrors the W2480 getImageData rollout). Verified E2E by
+        // verify-videoframe-atlas-coherence.sh (new VideoFrame(canvas) -> copyTo RGBA).
+        bool servedFromAtlasVF = false;
+        static bool s_vfAtlas = []() { const char* e = getenv("DRIFTSTACK_VIDEOFRAME_ATLAS"); return e && e[0] == '1'; }();
+        if (s_vfAtlas) {
+            if (RefPtr ctx2DV = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+                if (RefPtr bapV = dynamicDowncast<ByteArrayPixelBuffer>(pixelBuffer.get())) {
+                    uint16_t wSV = static_cast<uint16_t>(std::min<unsigned>(width(), 0xffff));
+                    uint16_t hSV = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
+                    String opSeqShaV = ctx2DV->driftstackOpSequenceSHA256(wSV, hSV);
+                    Vector<uint8_t> rgbaV;
+                    if (Driftstack::getV510AtlasRGBAForOpSeq(opSeqShaV, width(), height(), rgbaV)) {
+                        auto bytesV = bapV->bytes();
+                        if (rgbaV.size() == bytesV.size() && !(rgbaV.size() % 4)) {
+                            // atlas RGBA8 -> pixelBuffer BGRA8 (both unpremultiplied): swap B<->R.
+                            for (size_t i = 0; i + 4 <= rgbaV.size(); i += 4) {
+                                bytesV[i + 0] = rgbaV[i + 2];
+                                bytesV[i + 1] = rgbaV[i + 1];
+                                bytesV[i + 2] = rgbaV[i + 0];
+                                bytesV[i + 3] = rgbaV[i + 3];
+                            }
+                            servedFromAtlasVF = true;
+                            WTFLogAlways("[Driftstack-V510-toVideoFrame] HIT (%ux%u opSeq=%s)",
+                                width(), height(), opSeqShaV.left(12).utf8().data());
+                        }
+                    }
+                }
+            }
+        }
         static bool s_afpVF = []() { const char* e = getenv("DRIFTSTACK_AFP_FALLBACK_ENABLED"); return e && e[0] == '1'; }();
-        if (s_afpVF) {
+        if (!servedFromAtlasVF && s_afpVF) {
             if (RefPtr bapVF = dynamicDowncast<ByteArrayPixelBuffer>(pixelBuffer.get())) {
                 auto bytesVF = bapVF->bytes();
                 if (bytesVF.size() >= 4) {
