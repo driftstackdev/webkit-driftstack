@@ -218,6 +218,7 @@ static size_t parseAuthResponse(nw_framer_t framer, FramerInstance* instance)
 static size_t parseConnectResponse(nw_framer_t framer, FramerInstance* instance)
 {
     __block size_t consumed = 0;
+    __block uint8_t atyp = 0x01;
     nw_framer_parse_input(framer, 4, 4,
         nil,
         ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
@@ -228,35 +229,42 @@ static size_t parseConnectResponse(nw_framer_t framer, FramerInstance* instance)
                 consumed = 4;
                 return 4;
             }
-            // ATYP at buf[3] — currently unused (we assume IPv4 reply below).
-            // TODO: handle ATYP-dependent BND.ADDR length.
-            (void)buf[3];
-            // Compute trailing length: BND.ADDR + BND.PORT
-            // ATYP=0x01 IPv4: 4 + 2 = 6
-            // ATYP=0x04 IPv6: 16 + 2 = 18
-            // ATYP=0x03 domain: 1 + N + 2 (N = first byte of trailing)
-            // We've consumed 4 bytes already. For domain, we need 1 more byte to know N.
-            // Simplest path: don't consume header until we have full message.
-            // But nw_framer_parse_input only lets us see what's available.
-            // For now: peek ATYP and consume just enough.
+            // W2473 — capture ATYP so the trailing BND.ADDR+PORT drain below uses the
+            // RIGHT length. Previously this was discarded and the drain hardcoded 6 (IPv4),
+            // which MIS-FRAMES an IPv6 (ATYP=0x04, 18 trailing) or domain (0x03, variable)
+            // CONNECT reply: the un-consumed address tail leaks into the transparent app
+            // stream → WebRTC TURN-over-TCP corruption with any IPv6-binding customer proxy.
+            atyp = buf[3];
             consumed = 4;
             return 4;
         });
     if (instance->state == HandshakeState::kError)
         return consumed;
-    // Drain the BND.ADDR + BND.PORT
-    nw_framer_parse_input(framer, 6, 22,
+    // Drain the ATYP-dependent BND.ADDR + BND.PORT (W2473).
+    //   ATYP=0x01 IPv4:   4 + 2 = 6
+    //   ATYP=0x04 IPv6:  16 + 2 = 18
+    //   ATYP=0x03 domain: 1 (len) + N + 2 ≤ 1+255+2 = 258
+    nw_framer_parse_input(framer, 1, 258,
         nil,
         ^size_t(uint8_t* buf, size_t bufLen, bool /*isComplete*/) {
-            // For IPv4 reply: 4 + 2 = 6 bytes
-            // For IPv6 reply: 16 + 2 = 18 bytes
-            // For domain reply: 1 + N + 2 ≤ 1+255+2 = 258
-            if (bufLen < 6) return 0;
-            // Without knowing ATYP here, conservatively eat 6 bytes (IPv4)
-            // Domain handling refinement is TODO.
-            consumed += 6;
+            size_t need;
+            if (atyp == 0x01)
+                need = 6;
+            else if (atyp == 0x04)
+                need = 18;
+            else if (atyp == 0x03) {
+                if (bufLen < 1) return 0;          // need the length prefix first
+                need = 1 + static_cast<size_t>(buf[0]) + 2;
+            } else {
+                // Unsupported/malformed ATYP — a real SOCKS5 server uses 0x01/0x03/0x04 only.
+                WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.114/W2473] CONNECT resp: unsupported BND ATYP=0x%02x — failing handshake", atyp);
+                instance->state = HandshakeState::kError;
+                return bufLen;                     // drain to avoid re-loop; kError fails the connection
+            }
+            if (bufLen < need) return 0;           // wait for the full address+port
+            consumed += need;
             instance->state = HandshakeState::kTransparent;
-            return 6;
+            return need;
         });
     if (instance->state == HandshakeState::kTransparent) {
         // CONNECT succeeded — mark framer ready so CFNetwork can send.
