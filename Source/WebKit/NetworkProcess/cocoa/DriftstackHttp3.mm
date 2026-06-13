@@ -1611,6 +1611,20 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
     // Copy because the singular append moves below.
     {
         Locker l { qc->h3StreamsLock };
+        // Wave 29-499.360 (security, defense-in-depth) — bound the per-stream map.
+        // It is bounded TODAY (ngtcp2 caps concurrent streams at max_streams=100 and
+        // server push is disabled — no MAX_PUSH_ID raised, so nghttp3 keeps push_id=0
+        // — therefore every entry maps to an inflight request that the drain loop
+        // removes on completion). Make the stream-COUNT bound EXPLICIT so a future
+        // push-enable, or a malformed server that surfaces an orphan stream the drain
+        // loop never visits, can't grow the map unbounded → OOM the multi-tenant node
+        // (the count twin of the .359 header-byte / .358 body-byte caps). 512 is well
+        // above the 100 concurrent-stream limit, so no legitimate connection trips it.
+        constexpr size_t kMaxH3Streams = 512;
+        if (qc->h3Streams.size() >= kMaxH3Streams && !qc->h3Streams.contains(streamId + 1)) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.360] h3 stream map exceeds %zu — aborting stream %lld", kMaxH3Streams, (long long)streamId);
+            return -1;
+        }
         auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
         if (statusCode >= 0)
             slot->status = statusCode;
@@ -1643,6 +1657,13 @@ static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t streamId,
     // Wave .322 — per-stream body (additive; key = streamId + 1, see recv_header).
     {
         Locker l { qc->h3StreamsLock };
+        // Wave .360 (security) — same explicit stream-count bound as recv_header (a
+        // DATA frame for an as-yet-unseen stream would otherwise insert a new entry).
+        constexpr size_t kMaxH3Streams = 512;
+        if (qc->h3Streams.size() >= kMaxH3Streams && !qc->h3Streams.contains(streamId + 1)) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.360] h3 stream map exceeds %zu — aborting stream %lld", kMaxH3Streams, (long long)streamId);
+            return -1;
+        }
         auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
         slot->body.append(std::span<const uint8_t> { data, datalen });
     }
