@@ -940,7 +940,19 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
         break;
     }
 
-    WebCore::DoublePoint location(locationInViewport.x(), locationInViewport.y());
+    // W2439 (founder #1 / A3 W1855): the generic WebCore touch handler runs windowToContents() on every
+    // touch point (EventHandler.cpp:5486/5526/5604) — it expects WebKit top-left WINDOW coords, and
+    // windowToContents subtracts the FrameView top content inset (== the propagated obscuredContentInsets.top,
+    // e.g. a fullSizeContentView window's title-bar band). This path passed the viewport/content-relative
+    // location STRAIGHT THROUGH, so the WebProcess subtracted that inset from a coordinate that never had it
+    // → every tap landed the inset height too HIGH (A3 measured clientY = reqY − 69 on the titled test window).
+    // The MOUSE path is correct because it does (locationInViewport + obscuredInsets) → rootViewToWindow; the
+    // rootViewToWindow (AppKit bottom-left) flip is needed ONLY for the NSEvent it builds. The touch path feeds
+    // windowToContents directly, so it needs the SAME inset add WITHOUT the flip — that exactly cancels the
+    // WebProcess subtraction for ANY inset (0 on a borderless window, 69 on the titled test one). Using the
+    // full viewportLocationToWindowLocation here is WRONG (its rootViewToWindow inverts the Y axis).
+    auto dsInsets = page.obscuredContentInsets();
+    WebCore::DoublePoint location(locationInViewport.x() + dsInsets.left(), locationInViewport.y() + dsInsets.top());
     Vector<WebPlatformTouchPoint> touchPoints;
     touchPoints.append(WebPlatformTouchPoint(1u, location, location, location, phase,
         24.278 /* radiusX */, 0.0 /* radiusY */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
