@@ -603,6 +603,7 @@ struct DriftstackQuicConn {
     int64_t h3RequestStreamId { -1 };
     int h3Status { 0 };                      // :status pseudo-header
     Vector<std::pair<Vector<uint8_t>, Vector<uint8_t>>> h3ResponseHeaders;
+    size_t h3HeaderCost { 0 };               // Wave .359 — accumulated QPACK cost-model header bytes (DoS cap; see recv_header)
     Vector<uint8_t> h3ResponseBody;
     bool h3ResponseComplete { false };       // end_stream on request stream
     // Request data the client emits (set before submit).
@@ -1569,13 +1570,34 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
     auto& h = ngHttp3Fns();
     nghttp3_vec nv = h.rcbuf_get_buf(name);
     nghttp3_vec vv = h.rcbuf_get_buf(value);
+    // Wave 29-499.359 (security) — bound the accumulated response header section.
+    // The fork deliberately OMITS MAX_FIELD_SECTION_SIZE from its h3 SETTINGS to
+    // match real iPhone Safari's wire fingerprint ("1:16383;7:100;GREASE", see the
+    // .349 SETTINGS rewrite), so nghttp3 enforces NO header-list limit — a
+    // malicious/compromised h3 server could stream unbounded header fields →
+    // h3ResponseHeaders / slot->headers grow without bound → OOM the multi-tenant
+    // node (the same DoS class the .358 recv_data 128MB body cap defends). Enforce
+    // the bound INTERNALLY (NOT on the wire, so the SETTINGS fingerprint is
+    // unchanged) via the RFC 9204 §4.1 / RFC 7541 cost model (name.len + value.len
+    // + 32 per field — the +32 also bounds a flood of empty fields). 16MB accepts
+    // any realistic response (real header sections are KB, not MB) while bounding
+    // the OOM; over the cap return -1 → nghttp3 treats nonzero as fatal → tears
+    // down the connection → the request fails over to the proven TCP h2/h1 path.
+    constexpr size_t kMaxH3HeaderBytes = 16u * 1024 * 1024;
+    qc->h3HeaderCost += nv.len + vv.len + 32;
+    if (qc->h3HeaderCost > kMaxH3HeaderBytes) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.359] h3 response header section exceeds 16MB cap — aborting stream %lld", (long long)streamId);
+        return -1;
+    }
     Vector<uint8_t> nameBuf; nameBuf.append(std::span<const uint8_t> { nv.base, nv.len });
     Vector<uint8_t> valBuf; valBuf.append(std::span<const uint8_t> { vv.base, vv.len });
     // :status pseudo-header → numeric status code.
     int statusCode = -1;
     if (nv.len == 7 && !memcmp(nv.base, ":status", 7)) {
         int code = 0;
-        for (size_t i = 0; i < vv.len; ++i) {
+        // :status is exactly 3 ASCII digits (RFC 9114 §4.1.2). Bound the loop to 3
+        // to avoid signed-int overflow UB on a malformed long digit string.
+        for (size_t i = 0; i < vv.len && i < 3; ++i) {
             if (vv.base[i] < '0' || vv.base[i] > '9') break;
             code = code * 10 + (vv.base[i] - '0');
         }
@@ -2286,6 +2308,7 @@ static bool driftstackQuicCustomTlsEnabled()
     // Reset per-request response accumulators (connection-level state persists).
     qc->h3Status = 0;
     qc->h3ResponseHeaders.clear();
+    qc->h3HeaderCost = 0;                     // Wave .359 — reset the per-request header-cap accumulator
     qc->h3ResponseBody.clear();
     qc->h3ResponseComplete = false;
 
