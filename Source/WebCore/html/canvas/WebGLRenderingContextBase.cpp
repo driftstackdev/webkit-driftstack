@@ -2073,11 +2073,24 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_RENDERBUFFER_SIZE:
         return m_maxRenderbufferSize;
     case GraphicsContextGL::MAX_TEXTURE_IMAGE_UNITS:
+#if PLATFORM(DRIFTSTACK)
+        // W2522 host-leak audit: real iPhone 17 / Safari 26.4 reports 16 (the GL ES 3.0
+        // per-stage texture-unit floor) across webgl1.parameters / glParams /
+        // browserleaks webgl1+webgl2. The bare host passthrough leaks the Mac Metal/ANGLE
+        // backend's per-stage texture-unit count (host-variable on the fleet axis).
+        // Mirrors the MAX_VARYING_VECTORS=31 override below. WebGL2RenderingContext does
+        // not handle this pname in its own switch, so it falls through to this base — one
+        // override covers WebGL1 + WebGL2 (iPhone reports 16 in both).
+        return 16;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_TEXTURE_SIZE:
         return m_maxTextureSize;
     case GraphicsContextGL::MAX_VARYING_VECTORS:
 #if PLATFORM(DRIFTSTACK)
+        // W2522 host-leak family: real iPhone 17 / Safari 26.4 reports 31 across
+        // webgl1.parameters / glParams / browserleaks (vs the Mac ANGLE/Metal backend's
+        // varying-vector count). Sibling of the MAX_TEXTURE_IMAGE_UNITS=16 override above.
         return 31;
 #endif
         return getIntParameter(pname);

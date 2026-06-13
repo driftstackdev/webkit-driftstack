@@ -3221,6 +3221,14 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_3D_TEXTURE_SIZE:
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_ARRAY_TEXTURE_LAYERS:
+#if PLATFORM(DRIFTSTACK)
+        // W2522 host-leak audit: real iPhone 17 / Safari 26.4 reports 2048 across
+        // webgl2.parameters / glParams / webgl2Deep.params / browserleaks webgl2. The bare
+        // host passthrough leaks the Mac Metal backend's max-array-texture-layers
+        // (host-variable on the fleet axis). Mirrors the
+        // MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS=53248 override pattern in this switch.
+        return 2048;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_CLIENT_WAIT_TIMEOUT_WEBGL:
         return static_cast<long long>(MaxClientWaitTimeout);
