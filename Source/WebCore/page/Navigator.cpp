@@ -533,7 +533,7 @@ void Navigator::clearAppBadge(Ref<DeferredPromise>&& promise)
 
 int Navigator::maxTouchPoints() const
 {
-#if (ENABLE(IOS_TOUCH_EVENTS) && !PLATFORM(MACCATALYST)) || PLATFORM(DRIFTSTACK)
+#if (ENABLE(IOS_TOUCH_EVENTS) && !PLATFORM(MACCATALYST)) || PLATFORM(DRIFTSTACK) /* V-MAXTOUCH-DS5: the || PLATFORM(DRIFTSTACK) forces navigator.maxTouchPoints=5 (iPhone); a Mac lacks IOS_TOUCH_EVENTS so dropping it returns 0 = desktop tell. Source-pinned (W2508). */
     RefPtr document = this->document();
     if (!document || !document->quirks().needsZeroMaxTouchPointsQuirk())
         return 5;
