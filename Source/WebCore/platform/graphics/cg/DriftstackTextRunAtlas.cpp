@@ -572,6 +572,15 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 namespace {
 
 struct TextSourceSlot {
+    // W2538: owning copy of the source text for the CANVAS path. The per-glyph
+    // platform hook (FontCascadeCoreText) reads this TLS source AFTER drawGlyphBuffer
+    // returns the layout — by then the transient backing string of a non-owning
+    // StringView is freed/recycled, so the view's length survives (sourceLen=1) but
+    // its data dangles → the codepoint decodes as U+0000 and the per-glyph atlas
+    // never hits (empirically 9/769). Capturing an owning String at scope entry
+    // (while `source` is still a live param) keeps the bytes valid through the
+    // deferred read. Page (non-canvas) text keeps the cheap non-owning view.
+    String owned;
     StringView current;
 };
 
@@ -589,13 +598,25 @@ DriftstackCurrentTextSourceScope::DriftstackCurrentTextSourceScope(StringView so
     // No save/restore — drawGlyphBuffer is leaf w.r.t. recursive text emit
     // in the current code path. If nesting appears later, switch to a
     // Vector<StringView> push/pop and refactor.
-    slot.current = source;
+    //
+    // W2538: in the canvas-text-draw scope the per-glyph/platform hook reads this
+    // source after the backing buffer may be gone, so own a copy there (current
+    // then views the owned String, which lives until the dtor). Outside canvas
+    // (on-screen page text — the hot path) keep the zero-alloc non-owning view.
+    if (driftstackInCanvasTextDraw()) {
+        slot.owned = source.toString();
+        slot.current = slot.owned;
+    } else {
+        slot.owned = String { };
+        slot.current = source;
+    }
 }
 
 DriftstackCurrentTextSourceScope::~DriftstackCurrentTextSourceScope()
 {
     auto& slot = *textSourceSlot();
     slot.current = StringView { };
+    slot.owned = String { };
 }
 
 StringView driftstackCurrentTextSource()
