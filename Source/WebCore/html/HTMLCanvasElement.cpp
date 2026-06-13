@@ -1111,7 +1111,12 @@ static String v510AtlasLookupInState(const V510AtlasState& state, const String& 
                              | (uint32_t(entrySpan[18]) << 16) | (uint32_t(entrySpan[19]) << 24);
             uint32_t dataLen = uint32_t(entrySpan[20]) | (uint32_t(entrySpan[21]) << 8)
                              | (uint32_t(entrySpan[22]) << 16) | (uint32_t(entrySpan[23]) << 24);
-            if (dataOff + dataLen > state.dataPayloadSpan.size())
+            // W2530: compute dataOff+dataLen in 64-bit — both are uint32 read straight from the
+            // atlas file, so a 32-bit add WRAPS on a malformed/corrupt atlas (e.g. dataOff=0xFFFFFF00,
+            // dataLen=0x200 → 0x100), passing this bound while the subspan below reads ~4GB past the
+            // payload = WebContent crash. Promoting to uint64 makes the bound exact (cf. the already-
+            // correct DriftstackAudioAtlas.mm / DriftstackWebGPUAtlas.mm per-entry checks).
+            if (static_cast<uint64_t>(dataOff) + static_cast<uint64_t>(dataLen) > state.dataPayloadSpan.size())
                 return String();
             auto entry = state.dataPayloadSpan.subspan(dataOff, dataLen);
             static unsigned hits = 0;

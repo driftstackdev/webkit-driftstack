@@ -138,16 +138,23 @@ void DriftstackWebGPUAtlas::mapAtlas()
         munmap(base, st.st_size); close(fd); return;
     }
 
-    // Validate offset arithmetic
+    // Validate offset arithmetic. W2530: compute the index-region size in 64-bit. numEntries and
+    // indexEntryStride are both uint32 (this loader is unique in reading the stride from the file
+    // rather than a constexpr size_t), so `numEntries * indexEntryStride` in 32-bit can WRAP on a
+    // malformed/corrupt atlas (numEntries=0x08000001, stride=32 → 0x20) — passing the equality while
+    // m_numEntries below stays huge → an undersized m_indexSpan and an OOB index read in entryFor/
+    // entryByByteCount. Promote before the multiply + bound the index region against the real file size.
+    uint64_t indexSize = static_cast<uint64_t>(numEntries) * indexEntryStride;
     if (indexOffset < kWebGPUAtlasHeaderBytes
-        || dataOffset != indexOffset + numEntries * indexEntryStride
+        || static_cast<uint64_t>(indexOffset) + indexSize > bytesSpan.size()
+        || dataOffset != static_cast<uint64_t>(indexOffset) + indexSize
         || dataOffset > bytesSpan.size()) {
         WTFLogAlways("[Driftstack] WebGPUAtlas: header offsets invalid (numEntries=%u indexOffset=%u dataOffset=%u fileSize=%zu)",
             numEntries, indexOffset, dataOffset, bytesSpan.size());
         munmap(base, st.st_size); close(fd); return;
     }
 
-    m_indexSpan = bytesSpan.subspan(indexOffset, numEntries * indexEntryStride);
+    m_indexSpan = bytesSpan.subspan(indexOffset, static_cast<size_t>(indexSize));
     m_dataPayloadSpan = bytesSpan.subspan(dataOffset);
     m_numEntries = numEntries;
     m_atlasVersion = version;
