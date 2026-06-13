@@ -192,6 +192,35 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 }
 @end
 
+// W2532 (#68): shared loopback/RFC1918 classifier + dev-bypass gate for the SSRF defense.
+static bool driftstackHostIsLoopbackOrPrivate(NSString *host)
+{
+    host = host.lowercaseString;
+    if ([host isEqualToString:@"localhost"]
+        || [host hasPrefix:@"127."]
+        || [host isEqualToString:@"::1"]
+        || [host hasPrefix:@"10."]
+        || [host hasPrefix:@"192.168."])
+        return true;
+    if ([host hasPrefix:@"172."]) {
+        NSArray *parts = [host componentsSeparatedByString:@"."];
+        if (parts.count == 4) {
+            int second = [parts[1] intValue];
+            if (second >= 16 && second <= 31)
+                return true;
+        }
+    }
+    return false;
+}
+static bool driftstackDirectBrowse()
+{
+    static bool v = []() {
+        const char* e = getenv("DRIFTSTACK_DIRECT_BROWSE");
+        return e && e[0] == '1';
+    }();
+    return v;
+}
+
 @implementation WKDriftstackSocks5URLProtocol
 
 + (BOOL)canInitWithRequest:(NSURLRequest *)request
@@ -285,28 +314,23 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     // `(deny network-outbound)` for loopback in NetworkProcess.sb.in — dev (DIRECT_BROWSE / no custom
     // SOCKS5) keeps the bypass for the checker-server. DO NOT extend this bypass list without that fix.
     NSString *host = url.host.lowercaseString;
-    if ([host isEqualToString:@"localhost"]
-        || [host hasPrefix:@"127."]
-        || [host isEqualToString:@"::1"]
-        || [host hasPrefix:@"10."]
-        || [host hasPrefix:@"192.168."]
-        || ([host hasPrefix:@"172."]
-            && ({
-                NSArray *parts = [host componentsSeparatedByString:@"."];
-                BOOL is172 = NO;
-                if (parts.count == 4) {
-                    int second = [parts[1] intValue];
-                    is172 = (second >= 16 && second <= 31);
-                }
-                is172;
-            }))) {
-        static bool loggedLoopbackOnce = false;
-        if (!loggedLoopbackOnce) {
-            loggedLoopbackOnce = true;
-            WTFLogAlways("[Driftstack-EG-WK-1.8/Wave29-499.273] bypass SOCKS5 for loopback/private host '%s' (direct via CFNetwork)",
-                host.UTF8String);
+    if (driftstackHostIsLoopbackOrPrivate(host)) {
+        // W2532 (#68 SSRF fix): on a real iPhone, loopback/RFC1918 bypasses the proxy to reach the
+        // user's own device (harmless). On the FLEET that is SHARED host infra (other WebContent
+        // sessions, the harness control plane) — returning NO here (direct CFNetwork) is a
+        // cross-tenant SSRF. So ONLY the dev checker path (DIRECT_BROWSE=1) keeps the direct bypass;
+        // in production we CLAIM the request and -startLoading fails it closed (no direct connect, no
+        // fleet reach). Founder egress "crash-loud-not-leak" lock 2026-05-17.
+        if (driftstackDirectBrowse()) {
+            static bool loggedLoopbackOnce = false;
+            if (!loggedLoopbackOnce) {
+                loggedLoopbackOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8] DIRECT_BROWSE: bypass SOCKS5 for loopback/private host '%s' (dev checker-server)",
+                    host.UTF8String);
+            }
+            return NO;
         }
-        return NO;
+        // production: fall through → claim the request → -startLoading denies it fail-closed.
     }
 
     // Wave 29-396 sub-slice 1.9.b: ACTIVATE — claim the request for
@@ -332,6 +356,17 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     NSString *scheme = url.scheme.lowercaseString ?: @"";
     int defaultPort = [scheme isEqualToString:@"https"] ? 443 : 80;
     int actualPort = port ? port.intValue : defaultPort;
+
+    // W2532 (#68 SSRF fix): fail-closed deny of loopback/RFC1918 in production. canInitWithRequest
+    // CLAIMS such requests (instead of the dev direct-bypass) so we reject them here before any
+    // connection — a customer session must never reach the fleet's own 127/::1 or RFC1918 LAN.
+    if (!driftstackDirectBrowse() && driftstackHostIsLoopbackOrPrivate(host)) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/#68] DENY loopback/RFC1918 egress '%s' (fail-closed; no direct connect, no fleet reach)",
+            host.UTF8String);
+        [[self client] URLProtocol:self didFailWithError:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost userInfo:@{
+            NSLocalizedDescriptionKey: @"loopback/RFC1918 egress denied (cross-tenant SSRF defense)" }]];
+        return;
+    }
 
     // Wave 29-499.321 — HTTP/3 fast-path for https origins. If the QUIC/h3
     // request through the SOCKS5 §7 relay succeeds, the response is delivered

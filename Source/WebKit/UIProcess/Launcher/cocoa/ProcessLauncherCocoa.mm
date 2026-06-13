@@ -558,6 +558,13 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // eventual launch-env flip actually activates WS-over-h2 in production
             // instead of silently staying on the h1.1 path.
             { "DRIFTSTACK_WS_PATHB", getenv("DRIFTSTACK_WS_PATHB") },
+            // W2532 (#52): the custom-h3 / QUIC PathB gates. Consumed in the NetworkProcess
+            // (static getenv() in DriftstackHttp3.mm), which does NOT get the __XPC_ mirror —
+            // so they MUST be in this explicit dsEnv[] list (same class as the cert-validate +
+            // WS_PATHB gates above), or production h3/QUIC stays on the non-iPhone-exact path
+            // because the launch-env flip silently never reaches getenv().
+            { "DRIFTSTACK_H3_POOL", getenv("DRIFTSTACK_H3_POOL") },
+            { "DRIFTSTACK_QUIC_CUSTOM_TLS", getenv("DRIFTSTACK_QUIC_CUSTOM_TLS") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",

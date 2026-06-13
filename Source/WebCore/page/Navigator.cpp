@@ -463,6 +463,23 @@ GPU* Navigator::gpu()
     }();
     if (s_isFamilyA)
         return nullptr;
+    // W2532 (#56): within Family B (Safari 26+), WebGPU still requires an iPhone 15 Pro+ / A17+ GPU
+    // (CLAUDE.md). navigator.gpu is otherwise gated by Safari VERSION only (model-blind), so an
+    // A16-and-below model running 26.x (iphone13/14 families, iphone15 non-Pro/Plus) would FALSELY
+    // expose WebGPU. Hide it for those; the WebGPU-capable models — iphone15pro/promax (A17),
+    // iphone16* (A18), iphone17* (A19, the launch archetype) — keep native exposure. The exact slug
+    // boundary is BS-verifiable (15-Pro@26.4 navigator.gpu defined, 15@26.4 undefined); default
+    // (no archetype) = launch iphone17 = capable = exposed.
+    static bool s_hideWebGPUNonCapableModel = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view a(archetype);
+        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0) || (a.find("iphone15pro") == 0);
+        return !capable;
+    }();
+    if (s_hideWebGPUNonCapableModel)
+        return nullptr;
 #endif
     if (!m_gpuForWebGPU) {
         RefPtr frame = this->frame();

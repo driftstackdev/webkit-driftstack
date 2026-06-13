@@ -124,6 +124,19 @@ GPU* WorkerNavigator::gpu()
     }();
     if (s_isFamilyAWorker)
         return nullptr;
+    // W2532 (#56): Family-B model-capability gate (Worker mirror of Navigator.cpp; V-205 Bug 2
+    // cross-context parity). WebGPU needs iPhone 15 Pro+ / A17+; hide navigator.gpu for A16-and-below
+    // Family-B models, keep it for iphone15pro/promax/iphone16*/iphone17* (launch = iphone17 = capable).
+    static bool s_hideWebGPUNonCapableModelWorker = []() {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false;
+        std::string_view a(archetype);
+        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0) || (a.find("iphone15pro") == 0);
+        return !capable;
+    }();
+    if (s_hideWebGPUNonCapableModelWorker)
+        return nullptr;
 #endif
     if (!m_gpuForWebGPU) {
         Ref context = downcast<WorkerGlobalScope>(*this->scriptExecutionContext());
