@@ -120,11 +120,23 @@ static std::optional<PlatformMediaCapabilitiesInfo> computeMediaCapabilitiesInfo
             info = *parsedInfo;
         } else if (codec.startsWith("vp8"_s) || codec.startsWith("vp08"_s)) {
 #if PLATFORM(DRIFTSTACK)
-            // iOS has no VP8 WebM video decode path; macOS WebKit does (isVP8DecoderAvailable()
-            // returns true on the Mac fork). Report VP8 as unsupported to match a real iPhone
-            // (verified supported=false on real iPhone 17 / Safari 26.4 AND 26.5, founder item #19).
-            // This routes through every decode-capability path (decodingInfo + canPlayType /
-            // isTypeSupported), not just one. Opus-in-WebM (audio) is unaffected — iPhone supports it.
+            // V-VP8-DECODINGINFO-ONLY (founder item #19, commit 27859fb6fc; verified live W542,
+            // bit-exact W2362, re-reconciled W2523). SCOPE: this function (computeMediaCapabilitiesInfo)
+            // is reached ONLY via MediaCapabilities::decodingInfo -> gatherDecodingInfo ->
+            // createDecodingConfiguration (the JS navigator.mediaCapabilities.decodingInfo API). It does
+            // NOT affect HTMLMediaElement.canPlayType (MediaPlayer::supportsType -> SourceBufferParserWebM,
+            // ungated), MediaRecorder.isTypeSupported, or WebCodecs VideoDecoder.isConfigSupported — those
+            // stay native and report VP8 supported.
+            // Real iPhone-17 is API-SPLIT for VP8 (NOT a measurement artifact — it is genuine Apple
+            // behaviour, identical to VP9): canPlayType='probably', WebCodecs vp8.decode=true,
+            // MediaRecorder=true, WebRTC video/VP8 present — BUT mediaCapabilities.decodingInfo
+            // video/webm;codecs="vp8" supported=FALSE (every real-device aio capture that tests it; never
+            // true). On the Mac fork isVP8DecoderAvailable()=VideoDecoder::isVPXSupported()=true (it ships a
+            // VPX software decoder), so WITHOUT this gate decodingInfo would return VP8 supported=true,
+            // diverging from the iPhone's false. Force unsupported HERE ONLY to reproduce the device's
+            // decodingInfo value. DO NOT "fix" this to match canPlayType ('probably') — the real-device
+            // divergence is decodingInfo-specific; deleting this re-opens a self-vs-real leak (the W2376
+            // inversion: forcing a value backward away from ground truth). Opus-in-WebM audio is unaffected.
             return std::nullopt;
 #endif
             if (!isVP8DecoderAvailable())
