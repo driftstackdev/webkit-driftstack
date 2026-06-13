@@ -15,6 +15,7 @@
 #import <WebKit/WKScriptMessage.h>
 #import <WebKit/WKFrameInfo.h>
 #import <sys/socket.h>
+#import <sys/time.h>
 #import <sys/un.h>
 #import <unistd.h>
 
@@ -74,6 +75,24 @@
             NSLog(@"[DriftstackJSBridge] socket() failed: errno=%d", errno);
             return;
         }
+        // Wave 29-499.361 (hardening) — two standard unix-socket-client guards this
+        // handler omitted:
+        //  (1) SO_NOSIGPIPE — on macOS, send() to a peer that closed the connection
+        //      mid-write raises SIGPIPE, whose default disposition TERMINATES the
+        //      process. If the harness JSBridgeSocketServer accepts then closes/dies
+        //      while we're sending, an unguarded send() could crash this UIProcess.
+        //      (Foundation usually ignores SIGPIPE process-wide, but per-socket
+        //      SO_NOSIGPIPE makes THIS socket correct regardless of global state.)
+        //  (2) SO_SNDTIMEO — the send() below is blocking and _ioQueue is SERIAL, so
+        //      a harness that accepts but stops draining (hung/overloaded) would block
+        //      send() on a full socket buffer indefinitely → the serial queue stalls →
+        //      every subsequent bridge message backs up unbounded (the W2314 blocking-
+        //      syscall-with-no-timeout class). A 2s cap makes a stuck send fail (the
+        //      while-loop breaks, message dropped, fd closed) so the queue drains.
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+        struct timeval sndTimeout = { .tv_sec = 2, .tv_usec = 0 };
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &sndTimeout, sizeof(sndTimeout));
         struct sockaddr_un addr;
         memset(&addr, 0, sizeof(addr));
         addr.sun_family = AF_UNIX;
