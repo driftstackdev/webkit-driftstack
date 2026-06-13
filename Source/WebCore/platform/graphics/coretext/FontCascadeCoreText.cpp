@@ -692,6 +692,14 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                            | (static_cast<uint32_t>(bytes[1] & 0x3F) << 12)
                            | (static_cast<uint32_t>(bytes[2] & 0x3F) << 6)
                            | (static_cast<uint32_t>(bytes[3] & 0x3F));
+                    } else if (sourceText.length() == 1) {
+                        // W2542: a length-1 8-bit WebCore StringView is Latin-1 (LChar),
+                        // so the byte IS the codepoint (e.g. U+00A1 stored as 0xA1, NOT
+                        // UTF-8 0xC2 0xA1). The UTF-8 multi-byte branches above only fire
+                        // for genuine >=2-byte buffers; a lone high byte is Latin-1. This
+                        // closes the per-glyph Latin-1 cold-miss (0xA1-0xFF) that decoded
+                        // as cp=0 → atlas miss for every accented/punctuation glyph.
+                        cp = b0;
                     } else {
                         // Malformed or unsupported encoding — skip atlas
                         cp = 0;
