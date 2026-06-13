@@ -279,6 +279,15 @@ void EventHandler::driftstackSynthesizeBehavioralStream(DriftstackBehavioralInte
     // Each handle*Event call dispatches up through the existing EventHandler
     // tree as if from native UI input. isTrusted: true via WebCore-internal
     // API (NOT JS dispatchEvent).
+    //
+    // W2465 audit note — when the EmpiricalHistogram sampler lands here, guard the
+    // bins/counts pairing: the loader (loadSignals, EmpiricalHistogram case) appends
+    // histogramBins and histogramCounts INDEPENDENTLY, so a malformed model can yield
+    // bins.size() != counts.size(). The sampler MUST bound its index by
+    // min(histogramBins.size(), histogramCounts.size()) (or reject the signal) — never
+    // index counts[i] for i over bins.size() or vice versa. (Today: trusted shipped
+    // model + this path is DRIFTSTACK_BEHAVIORAL_SYNTHESIS-gated default-off + a no-op
+    // stub, so no live exposure; this is a build-ahead invariant for the wire-up.)
 }
 
 } // namespace WebCore
