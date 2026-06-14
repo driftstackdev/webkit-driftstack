@@ -736,6 +736,29 @@ void WebGL2RenderingContext::framebufferTextureLayer(GCGLenum target, GCGLenum a
     framebufferBinding->setAttachmentForBoundFramebuffer(target, attachment, WebGLFramebuffer::TextureLayerAttachment { texture, level, layer });
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2556: chip-keyed WebGL MSAA. A19 (iPhone 17 family — 17 / 17 Pro / 17 Pro Max) exposes 8x
+// MSAA; EVERY pre-A19 chip (A15/A16/A17/A18 = iPhone 13/14/15/16 families incl. 16 Pro / 16 Pro
+// Max) exposes 4x (founder-validated chip→MSAA thesis, multi-archetype-matrix-plan.md). This is
+// the SINGLE source for BOTH the int MAX_SAMPLES (getParameter) and the per-format SAMPLES list
+// (getInternalformatParameter) so they cannot disagree (an internal-inconsistency tell, comment
+// at the SAMPLES site). Replaces the prior brittle substring dispatch that returned the A19
+// value 8 for every model except a literal "iphone16pro_" match — so iphone16promax_ (A18 Pro,
+// the SAME chip as 16 Pro) AND all 13/14/15/16-non-pro archetypes wrongly reported 8 (a per-model
+// wrong-chip GPU tell on 67 coming_soon archetypes; found by the W2556 config-coherence audit).
+static int driftstackArchetypeMaxSamples()
+{
+    static const int s_samples = []() -> int {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return 8; // no archetype env = launch default = iPhone 17 (A19)
+        // Only the iPhone 17 family carries A19; its slugs are the only ones containing "iphone17".
+        return std::string_view(archetype).find("iphone17") != std::string_view::npos ? 8 : 4;
+    }();
+    return s_samples;
+}
+#endif
+
 WebGLAny WebGL2RenderingContext::getInternalformatParameter(GCGLenum target, GCGLenum internalformat, GCGLenum pname)
 {
     if (isContextLost())
@@ -773,11 +796,9 @@ WebGLAny WebGL2RenderingContext::getInternalformatParameter(GCGLenum target, GCG
         // Cache only the POD decision (a static Vector would need an exit-time destructor,
         // which WebKit forbids — match the int-cached MAX_SAMPLES dispatch). The 2-3 element
         // Vector is built per call (this query is rare).
-        static const bool s_isIPhone16Pro = []() {
-            const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-            return archetype && std::string_view(archetype).find("iphone16pro_") != std::string_view::npos;
-        }();
-        Vector<GCGLint> formatSamples = s_isIPhone16Pro ? Vector<GCGLint> { 4, 2 } : Vector<GCGLint> { 8, 4, 2 };
+        // W2556: chip-keyed (A19=8x → [8,4,2]; pre-A19=4x → [4,2]). Single source shared with
+        // the int MAX_SAMPLES dispatch so they can't disagree (was a brittle iphone16pro_ substring).
+        Vector<GCGLint> formatSamples = driftstackArchetypeMaxSamples() == 8 ? Vector<GCGLint> { 8, 4, 2 } : Vector<GCGLint> { 4, 2 };
         return toWebGLAny(Int32Array::tryCreate(formatSamples.span()));
     }
 #endif
@@ -3318,22 +3339,11 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
             // Archetype dispatch reads DRIFTSTACK_ARCHETYPE once per
             // WebContent process (env propagated via ProcessLauncherCocoa
             // allowlist line 505).
-            static const int s_maxSamples = []() {
-                const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-                // Default (no archetype env) = launch archetype = iPhone 17.
-                if (!archetype)
-                    return 8;
-                std::string_view sv(archetype);
-                // iPhone 16 Pro hardware → 4 regardless of Safari version.
-                if (sv.find("iphone16pro_") != std::string_view::npos)
-                    return 4;
-                // iPhone 17 hardware → 8 regardless of Safari version.
-                if (sv.find("iphone17_") != std::string_view::npos)
-                    return 8;
-                // Unknown archetype slug: fall back to launch default.
-                return 8;
-            }();
-            return s_maxSamples;
+            // W2556: chip-keyed (A19/iphone17=8, all pre-A19=4) — single source shared with the
+            // per-format SAMPLES list in getInternalformatParameter. The old dispatch returned 8
+            // for every model except a literal "iphone16pro_" match (so 16 Pro Max + 13/14/15/16
+            // wrongly got the A19 value) — a per-model GPU tell across 67 coming_soon archetypes.
+            return driftstackArchetypeMaxSamples();
         }
 #endif
         return maxSamples();
