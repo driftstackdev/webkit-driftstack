@@ -230,6 +230,9 @@ private:
     String m_locale;
     String m_dataLocale;
     mutable String m_numberingSystem;
+#if PLATFORM(DRIFTSTACK)
+    bool m_driftstackTolsDigits { false }; // #87: map latn digits → Tolong (U+11DE0-9) in format()
+#endif
     String m_currency;
     String m_unit;
     unsigned m_minimumIntegerDigits { 1 };

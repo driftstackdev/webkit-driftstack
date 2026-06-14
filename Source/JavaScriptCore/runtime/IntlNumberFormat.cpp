@@ -328,6 +328,31 @@ void IntlNumberFormat::initializeNumberFormat(JSGlobalObject* globalObject, JSVa
     m_numberingSystem = resolved.extensions[static_cast<unsigned>(RelevantExtensionKey::Nu)];
     m_dataLocale = resolved.dataLocale;
 
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK #87 (W2557): real iPhone Safari 26.4 RESOLVES numberingSystem:'tols' to 'tols'
+    // (Tolong digits U+11DE0-9) — BS /aio captured. Mac ICU lacks 'tols' formatting data so
+    // resolveLocale fell back to 'latn'; the fork was INCOHERENT (supportedValuesOf lists 'tols'
+    // on Family-B but NumberFormat resolved it to latn). When the page REQUESTED 'tols' and it fell
+    // back to latn, on a Family-B archetype (matching the IntlObject s_appendTols supportedValuesOf
+    // gate — Family-A Safari 17-25 does NOT list/resolve 'tols'), set the digit-remap flag: the ICU
+    // formatter is left on latn (untouched/safe), but resolvedOptions() reports 'tols' and format()
+    // maps the latn output digits → Tolong. Capture-pinned: '1' = U+11DE1 (high 0xD807, low 0xDDE0+d).
+    if (!numberingSystem.isNull() && m_numberingSystem == "latn"_s
+        && numberingSystem.convertToASCIILowercase() == "tols"_s) {
+        bool familyB = true;
+        if (const char* arch = getenv("DRIFTSTACK_ARCHETYPE"); arch && arch[0]) {
+            std::string_view sv(arch);
+            if (sv.find("safari17_") != std::string_view::npos || sv.find("safari18_") != std::string_view::npos
+                || sv.find("safari19_") != std::string_view::npos || sv.find("safari20_") != std::string_view::npos
+                || sv.find("safari21_") != std::string_view::npos || sv.find("safari22_") != std::string_view::npos
+                || sv.find("safari23_") != std::string_view::npos || sv.find("safari24_") != std::string_view::npos
+                || sv.find("safari25_") != std::string_view::npos)
+                familyB = false;
+        }
+        m_driftstackTolsDigits = familyB;
+    }
+#endif
+
     m_style = intlOption<Style>(globalObject, options, vm.propertyNames->style, { { "decimal"_s, Style::Decimal }, { "percent"_s, Style::Percent }, { "currency"_s, Style::Currency }, { "unit"_s, Style::Unit } }, "style must be either \"decimal\", \"percent\", \"currency\", or \"unit\""_s, Style::Decimal);
     RETURN_IF_EXCEPTION(scope, void());
 
@@ -578,6 +603,26 @@ UNumberRangeFormatter* IntlNumberFormat::createNumberRangeFormatterIfNecessary(J
 }
 
 // https://tc39.es/ecma402/#sec-formatnumber
+#if PLATFORM(DRIFTSTACK)
+// #87: map ASCII digits '0'-'9' in a latn-formatted number to Tolong digits U+11DE0-9
+// (each is the surrogate pair high=0xD807, low=0xDDE0+digit). Capture-pinned to the real
+// iPhone Safari 26.4 numberingSystem:'tols' output. Non-digit chars (group/decimal seps,
+// minus, currency, %) pass through unchanged. Only called when m_driftstackTolsDigits.
+static String driftstackRemapLatnToTolsDigits(std::span<const char16_t> latn)
+{
+    StringBuilder out;
+    out.reserveCapacity(latn.size() + 16);
+    for (char16_t u : latn) {
+        if (u >= '0' && u <= '9') {
+            out.append(static_cast<char16_t>(0xD807));
+            out.append(static_cast<char16_t>(0xDDE0 + (u - '0')));
+        } else
+            out.append(u);
+    }
+    return out.toString();
+}
+#endif
+
 JSValue IntlNumberFormat::format(JSGlobalObject* globalObject, double value) const
 {
     VM& vm = globalObject->vm();
@@ -597,6 +642,10 @@ JSValue IntlNumberFormat::format(JSGlobalObject* globalObject, double value) con
     status = callBufferProducingFunction(unumf_resultToString, formattedNumber.get(), buffer);
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "Failed to format a number."_s);
+#if PLATFORM(DRIFTSTACK)
+    if (m_driftstackTolsDigits)
+        return jsString(vm, driftstackRemapLatnToTolsDigits(buffer.span()));
+#endif
     return jsString(vm, String(WTF::move(buffer)));
 }
 
@@ -621,6 +670,10 @@ JSValue IntlNumberFormat::format(JSGlobalObject* globalObject, IntlMathematicalV
     status = callBufferProducingFunction(unumf_resultToString, formattedNumber.get(), buffer);
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "Failed to format a BigInt."_s);
+#if PLATFORM(DRIFTSTACK)
+    if (m_driftstackTolsDigits)
+        return jsString(vm, driftstackRemapLatnToTolsDigits(buffer.span()));
+#endif
     return jsString(vm, String(WTF::move(buffer)));
 }
 
@@ -1227,7 +1280,14 @@ JSObject* IntlNumberFormat::resolvedOptions(JSGlobalObject* globalObject) const
         m_numberingSystem = defaultNumberingSystemForLocale(m_dataLocale);
     JSObject* options = constructEmptyObject(globalObject);
     options->putDirect(vm, vm.propertyNames->locale, jsString(vm, m_locale));
+#if PLATFORM(DRIFTSTACK)
+    // #87: report 'tols' (the requested system the real iPhone resolves) instead of the latn the
+    // ICU formatter actually used. format() remaps the digits; keeps resolvedOptions coherent with
+    // supportedValuesOf('numberingSystem') which lists 'tols' on Family-B.
+    options->putDirect(vm, vm.propertyNames->numberingSystem, jsString(vm, m_driftstackTolsDigits ? "tols"_s : m_numberingSystem));
+#else
     options->putDirect(vm, vm.propertyNames->numberingSystem, jsString(vm, m_numberingSystem));
+#endif
     options->putDirect(vm, vm.propertyNames->style, jsNontrivialString(vm, styleString(m_style)));
     switch (m_style) {
     case Style::Decimal:
