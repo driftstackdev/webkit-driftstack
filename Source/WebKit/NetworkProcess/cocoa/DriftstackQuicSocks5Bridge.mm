@@ -33,6 +33,11 @@
 
 namespace WebKit {
 
+// W2557 (#37): defined in DriftstackHttp3.mm — resolve a hostname to IPv4 OVER the SOCKS5 proxy
+// (DNS-over-SOCKS5), so the QUIC §7 pre-resolve does NOT leak the customer's destination to the host
+// resolver via local getaddrinfo. Returns a null String on failure (caller falls back to getaddrinfo).
+String driftstackResolveHostOverSocks5Proxy(const String& host);
+
 namespace DriftstackQuic {
 
 // Wave 29-397 Slice 16.6 (Task #16 EG-WK-1.10 production observability):
@@ -313,6 +318,20 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
             if (!cached.isEmpty())
                 destination.host = cached;
             else {
+                // W2557 (#37): resolve OVER the SOCKS5 proxy first (DNS-over-SOCKS5 to 1.1.1.1) so the
+                // customer's destination hostname is NOT leaked to the fleet HOST resolver via a local
+                // getaddrinfo. Fall back to local getaddrinfo only if the proxy-resolve fails (SOCKS5
+                // off / no associate) — zero regression vs the prior behavior. Cached per host.
+                String viaProxy = driftstackResolveHostOverSocks5Proxy(destinationHost);
+                if (!viaProxy.isEmpty()) {
+                    destination.host = viaProxy;
+                    {
+                        Locker locker { s_resolveCacheLock.get() };
+                        s_resolveCache.get().set(destinationHost, destination.host);
+                    }
+                    WTFLogAlways("[Driftstack-EG-WK-1.10/W2557-#37] QUIC/UDP §7 pre-resolve via SOCKS5 proxy (no host-DNS leak): %s → %s",
+                        hostUtf8.data(), viaProxy.utf8().data());
+                } else {
                 struct addrinfo hints { };
                 hints.ai_family = AF_INET;
                 hints.ai_socktype = SOCK_DGRAM;
@@ -333,6 +352,7 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
                 } else {
                     WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319] QUIC §7 pre-resolve FAILED for %s — falling back to ATYP=0x03 (gost may drop)",
                         hostUtf8.data());
+                }
                 }
             }
         }
@@ -441,6 +461,12 @@ static void setPendingFramerDestination(const String& host, uint16_t port)
         auto hostUtf8 = host.utf8();
         struct in_addr probe { };
         if (!host.isEmpty() && inet_pton(AF_INET, hostUtf8.data(), &probe) != 1) {
+            // W2557 (#37): resolve OVER the SOCKS5 proxy first (no host-DNS leak); fall back to local
+            // getaddrinfo only on proxy-resolve failure (zero regression).
+            String viaProxy = driftstackResolveHostOverSocks5Proxy(host);
+            if (!viaProxy.isEmpty())
+                resolvedHost = viaProxy;
+            else {
             struct addrinfo hints { };
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_DGRAM;
@@ -459,6 +485,7 @@ static void setPendingFramerDestination(const String& host, uint16_t port)
                 }
             } else {
                 WTFLogAlways("[Driftstack-EG-WK-1.10/Wave29-499.319b] framer dest pre-resolve FAILED for %s — ATYP=0x03 (gost may drop)", hostUtf8.data());
+            }
             }
         }
     }

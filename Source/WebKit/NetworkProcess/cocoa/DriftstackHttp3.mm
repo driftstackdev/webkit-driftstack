@@ -2774,6 +2774,51 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
     return true;
 }
 
+} // anonymous namespace — closed so the #37 DNS-over-proxy resolver below has EXTERNAL linkage (W2557)
+
+// Prototype (also forward-declared in DriftstackQuicSocks5Bridge.mm) — satisfies -Wmissing-prototypes.
+String driftstackResolveHostOverSocks5Proxy(const String& host);
+
+// W2557 (#37 QUIC DNS-leak): resolve a hostname to IPv4 OVER the SOCKS5 proxy (DNS-over-SOCKS5-UDP to
+// 1.1.1.1) so the QUIC/UDP §7 frame can emit ATYP=0x01 WITHOUT a LOCAL getaddrinfo — which would leak a
+// DNS query for the customer's destination to the fleet host's resolver (the #37 leak). Establishes a
+// one-shot UDP ASSOCIATE (its own control fd + udpFd, both closed here), sends the A query through the
+// relay, returns the dotted-quad. Null String on ANY failure → caller falls back to local getaddrinfo
+// (zero-regression). Exposed (non-static) for DriftstackQuicSocks5Bridge::wrapOutgoingQuicPacket.
+String driftstackResolveHostOverSocks5Proxy(const String& host)
+{
+    struct sockaddr_in relaySa { };
+    int controlFd = -1;
+    if (!driftstackQuicRawSocks5Associate(&relaySa, &controlFd)) {
+        if (controlFd >= 0)
+            ::close(controlFd);
+        return String();
+    }
+    int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udpFd < 0) {
+        if (controlFd >= 0)
+            ::close(controlFd);
+        return String();
+    }
+    struct sockaddr_in localBind { };
+    localBind.sin_family = AF_INET;
+    localBind.sin_addr.s_addr = htonl(INADDR_ANY);
+    localBind.sin_port = 0;
+    if (::bind(udpFd, reinterpret_cast<struct sockaddr*>(&localBind), sizeof(localBind)) < 0) {
+        ::close(udpFd);
+        if (controlFd >= 0)
+            ::close(controlFd);
+        return String();
+    }
+    String ip = driftstackResolveHostViaSocks5Relay(host, udpFd, relaySa, "1.1.1.1");
+    ::close(udpFd);
+    if (controlFd >= 0)
+        ::close(controlFd);
+    return ip;
+}
+
+namespace { // reopen the anonymous namespace for the remaining file-local helpers (W2557)
+
 } // anonymous namespace
 
 // Wave 29-499.321 — parse a DNS response payload (post-§7-unwrap): does any
