@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace WebCore {
 
@@ -60,12 +61,20 @@ public:
         uint32_t codepoint,
         uint32_t posClass) const;
 
+    // W2557 (#42 ©®™ residual): true if ANY entry has this codepoint. Used by
+    // FontCascade::resolveEmojiPolicy to force emoji-presentation for the baked codepoints
+    // (matching iOS's early-Apple-Color-Emoji cascade), so text-default-emoji glyphs the iPhone
+    // renders via Apple Color Emoji (©®™ etc.) are classified Color → the canvas dispatch blits
+    // the real iPhone pixels. Lazily builds a small codepoint set on first call.
+    bool hasCodepoint(uint32_t codepoint) const;
+
 private:
     bool m_loaded { false };
     const uint8_t* m_mapBase { nullptr };
     size_t m_mapSize { 0 };
     size_t m_entryCount { 0 };
     const uint8_t* m_entriesBase { nullptr };
+    std::vector<uint32_t> m_codepoints; // unique sorted codepoints, for hasCodepoint() (built on load)
 };
 
 } // namespace WebCore

@@ -1863,6 +1863,13 @@ ResolvedEmojiPolicy FontCascade::resolveEmojiPolicy(FontVariantEmoji fontVariant
         // The third category are characters with Emoji=No.
         if (isEmojiWithPresentationByDefault(character))
             return ResolvedEmojiPolicy::RequireEmoji;
+        // W2557 (#42 ©®™ residual) NOTE: forcing RequireEmoji here for the baked text-default-emoji
+        // codepoints (©®™ etc.) was tried + REVERTED — it did NOT close them: the fork renders ©®™
+        // BLANK in canvas under ANY font (the iOS Apple-Color-Emoji-160px subset's © glyph is not
+        // rendered as a usable Color glyph by the fork's CoreText, AND Arial produces nothing here).
+        // So ©®™ is blocked on a deeper CoreText glyph-availability issue, not the emoji policy. The
+        // per-glyph COLOR atlas has the real-iPhone ©®™ pixels staged (DriftstackPerGlyphColorAtlas::
+        // hasCodepoint) for when that is fixed. Tracked in #42.
         return ResolvedEmojiPolicy::NoPreference;
     case FontVariantEmoji::Text:
         return ResolvedEmojiPolicy::RequireText;

@@ -160,7 +160,15 @@ bool DriftstackPerGlyphColorAtlas::loadFromFile(const char* path)
     m_entriesBase = bytes + kColorHeaderSize;
     m_loaded = true;
 
-    WTFLogAlways("[V-COLOR] per-glyph color atlas loaded: %u entries from %s", count, resolved);
+    // Build the unique-codepoint index for hasCodepoint() (cp at key offset 4: after font_id u16 + ptSizeQ4 u16).
+    m_codepoints.clear();
+    m_codepoints.reserve(count);
+    for (uint32_t i = 0; i < count; ++i)
+        m_codepoints.push_back(leU32Color(m_entriesBase + static_cast<size_t>(i) * kColorEntrySize + 4));
+    std::sort(m_codepoints.begin(), m_codepoints.end());
+    m_codepoints.erase(std::unique(m_codepoints.begin(), m_codepoints.end()), m_codepoints.end());
+
+    WTFLogAlways("[V-COLOR] per-glyph color atlas loaded: %u entries (%zu unique codepoints) from %s", count, m_codepoints.size(), resolved);
     return true;
 }
 
@@ -191,6 +199,11 @@ std::optional<DriftstackPerGlyphColorAtlasEntry> DriftstackPerGlyphColorAtlas::l
             lo = mid + 1;
     }
     return std::nullopt;
+}
+
+bool DriftstackPerGlyphColorAtlas::hasCodepoint(uint32_t codepoint) const
+{
+    return std::binary_search(m_codepoints.begin(), m_codepoints.end(), codepoint);
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
