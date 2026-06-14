@@ -767,6 +767,7 @@ platform/graphics/cv/GraphicsContextGLCVCocoa.mm @nonARC @no-unify
 platform/graphics/cg/DriftstackTelemetry.cpp
 platform/graphics/cg/DriftstackTextRunAtlas.cpp
 platform/graphics/cg/DriftstackPerGlyphAtlas.cpp
+platform/graphics/cg/DriftstackPerGlyphColorAtlas.cpp
 
 // V-790.V Layer B WebKit fork integration (Phase 2 — wave 29-116).
 // Objective-C++ (.mm) for CoreML/MLModel dependency. ARC-compatible

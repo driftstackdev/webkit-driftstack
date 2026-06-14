@@ -31,6 +31,7 @@
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "../cg/DriftstackPerGlyphAtlas.h"
+#include "../cg/DriftstackPerGlyphColorAtlas.h"
 #include "../cg/DriftstackTelemetry.h"
 #include "../cg/DriftstackTextRunAtlas.h"
 #include "Color.h"
@@ -1148,6 +1149,117 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     }
 
 #if PLATFORM(DRIFTSTACK)
+    // V-COLOR (W2557, #42 color-emoji residual): per-glyph COLOR-emoji exact substitution.
+    // Color emoji are Apple-Color-Emoji sbix bitmaps; native Mac CoreImage downscale AA diverges
+    // from iOS (the deprecated DSEA path's own "805px AA residual") — the SAME class of gap that
+    // forced the grayscale per-glyph TEXT atlas. So close color emoji the SAME proven way: blit the
+    // real iPhone's captured RGBA from the per-glyph color atlas (DSPGCA1) at the IDENTICAL pen-
+    // relative geometry as the grayscale per-glyph blit (capture pen (8,46), 64x64 cell →
+    // drawNativeImage at (anchor-8, anchor-46, 64, 64)). Canvas-only (driftstackInCanvasTextDraw):
+    // on-screen HTML emoji render natively (no getImageData fingerprint), exactly like the text
+    // atlas. Default-OFF (DRIFTSTACK_EMOJI_COLOR_ATLAS=1) until the fork glyphchardiff re-verifies
+    // 224/224; launch-env flips it on then. This preempts the deprecated V-090/DSEA block below
+    // (early-return on full handling) only when it actually substitutes — a pure miss falls through.
+    {
+        static const bool s_colorEmojiAtlasEnabled = std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")
+            && std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")[0] == '1';
+        if (s_colorEmojiAtlasEnabled && driftstackInCanvasTextDraw() && glyphs.size() > 0) {
+            auto& colorAtlas = DriftstackPerGlyphColorAtlas::singleton();
+            if (colorAtlas.isLoaded()) {
+                const float ptSize = font.platformData().size();
+                const uint16_t ptSizeQ4 = static_cast<uint16_t>(std::lround(ptSize * 16.0f));
+                struct ColorPlan { bool hit; const uint8_t* pixels; };
+                Vector<ColorPlan, 64> cplans;
+                cplans.reserveInitialCapacity(glyphs.size());
+                unsigned colorHits = 0;
+                for (size_t i = 0; i < glyphs.size(); ++i) {
+                    ColorPlan plan { false, nullptr };
+                    Glyph g = glyphs[i];
+                    if (font.colorGlyphType(g) == ColorGlyphType::Color) {
+                        char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
+                        // NO cp>0xFFFF BMP filter: under a named "Apple Color Emoji" stack the page
+                        // forces color for BMP emoji too (verified on real device: bare U+2600/2602/
+                        // 2615/26A0/2708/2764 render COLOR, not text). The atlas only holds codepoints
+                        // captured AS color, so a miss (e.g. a heart CT shaped as text under sans-serif
+                        // → not a Color glyph here at all) simply falls through to native CT — correct.
+                        if (codepoint) {
+                            auto hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
+                            if (hit) { plan.hit = true; plan.pixels = hit->pixels; ++colorHits; }
+                        }
+                    }
+                    cplans.append(plan);
+                }
+                if (colorHits > 0) {
+                    // Per-glyph cursor positions (CTM coords; mirrors the V-090 block).
+                    Vector<CGPoint, 64> positions;
+                    positions.reserveInitialCapacity(glyphs.size());
+                    FloatPoint cursor = point;
+                    for (size_t i = 0; i < glyphs.size(); ++i) {
+                        positions.append(CGPointMake(cursor.x(), cursor.y()));
+                        cursor.move(advances[i].width, advances[i].height);
+                    }
+                    // Pass 2: passthrough glyphs in contiguous CT runs; color-hit glyphs via the proven
+                    // per-glyph RGBA blit (mirrors the V-790.L grayscale N=1 drawNativeImage exactly).
+                    Vector<GlyphBufferGlyph, 64> ctRunGlyphs;
+                    Vector<GlyphBufferAdvance, 64> ctRunAdvances;
+                    FloatPoint ctRunStart = point;
+                    auto flushCTRun = [&]() {
+                        if (ctRunGlyphs.isEmpty())
+                            return;
+                        showGlyphsWithAdvances(ctRunStart, font, cgContext.get(),
+                            ctRunGlyphs.span(), ctRunAdvances.span(), textMatrix);
+                        ctRunGlyphs.clear();
+                        ctRunAdvances.clear();
+                    };
+                    for (size_t i = 0; i < glyphs.size(); ++i) {
+                        if (!cplans[i].hit) {
+                            if (ctRunGlyphs.isEmpty())
+                                ctRunStart = FloatPoint(positions[i].x, positions[i].y);
+                            ctRunGlyphs.append(glyphs[i]);
+                            ctRunAdvances.append(advances[i]);
+                            continue;
+                        }
+                        flushCTRun();
+                        // Premultiply the atlas's UNpremultiplied capture (getImageData convention) for
+                        // kCGImageAlphaPremultipliedLast. Emoji IGNORE fillStyle → NO tint (unlike the
+                        // grayscale mask-tint). Over a cleared (transparent) canvas — glyphchardiff
+                        // clearRect — SourceOver of premult-src over transparent is identity, so
+                        // getImageData reads back the captured RGBA (opaque interior alpha=255 is exact;
+                        // partial-alpha AA edges round-trip within ±1, the same AA class as text).
+                        std::array<uint8_t, 64 * 64 * 4> rgba;
+                        auto src = unsafeMakeSpan(cplans[i].pixels, 64 * 64 * 4);
+                        auto dst = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
+                        for (size_t px = 0; px < 64 * 64; ++px) {
+                            unsigned a = src[px * 4 + 3];
+                            dst[px * 4 + 0] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 0]) * a + 127) / 255);
+                            dst[px * 4 + 1] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 1]) * a + 127) / 255);
+                            dst[px * 4 + 2] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 2]) * a + 127) / 255);
+                            dst[px * 4 + 3] = static_cast<uint8_t>(a);
+                        }
+                        RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
+                        RetainPtr<CGDataProviderRef> dataProvider = adoptCF(CGDataProviderCreateWithCFData(rgbaData.get()));
+                        RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+                        RetainPtr<CGImageRef> glyphImg = adoptCF(CGImageCreate(
+                            64, 64, 8, 32, 64 * 4, colorSpace.get(),
+                            kCGImageAlphaPremultipliedLast,
+                            dataProvider.get(), nullptr, false, kCGRenderingIntentDefault));
+                        if (glyphImg) {
+                            RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
+                            if (nativeImg) {
+                                FloatRect destRect(positions[i].x - 8.0, positions[i].y - 46.0, 64, 64);
+                                FloatRect srcRect(0, 0, 64, 64);
+                                context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
+                            }
+                        }
+                    }
+                    flushCTRun();
+                    if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG"))
+                        WTFLogAlways("[V-COLOR] color-emoji blit: %u/%zu hits ptSize=%.1f", colorHits, glyphs.size(), (double)ptSize);
+                    return; // fully handled (color blits + CT passthrough) — skip the deprecated path
+                }
+            }
+        }
+    }
     // V-090 / Phase F.1.B-2: composite atlas-rendered emoji bitmaps in
     // place of CT-rendered color glyphs. V-655 (2026-05-11) extends this
     // block to ALSO dispatch text-atlas substitutions when a mixed
