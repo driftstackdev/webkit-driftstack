@@ -1951,10 +1951,28 @@ static JSArray* availableNumberingSystems(JSGlobalObject* globalObject)
     // (Toto/Tolung digits) which Mac WebKit's bundled ICU doesn't include.
     // V-074 cumulative-rig set diff: only 'tols' is on iPhone-only side.
     // Append on Driftstack so supportedValuesOf("numberingSystem") matches
-    // iPhone exactly. Note: Mac's ICU doesn't actually support 'tols' for
-    // number formatting; calling Intl.NumberFormat(..., {numberingSystem:
-    // 'tols'}) will throw RangeError. iPhone presumably supports it in
-    // some way; this stub matches the supportedValuesOf surface only.
+    // iPhone exactly (verified W2557: fork Family-B = 78 entries incl 'tols',
+    // single — no duplicate — matching the real iPhone-17 /aio capture's 78;
+    // Family-A correctly = 77 w/o 'tols').
+    //
+    // ⚠️ W2557 CORRECTION of a stale claim: the old comment said calling
+    // Intl.NumberFormat(..., {numberingSystem:'tols'}) "will throw RangeError".
+    // That is empirically FALSE on the current libicucore.A.dylib 78.1.0:
+    // 'tols' is a well-formed Unicode locale type, so IntlNumberFormat does NOT
+    // throw — it accepts the option, ICU's numberingSystemsForLocale() (via
+    // unumsys_openAvailableNames) does NOT list 'tols' on macOS, so ResolveLocale
+    // falls back and resolvedOptions().numberingSystem === 'latn' (formats Latin
+    // digits). RESIDUAL (build-ahead, BS-gated, LOW/exotic): whether a REAL iPhone
+    // RESOLVES {nu:'tols'} to 'tols' (Tolong-Siki digits U+1E4F0-9) or ALSO
+    // falls back to 'latn' is UNCAPTURED — /aio never probed the resolution, only
+    // the LIST. Both outcomes are plausible (ICU can register a name in
+    // openAvailableNames yet lack formatting data → latn fallback on iPhone too).
+    // Per verify-first (JA4/VP8 lesson) we do NOT inject a speculative Tolong-Siki
+    // formatter: if the iPhone also latn-falls-back, the fork ALREADY matches and a
+    // formatter would CREATE a divergence. The intl /aio probe now captures the
+    // tols resolution (added W2557) so the next routine BS run resolves this; only
+    // then (if iPhone='tols') do we add the resolved-options + digit override here.
+    // The LIST surface — the value fingerprinters actually enumerate — is matched.
     //
     // Wave 29-499 §91.I (2026-05-20): Family A archetypes (iOS Safari 18.6
     // BS REF) do NOT list 'tols' — that's iOS 26.4+ only. Gate the append
