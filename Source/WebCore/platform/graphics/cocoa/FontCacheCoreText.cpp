@@ -127,6 +127,38 @@ static bool driftstackIOSFontMapInitialized WTF_GUARDED_BY_LOCK(driftstackIOSFon
 // skipped entirely, so the hidden system UI font's localized names
 // (Systeemlettertype / 系统字体 …) can never over-register. The CJK collections
 // are 19-139 MB, so we pread only the header, table directory and name table.
+// DRIFTSTACK #69: the 2 Savoye version-suffixed Full names + the 'Courier 10 Pitch'
+// alias are detected by real iPhone Safari on browserleaks/fonts at <= 26.4 (256 fonts)
+// but Apple STOPPED resolving them at Safari 26.5 (253). So the #69 exposure below must
+// apply ONLY for archetypes at Safari <= 26.4 — a 26.5+ archetype correctly stays at 253
+// (applying it there would OVER-detect by 3, the W321/W2368 invariant). Parses the
+// "safariNN_M" token from DRIFTSTACK_ARCHETYPE; defaults to apply (launch = 26.4).
+static bool driftstackBlfonts69ShouldApply()
+{
+    static const bool s_apply = []() -> bool {
+        const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!arch || !arch[0])
+            return true;
+        std::string_view sv(arch);
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos)
+            return true;
+        pos += 6;
+        int major = 0, minor = 0;
+        while (pos < sv.size() && isASCIIDigit(sv[pos])) { major = major * 10 + (sv[pos] - '0'); ++pos; }
+        if (pos < sv.size() && sv[pos] == '_') {
+            ++pos;
+            while (pos < sv.size() && isASCIIDigit(sv[pos])) { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+        }
+        if (major > 26)
+            return false;          // Safari 27+ : Apple removed these (assume stays removed)
+        if (major == 26 && minor >= 5)
+            return false;          // Safari 26.5+ : verified real = 253 (not detected)
+        return true;               // Safari <= 26.4 (incl Family-A 17/18/19) : verified/assumed 256
+    }();
+    return s_apply;
+}
+
 static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<String, Vector<String>>& out)
 {
     int fd = open(path.c_str(), O_RDONLY);
@@ -259,6 +291,8 @@ static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<S
                 //     real tell, under-detect the tolerated gap). So allowlist ONLY the proven 2.
                 // (If a future real-device capture proves iOS resolves another version-suffixed Full
                 //  name, add it here.) Verified W2557: fork blfonts 253→256, 0 over-detection.
+                if (!driftstackBlfonts69ShouldApply())
+                    continue; // Safari 26.5+ archetype: these are NOT detected (stay at 253)
                 String lk4 = s.convertToASCIILowercase();
                 if (lk4 != "savoye let plain:1.0"_s && lk4 != "savoye let plain cc.:1.0"_s)
                     continue;
@@ -456,7 +490,7 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                 // resolves to Courier (browserleaks/fonts detects it on Safari 26.4) but it lives
                 // in NO fork font file's name table. Register it as an explicit alias on the
                 // Courier face so font-family:"Courier 10 Pitch" resolves like the iPhone.
-                if (family == "courier"_s || postscript == "courier"_s) {
+                if (driftstackBlfonts69ShouldApply() && (family == "courier"_s || postscript == "courier"_s)) {
                     if (!aliasKeys.contains("courier 10 pitch"_s))
                         aliasKeys.append("courier 10 pitch"_s);
                 }
