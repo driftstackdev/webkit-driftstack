@@ -463,19 +463,21 @@ GPU* Navigator::gpu()
     }();
     if (s_isFamilyA)
         return nullptr;
-    // W2532 (#56): within Family B (Safari 26+), WebGPU still requires an iPhone 15 Pro+ / A17+ GPU
-    // (CLAUDE.md). navigator.gpu is otherwise gated by Safari VERSION only (model-blind), so an
-    // A16-and-below model running 26.x (iphone13/14 families, iphone15 non-Pro/Plus) would FALSELY
-    // expose WebGPU. Hide it for those; the WebGPU-capable models — iphone15pro/promax (A17),
-    // iphone16* (A18), iphone17* (A19, the launch archetype) — keep native exposure. The exact slug
-    // boundary is BS-verifiable (15-Pro@26.4 navigator.gpu defined, 15@26.4 undefined); default
-    // (no archetype) = launch iphone17 = capable = exposed.
+    // W2532 (#56): within Family B (Safari 26+), WebGPU requires an A16+ GPU. navigator.gpu is
+    // otherwise gated by Safari VERSION only (model-blind), so an A15 model running 26.x (iphone13/14
+    // /14plus) would FALSELY expose WebGPU. Hide it for those; the A16+ models keep native exposure.
+    // ⚠️ W2557: boundary CORRECTED A17+→A16+ — BS captured the non-Pro iPhone 15 (A16, 393x852) @
+    // Safari 26.2 with a REAL "apple" WebGPU adapter, falsifying file-122's "15 Pro and newer".
+    // iphone14pro/promax are the SAME A16 chip. This gate + the WebPage.cpp settings gate + the
+    // WorkerNavigator.cpp worker gate MUST stay byte-identical (else navigator.gpu===null or a
+    // main/worker incoherence tell). A15 iphone13*/iphone14/iphone14plus stay non-capable.
     static bool s_hideWebGPUNonCapableModel = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;
         std::string_view a(archetype);
-        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0) || (a.find("iphone15pro") == 0);
+        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0)
+            || (a.find("iphone15") == 0) || (a.find("iphone14pro") == 0); // A16+ : 14 Pro/Pro Max, 15*, 16*, 17*
         return !capable;
     }();
     if (s_hideWebGPUNonCapableModel)

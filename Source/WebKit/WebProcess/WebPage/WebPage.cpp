@@ -5435,12 +5435,17 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // matches iphone15/iphone15plus/iphone15pro/iphone15promax (all A16/A17). iphone13* (A15) stays
     // NON-capable — untestable (BS "iPhone 13 @ 26 not supported"), so the A16 boundary is the safe
     // data-backed line; the A15 boundary is SURFACED for a real-device/Apple-docs confirmation (#56).
+    // W2557 per-archetype matrix audit: the boundary is the A16 CHIP, so iphone14pro/iphone14promax
+    // (ALSO A16 — the exact GPU/Metal feature set as the BS-proven iPhone 15) must be capable too;
+    // the prior list missed them. iphone14/iphone14plus stay NON-capable (A15) — so match the
+    // "iphone14pro" PREFIX, which excludes the A15 iphone14/iphone14plus.
     static const bool s_webGPUNonCapableModel = []() {
         const char* a = getenv("DRIFTSTACK_ARCHETYPE");
         if (!a || !a[0])
             return false; // no archetype env = iphone17 launch = WebGPU-capable
         std::string_view sv(a);
-        bool capable = sv.find("iphone17") == 0 || sv.find("iphone16") == 0 || sv.find("iphone15") == 0;
+        bool capable = sv.find("iphone17") == 0 || sv.find("iphone16") == 0
+            || sv.find("iphone15") == 0 || sv.find("iphone14pro") == 0; // A16+ : 14 Pro/Pro Max, 15*, 16*, 17*
         return !capable;
     }();
     if (s_webGPUNonCapableModel)

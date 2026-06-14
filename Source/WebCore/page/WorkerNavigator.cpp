@@ -124,15 +124,19 @@ GPU* WorkerNavigator::gpu()
     }();
     if (s_isFamilyAWorker)
         return nullptr;
-    // W2532 (#56): Family-B model-capability gate (Worker mirror of Navigator.cpp; V-205 Bug 2
-    // cross-context parity). WebGPU needs iPhone 15 Pro+ / A17+; hide navigator.gpu for A16-and-below
-    // Family-B models, keep it for iphone15pro/promax/iphone16*/iphone17* (launch = iphone17 = capable).
+    // W2532 (#56): Family-B model-capability gate (Worker mirror of WebPage.cpp/Navigator.cpp;
+    // V-205 Bug 2 cross-context parity — main and worker MUST agree or it's a detectable tell).
+    // ⚠️ W2557: boundary CORRECTED A17+→A16+ to MATCH the main-context gate (WebPage.cpp): BS proved
+    // the non-Pro iPhone 15 (A16) has navigator.gpu, and iphone14pro/promax are the SAME A16 chip.
+    // This worker gate had been left at the stale iphone15pro (A17) → main/worker WebGPU INCOHERENCE
+    // for iphone15/iphone14pro archetypes. Keep the two gates byte-identical.
     static bool s_hideWebGPUNonCapableModelWorker = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;
         std::string_view a(archetype);
-        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0) || (a.find("iphone15pro") == 0);
+        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0)
+            || (a.find("iphone15") == 0) || (a.find("iphone14pro") == 0); // A16+ : 14 Pro/Pro Max, 15*, 16*, 17*
         return !capable;
     }();
     if (s_hideWebGPUNonCapableModelWorker)
