@@ -40,6 +40,7 @@
 #include "LocalDOMWindow.h"
 #include "LocalFrameInlines.h"
 #include "LocalFrameView.h"
+#include "ViewportArguments.h"
 #include <wtf/TZoneMallocInlines.h>
 
 namespace WebCore {
@@ -144,6 +145,35 @@ double VisualViewport::width() const
 double VisualViewport::height() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // W2556 (dispatch audit #2): mirror LocalDOMWindow::innerHeight()'s no-meta-viewport legacy
+    // branch so visualViewport.height stays EQUAL to innerHeight on a no-<meta viewport> page (they
+    // are equal on real iPhone — see the comment below). Without this, innerHeight returned the legacy
+    // 1741/1653 while visualViewport.height returned the meta value → a cross-getter coherence tell
+    // (affecting iphone17 too). The legacy value itself is still Safari-version-keyed / model-blind for
+    // non-iphone17 models — that per-model accuracy is tracked in #94/#55; this closes the COHERENCE.
+    if (RefPtr legacyFrame = this->frame()) {
+        if (RefPtr document = legacyFrame->document()) {
+            const auto& args = document->viewportArguments();
+            if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit) {
+                static int s_legacyVVHeight = []() {
+                    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+                    if (!archetype || !archetype[0])
+                        return 1741;
+                    std::string_view sv { archetype };
+                    if (sv.find("safari17_") != std::string_view::npos
+                        || sv.find("safari18_") != std::string_view::npos
+                        || sv.find("safari19_") != std::string_view::npos
+                        || sv.find("safari26_0") != std::string_view::npos
+                        || sv.find("safari26_1") != std::string_view::npos
+                        || sv.find("safari26_2") != std::string_view::npos
+                        || sv.find("safari26_3") != std::string_view::npos)
+                        return 1653;
+                    return 1741;
+                }();
+                return static_cast<double>(s_legacyVVHeight);
+            }
+        }
+    }
     // V-074 + W2275: visualViewport.height == innerHeight (verified equal on real iPhone, all
     // models). PREFER the per-(model,Safari-version) real-device inner_height from the archetype
     // Config (model-specific chrome — W2274); fall back to the Safari-version-keyed 678/714 when
