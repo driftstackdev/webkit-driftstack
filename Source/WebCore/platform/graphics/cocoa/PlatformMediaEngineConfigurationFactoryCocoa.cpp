@@ -166,10 +166,26 @@ static std::optional<PlatformMediaCapabilitiesInfo> computeMediaCapabilitiesInfo
             if (alphaChannel || hdrSupported)
                 return std::nullopt;
 
+#if PLATFORM(DRIFTSTACK)
+            // W2557 (#84): pin decodingInfo.powerEfficient HOST-INDEPENDENT for the generic
+            // videoCodecType path. This branch handles H.264 (avc1/avc3) and mp4v (HEVC is
+            // handled explicitly above; VP8/AV1 in their own branches). The native code reads
+            // VTIsHardwareDecodeSupported() = the HOST Mac's VideoToolbox — coincidentally correct
+            // on the Apple-Silicon fleet (every M-series Mac hardware-decodes H.264 → true; legacy
+            // mp4v has no hw decoder → false) BUT it's a host-derived value (a latent fleet-variance
+            // / host-leak if any fleet host ever differs). Pin to the real iPhone-17 /aio capture so
+            // it's fleet-invariant + device-exact, behavior-PRESERVING on the launch fleet:
+            //   avc1.42E01E (H.264): supported/smooth/powerEfficient = true (captured decodingInfo[0])
+            //   mp4v (MPEG-4 Part 2 Visual): legacy, no hardware decode on iPhone → powerEfficient=false
+            // smooth stays true (mirrors the native generic-path default + the captured H.264 smooth).
+            info.smooth = true;
+            info.powerEfficient = (videoCodecType == kCMVideoCodecType_H264);
+#else
             if (canLoad_VideoToolbox_VTIsHardwareDecodeSupported()) {
                 info.powerEfficient = VTIsHardwareDecodeSupported(videoCodecType);
                 info.smooth = true;
             }
+#endif
         } else
             return std::nullopt;
     }
