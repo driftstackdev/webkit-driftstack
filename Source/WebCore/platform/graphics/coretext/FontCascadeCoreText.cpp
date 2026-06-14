@@ -1175,13 +1175,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 for (size_t i = 0; i < glyphs.size(); ++i) {
                     ColorPlan plan { false, nullptr };
                     Glyph g = glyphs[i];
+                    // Gate on CT's COLOR classification: only substitute when CT actually resolved this
+                    // glyph to a color-font (emoji) glyph. This is correct AND safe — keying purely on
+                    // codepoint would over-fire (e.g. blit the gray Apple-Color-Emoji © for ordinary
+                    // black body-text ©, which is a fillStyle-respecting TEXT glyph). The 10 color emoji
+                    // (incl. BMP U+2600/2602/2615/26A0/2708/2764, which DO resolve to Color glyphs under
+                    // a named "Apple Color Emoji" stack — verified on real device) are closed here.
+                    // © ® ™ render on iPhone via Apple Color Emoji as fill-independent gray bitmaps but
+                    // Mac CT falls them back to Arial TEXT (colorGlyphType!=Color) — closing them needs a
+                    // font-FALLBACK fix (make the fork pick Apple Color Emoji for them under an
+                    // emoji-first stack), NOT a codepoint override. Tracked as a separate #42 residual.
                     if (font.colorGlyphType(g) == ColorGlyphType::Color) {
                         char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
-                        // NO cp>0xFFFF BMP filter: under a named "Apple Color Emoji" stack the page
-                        // forces color for BMP emoji too (verified on real device: bare U+2600/2602/
-                        // 2615/26A0/2708/2764 render COLOR, not text). The atlas only holds codepoints
-                        // captured AS color, so a miss (e.g. a heart CT shaped as text under sans-serif
-                        // → not a Color glyph here at all) simply falls through to native CT — correct.
                         if (codepoint) {
                             auto hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
                             if (hit) { plan.hit = true; plan.pixels = hit->pixels; ++colorHits; }
