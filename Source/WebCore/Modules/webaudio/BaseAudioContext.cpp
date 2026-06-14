@@ -366,7 +366,15 @@ ExceptionOr<Ref<ScriptProcessorNode>> BaseAudioContext::createScriptProcessor(si
     // is not one of the allowed power-of-2 values listed above, an IndexSizeError must be thrown.
     switch (bufferSize) {
     case 0:
-#if USE(AUDIO_SESSION)
+#if PLATFORM(DRIFTSTACK)
+        // W2557 (#83): createScriptProcessor(0) must report the real iPhone's AudioSession buffer
+        // (256), NOT the host Mac's (AudioSession::singleton().bufferSize() = 512 on the fleet) — the
+        // host value both LEAKS the fleet host (per-Mac variance) and is the wrong iPhone value.
+        // Verified: real iPhone 17 Safari 26.4 returns bufferSize=256 (BS audio-hostleak capture);
+        // iOS uses 256 across models, so this is a host-independent constant. baseLatency stays
+        // 128/sampleRate (render-quantum, already host-independent — W1943).
+        bufferSize = 256;
+#elif USE(AUDIO_SESSION)
         // Pick a value between 256 (2^8) and 16384 (2^14), based on the buffer size of the current AudioSession:
         bufferSize = 1 << std::max<size_t>(8, std::min<size_t>(14, std::log2(AudioSession::singleton().bufferSize())));
 #else
