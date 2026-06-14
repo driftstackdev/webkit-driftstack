@@ -5427,14 +5427,20 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // 'gpu' in navigator === false. The Navigator.cpp comment itself requires "undefined, not null".
     // Route the model-gate through the SAME [EnabledBySetting=WebGPUEnabled] deletion path Family-A
     // uses, so the accessor is DELETED (genuine undefined) and the GPU* window-global cascade also
-    // goes undefined. Capability boundary mirrors the W2532 model-gate (A17+: iphone15pro/16/17). The
-    // exact 15-Pro-vs-15 slug boundary stays BS-gated (#56); this null→undefined fix is independent.
+    // goes undefined. Capability boundary CORRECTED W2557 from A17+ to A16+ (iphone15/16/17 + their
+    // Pro variants): BS captured a device-profile-accurate iPhone 15 (A16, screen 393x852) @ Safari
+    // 26.2 with a REAL WebGPU adapter (vendor/arch/device/desc all "apple") — so navigator.gpu IS
+    // present on the non-Pro iPhone 15, NOT just 15 Pro. file-122's "15 Pro and newer" baseline was a
+    // claim about iOS behavior now falsified by capture (CLAUDE.md "reality wins"). find("iphone15")
+    // matches iphone15/iphone15plus/iphone15pro/iphone15promax (all A16/A17). iphone13* (A15) stays
+    // NON-capable — untestable (BS "iPhone 13 @ 26 not supported"), so the A16 boundary is the safe
+    // data-backed line; the A15 boundary is SURFACED for a real-device/Apple-docs confirmation (#56).
     static const bool s_webGPUNonCapableModel = []() {
         const char* a = getenv("DRIFTSTACK_ARCHETYPE");
         if (!a || !a[0])
             return false; // no archetype env = iphone17 launch = WebGPU-capable
         std::string_view sv(a);
-        bool capable = sv.find("iphone17") == 0 || sv.find("iphone16") == 0 || sv.find("iphone15pro") == 0;
+        bool capable = sv.find("iphone17") == 0 || sv.find("iphone16") == 0 || sv.find("iphone15") == 0;
         return !capable;
     }();
     if (s_webGPUNonCapableModel)
