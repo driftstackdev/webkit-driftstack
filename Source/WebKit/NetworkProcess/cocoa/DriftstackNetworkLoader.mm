@@ -775,6 +775,21 @@ static HashSet<String>& driftstackH2PoolPending()
 // Input contract drift-locked harness-side (A3 W1351: ≥2 well-formed tags, region-qualified [0]).
 // CAVEAT (task #48, BS-gated): the CFNetwork multi-tag/CJK minimization (ja-JP→ja) is NOT modeled here
 // — byte-exact for the Latin 2-element locales; coherent-not-yet-byte-exact for ja/zh/no until #48.
+// W2557 (per-archetype audit): the per-archetype full User-Agent, forwarded to the NetworkProcess
+// via DRIFTSTACK_ARCHETYPE_UA_FULL (ProcessLauncherCocoa). Used only as the PathB request
+// user-agent FALLBACK — in normal operation the WebProcess already set the request's user-agent to
+// the per-archetype customUserAgent (the contains-check returns it). The prior hardcoded iphone17
+// literal would leak the WRONG UA on the wire for every OTHER archetype if the header were ever
+// absent; deriving from the forwarded env keeps the fallback per-archetype-correct (launch
+// archetype unchanged when the env carries the iphone17 UA).
+static String driftstackPathBUserAgentFallback()
+{
+    const char* ua = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL");
+    if (ua && ua[0])
+        return String::fromUTF8(ua);
+    return "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
+}
+
 static String driftstackPathBAcceptLanguage()
 {
     const char* al = getenv("DRIFTSTACK_APPLELANGUAGES");
@@ -915,7 +930,7 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     // safe. Hardcode the iPhone value so every PathB request (navigation + fetch/XHR) is byte-correct.
     h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
-    h2req.extraHeaders.append({ "user-agent"_s, getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
+    h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
     // W2438 (#61): real iPhone-17 Safari 26.4 sends the RFC 9218 `priority` header on every request
     // (16/16 BS browserleaks captures = `u=0, i`). On iOS that header is injected by CFNetwork at the
     // network layer; PathB bypasses CFNetwork, so the WebProcess request has no `priority` and omitting
@@ -1270,7 +1285,7 @@ void DriftstackNetworkLoader::resume()
                 if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
                 h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
-                h3req.extraHeaders.append({ "user-agent"_s, orDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
+                h3req.extraHeaders.append({ "user-agent"_s, wk.contains("user-agent"_s) ? wk.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
                 // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when
                 // WebKit doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
                 h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s) : "u=0, i"_s });
@@ -1666,7 +1681,7 @@ void DriftstackNetworkLoader::resume()
             if (webkitHdrs.contains("sec-fetch-mode"_s))
                 h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
-                getOrDefault("user-agent"_s, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s) });
+                webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
             // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when WebKit
             // doesn't supply one — the one-shot path bypasses CFNetwork same as the pool builder above.
             h2req.extraHeaders.append({ "priority"_s,

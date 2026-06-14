@@ -31,6 +31,10 @@
 #import <wtf/NeverDestroyed.h>
 #import <wtf/text/MakeString.h>
 
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackArchetypeConfig.h"
+#endif
+
 namespace WebCore {
 
 String standardUserAgentWithApplicationName(const String& applicationName, const String&, UserAgentType)
@@ -43,7 +47,26 @@ String standardUserAgentWithApplicationName(const String& applicationName, const
     // /useragent + many detection vendors read both JS UA + HTTP UA + flag
     // any divergence as "spoofing detected". Match Wave 1.2 + V-205 Bug 2
     // (WorkerNavigator) UA string here.
-    static NeverDestroyed<String> driftstackHttpUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
+    // W2557 (per-archetype audit): resolve the HTTP User-Agent the SAME way Navigator::userAgent()
+    // does (Navigator.cpp:118-148) — config.userAgentFull() → DRIFTSTACK_ARCHETYPE_UA_FULL env →
+    // iphone17 literal — so the wire UA is byte-identical to navigator.userAgent for EVERY archetype.
+    // The prior hardcoded iphone17 literal returned the SAME UA for all 81 archetypes, so any
+    // non-launch archetype (Version/26.0, Version/18.6, …) would send the LAUNCH UA on the wire while
+    // navigator.userAgent reported its real one — the exact JS-vs-HTTP divergence the V-228 comment
+    // was written to prevent. In production the config (DRIFTSTACK_ARCHETYPE_CONFIG_PATH) is always
+    // set, so this matches navigator.userAgent's layer-1 exactly; launch archetype unchanged
+    // (config.userAgentFull() == the iphone17 literal). Per-process (per-session).
+    static NeverDestroyed<String> driftstackHttpUA = [] () -> String {
+        auto& cfg = DriftstackArchetypeConfig::singleton();
+        if (cfg.isValid()) {
+            String s = cfg.userAgentFull();
+            if (!s.isEmpty())
+                return s;
+        }
+        if (const char* env = getenv("DRIFTSTACK_ARCHETYPE_UA_FULL"); env && env[0])
+            return String::fromUTF8(env);
+        return "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.4 Mobile/15E148 Safari/604.1"_s;
+    }();
     UNUSED_PARAM(applicationName);
     return driftstackHttpUA.get();
 #else

@@ -25,6 +25,10 @@
 #include "config.h"
 #include "MediaQueryFeatures.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include "CSSPrimitiveNumericCategory.h"
 #include "Chrome.h"
 #include "ComputedStyleDependencies.h"
@@ -380,8 +384,14 @@ static const LengthSchema& deviceHeightFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
-            // V-074: device-height = iPhone 16 Pro screen.height (874).
+            // V-074 + W2557 (per-archetype audit): device-height = the ARCHETYPE's screen.height,
+            // from the per-session config — NOT a hardcoded 874 (that is only the iphone17/16-Pro
+            // value; every other model's CSS `@media (device-height)` query would mis-report 874 →
+            // a per-archetype tell that fires on every page). Fall back to 874 when the config does
+            // not carry the value (launch archetype unchanged: config.screenHeight()==874).
             (void)context;
+            if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
+                return LayoutUnit { static_cast<float>(h) };
             return LayoutUnit { 874.0f };
 #else
             if (RefPtr localFrame = context.document->frame()->localMainFrame())
@@ -412,8 +422,13 @@ static const LengthSchema& deviceWidthFeatureSchema()
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
 #if PLATFORM(DRIFTSTACK)
-            // V-074: device-width = iPhone 16 Pro screen.width (402).
+            // V-074 + W2557 (per-archetype audit): device-width = the ARCHETYPE's screen.width,
+            // from the per-session config — NOT a hardcoded 402 (every non-402-wide model's CSS
+            // `@media (device-width)` query would mis-report 402). Fall back to 402 when the config
+            // does not carry the value (launch archetype unchanged: config.screenWidth()==402).
             (void)context;
+            if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+                return LayoutUnit { static_cast<float>(w) };
             return LayoutUnit { 402.0f };
 #else
             if (RefPtr localFrame = context.document->frame()->localMainFrame())
