@@ -207,12 +207,18 @@ static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<S
         Vector<uint32_t> id1Langs; // (platformID<<16 | languageID) of nameID=1 records
         struct TypoCand { String name; uint32_t lang; };
         Vector<TypoCand> id16Cands;
+        // DRIFTSTACK #69 (W2557): set when a VERSION-SUFFIXED nameID=4 (Full name)
+        // is found (e.g. "Savoye LET Plain:1.0"). Real iPhone Safari 26.4 exposes
+        // these as resolvable families; some of their faces are hidden (dot-prefixed
+        // PostScript name, e.g. ".SavoyeLetPlainCC"), so this also relaxes the
+        // hidden-face skip below — but ONLY for the version-suffixed-full-name case.
+        bool hasVersionSuffixedFullName = false;
         for (unsigned r = 0; r < recCount; ++r) {
             size_t recPos = 6 + static_cast<size_t>(r) * 12;
             if (recPos + 12 > nameData.size())
                 break;
             unsigned nameID = be16(ns, recPos + 6);
-            if (nameID != 1 && nameID != 6 && nameID != 16) // 1=Family, 6=PostScript, 16=Typographic Family
+            if (nameID != 1 && nameID != 6 && nameID != 16 && nameID != 4) // 1=Family, 6=PostScript, 16=Typographic Family, 4=Full name (version-suffixed only, #69)
                 continue;
             unsigned platformID = be16(ns, recPos + 0);
             unsigned encodingID = be16(ns, recPos + 2);
@@ -239,6 +245,29 @@ static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<S
                     facePS = s.convertToASCIILowercase();
                 continue;
             }
+            if (nameID == 4) {
+                // DRIFTSTACK #69: expose the Full font name as a resolvable family ONLY for the
+                // EXACT version-suffixed names the REAL iPhone (Safari 26.4, browserleaks/fonts)
+                // resolves — an explicit allowlist, NOT a "any version-suffixed nameID=4" pattern.
+                //   • A blanket nameID=4 add exposes every ordinary "Arial Bold" full name →
+                //     over-detects ~200 fonts iOS does NOT report (reverted W2546).
+                //   • Even a ":<digit>" version-suffix filter is too broad: the fork font set ALSO
+                //     contains "Academy Engraved LET Plain:1.0" (AcademyEngraved.ttf, identical
+                //     Family-Plain:1.0 structure) which browserleaks does NOT test and for which we
+                //     have NO real-device evidence iOS resolves — exposing it risks a Mac-font
+                //     OVER-detection (the W321/W2368 zero-over-detection invariant: over-detect is the
+                //     real tell, under-detect the tolerated gap). So allowlist ONLY the proven 2.
+                // (If a future real-device capture proves iOS resolves another version-suffixed Full
+                //  name, add it here.) Verified W2557: fork blfonts 253→256, 0 over-detection.
+                String lk4 = s.convertToASCIILowercase();
+                if (lk4 != "savoye let plain:1.0"_s && lk4 != "savoye let plain cc.:1.0"_s)
+                    continue;
+                if (!names.contains(lk4)) {
+                    names.append(lk4);
+                    hasVersionSuffixedFullName = true;
+                }
+                continue;
+            }
             if (s.startsWith('.'))
                 continue;
             String lk = s.convertToASCIILowercase();
@@ -257,11 +286,31 @@ static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<S
             if (id1Langs.contains(cand.lang) && !names.contains(cand.name))
                 names.append(cand.name);
         }
-        // Only non-hidden faces (PostScript name not dot-prefixed).
-        if (facePS.isEmpty() || facePS.startsWith('.') || names.isEmpty())
+        // Only non-hidden faces (PostScript name not dot-prefixed) — EXCEPT a face
+        // carrying a version-suffixed nameID=4 Full name (#69: real Safari 26.4 exposes
+        // e.g. "Savoye LET Plain CC.:1.0" even though its PostScript name is hidden
+        // ".SavoyeLetPlainCC"). names.isEmpty() always skips.
+        if (names.isEmpty())
+            continue;
+        if ((facePS.isEmpty() || facePS.startsWith('.')) && !hasVersionSuffixedFullName)
             continue;
         for (const String& key : names) {
             auto& vec = out.ensure(key, [] { return Vector<String> { }; }).iterator->value;
+            for (const String& fam : names) {
+                if (!vec.contains(fam))
+                    vec.append(fam);
+            }
+        }
+        // DRIFTSTACK #69: a HIDDEN face (dot-prefixed PostScript name) carrying a
+        // version-suffixed nameID=4 Full name (e.g. ".SavoyeLetPlainCC" /
+        // "Savoye LET Plain CC.:1.0") has NO English nameID=1 family, so the
+        // resolution site — which looks up localizedByFamily by the descriptor's
+        // family name — can't find these names. ALSO key them by the PostScript
+        // name so the resolution site's postscript lookup (added there) registers
+        // the version-suffixed Full name. Gated on hasVersionSuffixedFullName so
+        // only these rare faces are PS-keyed (no broad hidden-face exposure).
+        if (hasVersionSuffixedFullName && !facePS.isEmpty()) {
+            auto& vec = out.ensure(facePS, [] { return Vector<String> { }; }).iterator->value;
             for (const String& fam : names) {
                 if (!vec.contains(fam))
                     vec.append(fam);
@@ -390,6 +439,27 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                 String postscript = String(postscriptCF.get()).convertToASCIILowercase();
                 if (!postscript.isEmpty() && postscript != family)
                     aliasKeys.append(postscript);
+                // DRIFTSTACK #69: register version-suffixed Full names of HIDDEN faces
+                // (".SavoyeLetPlainCC" → "Savoye LET Plain CC.:1.0"). The localizedByFamily
+                // map (built above) keys these by the PostScript name for exactly this case,
+                // since the hidden face has no English family name to match by.
+                if (!postscript.isEmpty()) {
+                    auto itPS = localizedByFamily.find(postscript);
+                    if (itPS != localizedByFamily.end()) {
+                        for (const String& a : itPS->value) {
+                            if (!aliasKeys.contains(a))
+                                aliasKeys.append(a);
+                        }
+                    }
+                }
+                // DRIFTSTACK #69: "Courier 10 Pitch" is a system-level alias the real iPhone
+                // resolves to Courier (browserleaks/fonts detects it on Safari 26.4) but it lives
+                // in NO fork font file's name table. Register it as an explicit alias on the
+                // Courier face so font-family:"Courier 10 Pitch" resolves like the iPhone.
+                if (family == "courier"_s || postscript == "courier"_s) {
+                    if (!aliasKeys.contains("courier 10 pitch"_s))
+                        aliasKeys.append("courier 10 pitch"_s);
+                }
             }
             // iPhone-canonical face-name allowlist for archetype
             // iphone17_ios18_7_safari26_4. Derived from BS Automate
