@@ -141,9 +141,28 @@ inline const char* driftstackFontsCurrentArchetypeCStr()
     return archetype;
 }
 
+// W2556 (config-coherence audit #5): the Mac-only-font denylist reflects iOS FONT AVAILABILITY
+// (which font files exist on the device) — MODEL-INDEPENDENT, keyed only by iOS version. It was
+// keyed by the EXACT slug, so only the launch slug iphone17_ios18_7_safari26_4 ever matched and
+// EVERY other archetype got an EMPTY denylist (Mac-only fonts a real iPhone hides stayed visible =
+// a per-model font-detection tell). Match by iOS version instead: every model on iOS 18.7 → the
+// iphone17 (18.7) set, every model on iOS 18.6 → the iphone16pro (18.6) set. The 2 entry keys
+// (iphone16pro_ios18_6, iphone17_ios18_7_safari26_4) are the only iOS versions in the 81-archetype
+// matrix, so every archetype maps to exactly one set.
+inline std::string_view driftstackFontsIosKey(std::string_view slug)
+{
+    auto p = slug.find("_ios");
+    if (p == std::string_view::npos)
+        return slug; // unkeyed: fall back to whole-slug compare
+    auto rest = slug.substr(p + 4);          // e.g. "18_7_safari26_4" or "18_6"
+    auto u1 = rest.find('_');                // end of "18"
+    auto u2 = (u1 == std::string_view::npos) ? std::string_view::npos : rest.find('_', u1 + 1);
+    return rest.substr(0, u2 == std::string_view::npos ? rest.size() : u2); // "18_7" | "18_6"
+}
+
 inline bool driftstackFontsArchetypeEq(const char* a, const char* b)
 {
-    return std::string_view(a) == std::string_view(b);
+    return driftstackFontsIosKey(std::string_view(a)) == driftstackFontsIosKey(std::string_view(b));
 }
 
 inline bool driftstackFamilyDenylistedForArchetype(const char* archetype, const WTF::AtomString& family)
