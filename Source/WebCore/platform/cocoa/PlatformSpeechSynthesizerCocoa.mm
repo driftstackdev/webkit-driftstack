@@ -374,10 +374,18 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             // Bounded to Samantha ONLY — the other 67/68 voices already match real iphone17 natively
             // (W624; Geeta/Alpana/Paya are compact on BOTH the Mac and real iphone17). The match is on
             // the `compact` identifier so it's a no-op if a future macOS reverts Samantha to super-compact.
+            // W2556 (dispatch audit #4): was an EXACT-slug match on iphone17_ios18_7_safari26_4, so
+            // iphone17_ios18_7_safari26_5 + iphone17pro/promax (all iOS 18.7) got Mac-native `compact`
+            // (a per-archetype voice tell). The 17× real 26.5 captures (W620-624) confirm the iPhone 17
+            // FAMILY = super-compact at BOTH 26.4 and 26.5; voices are per-iOS-version so all iOS-18.7
+            // 17-family models share it. Narrowed to the CONFIRMED set (iphone17* AND ios18_7) — NOT the
+            // broad "all Safari-26.x" the audit suggested, which is model-vs-iOS confounded (16 Pro @
+            // 18.6 = compact; whether a 13/14/15/16 model @ 26.x is super-compact is unverified).
             static const bool iphone17NeedsSamanthaSuperCompact = []() {
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
-                return [[NSString stringWithUTF8String:env] isEqualToString:@"iphone17_ios18_7_safari26_4"];
+                NSString* slug = [NSString stringWithUTF8String:env];
+                return [slug containsString:@"iphone17"] && [slug containsString:@"ios18_7"];
             }();
             if (iphone17NeedsSamanthaSuperCompact
                 && [identifier isEqualToString:@"com.apple.voice.compact.en-US.Samantha"])
