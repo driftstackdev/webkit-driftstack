@@ -237,6 +237,19 @@ bool av1HardwareDecoderAvailable()
 static std::optional<bool> s_av1HardwareDecoderAvailableInProcess = { };
 bool av1HardwareDecoderAvailableInProcess()
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2568: the SAME A15/A16 gate as av1HardwareDecoderAvailable() must apply here too. The GPU
+    // process feeds THIS value into hasAV1HardwareDecoder (GPUConnectionToWebProcess) →
+    // LibWebRTCCodecs::setHasAV1HardwareDecoder → setWebCodecsAV1Enabled(true), which is the SOLE
+    // flip that exposes the WebCodecs/VideoDecoder AV1 path (a software dav1d decoder). Without this
+    // guard, A15/A16 archetypes report VideoDecoder.isConfigSupported('av01').supported=true while the
+    // now-gated canPlayType/MSE/decodingInfo all return false — a per-chip cross-API incoherence that
+    // contradicts the real device (A16 = false on every AV1 API; W2560 captures). DRIFTSTACK_ARCHETYPE
+    // is forwarded to the GPU process, so this getenv-backed check is correct in-process there too.
+    if (!driftstackArchetypeHasAV1Decode())
+        return false;
+#endif
+
     ASSERT(isMainThread() || !!s_av1HardwareDecoderAvailableInProcess);
 
     if (!s_av1HardwareDecoderAvailableInProcess)
