@@ -1234,6 +1234,18 @@ static BOOL areEssentiallyEqual(double a, double b)
     completionHandler();
 }
 
+// W2076: is the iOS-26 Safari chrome active? (value-check, matches BrowserWindowController.m:86-92 —
+// a non-empty value that isn't "0"/"false"/"no"/"off"). Used to switch the address bar between the
+// iOS collapsed-domain look (chrome on) and the full dev URL (chrome off).
+static BOOL driftSafariChromeEnabled(void)
+{
+    const char *raw = getenv("DRIFTSTACK_SAFARI_CHROME");
+    if (!raw)
+        return NO;
+    NSString *v = [[NSString stringWithUTF8String:raw] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].lowercaseString;
+    return v.length > 0 && ![v isEqualToString:@"0"] && ![v isEqualToString:@"false"] && ![v isEqualToString:@"no"] && ![v isEqualToString:@"off"];
+}
+
 - (void)updateTextFieldFromURL:(NSURL *)URL
 {
     if (!URL)
@@ -1242,7 +1254,35 @@ static BOOL areEssentiallyEqual(double a, double b)
     if (!URL.absoluteString.length)
         return;
 
-    urlText.stringValue = [URL _web_userVisibleString];
+    // W2076 (founder "more modern / more iOS"): in the iOS-26 chrome the collapsed address bar shows the
+    // DOMAIN (host minus a leading "www."), like iOS-26 Safari — not the full scheme://host/path. The full
+    // URL returns on tap-to-edit (controlTextDidBeginEditing). Chrome-only, and the page CANNOT read the
+    // address bar → fp-NEUTRAL. The bare/dev MiniBrowser (chrome off) keeps the full user-visible URL.
+    NSString *host = URL.host;
+    if (driftSafariChromeEnabled() && host.length) {
+        if ([host hasPrefix:@"www."])
+            host = [host substringFromIndex:4];
+        urlText.stringValue = host;
+    } else
+        urlText.stringValue = [URL _web_userVisibleString];
+}
+
+// W2076: while the user is editing the address bar, show the FULL URL so they can see/edit the whole
+// address (iOS-26 expands the collapsed domain to the full URL on tap); restore the collapsed domain
+// when editing ends. Gated on the chrome — the dev/bare browser already shows the full URL.
+- (void)controlTextDidBeginEditing:(NSNotification *)notification
+{
+    if (notification.object == urlText && driftSafariChromeEnabled()) {
+        NSURL *u = self.currentURL;
+        if (u.absoluteString.length)
+            urlText.stringValue = [u _web_userVisibleString];
+    }
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification
+{
+    if (notification.object == urlText)
+        [self updateTextFieldFromURL:self.currentURL];
 }
 
 - (void)updateLockButtonIcon:(BOOL)hasOnlySecureContent
