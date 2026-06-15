@@ -277,7 +277,17 @@
         tabsButton.contentTintColor = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
         [bar addSubview:tabsButton];
     }
-    if (progressIndicator) { progressIndicator.frame = NSMakeRect(W/2 - 12, 12, 24, 24); [bar addSubview:progressIndicator]; }
+    // W2073 (founder "the loading thing is kinda small, make it better"): replace the 24px corner spinner
+    // with a full-width iOS-style DETERMINATE progress bar pinned to the TOP edge of the bottom bar (where
+    // iOS-26 Safari shows load progress). The xib switched it to style=bar; it stays bound to the webView's
+    // estimatedProgress (0..1, maxValue=1) + hidden-when-not-loading, so it fills left→right as the page loads
+    // and disappears on completion. Purely a chrome overlay — does NOT resize the web view, so the
+    // clientHeight==inner_height(714) layout-viewport signal (W2072/W2564) is unaffected.
+    if (progressIndicator) {
+        progressIndicator.frame = NSMakeRect(0, barH - 5, W, 5);
+        progressIndicator.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;   // full width, pinned to the bar's top edge
+        [bar addSubview:progressIndicator];
+    }
 
     // Shrink the web content to sit ABOVE the bar (the nib's containerView is the webView's parent).
     if (containerView) {

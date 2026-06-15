@@ -156,9 +156,9 @@
                     </toolbarItem>
                     <toolbarItem implicitItemIdentifier="86912BAA-B8D0-400F-BFEE-71FC166986E6" label="Progress" paletteLabel="Progress" tag="-1" visibilityPriority="600" sizingBehavior="auto" id="60">
                         <nil key="toolTip"/>
-                        <progressIndicator key="view" horizontalHuggingPriority="750" verticalHuggingPriority="750" maxValue="1" displayedWhenStopped="NO" bezeled="NO" controlSize="small" style="spinning" id="21">
-                            <rect key="frame" x="19" y="14" width="16" height="16"/>
-                            <autoresizingMask key="autoresizingMask" flexibleMinX="YES" flexibleMinY="YES"/>
+                        <progressIndicator key="view" horizontalHuggingPriority="750" verticalHuggingPriority="750" maxValue="1" displayedWhenStopped="NO" bezeled="NO" indeterminate="NO" controlSize="small" style="bar" id="21">
+                            <rect key="frame" x="0.0" y="87" width="400" height="5"/>
+                            <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
                         </progressIndicator>
                     </toolbarItem>
                 </allowedToolbarItems>
