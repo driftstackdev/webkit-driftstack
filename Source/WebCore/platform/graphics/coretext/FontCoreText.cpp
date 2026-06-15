@@ -1509,6 +1509,20 @@ char32_t Font::driftstackCodepointForColorGlyph(Glyph glyph) const
                     m_driftstackEmojiReverseMap.set(glyphs[0], static_cast<char32_t>(cp));
             }
         }
+        // DRIFTSTACK #42 (W2558): © ® ™ resolve to Apple Color Emoji COLOR glyphs under an emoji-first
+        // canvas stack (verified colorGlyphType==Color), and the per-glyph COLOR atlas (DSPGCA1) HAS
+        // their gray iPhone pixels — but DriftstackEmojiAtlas::codepoints() (this reverse-map source)
+        // OMITS them, so a color-resolved © ® ™ glyph couldn't recover its codepoint → the color-atlas
+        // lookup was skipped → CT rendered the Mac's BLANK Apple-Color-Emoji © → blank (ink=0). Map them
+        // explicitly so the color dispatch recovers 0xA9/0xAE/0x2122 → serves the gray atlas (matching
+        // the real iPhone). The colorGlyphType==Color gate keeps this canvas/emoji-first only; plain
+        // text fonts render © as text (no color glyph), so body text is unaffected.
+        for (uint32_t legacyCp : { 0x00A9u, 0x00AEu, 0x2122u }) {
+            UniChar cu = static_cast<UniChar>(legacyCp);
+            CGGlyph lg = 0;
+            if (CTFontGetGlyphsForCharacters(font.get(), &cu, &lg, 1) && lg)
+                m_driftstackEmojiReverseMap.set(lg, static_cast<char32_t>(legacyCp));
+        }
         m_driftstackEmojiReverseMapBuilt = true;
         WTFLogAlways("[Driftstack] Font::driftstackCodepointForColorGlyph: built reverse map for color-emoji font, %u entries", static_cast<unsigned>(m_driftstackEmojiReverseMap.size()));
     }
