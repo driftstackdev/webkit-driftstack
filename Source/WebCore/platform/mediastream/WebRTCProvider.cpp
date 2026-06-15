@@ -96,6 +96,23 @@ void WebRTCProvider::setAV1Support(bool supportsAV1)
 
 bool WebRTCProvider::isSupportingAV1() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2562: A15/A16 archetypes have no AV1 hardware decoder, so a real iPhone of those models does NOT
+    // advertise AV1 in RTCRtpReceiver/Sender.getCapabilities() (BS captures: iphone14/14pro/15 video
+    // codecs = H264/H265/VP8/VP9/red/rtx with NO AV1; iphone15promax/17 add AV1). The M3-class fleet's
+    // libwebrtc would advertise AV1 for ALL archetypes (gated only by the webRTCAV1CodecEnabled setting,
+    // not per-chip), so force AV1 off for non-A17Pro+ archetypes. Boundary mirrors the canPlayType AV1
+    // gate (W2561 driftstackArchetypeHasAV1Decode): A17Pro+ = iphone15pro/iphone15promax/iphone16*/
+    // iphone17*. (project_codec_capability_perchip_hostderived_w2560.)
+    if (m_supportsAV1) {
+        if (const char* env = getenv("DRIFTSTACK_ARCHETYPE")) {
+            auto slug = String::fromUTF8(env);
+            bool hasAV1 = slug.startsWith("iphone15pro"_s) || slug.startsWith("iphone16"_s) || slug.startsWith("iphone17"_s);
+            if (!hasAV1)
+                return false;
+        }
+    }
+#endif
     return m_supportsAV1;
 }
 
