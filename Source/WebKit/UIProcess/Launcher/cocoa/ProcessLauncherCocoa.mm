@@ -466,6 +466,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // the sandboxed WebContent (the __XPC_ shadow path does not forward these). Both default-off.
             { "DRIFTSTACK_INLINE_OFFSET_SNAP", getenv("DRIFTSTACK_INLINE_OFFSET_SNAP") },
             { "DRIFTSTACK_LOG_INLINE_BBOX", getenv("DRIFTSTACK_LOG_INLINE_BBOX") },
+            { "DRIFTSTACK_LOG_FONT_METRIC", getenv("DRIFTSTACK_LOG_FONT_METRIC") },
             // Locale: forward to BOTH WebContent (navigator.language via the
             // AppleLanguages override) AND NetworkProcess (Accept-Language), so
             // the JS language and the HTTP header never diverge.

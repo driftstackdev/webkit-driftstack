@@ -284,6 +284,22 @@ void Font::platformInit()
     descent = ceilf(descent);
 
 #if PLATFORM(DRIFTSTACK)
+    // W2572 instrumentation (gated default-off): pin the -apple-system large-size offsetHeight cap.
+    // Hypothesis: the SF-Pro iOS-ratio override (shouldUseSfProConstantOnePixelAdjustment) does NOT fire
+    // at large sizes because the resolved Display optical-variant's family name isn't in the match list,
+    // so the fork falls back to raw Mac CoreText metrics (ascent+descent ~116 at 128px) instead of the
+    // iOS ratios (153). Logs the resolved family name + metrics. Reverted after pinning.
+    if (getenv("DRIFTSTACK_LOG_FONT_METRIC")) {
+        char buf[160] = {0};
+        if (familyName)
+            CFStringGetCString(familyName.get(), buf, sizeof(buf), kCFStringEncodingUTF8);
+        WTFLogAlways("[W2572-FM] family='%s' size=%.1f ascent=%.2f descent=%.2f lineGap=%.2f lineSpacing=%.2f sfProOverride=%d",
+            buf, pointSize, ascent, descent, lineGap, lineSpacing,
+            shouldUseSfProConstantOnePixelAdjustment(ctFont.get()) ? 1 : 0);
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
     // V-602 PingFang metric overlay + Track I generalization (wave 29-233):
     // Mac-resolved fallback fonts that diverge from iOS equivalents get
     // metric override here. Table-driven pattern — each entry maps a Mac
