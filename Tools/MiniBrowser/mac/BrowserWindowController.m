@@ -275,6 +275,11 @@
         tabsButton.bordered = NO;
         tabsButton.image.template = YES;
         tabsButton.contentTintColor = [NSColor colorWithSRGBRed:114.0/255.0 green:47.0/255.0 blue:55.0/255.0 alpha:1.0];
+        // W2079: label the button for accessibility + UI automation. The NSImage's accessibilityDescription
+        // does NOT propagate to the button's AXDescription, so the tabs control was unlabeled (a11y gap +
+        // un-scriptable). Set the button's own label so VoiceOver announces it AND System Events can target
+        // it (`button whose description is "Tabs"`) to open the overview headlessly for visual self-checks.
+        tabsButton.accessibilityLabel = @"Tabs";
         [bar addSubview:tabsButton];
     }
     // W2073 (founder "the loading thing is kinda small, make it better"): replace the 24px corner spinner
