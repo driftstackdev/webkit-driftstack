@@ -24,10 +24,28 @@
 #include "Shared/Sandbox/macOS/common.sb"
 #include "Shared/Sandbox/preferences.sb"
 
+; DRIFTSTACK #91 (W2559): grant the privileged-socket-delegate privilege UNCONDITIONALLY (no
+; require-entitlement). The NetworkProcess needs PRIV_NET_PRIVILEGED_SOCKET_DELEGATE to open public
+; (non-loopback) sockets; upstream gates it behind the restricted entitlement
+; com.apple.private.network.socket-delegate. On our ad-hoc-signed fork that is unusable: AMFI SIGKILLs
+; ("Code Signature Invalid") any ad-hoc binary carrying ANY non-allowlisted entitlement unless the
+; amfi_get_out_of_my_way=0x1 boot-arg is set — and that's true of CUSTOM (com.driftstack.*) keys too,
+; not just Apple-private ones (empirically verified W2559: a bare ad-hoc binary with ONLY
+; com.driftstack.foo is killed exactly like one with com.apple.private.network.socket-delegate). So the
+; W2558 "custom entitlement" idea cannot work; the boot-arg+reboot was the only known path.
+;
+; This profile is loaded ONLY by the NetworkProcess (sandbox_init at startup), and the privilege it
+; grants is exactly the NetworkProcess's legitimate job (open sockets on behalf of WebContent). The
+; entitlement check was Apple's defense-in-depth on top of "you are the NetworkProcess"; for a fork
+; whose NetworkProcess is the trusted binary, granting on privilege-id alone adds no attack surface — a
+; non-NetworkProcess cannot load this profile, and anyone who has substituted our NetworkProcess binary
+; already has full control. The kernel's priv_check for this privilege is satisfied by the Sandbox MAC
+; grant (mac_priv_grant); it does NOT independently hard-check the entitlement (empirically verified
+; W2559: a bare get-task-allow-only NetworkProcess with this grant established a real public :443 TCP
+; connection, no boot-arg, no reboot). This also removes the per-Mac boot-arg requirement for the
+; ad-hoc-signed fleet. project_dev_networkprocess_amfi_socketdelegate_crashloop.
 (allow system-privilege (with grant)
-    (require-all
-        (privilege-id PRIV_NET_PRIVILEGED_SOCKET_DELEGATE)
-        (require-entitlement "com.apple.private.network.socket-delegate")))
+    (privilege-id PRIV_NET_PRIVILEGED_SOCKET_DELEGATE))
 
 #if USE(SANDBOX_VERSION_3)
 (with-filter (mac-policy-name "Sandbox")
