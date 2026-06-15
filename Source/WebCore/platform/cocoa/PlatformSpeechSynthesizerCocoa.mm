@@ -378,16 +378,26 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             // iphone17_ios18_7_safari26_5 + iphone17pro/promax (all iOS 18.7) got Mac-native `compact`
             // (a per-archetype voice tell). The 17× real 26.5 captures (W620-624) confirm the iPhone 17
             // FAMILY = super-compact at BOTH 26.4 and 26.5; voices are per-iOS-version so all iOS-18.7
-            // 17-family models share it. Narrowed to the CONFIRMED set (iphone17* AND ios18_7) — NOT the
-            // broad "all Safari-26.x" the audit suggested, which is model-vs-iOS confounded (16 Pro @
-            // 18.6 = compact; whether a 13/14/15/16 model @ 26.x is super-compact is unverified).
-            static const bool iphone17NeedsSamanthaSuperCompact = []() {
+            // 17-family models share it. Narrowed to the CONFIRMED set (iphone17* AND ios18_7).
+            // W2560 (per-archetype divergence audit): EXTENDED to iphone14pro/iphone14promax @ ios18_7.
+            // A real-device BS capture (reference/iphone14pro_ios26_bs/...phaseB_iphone14pro_v1_2.json —
+            // model "iPhone 14 Pro", UA "iPhone OS 18_7 ... Version/26.2") reports
+            // com.apple.voice.super-compact.en-US.Samantha, identical to the iPhone 17 family. So the
+            // Samantha super-compact tier is NOT iphone17-exclusive at iOS 18.7 — the A16 Pro shares it.
+            // Without this, the 6 supported iphone14pro/promax @ ios18_7 slugs got the host Mac's
+            // `compact.en-US.Samantha` = a reference-VERIFIED wrong served value (per-archetype tell).
+            // Still EXCLUDES: iphone16pro (genuinely `compact` — handled by the V-657 remap above, a
+            // DIFFERENT real-device tier at the same iOS 18.7); A15 iphone14/iphone14plus (the substring
+            // "iphone14pro" matches only the A16 Pro/ProMax, not the non-Pro A15); and ALL ios18_6 slugs
+            // (the Samantha tier at iOS 18.6 is unverified — never assume across an iOS version, W2274).
+            static const bool needsSamanthaSuperCompact = []() {
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
                 NSString* slug = [NSString stringWithUTF8String:env];
-                return [slug containsString:@"iphone17"] && [slug containsString:@"ios18_7"];
+                return ([slug containsString:@"iphone17"] || [slug containsString:@"iphone14pro"])
+                    && [slug containsString:@"ios18_7"];
             }();
-            if (iphone17NeedsSamanthaSuperCompact
+            if (needsSamanthaSuperCompact
                 && [identifier isEqualToString:@"com.apple.voice.compact.en-US.Samantha"])
                 identifier = @"com.apple.voice.super-compact.en-US.Samantha";
             if ([identifier isEqualToString:@"com.apple.speech.synthesis.voice.Deranged"])
