@@ -43,6 +43,31 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+// W2561: per-archetype AV1 hardware-decode capability. AV1 hardware decode exists only on Apple
+// A17 Pro and later (iPhone 15 Pro / 15 Pro Max, all iPhone 16, all iPhone 17). On the A15/A16
+// archetypes (iphone13*, iphone14/14plus, iphone14pro/promax, iphone15/15plus) a REAL iPhone reports
+// AV1 UNSUPPORTED — BS captures (W2560) confirm av01 canPlayType="" on iPhone 14 / 14 Pro / 15 vs
+// "probably" on iPhone 15 Pro Max / 17. But the M3-class fleet HAS an AV1 hardware decoder, so the
+// host VideoToolbox over-reports AV1 supported for the A15/A16 archetypes — a per-archetype
+// fingerprint tell across canPlayType / MediaSource.isTypeSupported / MediaCapabilities.decodingInfo.
+// Force AV1 unsupported for non-A17Pro+ archetypes so the fork matches the real device it emulates.
+// (project_codec_capability_perchip_hostderived_w2560.)
+static bool driftstackArchetypeHasAV1Decode()
+{
+    static const bool hasAV1 = [] {
+        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!env || !env[0])
+            return true; // no archetype set => default fleet behavior (host passthrough)
+        std::string_view sv { env };
+        // A17 Pro+: "iphone15pro" matches iphone15pro AND iphone15promax (NOT iphone15/iphone15plus,
+        // which have no "pro"); "iphone16"/"iphone17" match all of those families.
+        return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
+    }();
+    return hasAV1;
+}
+#endif
+
 static bool NODELETE isConfigurationRecordHDR(const AV1CodecConfigurationRecord& record)
 {
     if (record.bitDepth < 10)
@@ -67,6 +92,12 @@ static bool NODELETE isConfigurationRecordHDR(const AV1CodecConfigurationRecord&
 
 std::optional<PlatformMediaCapabilitiesInfo> validateAV1Parameters(const AV1CodecConfigurationRecord& record, const PlatformMediaCapabilitiesVideoConfiguration& configuration)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2561: A15/A16 archetypes have no AV1 hardware decoder (decodingInfo path).
+    if (!driftstackArchetypeHasAV1Decode())
+        return std::nullopt;
+#endif
+
     if (!validateAV1ConfigurationRecord(record))
         return std::nullopt;
 
@@ -187,6 +218,15 @@ void setAV1HardwareDecoderAvailable(bool value)
 
 bool av1HardwareDecoderAvailable()
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2561: force AV1 unsupported on A15/A16 archetypes BEFORE the settable cache — the GPU process
+    // calls setAV1HardwareDecoderAvailable() with the M3 fleet's host value (true), which would
+    // otherwise bypass an in-process gate. This is the authoritative AV1-capability gate used by the
+    // canPlayType (supportsTypeAndCodecs) + MSE (SourceBufferParserWebM) paths.
+    if (!driftstackArchetypeHasAV1Decode())
+        return false;
+#endif
+
     ASSERT(isMainThread() || !!s_av1HardwareDecoderAvailable);
 
     if (s_av1HardwareDecoderAvailable)

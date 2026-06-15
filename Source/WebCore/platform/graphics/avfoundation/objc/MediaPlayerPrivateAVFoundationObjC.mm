@@ -28,6 +28,7 @@
 
 #if ENABLE(VIDEO) && USE(AVFOUNDATION)
 
+#import "AV1UtilitiesCocoa.h"
 #import "AVAssetMIMETypeCache.h"
 #import "AVAssetTrackUtilities.h"
 #import "AVTrackPrivateAVFObjCImpl.h"
@@ -2093,6 +2094,16 @@ static bool keySystemIsSupported(const String& keySystem)
 
 MediaPlayer::SupportsType MediaPlayerPrivateAVFoundationObjC::supportsTypeAndCodecs(const MediaEngineSupportParameters& parameters)
 {
+#if PLATFORM(DRIFTSTACK) && ENABLE(AV1)
+    // W2561: A15/A16 archetypes have no AV1 hardware decoder, so a real iPhone of those models reports
+    // canPlayType('…av01…')="" / isTypeSupported=false, while the M3-class fleet's AVFoundation reports
+    // AV1 supported. Force AV1 unsupported on this canPlayType/isTypeSupported path for non-A17Pro+
+    // archetypes (av1HardwareDecoderAvailable() is the per-archetype gate). decodingInfo is already
+    // false for AV1 on EVERY iPhone (API-split, host-correct), so only this lenient surface diverges
+    // per-chip. project_codec_capability_perchip_hostderived_w2560.
+    if (parameters.type.raw().contains("av01"_s) && !av1HardwareDecoderAvailable())
+        return MediaPlayer::SupportsType::IsNotSupported;
+#endif
     if (parameters.platformType != PlatformMediaDecodingType::FileOrHLS)
         return MediaPlayer::SupportsType::IsNotSupported;
 #if ENABLE(WIRELESS_PLAYBACK_TARGET)
