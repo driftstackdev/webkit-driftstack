@@ -363,6 +363,15 @@ void LineBoxBuilder::setLayoutBoundsForInlineBox(InlineLevelBox& inlineBox, Font
                 descent += halfLeading;
             }
         }
+#if PLATFORM(DRIFTSTACK)
+        // W2573: log the OUTPUT layoutBounds (post-half-leading) to pin where the glyphHash block +1
+        // enters (the font METRICS are iOS-identical per W2573, so the +1 is in this layout assembly).
+        // Correlate with the [P46-SLBIB] input line via ascent_in/descent_in (which identify the font).
+        if (getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT"))
+            WTFLogAlways("[Driftstack-W2573-OUT] isRoot=%d out_ascent=%.6f out_descent=%.6f out_sum=%.6f",
+                inlineBox.isRootInlineBox() ? 1 : 0, static_cast<double>(ascent), static_cast<double>(descent),
+                static_cast<double>(ascent + descent));
+#endif
         return { ascent, descent };
     }();
 
