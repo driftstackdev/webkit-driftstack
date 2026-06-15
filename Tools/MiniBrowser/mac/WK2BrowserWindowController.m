@@ -52,6 +52,7 @@
 #import <WebKit/_WKIconLoadingDelegate.h>
 #import <WebKit/_WKInspector.h>
 #import <WebKit/_WKLinkIconParameters.h>
+#import <objc/runtime.h>   // W2078: associate the per-tab favicon with its WKWebView for the tab overview
 #import <WebKit/_WKUserInitiatedAction.h>
 
 static void* keyValueObservingContext = &keyValueObservingContext;
@@ -351,6 +352,16 @@ static const int testFooterBannerHeight = 58;
         NSString *t = wv.title.length ? wv.title : (wv.URL.absoluteString.length ? wv.URL.absoluteString : @"New Tab");
         NSButton *card = [NSButton buttonWithTitle:t target:self action:@selector(driftSelectTab:)];
         card.tag = i;
+        // W2078: show the tab's FAVICON on the card (iOS-26 tab switcher look), left of the title. NSButton
+        // lays out image+title for us (NSImageLeading). Falls back to title-only if the tab has no icon yet.
+        NSImage *favicon = objc_getAssociatedObject(wv, &kDriftFaviconKey);
+        if (favicon) {
+            NSImage *small = [favicon copy];
+            small.size = NSMakeSize(24, 24);
+            card.image = small;
+            card.imagePosition = NSImageLeading;
+            card.imageHugsTitle = YES;
+        }
         card.bezelStyle = NSBezelStyleRegularSquare;
         card.frame = NSMakeRect(sideMargin, y, W - 2 * sideMargin, cardH);
         card.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
@@ -1531,9 +1542,20 @@ static BOOL isJavaScriptURL(NSURL *url)
         LOG(@"renderingProgressDidChange: %@", @"first paint after suppressed incremental rendering");
 }
 
+// W2078: associated-object key — stash each tab's favicon ON its WKWebView so the iOS-26 tab overview
+// renders it per card (iPhone shows favicons in the tab switcher, not the address bar).
+static char kDriftFaviconKey;
+
 - (void)webView:(WKWebView *)webView shouldLoadIconWithParameters:(_WKLinkIconParameters *)parameters completionHandler:(void (^)(void (^)(NSData*)))completionHandler
 {
     completionHandler(^void (NSData *data) {
+        // W2078: the icon was already being FETCHED here (then only logged) — now keep it on the tab's
+        // webView for the overview cards. Decode off the data; nil-safe (a bad/empty icon just isn't stored).
+        if (data.length) {
+            NSImage *icon = [[NSImage alloc] initWithData:data];
+            if (icon)
+                objc_setAssociatedObject(webView, &kDriftFaviconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
         LOG(@"Icon URL %@ received icon data of length %u", parameters.url, (unsigned)data.length);
     });
 }
