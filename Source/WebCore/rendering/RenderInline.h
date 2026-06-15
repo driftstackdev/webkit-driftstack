@@ -114,7 +114,17 @@ private:
     LayoutUnit offsetLeft() const final;
     LayoutUnit offsetTop() const final;
     LayoutUnit offsetWidth() const final { return linesBoundingBox().width(); }
-    LayoutUnit offsetHeight() const final { return linesBoundingBox().height(); }
+    LayoutUnit offsetHeight() const final
+    {
+#if PLATFORM(DRIFTSTACK)
+        if (auto snapped = driftstackSnappedInlineOffsetHeight())
+            return *snapped;
+#endif
+        return linesBoundingBox().height();
+    }
+#if PLATFORM(DRIFTSTACK)
+    std::optional<LayoutUnit> driftstackSnappedInlineOffsetHeight() const;
+#endif
 
 protected:
     LayoutRect clippedOverflowRect(const RenderLayerModelObject* repaintContainer, VisibleRectContext) const override;

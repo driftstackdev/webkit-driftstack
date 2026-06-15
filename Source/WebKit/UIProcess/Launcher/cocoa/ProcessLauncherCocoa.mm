@@ -461,6 +461,11 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Fingerprint overrides:
             { "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE") },
             { "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE") },
+            // W2569 (#22 inline-offsetHeight): the snap-fix gate + its instrumentation. Read via
+            // getenv in WebContent (RenderInline.cpp); must be in this explicit allowlist to reach
+            // the sandboxed WebContent (the __XPC_ shadow path does not forward these). Both default-off.
+            { "DRIFTSTACK_INLINE_OFFSET_SNAP", getenv("DRIFTSTACK_INLINE_OFFSET_SNAP") },
+            { "DRIFTSTACK_LOG_INLINE_BBOX", getenv("DRIFTSTACK_LOG_INLINE_BBOX") },
             // Locale: forward to BOTH WebContent (navigator.language via the
             // AppleLanguages override) AND NetworkProcess (Accept-Language), so
             // the JS language and the HTTP header never diverge.

@@ -407,6 +407,20 @@ IntRect RenderInline::linesBoundingBox() const
             }
             return enclosingIntRect(result);
         }
+#if PLATFORM(DRIFTSTACK)
+        // W2569 instrumentation (gated, default-off): confirm the #22 +1px offsetHeight root cause.
+        // Hypothesis: enclosingBorderBoxRectFor returns a FloatRect with a FRACTIONAL y-origin, so
+        // enclosingIntRect (floor top / ceil bottom) yields height+1 even when the float height is an
+        // exact integer (e.g. 143.0 -> [floor(y), ceil(y+143.0)] = 144 when y is fractional). This is
+        // the uninstrumented IBG-143 -> offsetHeight-144 hop W337 pinned. Reverted after pinning.
+        if (getenv("DRIFTSTACK_LOG_INLINE_BBOX")) {
+            FloatRect fr { layout->enclosingBorderBoxRectFor(*this) };
+            IntRect ir = enclosingIntRect(fr);
+            WTFLogAlways("[W2569-BBOX] float{x=%.4f y=%.4f w=%.4f h=%.4f} -> enclosingInt{x=%d y=%d w=%d h=%d}  roundH=%d",
+                fr.x(), fr.y(), fr.width(), fr.height(), ir.x(), ir.y(), ir.width(), ir.height(),
+                static_cast<int>(std::lround(fr.height())));
+        }
+#endif
         return enclosingIntRect(layout->enclosingBorderBoxRectFor(*this));
     }
 
@@ -437,6 +451,30 @@ IntRect RenderInline::linesBoundingBox() const
 
     return result;
 }
+
+#if PLATFORM(DRIFTSTACK)
+// W2569: iOS-match the inline element's DOM offsetHeight. The default path (linesBoundingBox().height())
+// uses enclosingIntRect, which floors the top and ceils the bottom — so when the inline border box has a
+// FRACTIONAL y-origin (sub-pixel baseline placement, which is what happens at the browserleaks 128px probe
+// size), it yields height+1 even though the float border-box height is an EXACT integer. Real iOS reports
+// the rounded float height (no +1). This is the empirically-confirmed #22 / W318-W337 "+1px taller on
+// 243/261 fonts at 128px" blocker for the browserleaks font metricsHash + uniqueMetrics. Gated default-OFF
+// (DRIFTSTACK_INLINE_OFFSET_SNAP) pending full-surface verification; SCOPE is narrow — only the offsetHeight
+// DOM query, NOT linesBoundingBox()/borderBoundingBox()/repaint/hit-test (those keep enclosingIntRect).
+// MUST NOT touch ascent/descent (they are bit-correct and drive canvas measureText 1:1, W307/W325).
+std::optional<LayoutUnit> RenderInline::driftstackSnappedInlineOffsetHeight() const
+{
+    static const bool enabled = [] { const char* e = std::getenv("DRIFTSTACK_INLINE_OFFSET_SNAP"); return e && e[0] == '1'; }();
+    if (!enabled)
+        return std::nullopt;
+    auto* layout = LayoutIntegration::LineLayout::containing(*this);
+    if (!layout || !layoutBox() || !layout->contains(*this) || isRenderSVGInline())
+        return std::nullopt;
+    FloatRect borderBox { layout->enclosingBorderBoxRectFor(*this) };
+    float logicalHeight = isHorizontalWritingMode() ? borderBox.height() : borderBox.width();
+    return LayoutUnit { roundToInt(logicalHeight) };
+}
+#endif
 
 LayoutRect RenderInline::linesVisualOverflowBoundingBox() const
 {
