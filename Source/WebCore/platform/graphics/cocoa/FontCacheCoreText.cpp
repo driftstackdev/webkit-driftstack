@@ -2950,6 +2950,9 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             if (wcount++ < 80)
                 WTFLogAlways("[Driftstack-BaseWeight] U+20B9 base='%s' weightTrait=%.3f", driftstackBaseFamily.utf8().data(), driftstackBaseWeight);
         }
+        // (W2609 CJK-weight-bump REVERTED: it over-applied — Hiragino Kaku Gothic STD (0.62) wants bold ₹ but
+        // Hiragino Kaku Gothic PRO (0.23) wants REGULAR; same-weight Hiragino Sans (0.23) wants bold yet Hiragino
+        // Kaku Pro (0.23) wants regular, so neither weight nor a CJK prefix separates them — a per-font special case.)
     }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
             characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight)) {
