@@ -2795,6 +2795,12 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    case 0x0E32: case 0x0E33: { // ◌ Thai Sara Aa / Sara Am (Lo) — monospace (Courier lacks Thai -> fork notdef 10)
+        // vs iOS 9/17. iOS uses Thonburi (U+0E32=9, U+0E33=17); proportional generics already match Thonburi's
+        // value, so route unconditionally (Thonburi gives the iOS value in every generic). (Po/Lo orphan residual.)
+        static const std::array<ASCIILiteral, 2> candidates { "thonburi"_s, "sathu"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     case 0x20AA: { // ₪ New Sheqel Sign — iOS sans/cursive/fantasy=14 (Arial Hebrew); default/serif=13 + mono=10 already match
         if (baseFontIsMonospace)
             return nullptr;
