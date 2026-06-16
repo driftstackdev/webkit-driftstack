@@ -2516,7 +2516,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false)
 {
     if (cluster.isEmpty())
         return nullptr;
@@ -2642,10 +2642,21 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
-    case 0x2581: { // Lower One Eighth Block — iOS DOM offsetWidth 16 / offsetHeight 25 CONSTANT across generics
-        // W2585: iOS resolves to Hiragino Sans (advance 16.0 -> width 16; asc 14.08 + desc 1.92 + LEAD 8.0 =
-        // lineSpacing 24 -> line-box offsetHeight 25). Metrics identical Mac vs iOS-sim. The fork's raw cascade
-        // picked different fonts per generic (Songti/Hiragino/Menlo -> inconsistent 23/26/30). Route to Hiragino Sans.
+    case 0x2581: { // Lower One Eighth Block
+        // W2585: iOS resolves to Hiragino Sans (advance 16.0 @16px -> width 16; 128.0 @128px -> width 128) in
+        // PROPORTIONAL generics (default/sans/serif/cursive/fantasy). asc 14.08 + desc 1.92 + LEAD 8.0 =
+        // lineSpacing 24 -> line-box offsetHeight 25.
+        // W2597: in a MONOSPACE base context (font-family:monospace -> Courier/Monaco, which lack the U+2581
+        // glyph -> notdef), iOS does NOT fall to Hiragino — it falls to MENLO (advance 77.0625 @128px -> width
+        // 78), matching the monospace fallback cascade. Empirical (iOS-26.5 sim vs fork): mono fork=128 (Hiragino)
+        // vs iOS=78 (Menlo) — the +50px monospace blfonts uniqueMetrics divergence (Courier/Courier New/Monaco/
+        // monospace, all +51 from this single char). Proportional generics already match (fork=iOS=128). The 16px
+        // glyphHash is DOM-geometry-served in Element.cpp (size-gated to 16px/13px), so this 128px font pick does
+        // not affect the glyphHash surface. Route monospace-base -> Menlo, proportional-base -> Hiragino Sans.
+        if (baseFontIsMonospace) {
+            static const std::array<ASCIILiteral, 3> candidates { "menlo"_s, "hiragino sans"_s, "hiraginosans"_s };
+            return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        }
         static const std::array<ASCIILiteral, 2> candidates { "hiragino sans"_s, "hiraginosans"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
@@ -2693,8 +2704,12 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     // FIRST (before script-specific overrides) so the explicit list always wins
     // even where script ranges (e.g. U+302E Hangul Tone Mark) would otherwise
     // match the Hangul or Devanagari hooks.
+    // W2597: the base font's monospace trait disambiguates the U+2581 (and any future mono-vs-proportional)
+    // fallback pick — iOS routes notdef block/symbol clusters down the monospace cascade (Menlo) for fixed-pitch
+    // base fonts but the proportional cascade (Hiragino) otherwise.
+    bool driftstackBaseFontIsMonospace = ctFont && (CTFontGetSymbolicTraits(ctFont.get()) & kCTFontTraitMonoSpace);
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size())) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
