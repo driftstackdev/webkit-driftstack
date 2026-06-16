@@ -2516,8 +2516,9 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false, double baseWeight = 0)
 {
+    constexpr double kDriftstackHeavyBaseWeight = 0.35; // W2608: ≥ this -> weight-matched bold Latin/Indic fallback
     if (cluster.isEmpty())
         return nullptr;
     char32_t cp = cluster[0];
@@ -2588,10 +2589,28 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         // "helvetica" first (carlito/chalkboard kept as fallbacks) — closes the cursive cell with no
         // regression to the already-matching default/sans/serif/mono cells. Canvas-SAFE (U+20B9 canvas
         // is atlas/override-served; this systemFallback pick affects only the DOM/FontCascade surface).
+        // W2608: iOS weight-matches ₹ to the base font's weight — a HEAVY base (blfonts uniqueMetrics: DB LCD/DIN/
+        // Bradley Hand/Hiragino-Kaku) resolves ₹ to Helvetica BOLD (70.81 @128px -> 71) not Helvetica (66.5 -> 67).
+        // Generics + light bases (weight < 0.35) keep Helvetica (the glyphHash/symbol cells are weight 0 -> unchanged).
+        if (baseWeight >= kDriftstackHeavyBaseWeight) {
+            // driftstackLookupIOSFontByCandidates can't select a bold variant (it weight-normalizes to the CSS 400
+            // base — W2598/W2608), so create Helvetica Bold DIRECTLY by its name. (ctadv: Helvetica-Bold ₹=71.)
+            if (RetainPtr<CTFontRef> helveticaBold = adoptCF(CTFontCreateWithName(CFSTR("Helvetica-Bold"), size, nullptr)))
+                return helveticaBold;
+        }
         static const std::array<ASCIILiteral, 5> candidates {
             "helvetica"_s, "carlito"_s, "chalkboard se"_s, ".sf ui"_s, "apple symbols"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x097F: { // ॿ Devanagari Letter Bba — W2608: iOS weight-matches the ॿ fallback. HEAVY base -> Kohinoor
+        // Devanagari SEMIBOLD (74.50 @128px -> 75) via a semibold description copy; normal/light base -> nullptr
+        // (the natural cascade gives Kohinoor Devanagari -> 73, which the generics already match).
+        if (baseWeight >= kDriftstackHeavyBaseWeight) {
+            if (RetainPtr<CTFontRef> kohinoorSemibold = adoptCF(CTFontCreateWithName(CFSTR("KohinoorDevanagari-Semibold"), size, nullptr)))
+                return kohinoorSemibold;
+        }
+        return nullptr;
     }
     case 0xFFFD:   // Replacement Character
     case 0x21E4: { // Leftwards Arrow To Bar
@@ -2914,8 +2933,26 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     // W2607: the sans-serif generic resolves to Helvetica; some cps (U+05BE) need the sans/cursive/fantasy
     // fallback DIFFERENT from default/serif, so distinguish the Helvetica (sans-serif) base too.
     bool driftstackBaseIsSansSerif = equalLettersIgnoringASCIICase(driftstackBaseFamily, "helvetica"_s);
+    // W2608: the base font's kCTFontWeightTrait (float -1..1) SURVIVES WebKit's font-build here (verified via the
+    // DRIFTSTACK_LOG_FONT_RESOLVE diagnostic), unlike the symbolic kCTFontTraitBold which is stripped (W2598). iOS
+    // weight-matches the Latin/Indic fallback for ₹/ॿ to the base font's weight: a HEAVY base (DB LCD 0.62, DIN/
+    // Bradley Hand 0.40, Hiragino Kaku 0.62) resolves ₹ to Helvetica-Bold (71) + ॿ to Kohinoor-Semibold (75), where
+    // a normal base (0.0, incl all the glyphHash/symbol-sweep generics) uses Helvetica (67) / Kohinoor (73). Read
+    // the weight here and thread it. (Threshold 0.35 excludes Futura/Hiragino-Sans at 0.23 which want the normal 67.)
+    double driftstackBaseWeight = 0;
+    if (ctFont) {
+        if (RetainPtr traits = adoptCF(CTFontCopyTraits(ctFont.get()))) {
+            if (CFNumberRef n = static_cast<CFNumberRef>(CFDictionaryGetValue(traits.get(), kCTFontWeightTrait)))
+                CFNumberGetValue(n, kCFNumberDoubleType, &driftstackBaseWeight);
+        }
+        if (getenv("DRIFTSTACK_LOG_FONT_RESOLVE") && characterCluster.length() && characterCluster[0] == 0x20B9) {
+            static unsigned wcount = 0;
+            if (wcount++ < 80)
+                WTFLogAlways("[Driftstack-BaseWeight] U+20B9 base='%s' weightTrait=%.3f", driftstackBaseFamily.utf8().data(), driftstackBaseWeight);
+        }
+    }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif)) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
