@@ -2689,13 +2689,15 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     // then build+sim-diff verified). Routed unconditionally (the override only fires where the primary font lacks
     // the glyph = the divergent generics; matching generics are untouched -> zero regression).
     case 0x2303: case 0x2325: case 0x2326: case 0x2327: case 0x232B: case 0x237D:
-    case 0x233D: case 0x25B8: case 0x25BE: case 0x2641: { // -> Menlo (iOS width 10)
+    case 0x233D: case 0x25B8: case 0x25BE: case 0x2641:
+    case 0x21B5: case 0x21DE: case 0x21DF: case 0x21E5: case 0x21EA: { // -> Menlo (iOS width 10), uniform all 6
         // (U+233D: the workflow's "Arial Unicode MS" pick ctadv-matched 10 but is NOT loadable in the fork's font
         //  set -> driftstackLookupIOSFontByCandidates returned null -> stayed 16; Menlo has the glyph at 10 too.)
+        // W2601 added U+21B5/21DE/21DF/21E5/21EA (arrows, iOS 10 all generics).
         static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
-    case 0x2125: case 0x2137: case 0x2324: { // -> Apple Symbols (iOS 10 / 8 / 9)
+    case 0x2125: case 0x2137: case 0x2324: case 0x2108: { // -> Apple Symbols (iOS 10 / 8 / 9 / 11), uniform all 6
         static const std::array<ASCIILiteral, 1> candidates { "apple symbols"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
@@ -2713,6 +2715,46 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     }
     case 0x2135: { // -> STIX Two Math (iOS 12)
         static const std::array<ASCIILiteral, 1> candidates { "stix two math"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2601: UNIFORM-EXCEPT-MONO symbol-advance overrides (symbol-advance-mono-triage workflow, adversarially
+    // confirmed ctadv ok=1 + ceil==iOS non-mono target, then build+sim-diff verified). iOS is uniform across the
+    // 5 PROPORTIONAL generics; the monospace generic ALREADY matches the fork -> route monospace-base to nullptr
+    // (keep the natural cascade), proportional-base to the matched font. Uses the W2597 baseFontIsMonospace flag.
+    case 0x21B0: case 0x21B1: case 0x21B2: case 0x21B3: case 0x21B4: case 0x21B6: case 0x21B7:
+    case 0x21BC: case 0x21C0: case 0x21CD: case 0x21CF: case 0x21D1: case 0x21D3:
+    case 0x21E0: case 0x21E1: case 0x21E2: case 0x21E3: case 0x21F0:
+    case 0x2314: case 0x25A4: case 0x25A6: case 0x25A7: case 0x25A8: case 0x25A9: case 0x25AD:
+    case 0x25B4: case 0x25B5: case 0x25B9: case 0x25BF: case 0x25C3: case 0x25C8:
+    case 0x2609: case 0x260F: { // -> Apple SD Gothic Neo (iOS non-mono 14/15), mono natural
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "apple sd gothic neo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2100: case 0x2101: case 0x2106: case 0x2117: case 0x2120: case 0x2121:
+    case 0x2129: case 0x213A: case 0x213B: case 0x214B: { // -> Helvetica (iOS non-mono 14/12/15/4/13/16/11), mono natural
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2305: case 0x2318: case 0x25C1: case 0x25C6: case 0x25C7: { // -> Hiragino Sans (iOS non-mono 11/14/16), mono natural
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "hiragino sans"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x25A3: case 0x25A5: { // -> Apple Symbols (iOS non-mono 14), mono natural
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "apple symbols"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x270E: case 0x2758: { // -> Zapf Dingbats (iOS non-mono 15/3), mono natural
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 2> candidates { "zapf dingbats"_s, "itc zapf dingbats"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     // W2599: EMOJI-PRESENTATION symbol batch (symbol-advance fingerprint class, fork-vs-iOS-26.5-sim).
