@@ -2608,10 +2608,13 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
-    case 0x20E3: { // Combining Enclosing Keycap — iPhone width 72 (711/713)
-        // Family in SFUISymbols-Regular.otf: ".SF UI Symbols"
+    case 0x20E3: { // Combining Enclosing Keycap — iOS renders as EMOJI, DOM offsetWidth 21
+        // W2585: iOS resolves U+20E3 to Apple Color Emoji (advance 21.0 @16px -> offsetWidth 21), same as the
+        // other emoji-presentation symbols, NOT ".SF UI Symbols" (which gave w13). Apple Color Emoji is a system
+        // font (loads by name). (Prior ".sf ui symbols" route targeted a 72px surface; the DOM glyphHash @16px
+        // wants the emoji.)
         static const std::array<ASCIILiteral, 3> candidates {
-            ".sf ui symbols"_s, "apple symbols"_s, ".sf ui"_s,
+            "apple color emoji"_s, ".sf ui symbols"_s, "apple symbols"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
@@ -2630,6 +2633,43 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 3> candidates {
             ".sf ui"_s, "apple symbols"_s, "apple sd gothic neo"_s,
         };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2B06: { // Upwards Black Arrow — iOS renders as EMOJI (Apple Color Emoji), DOM offsetWidth 21 / offsetHeight 27
+        // W2585 (Mac CTFontCreateWithName candidate test): "Apple Color Emoji" has the glyph with advance 21.0
+        // @16px (offsetWidth 21) and asc+desc 26.25 -> line-box offsetHeight 27 — EXACT iOS-26.5-sim match. The fork
+        // raw cascade instead rendered a narrow text glyph (w16). Apple Color Emoji is a SYSTEM font (loads by name).
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2581: { // Lower One Eighth Block — iOS DOM offsetWidth 16 / offsetHeight 25 CONSTANT across generics
+        // W2585: iOS resolves to Hiragino Sans (advance 16.0 -> width 16; asc 14.08 + desc 1.92 + LEAD 8.0 =
+        // lineSpacing 24 -> line-box offsetHeight 25). Metrics identical Mac vs iOS-sim. The fork's raw cascade
+        // picked different fonts per generic (Songti/Hiragino/Menlo -> inconsistent 23/26/30). Route to Hiragino Sans.
+        static const std::array<ASCIILiteral, 2> candidates { "hiragino sans"_s, "hiraginosans"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x3095: { // Hiragana Letter Small Ka — iOS DOM offsetWidth 16 / offsetHeight 25
+        // W2585: iOS resolves to Hiragino Sans (advance 16.0 -> width 16; a+d 16 + lead 8 = lineSpacing 24 -> h25).
+        // Fork was +1 (h26). Route to Hiragino Sans.
+        static const std::array<ASCIILiteral, 2> candidates { "hiragino sans"_s, "hiraginosans"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x20B0: { // German Penny Sign — iOS DOM offsetWidth 10
+        // W2585: iOS uses Menlo (advance 9.633 -> width 10); fork picked a wide font (w15). Route to Menlo.
+        static const std::array<ASCIILiteral, 3> candidates { "menlo"_s, "helvetica"_s, ".sf ui"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x0D02: { // Malayalam Sign Anusvara — iOS DOM offsetWidth 7
+        // W2585: iOS uses Malayalam Sangam MN (advance 6.164 -> width 7); fork was too tall (h24). Route there.
+        static const std::array<ASCIILiteral, 2> candidates { "malayalam sangam mn"_s, ".sf malayalam"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x05C6: { // Hebrew Punctuation Nun Hafukha — iOS DOM offsetWidth 6
+        // W2585: iOS resolves to the SF Hebrew binary (Stage-B; advance 6.0625 -> width 6). The system-name
+        // "Arial Hebrew" advances to width 6 (5.648) CONSISTENTLY; the Stage-B .SF Hebrew lookup gave inconsistent
+        // 5/7 per generic (fell to Times in some). Route to Arial Hebrew first for the consistent w6.
+        static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     default:
