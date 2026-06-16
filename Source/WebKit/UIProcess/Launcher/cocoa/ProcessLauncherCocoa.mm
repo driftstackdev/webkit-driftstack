@@ -468,6 +468,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_LOG_INLINE_BBOX", getenv("DRIFTSTACK_LOG_INLINE_BBOX") },
             { "DRIFTSTACK_LOG_FONT_METRIC", getenv("DRIFTSTACK_LOG_FONT_METRIC") },
             { "DRIFTSTACK_INT_INLINE_LAYOUT", getenv("DRIFTSTACK_INT_INLINE_LAYOUT") }, // W2575 integer inline layout (glyphHash floor)
+            { "DRIFTSTACK_GLYPHHASH_GEOM_SERVE", getenv("DRIFTSTACK_GLYPHHASH_GEOM_SERVE") }, // W2589 glyphHash DOM-geometry serve (orphan combining marks + mono exotics)
             // Locale: forward to BOTH WebContent (navigator.language via the
             // AppleLanguages override) AND NetworkProcess (Accept-Language), so
             // the JS language and the HTTP header never diverge.

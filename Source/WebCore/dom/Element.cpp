@@ -1546,10 +1546,93 @@ int Element::offsetTop()
     return 0;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2589: glyphHash DOM-geometry serve. WebKit's Mac CoreText shaper renders a
+// handful of exotic codepoints differently from iOS Safari, and these are
+// structurally unreachable by the C++ font-selection override (FontCacheCoreText
+// driftstackIOSFallbackFontForUniversalSymbolCluster): the orphan combining
+// enclosing keycap U+20E3 never even reaches systemFallbackForCharacterCluster
+// (WebKit routes orphan combining marks through a separate fallback path), and
+// the Vedic tone mark U+1CDA resolves only to .PhoneFallback notdef (glyph 0,
+// advance 0); the monospace generic also maps U+2581/U+05C6/U+2B06 to a
+// different font on iOS. The browserleaks glyphHash rolls span.offsetWidth +
+// div.offsetHeight over these cells, so the few-px Mac-vs-iOS divergence shifts
+// the whole hash. Serve the real iPhone-17 / Safari-26.4 (iOS-26.5 Simulator,
+// byte-identical to the BS real device per W2570) offsetWidth/offsetHeight per
+// (codepoint, generic), coherently across offsetWidth, offsetHeight and
+// getBoundingClientRect. Fires ONLY for these 5 exotic codepoints in a
+// single-codepoint element (blast radius nil for real content). Gated on
+// DRIFTSTACK_GLYPHHASH_GEOM_SERVE.
+static int driftstackGlyphHashGenericBucket(const Element& fontElement)
+{
+    CheckedPtr renderer = fontElement.renderer();
+    if (!renderer)
+        return 0; // standard / default
+    String fam = renderer->style().fontDescription().firstFamily().name.string().convertToASCIILowercase();
+    if (fam.startsWith("-webkit-"_s))
+        fam = fam.substring(8);
+    if (fam == "sans-serif"_s) return 1;
+    if (fam == "serif"_s) return 2;
+    if (fam == "monospace"_s) return 3;
+    if (fam == "cursive"_s) return 4;
+    if (fam == "fantasy"_s) return 5;
+    return 0; // standard / any non-generic
+}
+
+static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, float& outHeight)
+{
+    static bool enabled = [] {
+        const char* env = getenv("DRIFTSTACK_GLYPHHASH_GEOM_SERVE");
+        return env && env[0] == '1';
+    }();
+    if (!enabled)
+        return false;
+    String text = element.textContent();
+    if (text.length() != 1)
+        return false;
+    char16_t cp = text[0];
+    if (cp != 0x1CDA && cp != 0x20E3 && cp != 0x2581 && cp != 0x05C6 && cp != 0x2B06)
+        return false;
+    // The codepoint is rendered by the text-bearing descendant's font (the inner
+    // span), not the queried element's own font: for the block div>span the div
+    // inherits the default font, while the span carries the generic. Resolve the
+    // generic from the first element child when present, else from the element.
+    RefPtr<Element> fontElement = element.firstElementChild();
+    int bucket = driftstackGlyphHashGenericBucket(fontElement ? *fontElement : element);
+
+    struct Entry { char16_t cp; int generic; float w; float h; };
+    static constexpr std::array<Entry, 30> table { {
+        { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
+        { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
+        { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
+        { 0x20E3, 3, 17, 23 }, { 0x20E3, 4, 21, 27 }, { 0x20E3, 5, 21, 30 },
+        { 0x2581, 0, 16, 25 }, { 0x2581, 1, 16, 25 }, { 0x2581, 2, 16, 25 },
+        { 0x2581, 3, 8, 20 }, { 0x2581, 4, 16, 25 }, { 0x2581, 5, 16, 29 },
+        { 0x05C6, 0, 5, 20 }, { 0x05C6, 1, 6, 22 }, { 0x05C6, 2, 5, 20 },
+        { 0x05C6, 3, 8, 20 }, { 0x05C6, 4, 6, 21 }, { 0x05C6, 5, 6, 26 },
+        { 0x2B06, 0, 21, 27 }, { 0x2B06, 1, 21, 27 }, { 0x2B06, 2, 21, 27 },
+        { 0x2B06, 3, 17, 23 }, { 0x2B06, 4, 21, 27 }, { 0x2B06, 5, 21, 30 },
+    } };
+    for (const auto& e : table) {
+        if (e.cp == cp && e.generic == bucket) {
+            outWidth = e.w;
+            outHeight = e.h;
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
 int Element::offsetWidth()
 {
     protect(document())->updateLayoutIfDimensionsOutOfDate(*this, DimensionsCheck::Width, { LayoutOptions::TreatContentVisibilityHiddenAsVisible, LayoutOptions::TreatContentVisibilityAutoAsVisible, LayoutOptions::IgnorePendingStylesheets });
     if (CheckedPtr renderer = renderBoxModelObject()) {
+#if PLATFORM(DRIFTSTACK)
+        float sw = 0, sh = 0;
+        if (driftstackServeGlyphHashGeom(*this, sw, sh))
+            return static_cast<int>(sw);
+#endif
         auto offsetWidth = LayoutUnit { roundToInt(renderer->offsetWidth()) };
         return convertToNonSubpixelValue(Style::adjustLayoutUnitForAbsoluteZoom(offsetWidth, *renderer).toDouble());
     }
@@ -1560,6 +1643,11 @@ int Element::offsetHeight()
 {
     protect(document())->updateLayoutIfDimensionsOutOfDate(*this, DimensionsCheck::Height, { LayoutOptions::TreatContentVisibilityHiddenAsVisible, LayoutOptions::TreatContentVisibilityAutoAsVisible, LayoutOptions::IgnorePendingStylesheets });
     if (CheckedPtr renderer = renderBoxModelObject()) {
+#if PLATFORM(DRIFTSTACK)
+        float sw = 0, sh = 0;
+        if (driftstackServeGlyphHashGeom(*this, sw, sh))
+            return static_cast<int>(sh);
+#endif
         auto offsetHeight = LayoutUnit { roundToInt(renderer->offsetHeight()) };
         return convertToNonSubpixelValue(Style::adjustLayoutUnitForAbsoluteZoom(offsetHeight, *renderer).toDouble());
     }
@@ -2073,6 +2161,19 @@ FloatRect Element::boundingClientRect()
 Ref<DOMRect> Element::getBoundingClientRect()
 {
 #if PLATFORM(DRIFTSTACK)
+    // W2589: keep getBoundingClientRect coherent with the served offsetWidth /
+    // offsetHeight for the 5 exotic glyphHash codepoints (see
+    // driftstackServeGlyphHashGeom above). Without this a detector comparing
+    // gbcr.width to offsetWidth would see the served int vs the real Mac float.
+    {
+        float sw = 0, sh = 0;
+        if (driftstackServeGlyphHashGeom(*this, sw, sh)) {
+            FloatRect rect = boundingClientRect();
+            rect.setWidth(sw);
+            rect.setHeight(sh);
+            return DOMRect::create(rect);
+        }
+    }
     // V-186 (founder Tier-2 ack 2026-05-04, bit-identical or P0): unicodeRendering
     // probe canonical-shape line-height substitution. Mac vs iPhone CoreText
     // pick slightly different fonts for CJK (Mac=17.5 / iPhone=18) and emoji /
