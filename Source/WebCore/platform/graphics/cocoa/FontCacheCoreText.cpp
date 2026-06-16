@@ -2950,9 +2950,12 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             if (wcount++ < 80)
                 WTFLogAlways("[Driftstack-BaseWeight] U+20B9 base='%s' weightTrait=%.3f", driftstackBaseFamily.utf8().data(), driftstackBaseWeight);
         }
-        // (W2609 CJK-weight-bump REVERTED: it over-applied — Hiragino Kaku Gothic STD (0.62) wants bold ₹ but
-        // Hiragino Kaku Gothic PRO (0.23) wants REGULAR; same-weight Hiragino Sans (0.23) wants bold yet Hiragino
-        // Kaku Pro (0.23) wants regular, so neither weight nor a CJK prefix separates them — a per-font special case.)
+        // W2609: per-font special-case — the "Hiragino Sans" family (the modern iOS CJK gothic) gets the bold ₹/ॿ
+        // fallback at ANY weight (iOS weight-matches to its heavier stroke), UNLIKE "Hiragino Kaku/Maru Gothic Pro"
+        // (0.23) which want regular. A broad CJK prefix over-applies (REVERTED); narrowing to "Hiragino Sans" only
+        // (exact-family, not "Hiragino Kaku") separates them. The heavy Hiragino Sans W6-W8 already weight-match.
+        if (driftstackBaseWeight < 0.35 && driftstackBaseFamily.startsWith("Hiragino Sans"_s))
+            driftstackBaseWeight = 0.5;
     }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
             characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight)) {
