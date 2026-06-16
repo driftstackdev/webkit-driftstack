@@ -1595,7 +1595,13 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // W2605: the 4 notdef-width currency (U+20B6 ₶ / U+20B7 / U+20BB / U+20BF ₿) + U+25CA ◊ monospace are
     // structurally unreachable by font-selection (no Mac font reproduces iOS's .LastResort per-cp tofu widths
     // 10/12/14, and Courier renders ◊ at 8 with no fallback) — serve their DOM geometry like the glyphHash cps.
-    bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA);
+    // W2611: U+1CF5 (Vedic sign Jihvamuliya) serif+cursive advance — the only Mac font with the glyph is
+    // Noto Sans Kannada (adv 8.432->ceil 9); iOS renders it at 8 with its own font. Unreachable by both
+    // font-selection (no Mac font gives 8) AND the V-689 advance atlas (it keys by the rendering font, and
+    // Noto Sans Kannada is Mac-only — absent from the iOS-captured atlas). Width is the advance (structure-
+    // independent) and the natural height already matches iOS (24), so serving is a clean width-only close.
+    bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
+        || cp == 0x1CF5);
     if (!isGlyphHashCp && !isSymbolServeCp)
         return false;
     // The codepoint is rendered by the text-bearing descendant's font (the inner
@@ -1620,7 +1626,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 55> table { {
+    static constexpr std::array<Entry, 57> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1641,6 +1647,8 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x20BF, 0, 10, 21 }, { 0x20BF, 1, 10, 21 }, { 0x20BF, 2, 10, 21 },
         { 0x20BF, 3, 10, 21 }, { 0x20BF, 4, 10, 22 }, { 0x20BF, 5, 10, 26 },
         { 0x25CA, 3, 10, 20 },
+        // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
+        { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
