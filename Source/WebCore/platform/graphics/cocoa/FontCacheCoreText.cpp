@@ -2578,11 +2578,18 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         }
         return result;
     }
-    case 0x20B9: { // Indian Rupee Sign — iPhone width 37 (703/713)
-        // Wave 29-219 fontTools cmap: U+20B9 in Carlito + Chalkboard SE.
-        // Not in .SF UI as previously assumed.
-        static const std::array<ASCIILiteral, 4> candidates {
-            "carlito"_s, "chalkboard se"_s, ".sf ui"_s, "apple symbols"_s,
+    case 0x20B9: { // Indian Rupee Sign
+        // W2583 (Workflow wcc98yhwt, verified): the prior "carlito"-first pick gave the right
+        // ADVANCE (DOM offsetWidth 9 @16px) but the WRONG line-box HEIGHT in the cursive generic
+        // (fork 21 vs iOS 22). iOS resolves U+20B9 to Helvetica, whose ceil-ascent-16 lifts the
+        // Snell-Roundhand cursive line box to 22 (carlito ascent 12 left it at 21). Verified vs the
+        // iOS-26.5 sim: an explicit "helvetica" span reproduces the iOS target [9,21][9,20][9,21]
+        // [9,20][9,22][9,26] EXACTLY across all 6 browserleaks generics (incl width 9). Reorder
+        // "helvetica" first (carlito/chalkboard kept as fallbacks) — closes the cursive cell with no
+        // regression to the already-matching default/sans/serif/mono cells. Canvas-SAFE (U+20B9 canvas
+        // is atlas/override-served; this systemFallback pick affects only the DOM/FontCascade surface).
+        static const std::array<ASCIILiteral, 5> candidates {
+            "helvetica"_s, "carlito"_s, "chalkboard se"_s, ".sf ui"_s, "apple symbols"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
