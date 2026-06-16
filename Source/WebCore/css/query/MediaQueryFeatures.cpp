@@ -367,11 +367,24 @@ static const RatioSchema& deviceAspectRatioFeatureSchema()
         "device-aspect-ratio"_s,
         OptionSet<MediaQueryDynamicDependency>(),
         [](auto& context) {
+#if PLATFORM(DRIFTSTACK)
+            // W2610 (host-leak audit): device-aspect-ratio MUST be computed from the SAME archetype screen
+            // dimensions as the sibling device-width (402) / device-height (874) features — NOT from the host
+            // Mac's screenSize(). Without this guard a fingerprinter reads spoofed device-width:402 +
+            // device-height:874 yet device-aspect-ratio = the host display's ratio (e.g. 1920/1200≈1.6 vs
+            // iPhone's 402/874≈0.46) — a deterministic coherence tell. On a real iPhone all three agree.
+            (void)context;
+            auto& config = DriftstackArchetypeConfig::singleton();
+            float w = config.screenWidth() > 0 ? static_cast<float>(config.screenWidth()) : 402.0f;
+            float h = config.screenHeight() > 0 ? static_cast<float>(config.screenHeight()) : 874.0f;
+            return FloatSize { w, h };
+#else
             if (RefPtr localFrame = context.document->frame()->localMainFrame()) {
                 auto screenSize = localFrame->screenSize();
                 return FloatSize { screenSize.width(), screenSize.height() };
             }
             return FloatSize { 0.0f, 0.0f };
+#endif
         }
     };
     return schema;
