@@ -2516,7 +2516,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false)
 {
     if (cluster.isEmpty())
         return nullptr;
@@ -2795,6 +2795,15 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    case 0x05BE: { // ־ Hebrew Maqaf (Po) — per-generic: default/serif=6, mono=10 (already match), sans/cursive/
+        // fantasy=7. iOS uses Arial Hebrew (7) for the sans/cursive/fantasy fallback. Route those three; leave
+        // default/serif (6) + monospace (10) natural. (Po/Lo orphan residual.)
+        if (baseIsSansSerif || baseIsCursive || baseIsFantasy) {
+            static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
+            return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        }
+        return nullptr;
+    }
     case 0x0E32: case 0x0E33: { // ◌ Thai Sara Aa / Sara Am (Lo) — monospace (Courier lacks Thai -> fork notdef 10)
         // vs iOS 9/17. iOS uses Thonburi (U+0E32=9, U+0E33=17); proportional generics already match Thonburi's
         // value, so route unconditionally (Thonburi gives the iOS value in every generic). (Po/Lo orphan residual.)
@@ -2902,8 +2911,11 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     String driftstackBaseFamily = ctFont ? String(adoptCF(CTFontCopyFamilyName(ctFont.get())).get()) : String();
     bool driftstackBaseIsCursive = driftstackBaseFamily.startsWith("Snell"_s);
     bool driftstackBaseIsFantasy = equalLettersIgnoringASCIICase(driftstackBaseFamily, "papyrus"_s);
+    // W2607: the sans-serif generic resolves to Helvetica; some cps (U+05BE) need the sans/cursive/fantasy
+    // fallback DIFFERENT from default/serif, so distinguish the Helvetica (sans-serif) base too.
+    bool driftstackBaseIsSansSerif = equalLettersIgnoringASCIICase(driftstackBaseFamily, "helvetica"_s);
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy)) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
