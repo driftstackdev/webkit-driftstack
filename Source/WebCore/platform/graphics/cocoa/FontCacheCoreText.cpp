@@ -2801,6 +2801,19 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2605: ◊ Lozenge U+25CA — cursive (Snell lacks it -> fork fallback 9) -> Helvetica (iOS 8). The monospace
+    // divergence (Courier HAS ◊ at 8 but iOS=10) can't be reached by the cluster fallback (the primary renders it,
+    // no fallback fires) -> handled by the DOM-geometry serve (Element.cpp). def/sans/serif/fantasy already match.
+    case 0x25CA: {
+        if (baseIsCursive) {
+            static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+            return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        }
+        return nullptr;
+    }
+    // NOTE: the notdef-width currency U+20B6/20B7/20BB/20BF are NOT font-selectable (no Mac font reproduces iOS's
+    // .LastResort per-cp tofu widths 10/12/14, and routing to a notdef font does NOT stick — WebKit continues the
+    // cascade) -> served via the DOM-geometry serve (Element.cpp driftstackServeGlyphHashGeom).
     // W2602: BOX-DRAWING double-line + dark-shade (U+2551-256C, U+2593). iOS renders these at 12 in default/serif
     // (the system/Times primary HAS the glyph -> no fallback) and 10 in sans-serif/cursive/fantasy (Helvetica/
     // Snell/Papyrus LACK the glyph -> fallback). The fork's fallback picked a wide font (16). MENLO has the glyph

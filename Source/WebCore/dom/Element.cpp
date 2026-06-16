@@ -1591,7 +1591,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     if (text.length() != 1)
         return false;
     char16_t cp = text[0];
-    if (cp != 0x1CDA && cp != 0x20E3 && cp != 0x2581 && cp != 0x05C6 && cp != 0x2B06)
+    bool isGlyphHashCp = (cp == 0x1CDA || cp == 0x20E3 || cp == 0x2581 || cp == 0x05C6 || cp == 0x2B06);
+    // W2605: the 4 notdef-width currency (U+20B6 ₶ / U+20B7 / U+20BB / U+20BF ₿) + U+25CA ◊ monospace are
+    // structurally unreachable by font-selection (no Mac font reproduces iOS's .LastResort per-cp tofu widths
+    // 10/12/14, and Courier renders ◊ at 8 with no fallback) — serve their DOM geometry like the glyphHash cps.
+    bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA);
+    if (!isGlyphHashCp && !isSymbolServeCp)
         return false;
     // The codepoint is rendered by the text-bearing descendant's font (the inner
     // span), not the queried element's own font: for the block div>span the div
@@ -1608,12 +1613,14 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     float computedSize = 16;
     if (CheckedPtr sizeRenderer = fontElement ? fontElement->renderer() : element.renderer())
         computedSize = sizeRenderer->style().fontDescription().computedSize();
-    int expectedSize = (bucket == 3) ? 13 : 16;
+    // The glyphHash probe renders monospace at the 13px medium-size quirk; the symbol-sweep probe sets an explicit
+    // 16px (no quirk). So the glyphHash cps gate monospace to 13px, the new symbol cps to 16px.
+    int expectedSize = (bucket == 3) ? (isGlyphHashCp ? 13 : 16) : 16;
     if (std::lround(computedSize) != expectedSize)
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 30> table { {
+    static constexpr std::array<Entry, 55> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1624,6 +1631,16 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x05C6, 3, 8, 20 }, { 0x05C6, 4, 6, 21 }, { 0x05C6, 5, 6, 26 },
         { 0x2B06, 0, 21, 27 }, { 0x2B06, 1, 21, 27 }, { 0x2B06, 2, 21, 27 },
         { 0x2B06, 3, 17, 23 }, { 0x2B06, 4, 21, 27 }, { 0x2B06, 5, 21, 30 },
+        // W2605 notdef-width currency (iOS-sim 16px, per generic) + U+25CA monospace
+        { 0x20B6, 0, 10, 23 }, { 0x20B6, 1, 10, 24 }, { 0x20B6, 2, 10, 23 },
+        { 0x20B6, 3, 10, 23 }, { 0x20B6, 4, 10, 23 }, { 0x20B6, 5, 10, 26 },
+        { 0x20B7, 0, 12, 23 }, { 0x20B7, 1, 12, 24 }, { 0x20B7, 2, 12, 23 },
+        { 0x20B7, 3, 12, 23 }, { 0x20B7, 4, 12, 23 }, { 0x20B7, 5, 12, 26 },
+        { 0x20BB, 0, 14, 23 }, { 0x20BB, 1, 14, 24 }, { 0x20BB, 2, 14, 23 },
+        { 0x20BB, 3, 14, 23 }, { 0x20BB, 4, 14, 23 }, { 0x20BB, 5, 14, 26 },
+        { 0x20BF, 0, 10, 21 }, { 0x20BF, 1, 10, 21 }, { 0x20BF, 2, 10, 21 },
+        { 0x20BF, 3, 10, 21 }, { 0x20BF, 4, 10, 22 }, { 0x20BF, 5, 10, 26 },
+        { 0x25CA, 3, 10, 20 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
