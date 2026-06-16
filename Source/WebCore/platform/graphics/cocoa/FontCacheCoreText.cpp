@@ -2757,6 +2757,27 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "zapf dingbats"_s, "itc zapf dingbats"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2602: BOX-DRAWING double-line + dark-shade (U+2551-256C, U+2593). iOS renders these at 12 in default/serif
+    // (the system/Times primary HAS the glyph -> no fallback) and 10 in sans-serif/cursive/fantasy (Helvetica/
+    // Snell/Papyrus LACK the glyph -> fallback). The fork's fallback picked a wide font (16). MENLO has the glyph
+    // at 10 = iOS. The override only fires in the fallback generics (sans/cursive/fantasy); default/serif/mono are
+    // primary-rendered and untouched. (Verified: .SF NS + Times have U+2551 ok=1 -> 12; Helvetica notdef.)
+    case 0x2551: case 0x2552: case 0x2553: case 0x2554: case 0x2555: case 0x2556: case 0x2557:
+    case 0x2558: case 0x2559: case 0x255A: case 0x255B: case 0x255C: case 0x255D: case 0x255F:
+    case 0x2560: case 0x2562: case 0x2563: case 0x2564: case 0x2565: case 0x2566: case 0x2567:
+    case 0x2568: case 0x2569: case 0x256B: case 0x256C: case 0x2593: { // -> Menlo (iOS fallback-generic width 10)
+        static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2602b: CARD SUITS (U+2660/2663/2665/2666). iOS renders the proportional FALLBACK generics (sans/cursive/
+    // fantasy, whose primary lacks the glyph) as COLOR EMOJI (advance 21); default/serif primary-render the text
+    // glyph (9-11) and monospace stays 10 (Menlo). Route the fallback to Apple Color Emoji; monospace->nullptr.
+    case 0x2660: case 0x2663: case 0x2665: case 0x2666: {
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     // W2599: EMOJI-PRESENTATION symbol batch (symbol-advance fingerprint class, fork-vs-iOS-26.5-sim).
     // These 53 codepoints (arrows/weather/hands/religious/zodiac/tool/checkmark/heart symbols) are rendered
     // by a real iPhone as COLOR EMOJI — advance 21.0 @16px (Apple Color Emoji) — in the proportional generics
