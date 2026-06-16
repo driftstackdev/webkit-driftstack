@@ -1600,6 +1600,18 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     RefPtr<Element> fontElement = element.firstElementChild();
     int bucket = driftstackGlyphHashGenericBucket(fontElement ? *fontElement : element);
 
+    // Size-gate (W2589b): the table holds the iOS values ONLY at the browserleaks glyphHash
+    // sizes — 16px for the non-mono generics, 13px for the monospace medium-size quirk. Serving
+    // them at any OTHER font-size would be a gross lie (a 72px U+20E3 is ~94px wide, not 21) and
+    // a detection tell. Fall through to natural layout at every other size. (The general,
+    // whole-iPhone path is a size-keyed DOM-geometry atlas; this table is the 16/13px slice.)
+    float computedSize = 16;
+    if (CheckedPtr sizeRenderer = fontElement ? fontElement->renderer() : element.renderer())
+        computedSize = sizeRenderer->style().fontDescription().computedSize();
+    int expectedSize = (bucket == 3) ? 13 : 16;
+    if (std::lround(computedSize) != expectedSize)
+        return false;
+
     struct Entry { char16_t cp; int generic; float w; float h; };
     static constexpr std::array<Entry, 30> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },

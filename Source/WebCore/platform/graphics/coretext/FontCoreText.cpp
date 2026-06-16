@@ -1368,9 +1368,13 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             // Sangam MN widths), then alias only for fonts where Mac+iOS diverge.
             uint32_t scriptRangeLo = 0;
             uint32_t scriptRangeHi = 0xFFFFFFFFu;
-            // V-145 diagnostic: log every (familyName, atlasKey) resolution.
-            WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f script=[U+%04X..U+%04X]",
-                familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize, scriptRangeLo, scriptRangeHi);
+            // V-145 diagnostic: log every (familyName, atlasKey) resolution. Gated default-OFF
+            // (W2590): this fired UNCONDITIONALLY on every font resolution — production log spam
+            // AND a severe slowdown on broad glyph sweeps (every exotic-codepoint fallback logs),
+            // which starved the whole-iPhone DOM-geometry sweep + the 3564-font uniqueMetrics probe.
+            if (getenv("DRIFTSTACK_LOG_FONT_RESOLVE"))
+                WTFLogAlways("[Driftstack-V145] resolve family='%s' → atlasKey='%s' size=%.1f script=[U+%04X..U+%04X]",
+                    familyName.utf8().data(), atlasKey ? atlasKey : "(null)", ptSize, scriptRangeLo, scriptRangeHi);
             if (atlasKey) {
                 // Find atlasKey font_id (shared between ASCII + non-ASCII tables).
                 uint16_t fontId = 0xFFFF;
