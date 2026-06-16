@@ -862,7 +862,7 @@ void ComplexTextController::adjustGlyphsAndAdvances()
                 char32_t markCp = character;
                 if (U16_IS_LEAD(character) && absIndex + 1 < m_run->length() && U16_IS_TRAIL(m_run.get()[absIndex + 1]))
                     markCp = U16_GET_SUPPLEMENTARY(character, m_run.get()[absIndex + 1]);
-                if (U_GET_GC_MASK(markCp) & U_GC_MN_MASK) {
+                if (U_GET_GC_MASK(markCp) & (U_GC_MN_MASK | U_GC_ME_MASK)) {
                     // Orphan = no BASE precedes this mark in logical (source) order. Walk backward
                     // over the FULL run (m_run, NOT the per-font-segment charactersSpan slice),
                     // skipping default-ignorables (ZWJ/ZWNJ/VS) and stacked Mn/Me, until a base
