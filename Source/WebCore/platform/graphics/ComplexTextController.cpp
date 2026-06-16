@@ -46,9 +46,48 @@
 #include <CoreText/CoreText.h>
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackOrphanMarkTable.h"
+#include <wtf/HashMap.h>
+#include <wtf/NeverDestroyed.h>
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(ComplexTextController);
+
+#if PLATFORM(DRIFTSTACK)
+// W2592: orphan combining-mark SPACING advance support. The CSS generic bucket comes from the
+// FontCascade's authored font-family (NOT the resolved fallback font, which can collapse across
+// generics) — the same -webkit-<generic> mapping Element.cpp uses.
+static int driftstackOrphanMarkGenericBucket(const FontCascade& fontCascade)
+{
+    String fam = fontCascade.fontDescription().firstFamily().name.string().convertToASCIILowercase();
+    if (fam.startsWith("-webkit-"_s))
+        fam = fam.substring(8);
+    if (fam == "sans-serif"_s) return 1;
+    if (fam == "serif"_s) return 2;
+    if (fam == "monospace"_s) return 3;
+    if (fam == "cursive"_s) return 4;
+    if (fam == "fantasy"_s) return 5;
+    return 0; // default / standard / any non-generic
+}
+
+static bool driftstackLookupOrphanMarkAdvance(char32_t cp, int generic, int sizePx, float& outAdvance)
+{
+    static NeverDestroyed<HashMap<uint64_t, float>> map = [] {
+        HashMap<uint64_t, float> m;
+        for (auto& e : kDriftstackOrphanMarkAdvances)
+            m.add((static_cast<uint64_t>(e.cp) << 24) | (static_cast<uint64_t>(e.generic) << 16) | e.sizePx, e.advance);
+        return m;
+    }();
+    auto it = map->find((static_cast<uint64_t>(cp) << 24) | (static_cast<uint64_t>(generic) << 16) | static_cast<uint64_t>(sizePx));
+    if (it == map->end())
+        return false;
+    outAdvance = it->value;
+    return true;
+}
+#endif
 
 class TextLayout {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(TextLayout);
@@ -798,24 +837,68 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             advance.expand(font->syntheticBoldOffset(), 0);
 
 #if PLATFORM(DRIFTSTACK)
-            // V-433.Z combining-mark zero-advance override (wave 29-235 Slice 235.8).
-            // iPhone CT returns 0 advance for Mn (non-spacing mark) codepoints per
-            // Unicode spec. Fork's cascade can route Mn to a font without the glyph
-            // → CT returns glyph=0 (notdef) with ~36/54 width (notdef placeholder
-            // size). This produces width-divergence vs iPhone for the V-433.Z target
-            // combining marks (e.g., U+1CDA Vedic, U+20E3 Combining Enclosing Keycap).
-            //
-            // Fix: if character is Mn (U_NON_SPACING_MARK / U_GC_MN_MASK) AND the
-            // returned glyph is notdef (==0), force zero advance to match iPhone.
-            //
-            // Gated by env var to allow A/B comparison.
-            static bool s_v433zCombiningMarkZeroAdvance = []() {
-                const char* env = std::getenv("DRIFTSTACK_V433Z_COMBINING_MARK_ZERO");
+            // W2592: ORPHAN combining-mark SPACING advance. Empirically (487-mark fork-vs-iOS-sim
+            // sweep) the fork's natural Mac CoreText gives an orphan Mn mark (standalone, no base)
+            // ZERO advance, but a real iPhone gives each a per-mark, per-generic SPACING advance
+            // (309/487 marks diverge). Inject the iOS advance (DriftstackOrphanMarkTable.h) so
+            // offsetWidth/getBoundingClientRect/glyphHash match iOS — coherent across every geometry
+            // getter (the advance flows into m_totalAdvance). This REPLACES the old V-433.Z
+            // zero-advance override, whose premise ("iPhone CT returns 0 for Mn") the sweep DISPROVED
+            // for orphans. Fires ONLY for ORPHAN marks: a mark WITH a base ("é"=e+U+0301, Arabic
+            // harakat, Indic matras, Hebrew points, Thai, Vietnamese stacks) MUST keep zero advance.
+            // Gated DRIFTSTACK_ORPHAN_MARK_SPACING; a table MISS (unswept size/cp) leaves CT's
+            // natural advance untouched (no force-0, no cross-optical scaling).
+            static const bool s_orphanMarkSpacing = [] {
+                const char* env = std::getenv("DRIFTSTACK_ORPHAN_MARK_SPACING");
                 return env && env[0] == '1';
             }();
-            if (s_v433zCombiningMarkZeroAdvance && glyph == 0
-                && (U_GET_GC_MASK(character) & U_GC_MN_MASK)) {
-                advance.setWidth(0);
+            // NOTE: do NOT gate on glyph==0 — the divergent orphan marks render with a REAL
+            // combining glyph (glyph != 0) at ZERO advance (not notdef). We setWidth (overwrite,
+            // not add), so spacing a mark CT already advanced is a no-op-to-correct, not a
+            // double-count. The atlas only holds DIVERGENT (cp,generic,size) cells, so a mark the
+            // fork already matches iOS on simply misses → keeps its natural advance.
+            if (s_orphanMarkSpacing) {
+                unsigned absIndex = characterIndex + complexTextRun->stringLocation();
+                char32_t markCp = character;
+                if (U16_IS_LEAD(character) && absIndex + 1 < m_run->length() && U16_IS_TRAIL(m_run.get()[absIndex + 1]))
+                    markCp = U16_GET_SUPPLEMENTARY(character, m_run.get()[absIndex + 1]);
+                if (U_GET_GC_MASK(markCp) & U_GC_MN_MASK) {
+                    // Orphan = no BASE precedes this mark in logical (source) order. Walk backward
+                    // over the FULL run (m_run, NOT the per-font-segment charactersSpan slice),
+                    // skipping default-ignorables (ZWJ/ZWNJ/VS) and stacked Mn/Me, until a base
+                    // (=> NOT orphan) or a boundary/space/control (=> orphan). Source-order walk is
+                    // RTL-safe (independent of glyph iteration order).
+                    bool isOrphan = true;
+                    unsigned i = absIndex;
+                    while (i) {
+                        char32_t prev = m_run.get()[i - 1];
+                        unsigned step = 1;
+                        if (U16_IS_TRAIL(prev) && i >= 2 && U16_IS_LEAD(m_run.get()[i - 2])) {
+                            prev = U16_GET_SUPPLEMENTARY(m_run.get()[i - 2], prev);
+                            step = 2;
+                        }
+                        i -= step;
+                        if (isDefaultIgnorableCodePoint(prev))
+                            continue;
+                        if (U_GET_GC_MASK(prev) & (U_GC_MN_MASK | U_GC_ME_MASK))
+                            continue;
+                        // space / NBSP are BASES for combining marks — a mark after a space combines
+                        // ONTO it with zero advance on iOS (verified: " "+U+0301 = NBSP width, not
+                        // spacing). Treat them as bases, NOT boundaries. Only true non-base separators
+                        // (newline/CR/tab/null/control) leave the mark orphan.
+                        bool boundary = prev == newlineCharacter || prev == carriageReturn
+                            || prev == tabCharacter || prev == nullCharacter || isControlCharacter(prev);
+                        isOrphan = boundary;
+                        break;
+                    }
+                    if (isOrphan) {
+                        int bucket = driftstackOrphanMarkGenericBucket(m_fontCascade.get());
+                        int sizePx = std::lround(font->platformData().size());
+                        float spacingAdvance = 0;
+                        if (driftstackLookupOrphanMarkAdvance(markCp, bucket, sizePx, spacingAdvance))
+                            advance.setWidth(spacingAdvance);
+                    }
+                }
             }
 #endif
 

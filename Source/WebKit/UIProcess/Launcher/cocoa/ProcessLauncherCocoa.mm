@@ -416,6 +416,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_LOG_LINE_BOX_HEIGHT", getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT") },
             { "DRIFTSTACK_V602_SUBSTITUTE", getenv("DRIFTSTACK_V602_SUBSTITUTE") },
             { "DRIFTSTACK_V433Z_COMBINING_MARK_ZERO", getenv("DRIFTSTACK_V433Z_COMBINING_MARK_ZERO") },
+            { "DRIFTSTACK_ORPHAN_MARK_SPACING", getenv("DRIFTSTACK_ORPHAN_MARK_SPACING") }, // W2592 orphan combining-mark iOS spacing advance
             { "DRIFTSTACK_LAYER_B_ENABLED", getenv("DRIFTSTACK_LAYER_B_ENABLED") },
             { "DRIFTSTACK_LAYER_B_V2_ENABLED", getenv("DRIFTSTACK_LAYER_B_V2_ENABLED") },
             { "DRIFTSTACK_ARCHETYPE_SLUG", getenv("DRIFTSTACK_ARCHETYPE_SLUG") },
