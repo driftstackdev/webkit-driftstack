@@ -2586,11 +2586,18 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
-    case 0xFFFD:   // Replacement Character — iPhone width 43 (710/713)
-    case 0x21E4: { // Leftwards Arrow To Bar — iPhone width 43 (712/713)
-        // Family in AppleSymbols.ttf: "Apple Symbols"
-        static const std::array<ASCIILiteral, 2> candidates {
-            "apple symbols"_s, ".sf ui"_s,
+    case 0xFFFD:   // Replacement Character
+    case 0x21E4: { // Leftwards Arrow To Bar
+        // W2577: iOS CoreText resolves the U+FFFD/U+21E4 tofu fallback to MENLO, not "Apple Symbols".
+        // Empirically (Mac CoreText vs iOS-26.5-sim 3090CE99, CTFontCreateForString + advances): iOS picks
+        // Menlo (advance 9.6328 @16px → offsetWidth 10; 43.348 @72px → 43); the old "apple symbols" candidate
+        // gives 13.30 @16px → width 14 (the glyphHash residual) and 59 @72px (verification-log:57741 "+16 WRONG").
+        // Mac-native Menlo == iOS-sim Menlo BYTE-IDENTICAL for both glyphs, and the per-em advance is identical at
+        // 16px AND 72px → closes both the glyphHash DOM surface and the fonts-full 72px canvas surface, size-
+        // independent, general for any So/Sm symbol whose iOS tofu fallback is Menlo. Menlo first; keep the old
+        // candidates as fallback.
+        static const std::array<ASCIILiteral, 3> candidates {
+            "menlo"_s, "apple symbols"_s, ".sf ui"_s,
         };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }

@@ -150,7 +150,14 @@ static bool shouldUseSfProConstantOnePixelAdjustment(CTFontRef font)
         // W1434 entries above didn't match h1 (stayed +1 too short). Add the `.SF NS Mono` variants. Canvas-safe:
         // the canvas validation uses ZERO monospace at any size (W1433).
         || caseInsensitiveCompare(familyName.get(), CFSTR(".SF NS Mono"))
-        || caseInsensitiveCompare(familyName.get(), CFSTR(".SFNSMono"));
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".SFNSMono"))
+        // W2577: `.CJK Symbols Fallback SC` is a SYSTEM-cascade sibling of the SF system font (the fallback
+        // for CJK symbols like U+2581 ▁). On a real iPhone it reports the SF vertical ratio (asc/size 0.95215,
+        // desc/size 0.24121) — identical bbox + advance to Mac, but Mac CoreText hands back the Mac SF ratio
+        // (0.96680/0.21094), which crosses an integer line-box boundary at some sizes → the post-W2575 integer
+        // line-box +1/-2 on the glyphHash U+2581 cells (Mac+iOS-26.5-sim verified: SAME font+advance, ratio-only
+        // diff). Forcing the iOS SF ratio matches. Canvas-safe: covered fonts are atlas-served (W1443 class).
+        || caseInsensitiveCompare(familyName.get(), CFSTR(".CJK Symbols Fallback SC"));
 }
 #endif
 
@@ -595,8 +602,20 @@ void Font::platformInit()
                 ascent = matchedTable.front().ascent;
                 descent = matchedTable.front().descent;
             } else if (track3Size >= matchedTable.back().size) {
-                ascent = matchedTable.back().ascent;
-                descent = matchedTable.back().descent;
+                // W2577: the Track-3 per-size table only covers [8..96]. For the SF system font
+                // (.AppleSystemUIFont), the SF-Pro vertical metrics are genuinely LINEAR above 96px
+                // (0.95215/0.24121 — fontTools hhea/OS2-verified; CoreText scales linearly past the
+                // opsz axis cap of 96 — the cap affects glyph SHAPE, not metric SCALE). The flat clamp
+                // to the 96px row (ascent 92/descent 24) capped -apple-system & system-ui offsetHeight
+                // at ~116-117 for ALL sizes >=96 (sim-verified: fork 117 vs iOS 121/135/153/192 at
+                // 100/112/128/160px). For SF fonts, SKIP the clamp so the correct linear values already
+                // set by shouldUseSfProConstantOnePixelAdjustment (lines ~274-278, ceil'd ~283-284)
+                // survive. Non-SF tables (Times/Indic/Telugu) keep the clamp — they are NOT SF-linear
+                // and have no verified >96 iOS metric.
+                if (!shouldUseSfProConstantOnePixelAdjustment(ctFont.get())) {
+                    ascent = matchedTable.back().ascent;
+                    descent = matchedTable.back().descent;
+                }
             } else {
                 DriftstackTrack3Entry a = matchedTable.front();
                 for (const auto& b : matchedTable) {
