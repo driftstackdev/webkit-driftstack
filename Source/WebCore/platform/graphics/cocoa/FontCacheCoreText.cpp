@@ -2516,7 +2516,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false)
 {
     if (cluster.isEmpty())
         return nullptr;
@@ -2757,6 +2757,50 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "zapf dingbats"_s, "itc zapf dingbats"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2603: per-generic letterlike where iOS routes the PROPORTIONAL generics (default/serif/sans) to Helvetica
+    // but the cursive/fantasy/monospace fallbacks ALREADY match a DIFFERENT iOS value -> route proportional to
+    // Helvetica, leave cursive/fantasy/monospace natural (return nullptr). (Helvetica has real glyphs: ℃=18, ℉=17,
+    // Å=11 = the iOS default/serif/sans target; the sans generic primary-renders so the override only fires in
+    // default/serif/cursive where the primary lacks the glyph.)
+    case 0x2103: { // ℃ Degree Celsius — iOS def/serif/sans/cursive=18 (Helvetica); fantasy=17, mono=10 already match
+        if (baseFontIsMonospace || baseIsFantasy)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2109: case 0x212B: { // ℉ Degree Fahrenheit (iOS 17) / Å Angstrom (iOS 11) — def/serif/sans only; cursive/fantasy/mono already match
+        if (baseFontIsMonospace || baseIsCursive || baseIsFantasy)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2604: per-generic arrows/geometric where default/serif primary-render (match) and ONLY the proportional
+    // FALLBACK generics (sans/cursive/fantasy) diverge to a uniform iOS value; monospace already matches (10) so
+    // gate it to nullptr. The override fires only where the primary lacks the glyph = the fallback generics.
+    case 0x2191: case 0x2193: case 0x25A0: case 0x25A1: case 0x25CB: case 0x25E6: { // -> Hiragino Sans (iOS fallback-generic 16)
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "hiragino sans"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2194: case 0x2195: case 0x25AA: case 0x25AB: case 0x263A: { // -> Apple Color Emoji (iOS fallback-generic 21)
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x25BA: case 0x20AF: { // -> Menlo (iOS fallback-generic 10)
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x20AA: { // ₪ New Sheqel Sign — iOS sans/cursive/fantasy=14 (Arial Hebrew); default/serif=13 + mono=10 already match
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     // W2602: BOX-DRAWING double-line + dark-shade (U+2551-256C, U+2593). iOS renders these at 12 in default/serif
     // (the system/Times primary HAS the glyph -> no fallback) and 10 in sans-serif/cursive/fantasy (Helvetica/
     // Snell/Papyrus LACK the glyph -> fallback). The fork's fallback picked a wide font (16). MENLO has the glyph
@@ -2832,8 +2876,15 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     // fallback pick — iOS routes notdef block/symbol clusters down the monospace cascade (Menlo) for fixed-pitch
     // base fonts but the proportional cascade (Hiragino) otherwise.
     bool driftstackBaseFontIsMonospace = ctFont && (CTFontGetSymbolicTraits(ctFont.get()) & kCTFontTraitMonoSpace);
+    // W2603: the CSS cursive/fantasy generics resolve to fixed iOS default fonts (Snell Roundhand / Papyrus). Some
+    // symbol cps (℃/℉/Å, arrows, geometric) have a per-generic iOS advance where the cursive/fantasy fallback
+    // ALREADY matches the fork but the proportional (default/serif) one does NOT — so the override must fire for
+    // the proportional generics yet leave cursive/fantasy (and monospace) natural. Classify the base font by family.
+    String driftstackBaseFamily = ctFont ? String(adoptCF(CTFontCopyFamilyName(ctFont.get())).get()) : String();
+    bool driftstackBaseIsCursive = driftstackBaseFamily.startsWith("Snell"_s);
+    bool driftstackBaseIsFantasy = equalLettersIgnoringASCIICase(driftstackBaseFamily, "papyrus"_s);
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace)) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
