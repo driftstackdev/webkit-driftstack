@@ -483,6 +483,16 @@ void Font::platformInit()
                 a = b;
             }
         }
+        // W2588: the table above replaces ascent/descent with the iOS Apple Color Emoji
+        // values, but lineSpacing was computed earlier (≈line 304) from Mac CoreText's RAW
+        // emoji metrics, which are SMALLER — so lineSpacing (21 at 16px) ends up LESS than
+        // ceil(ascent)+ceil(descent) (27). In the CSS normal-line-height half-leading calc
+        // (InlineLineBoxBuilder enclosingAscentDescentWithFallbackFonts) that negative gap
+        // SHRINKS the emoji's line-box contribution back down to 21, producing a -5px
+        // div.offsetHeight tell on the browserleaks glyphHash surface for every emoji
+        // fall-through glyph (U+2B06, U+20E3, …). iOS emoji leading is 0, so make lineSpacing
+        // consistent with the overridden ascent/descent (half-leading becomes 0, line box = 27).
+        lineSpacing = std::ceil(ascent) + std::ceil(descent) + lineGap;
     }
 
     // V-083 Track 3: per-size fontBoundingBox{Ascent,Descent} overrides

@@ -270,6 +270,13 @@ InlineLevelBox::AscentAndDescent LineBoxBuilder::enclosingAscentDescentWithFallb
             ascent += halfLeading;
             descent += halfLeading;
         }
+#if PLATFORM(DRIFTSTACK)
+        if (getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT")) {
+            auto famName = font->platformData().familyName();
+            WTFLogAlways("[Driftstack-W2588-FBFONT] family='%s' rawAsc=%.3f rawDesc=%.3f lineSpacing=%.3f -> adjAsc=%.3f adjDesc=%.3f",
+                famName.utf8().data(), (double)fontMetrics.ascent(), (double)fontMetrics.descent(), (double)fontMetrics.lineSpacing(), (double)ascent, (double)descent);
+        }
+#endif
         maxAscent = std::max(maxAscent, ascent);
         maxDescent = std::max(maxDescent, descent);
     }
