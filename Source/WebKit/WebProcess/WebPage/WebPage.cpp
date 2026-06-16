@@ -5302,6 +5302,17 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // via the same EnabledBySetting gate (ReadableStreamFromEnabled) as W313.
     settings.setReadableStreamFromEnabled(false);
 
+    // W2575 (2026-06-15, env-gated default-OFF diagnostic) — the browserleaks glyphHash block-div +1 is the fork
+    // ROUNDING a fractional line-box height where a real iPhone FLOORS it (sim-verified w2575: line-height:23.5px →
+    // div.offsetHeight = fork 24, iOS-26.5 sim 23; explicit CSS height:23.5px matches both → the divergence is the
+    // line-box → block-content-height path specifically). SHIPPED iOS appears to run inline layout in INTEGER mode
+    // (subpixelInlineLayoutEnabled=false) — NOT reflected in the OSS UnifiedWebPreferences default (true on all of
+    // WebCore/WebKit/WebKitLegacy), so this Mac-built fork inherited the wrong fractional behavior. Force integer
+    // inline layout to test floor=match-iOS. Gated for cumrig / W2569-inline / measureText blast-radius verification
+    // before any default-on flip.
+    if (getenv("DRIFTSTACK_INT_INLINE_LAYOUT"))
+        settings.setSubpixelInlineLayoutEnabled(false);
+
     // W353 (2026-06-02) — two more fork-too-new attributes the full-enumeration apiEnum surface caught, both
     // ABSENT on real iPhone-17 (W349) and gated here via new EnabledBySetting settings (the IDL preprocessor
     // cannot see PLATFORM(DRIFTSTACK), so a runtime setting is the only working hide):
