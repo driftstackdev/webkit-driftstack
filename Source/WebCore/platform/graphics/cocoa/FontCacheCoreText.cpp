@@ -2683,6 +2683,67 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2600: UNIFORM-all-6-generic symbol-advance overrides (symbol-advance fingerprint class). Each cp has the
+    // SAME iOS advance in all 6 generics, and one system-loadable named font gives ceil(advance@16px)==that value
+    // in every generic (adversarially confirmed via the symbol-advance-triage workflow's ctadv-by-name probing,
+    // then build+sim-diff verified). Routed unconditionally (the override only fires where the primary font lacks
+    // the glyph = the divergent generics; matching generics are untouched -> zero regression).
+    case 0x2303: case 0x2325: case 0x2326: case 0x2327: case 0x232B: case 0x237D:
+    case 0x233D: case 0x25B8: case 0x25BE: case 0x2641: { // -> Menlo (iOS width 10)
+        // (U+233D: the workflow's "Arial Unicode MS" pick ctadv-matched 10 but is NOT loadable in the fork's font
+        //  set -> driftstackLookupIOSFontByCandidates returned null -> stayed 16; Menlo has the glyph at 10 too.)
+        static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2125: case 0x2137: case 0x2324: { // -> Apple Symbols (iOS 10 / 8 / 9)
+        static const std::array<ASCIILiteral, 1> candidates { "apple symbols"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2132: case 0x2141: case 0x2144: { // -> Helvetica (iOS 10 / 13 / 11)
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2322: case 0x2323: { // -> Apple SD Gothic Neo (iOS 14)
+        static const std::array<ASCIILiteral, 1> candidates { "apple sd gothic neo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x20BC: { // -> Helvetica Neue (iOS 9)
+        static const std::array<ASCIILiteral, 2> candidates { "helvetica neue"_s, "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x2135: { // -> STIX Two Math (iOS 12)
+        static const std::array<ASCIILiteral, 1> candidates { "stix two math"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2599: EMOJI-PRESENTATION symbol batch (symbol-advance fingerprint class, fork-vs-iOS-26.5-sim).
+    // These 53 codepoints (arrows/weather/hands/religious/zodiac/tool/checkmark/heart symbols) are rendered
+    // by a real iPhone as COLOR EMOJI — advance 21.0 @16px (Apple Color Emoji) — in the proportional generics
+    // (default/sans-serif/serif/cursive/fantasy), where the fork's raw cascade picks a narrow TEXT glyph (11-16).
+    // Same mechanism + font as the already-shipped U+2B06/U+20E3 (W2585). Apple Color Emoji is a system font
+    // (loads by name); ctadv confirms ceil(advance@16)=21 for every one. The MONOSPACE generic already matches
+    // iOS (both 10, the narrow mono fallback) for these — so route monospace-base to nullptr (keep the natural
+    // cascade) and proportional-base to Apple Color Emoji. CANVAS pixels for these remain a #42-atlas follow-on;
+    // this fixes the DOM/FontCascade advance (offsetWidth/measureText) which is what the symbol-sweep probes.
+    case 0x2196: case 0x2197: case 0x2198: case 0x2199: case 0x21A9: case 0x21AA:
+    case 0x2328: case 0x25B6: case 0x25C0: case 0x25FB: case 0x25FC:
+    case 0x2600: case 0x2601: case 0x2602: case 0x2603: case 0x2604: case 0x260E:
+    case 0x2611: case 0x2618: case 0x261D: case 0x2620: case 0x2622: case 0x2623:
+    case 0x2626: case 0x262A: case 0x262E: case 0x262F: case 0x2638: case 0x265F:
+    case 0x2668: case 0x267B: case 0x267E: case 0x2702: case 0x2708: case 0x2709:
+    case 0x270C: case 0x270D: case 0x270F: case 0x2712: case 0x2714: case 0x2716:
+    case 0x271D: case 0x2721: case 0x2733: case 0x2734: case 0x2744: case 0x2747:
+    case 0x2763: case 0x2764: case 0x27A1: {
+        if (baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2599b: the 3 emoji symbols iOS renders at 21 in ALL 6 generics INCLUDING monospace (uniform — the fork's
+    // mono is also wrong here: U+2139 fork-mono 11, U+2B05/2B07 fork-mono 16). Route every generic to the emoji.
+    case 0x2139: case 0x2B05: case 0x2B07: {
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     default:
         return nullptr;
     }
