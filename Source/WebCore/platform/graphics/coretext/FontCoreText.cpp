@@ -465,23 +465,39 @@ void Font::platformInit()
             { 96.f, 97.f, 31.f }
         }};
         const float emojiSize = m_platformData.size();
-        if (emojiSize <= driftstackEmojiFontMetricsTable.front().size) {
-            ascent = driftstackEmojiFontMetricsTable.front().ascent;
-            descent = driftstackEmojiFontMetricsTable.front().descent;
-        } else if (emojiSize >= driftstackEmojiFontMetricsTable.back().size) {
-            ascent = driftstackEmojiFontMetricsTable.back().ascent;
-            descent = driftstackEmojiFontMetricsTable.back().descent;
-        } else {
-            DriftstackEmojiFontMetricsEntry a = driftstackEmojiFontMetricsTable.front();
-            for (const auto& b : driftstackEmojiFontMetricsTable) {
-                if (emojiSize >= a.size && emojiSize <= b.size && a.size != b.size) {
-                    float t = (emojiSize - a.size) / (b.size - a.size);
-                    ascent  = a.ascent  + t * (b.ascent  - a.ascent);
-                    descent = a.descent + t * (b.descent - a.descent);
-                    break;
+        // W2596: only use the captured table within its optical range [8..96]. For emojiSize > 96
+        // LINEAR-EXTRAPOLATE the iPhone table (NOT the natural Stage-B font metrics — the Stage-B
+        // AppleColorEmoji-160px.ttc ascent is exactly 128.0 → ceil 128 → line box 168 @128px, but
+        // the real iPhone is 170: ceil 129 + 41). Extrapolating from the table's size-64 and size-96
+        // entries (slope +1/size ascent, +0.3125/size descent) yields 129/41 @128px → lineSpacing
+        // 170 == iOS uniqueMetrics emoji height. The old code capped at the 96px row {97,31} → ~128
+        // (gross); same cap class as the W2577 -apple-system fix.
+        if (emojiSize <= driftstackEmojiFontMetricsTable.back().size) {
+            if (emojiSize <= driftstackEmojiFontMetricsTable.front().size) {
+                ascent = driftstackEmojiFontMetricsTable.front().ascent;
+                descent = driftstackEmojiFontMetricsTable.front().descent;
+            } else if (emojiSize >= driftstackEmojiFontMetricsTable.back().size) {
+                ascent = driftstackEmojiFontMetricsTable.back().ascent;
+                descent = driftstackEmojiFontMetricsTable.back().descent;
+            } else {
+                DriftstackEmojiFontMetricsEntry a = driftstackEmojiFontMetricsTable.front();
+                for (const auto& b : driftstackEmojiFontMetricsTable) {
+                    if (emojiSize >= a.size && emojiSize <= b.size && a.size != b.size) {
+                        float t = (emojiSize - a.size) / (b.size - a.size);
+                        ascent  = a.ascent  + t * (b.ascent  - a.ascent);
+                        descent = a.descent + t * (b.descent - a.descent);
+                        break;
+                    }
+                    a = b;
                 }
-                a = b;
             }
+        } else {
+            // emojiSize > 96: linear-extrapolate from the table's size-64 and size-96 entries.
+            const auto& lo = driftstackEmojiFontMetricsTable[64 - 8]; // size 64
+            const auto& hi = driftstackEmojiFontMetricsTable.back();  // size 96
+            float t = (emojiSize - hi.size) / (hi.size - lo.size);
+            ascent  = hi.ascent  + t * (hi.ascent  - lo.ascent);
+            descent = hi.descent + t * (hi.descent - lo.descent);
         }
         // W2588: the table above replaces ascent/descent with the iOS Apple Color Emoji
         // values, but lineSpacing was computed earlier (≈line 304) from Mac CoreText's RAW
