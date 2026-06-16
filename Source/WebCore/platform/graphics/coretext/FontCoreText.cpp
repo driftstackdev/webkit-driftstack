@@ -285,7 +285,22 @@ void Font::platformInit()
     }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // W2587: Mac CoreText returns some metrics with tiny floating-point NOISE just above an integer
+    // (e.g. Hiragino Sans leading = 8.00002), which ceilf() rounds UP to 9 — where iOS's exact 8.0 ceils
+    // to 8. That spurious +1 inflated the line-box / lineSpacing of fallback fonts (the glyphHash
+    // U+2581/U+3095 h26-vs-iOS-25 residual). Snap the leading to the nearest integer when it is within
+    // kMetricFpEpsilon (pure fp noise, ~2e-5 in practice), else ceil normally (genuine fractional leadings
+    // — those ≥0.01 from an integer — are preserved and still round up exactly as iOS does). General: fixes
+    // every fallback font whose CoreText leading carries this fp artifact, not just Hiragino.
+    {
+        constexpr float kMetricFpEpsilon = 0.01f;
+        float rounded = std::round(lineGap);
+        lineGap = (std::abs(lineGap - rounded) < kMetricFpEpsilon) ? rounded : std::ceil(lineGap);
+    }
+#else
     lineGap = ceilf(lineGap);
+#endif
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
     ascent = ceilf(ascent + adjustment);
     descent = ceilf(descent);
