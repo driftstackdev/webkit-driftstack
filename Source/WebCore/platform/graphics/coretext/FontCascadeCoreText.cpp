@@ -1168,6 +1168,22 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             if (colorAtlas.isLoaded()) {
                 const float ptSize = font.platformData().size();
                 const uint16_t ptSizeQ4 = static_cast<uint16_t>(std::lround(ptSize * 16.0f));
+                // DSPGCA2 (#42 multi-codepoint): version-2 atlases key clusters by
+                // seq_hash = FNV-1a-32(utf8). Canvas fingerprint probes (and most detectors) draw ONE
+                // emoji per fillText, so the source text IS the cluster — hash it once and serve it to
+                // that one color glyph. A version-1 (DSPGCA1) atlas keeps the exact codepoint keying
+                // below, so this change is behavior-preserving until the launch-env points at the v2 bin.
+                const bool seqKeyed = colorAtlas.version() >= 2;
+                uint32_t sourceSeqHash = 0;
+                bool haveSourceSeqHash = false;
+                if (seqKeyed) {
+                    StringView src = driftstackCurrentTextSource();
+                    if (!src.isEmpty()) {
+                        sourceSeqHash = driftstackSeqHashForUtf8(src);
+                        haveSourceSeqHash = true;
+                    }
+                }
+                bool sourceConsumed = false; // the whole-source cluster hash serves at most one glyph
                 struct ColorPlan { bool hit; const uint8_t* pixels; };
                 Vector<ColorPlan, 64> cplans;
                 cplans.reserveInitialCapacity(glyphs.size());
@@ -1186,13 +1202,37 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     // font-FALLBACK fix (make the fork pick Apple Color Emoji for them under an
                     // emoji-first stack), NOT a codepoint override. Tracked as a separate #42 residual.
                     if (font.colorGlyphType(g) == ColorGlyphType::Color) {
-                        char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
-                        if (codepoint) {
-                            auto hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
-                            if (hit) { plan.hit = true; plan.pixels = hit->pixels; ++colorHits; }
+                        std::optional<DriftstackPerGlyphColorAtlasEntry> hit;
+                        if (seqKeyed) {
+                            // Multi-cp clusters (ZWJ/skin/keycap/VS) have no single codepoint — serve
+                            // them via the whole-source cluster hash (once per run). Fall back to the
+                            // single-codepoint reverse map (a length-1 sequence) for the rest.
+                            if (haveSourceSeqHash && !sourceConsumed)
+                                hit = colorAtlas.lookup(0, ptSizeQ4, sourceSeqHash, 0);
+                            if (hit)
+                                sourceConsumed = true;
+                            else {
+                                char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
+                                if (codepoint)
+                                    hit = colorAtlas.lookup(0, ptSizeQ4, driftstackSeqHashForCodepoint(codepoint), 0);
+                            }
+                        } else {
+                            char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
+                            if (codepoint)
+                                hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
                         }
+                        if (hit) { plan.hit = true; plan.pixels = hit->pixels; ++colorHits; }
                     }
                     cplans.append(plan);
+                }
+                if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
+                    StringView dsrc = driftstackCurrentTextSource();
+                    unsigned u0 = dsrc.length() > 0 ? dsrc[0] : 0;
+                    unsigned u1 = dsrc.length() > 1 ? dsrc[1] : 0;
+                    unsigned u2 = dsrc.length() > 2 ? dsrc[2] : 0;
+                    WTFLogAlways("[V-COLOR-D2] glyphs=%zu colorHits=%u seqKeyed=%d haveSrc=%d srcHash=%08x srcLen=%u u=[%04X %04X %04X] pt=%.1f",
+                        glyphs.size(), colorHits, static_cast<int>(seqKeyed), static_cast<int>(haveSourceSeqHash),
+                        sourceSeqHash, dsrc.length(), u0, u1, u2, static_cast<double>(ptSize));
                 }
                 if (colorHits > 0) {
                     // Per-glyph cursor positions (CTM coords; mirrors the V-090 block).

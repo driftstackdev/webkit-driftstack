@@ -10,6 +10,8 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include "DriftstackTextRunAtlas.h"   // driftstackFnv1a32 (DSPGCA2 seq_hash keying)
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +35,9 @@ constexpr size_t kColorKeySize = 12;          // font_id u16 + pt_size_q4 u16 + 
 constexpr size_t kColorPixelsSize = 64 * 64 * 4;  // RGBA
 constexpr size_t kColorEntrySize = kColorKeySize + kColorPixelsSize;
 constexpr const char kColorMagic[8] = { 'D', 'S', 'P', 'G', 'C', 'A', '1', '\0' };
+// DSPGCA2 (#42 multi-cp): identical layout; the u32 key field holds seq_hash=FNV-1a-32(utf8 of the
+// codepoint sequence) instead of a bare codepoint (single cp = length-1 sequence → byte-identical).
+constexpr const char kColorMagic2[8] = { 'D', 'S', 'P', 'G', 'C', 'A', '2', '\0' };
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -130,7 +135,8 @@ bool DriftstackPerGlyphColorAtlas::loadFromFile(const char* path)
 
     const uint8_t* bytes = static_cast<const uint8_t*>(base);
 
-    if (std::memcmp(bytes, kColorMagic, 8) != 0) {
+    bool isV2 = std::memcmp(bytes, kColorMagic2, 8) == 0;
+    if (std::memcmp(bytes, kColorMagic, 8) != 0 && !isV2) {
         WTFLogAlways("[V-COLOR] per-glyph color atlas magic mismatch — disabled");
         ::munmap(base, st.st_size);
         return false;
@@ -138,7 +144,7 @@ bool DriftstackPerGlyphColorAtlas::loadFromFile(const char* path)
 
     uint32_t version = leU32Color(bytes + 8);
     uint32_t count = leU32Color(bytes + 12);
-    if (version != 1) {
+    if (version != 1 && version != 2) {
         WTFLogAlways("[V-COLOR] per-glyph color atlas version=%u unsupported — disabled", version);
         ::munmap(base, st.st_size);
         return false;
@@ -158,6 +164,7 @@ bool DriftstackPerGlyphColorAtlas::loadFromFile(const char* path)
     m_mapSize = static_cast<size_t>(st.st_size);
     m_entryCount = count;
     m_entriesBase = bytes + kColorHeaderSize;
+    m_version = version;   // DSPGCA2: the key u32 holds seq_hash, not a bare codepoint
     m_loaded = true;
 
     // Build the unique-codepoint index for hasCodepoint() (cp at key offset 4: after font_id u16 + ptSizeQ4 u16).
@@ -203,7 +210,10 @@ std::optional<DriftstackPerGlyphColorAtlasEntry> DriftstackPerGlyphColorAtlas::l
 
 bool DriftstackPerGlyphColorAtlas::hasCodepoint(uint32_t codepoint) const
 {
-    return std::binary_search(m_codepoints.begin(), m_codepoints.end(), codepoint);
+    // For DSPGCA2 the m_codepoints index actually holds seq_hashes; a single codepoint is the
+    // length-1 sequence, so search its seq_hash. For DSPGCA1 the index holds bare codepoints.
+    uint32_t key = (m_version >= 2) ? driftstackSeqHashForCodepoint(static_cast<char32_t>(codepoint)) : codepoint;
+    return std::binary_search(m_codepoints.begin(), m_codepoints.end(), key);
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END

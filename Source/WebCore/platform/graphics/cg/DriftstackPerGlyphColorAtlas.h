@@ -53,6 +53,10 @@ public:
 
     bool isLoaded() const { return m_loaded; }
     size_t entryCount() const { return m_entryCount; }
+    // 1 = DSPGCA1 (lookup key is a bare codepoint); 2 = DSPGCA2 (lookup key is a sequence's
+    // seq_hash = FNV-1a-32(utf8) — required for multi-codepoint emoji). The canvas dispatch keys
+    // accordingly so a DSPGCA1 atlas keeps its exact current behavior.
+    uint32_t version() const { return m_version; }
 
     // Lookup. Returns nullopt on miss. ptSizeQ4 = static_cast<uint16_t>(round(ptSize * 16)).
     std::optional<DriftstackPerGlyphColorAtlasEntry> lookup(
@@ -70,6 +74,7 @@ public:
 
 private:
     bool m_loaded { false };
+    uint32_t m_version { 1 };   // 1 = DSPGCA1 (codepoint key); 2 = DSPGCA2 (seq_hash key)
     const uint8_t* m_mapBase { nullptr };
     size_t m_mapSize { 0 };
     size_t m_entryCount { 0 };

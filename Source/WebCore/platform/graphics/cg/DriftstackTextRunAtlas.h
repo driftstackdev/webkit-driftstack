@@ -189,6 +189,56 @@ public:
 
 StringView driftstackCurrentTextSource();
 
+// #42 multi-codepoint color-emoji (DSPGCA2): the per-glyph COLOR atlas keys multi-codepoint
+// emoji clusters (ZWJ / skin-tone / keycap / VS16 / tag-seq) by FNV-1a-32 of the cluster's
+// UTF-8 bytes (single codepoints are length-1 sequences → byte-identical to the old codepoint
+// key). MUST match captures/v3/build-perglyph-color-atlas-v2.py exactly (uint32 multiply wraps
+// mod 2^32 == the python `& 0xFFFFFFFF`).
+inline uint32_t driftstackFnv1a32(std::span<const uint8_t> bytes)
+{
+    uint32_t h = 2166136261u;
+    for (uint8_t b : bytes)
+        h = (h ^ b) * 16777619u;
+    return h;
+}
+
+// seq_hash of a SINGLE codepoint = FNV-1a-32 of its UTF-8 bytes (the length-1 sequence). Used by the
+// single-codepoint color-emoji fallback + hasCodepoint(). Matches build-perglyph-color-atlas-v2.py.
+// Hashed byte-by-byte with no intermediate buffer (keeps -Wunsafe-buffer-usage happy in a header).
+inline uint32_t driftstackSeqHashForCodepoint(char32_t cp)
+{
+    uint32_t h = 2166136261u;
+    auto mix = [&](uint8_t b) { h = (h ^ b) * 16777619u; };
+    if (cp < 0x80)
+        mix(static_cast<uint8_t>(cp));
+    else if (cp < 0x800) {
+        mix(static_cast<uint8_t>(0xC0 | (cp >> 6)));
+        mix(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        mix(static_cast<uint8_t>(0xE0 | (cp >> 12)));
+        mix(static_cast<uint8_t>(0x80 | ((cp >> 6) & 0x3F)));
+        mix(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
+    } else {
+        mix(static_cast<uint8_t>(0xF0 | (cp >> 18)));
+        mix(static_cast<uint8_t>(0x80 | ((cp >> 12) & 0x3F)));
+        mix(static_cast<uint8_t>(0x80 | ((cp >> 6) & 0x3F)));
+        mix(static_cast<uint8_t>(0x80 | (cp & 0x3F)));
+    }
+    return h;
+}
+
+// seq_hash of a text CLUSTER = FNV-1a-32 over its UTF-8 bytes. The canvas dispatch recovers the
+// emoji cluster from the source text and keys the DSPGCA2 color atlas with this. CString::span() is
+// bounds-safe, so the range-for satisfies -Wunsafe-buffer-usage (no raw pointer/length span).
+inline uint32_t driftstackSeqHashForUtf8(StringView text)
+{
+    CString u8 = text.utf8();
+    uint32_t h = 2166136261u;
+    for (char c : u8.span())
+        h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+    return h;
+}
+
 // Canvas-context marker (W1092). The glyph PIXEL-substitution paths in the
 // Font::drawGlyphs hook (text-run atlas blit + V-790.L per-glyph atlas) exist
 // to make the CANVAS fingerprint (getImageData/toDataURL) bit-identical to a
