@@ -54,6 +54,10 @@ public:
         String path;
         const char* data { nullptr };
         size_t dataLength { 0 };
+        // Driftstack W2174: raw request header lines (e.g. "Authorization: Bearer <token>"), propagated
+        // from the parser so WebDriverService::handleRequest can enforce the per-session WD-auth token
+        // (cross-tenant isolation, W2104/W2131). Empty on the non-socket servers (unused there).
+        Vector<String> headers;
     };
     struct Response {
         unsigned statusCode { 0 };

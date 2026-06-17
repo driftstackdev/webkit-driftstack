@@ -62,6 +62,10 @@ public:
     // runloop (MiniBrowser hosts the server on its main runloop). Returns false if the
     // socket could not be bound.
     bool driftstackListenInProcess(const String& host, uint16_t port);
+    // W2174: set the per-session WD-auth bearer token (cross-tenant isolation, W2104/W2131). When set,
+    // handleRequest rejects any request without a matching `Authorization: Bearer <token>` (401). Call
+    // BEFORE driftstackListenInProcess so the listener is authed from its first accepted request.
+    void driftstackSetAuthToken(const String& token) { m_driftstackAuthToken = token; }
 #endif
 
     static void platformInit();
@@ -165,6 +169,9 @@ private:
 
     void handleRequest(HTTPRequestHandler::Request&&, Function<void (HTTPRequestHandler::Response&&)>&& replyHandler) override;
     void sendResponse(Function<void (HTTPRequestHandler::Response&&)>&& replyHandler, CommandResult&&) const;
+    // W2174: per-session WD-auth check (cross-tenant isolation, W2104/W2131). Returns true when no token
+    // is set (auth disabled) or the request carries the matching `Authorization: Bearer <token>`.
+    bool driftstackRequestIsAuthorized(const HTTPRequestHandler::Request&) const;
 
 #if ENABLE(WEBDRIVER_BIDI)
     bool acceptHandshake(HTTPRequestHandler::Request&&) override;
@@ -183,6 +190,7 @@ private:
 #endif // ENABLE(WEBDRIVER_BIDI)
 
     HTTPServer m_server;
+    String m_driftstackAuthToken; // W2174: per-session WD-auth bearer token (empty = auth disabled)
 #if ENABLE(WEBDRIVER_BIDI)
     const Ref<WebSocketServer> m_bidiServer;
     const Ref<SessionHost::BrowserTerminatedObserver> m_browserTerminatedObserver;

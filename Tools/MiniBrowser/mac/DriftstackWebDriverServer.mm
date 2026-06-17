@@ -62,6 +62,17 @@ void DriftstackStartWebDriverServer(NSString *sessionID, _WKAutomationSession *s
     }
 
     s_service = std::make_unique<WebDriver::WebDriverService>();
+
+    // W2174: per-session WD-auth (cross-tenant isolation, W2104/W2131). Generate a 128-bit random bearer
+    // token + set it on the service BEFORE listening, so the in-process WebDriver server is authed from its
+    // first accepted request. The harness (W2131) reads line 2 of the port-file + sends
+    // `Authorization: Bearer <token>`; a co-resident session that discovers this localhost port cannot drive
+    // it without the token (which lives in THIS session's 0600 port-file, isolated per the W346 data dir).
+    uint8_t tokenBytes[16];
+    arc4random_buf(tokenBytes, sizeof(tokenBytes));
+    NSString *token = [[NSData dataWithBytes:tokenBytes length:sizeof(tokenBytes)] base64EncodedStringWithOptions:0];
+    s_service->driftstackSetAuthToken(String(token));
+
     if (!s_service->driftstackListenInProcess(String("127.0.0.1"_s), port)) {
         NSLog(@"[Driftstack] WebDriver: failed to listen on 127.0.0.1:%u", port);
         s_service = nullptr;
@@ -71,14 +82,16 @@ void DriftstackStartWebDriverServer(NSString *sessionID, _WKAutomationSession *s
     // Write the port-file the instant the socket is accepting (A3 W161: the harness
     // polls /tmp/driftstack-webdriver-<sessionId>.port; writing it now — before any
     // heavy init — shrinks the harness connect head-of-line window). atomically:YES
-    // so the harness never reads a half-written file.
+    // so the harness never reads a half-written file. W2174: line 1 = port, line 2 = the bearer token.
     NSString *portPath = [NSString stringWithFormat:@"/tmp/driftstack-webdriver-%@.port", sessionID];
-    NSString *portStr = [NSString stringWithFormat:@"%u\n", port];
+    NSString *portStr = [NSString stringWithFormat:@"%u\n%@\n", port, token];
     NSError *error = nil;
     if (![portStr writeToFile:portPath atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
         NSLog(@"[Driftstack] WebDriver: failed to write port-file %@: %@", portPath, error);
         return;
     }
+    // W2174: the port-file now carries the auth token → restrict to 0600 (was default perms).
+    [[NSFileManager defaultManager] setAttributes:@{ NSFilePosixPermissions: @(0600) } ofItemAtPath:portPath error:nil];
 
     NSLog(@"[Driftstack] WebDriver: in-process server on 127.0.0.1:%u, port-file %@", port, portPath);
 }

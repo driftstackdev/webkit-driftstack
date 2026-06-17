@@ -360,8 +360,33 @@ bool WebDriverService::findCommand(HTTPMethod method, const String& path, Comman
     return false;
 }
 
+// Driftstack W2174: per-session WebDriver auth (cross-tenant isolation, W2104/W2131). When
+// DriftstackWebDriverServer has set a per-session token (generated + written to the 0600 port-file line 2),
+// every WD request MUST carry a matching `Authorization: Bearer <token>` header. A co-resident session that
+// discovers this localhost port cannot drive it without the token (which lives in the other session's 0600
+// port-file, isolated per the W346 per-session data dir). No token set → open (back-compat / non-harness use).
+bool WebDriverService::driftstackRequestIsAuthorized(const HTTPRequestHandler::Request& request) const
+{
+    if (m_driftstackAuthToken.isEmpty())
+        return true;
+    auto expected = makeString("Bearer "_s, m_driftstackAuthToken);
+    for (const auto& header : request.headers) {
+        if (header.startsWithIgnoringASCIICase("Authorization:"_s) && header.contains(expected))
+            return true;
+    }
+    return false;
+}
+
 void WebDriverService::handleRequest(HTTPRequestHandler::Request&& request, Function<void (HTTPRequestHandler::Response&&)>&& replyHandler)
 {
+    if (!driftstackRequestIsAuthorized(request)) {
+        HTTPRequestHandler::Response unauthorized;
+        unauthorized.statusCode = 401;
+        unauthorized.data = CString("{\"value\":{\"error\":\"unauthorized\",\"message\":\"missing or invalid WebDriver bearer token\"}}");
+        unauthorized.contentType = "application/json; charset=utf-8"_s;
+        replyHandler(WTF::move(unauthorized));
+        return;
+    }
     auto method = toCommandHTTPMethod(request.method);
     if (!method) {
         sendResponse(WTF::move(replyHandler), CommandResult::fail(CommandResult::ErrorCode::UnknownCommand, makeString("Unknown method: "_s, request.method)));

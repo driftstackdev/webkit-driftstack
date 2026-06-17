@@ -91,6 +91,10 @@ void HTTPRequestHandler::didReceive(RemoteInspectorSocketEndpoint&, ConnectionID
             reinterpret_cast<const char*>(message.requestBody.span().data()),
             static_cast<size_t>(message.requestBody.size())
         };
+        // Driftstack W2174: propagate the parsed request headers so handleRequest can enforce the
+        // per-session WD-auth token (cross-tenant isolation, W2104/W2131). requestBody stays valid
+        // (the request.data pointer above is independent of requestHeaders).
+        request.headers = WTF::move(message.requestHeaders);
 
         handleRequest(WTF::move(request), [this](HTTPRequestHandler::Response&& response) {
             sendResponse(WTF::move(response));
