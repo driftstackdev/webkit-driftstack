@@ -397,6 +397,27 @@ bool NetworkRTCUDPSocketCocoaConnections::ensurePerSocketRelay(DriftstackRTC::Re
     }
     return false;
 }
+
+// W2179 (egress-invariant defense-in-depth): mirrors the HTTP path's fail-closed trigger
+// (NetworkSessionCocoa.mm: requireProxy && !direct). The createUDPSocket SHARED-relay hard-block
+// (NetworkRTCProvider.cpp:344-350) only covers the relay channel at socket-CREATION; the PER-SOCKET
+// relay (ensurePerSocketRelay above) can fail INDEPENDENTLY later (prewarm pool empty AND the per-socket
+// UDP_ASSOCIATE handshake fails), and BOTH the setListeningPort + sendTo failure branches fall through to
+// a DIRECT nw_connection at the Mac fleet IP — gated ONLY on isCustomSocks5Active, NOT REQUIRE_PROXY. That
+// is the lone egress-lock asymmetry vs the HTTP path. Arm a fail-closed guard ONLY in production-locked
+// sessions (REQUIRE_PROXY=1, no explicit dev-direct flag), using the SAME env names as the HTTP path.
+static bool driftstackRequireProxyNoDirect()
+{
+    static const bool value = [] {
+        const char* req = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE");
+        const char* de = getenv("DRIFTSTACK_DIRECT_EGRESS");
+        bool require = req && req[0] == '1';
+        bool direct = (db && db[0] == '1') || (de && de[0] == '1');
+        return require && !direct;   // fail-closed armed only when proxy is required + no dev-direct override
+    }();
+    return value;
+}
 #endif
 
 void NetworkRTCUDPSocketCocoaConnections::setListeningPort(int port)
@@ -437,6 +458,20 @@ void NetworkRTCUDPSocketCocoaConnections::setListeningPort(int port)
             loggedFailOnce = true;
             WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] setListeningPort: SOCKS5 active but relay not established (result=%d) — falling through to Mac-local address (LEAK risk; verify proxy reachable)",
                 static_cast<int>(r));
+        }
+        // W2179 fail-closed: under REQUIRE_PROXY=1 (no dev-direct flag), do NOT emit the Mac-local ICE
+        // candidate — signal the socket CLOSED so libwebrtc abandons this candidate promptly (the same
+        // surface the createUDPSocket hard-block uses via signalSocketIsClosed → SignalClose), instead of
+        // leaking the fleet IP onto the ICE wire when the per-socket relay failed independently of the
+        // shared-relay creation check.
+        if (driftstackRequireProxyNoDirect()) {
+            static bool loggedFailClosedOnce = false;
+            if (!loggedFailClosedOnce) {
+                loggedFailClosedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8] setListeningPort: REQUIRE_PROXY=1 + per-socket relay unavailable → FAIL-CLOSED (no Mac-local ICE candidate; signalling socket closed). Set DRIFTSTACK_DIRECT_BROWSE/DIRECT_EGRESS=1 to allow direct (dev only).");
+            }
+            m_connection->send(Messages::LibWebRTCNetwork::SignalClose(m_identifier, 1), 0);
+            return;
         }
     }
 #endif
@@ -1091,6 +1126,20 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
         if (traceThisCall)
             WTFLogAlways("[Wave29-499.88] sendTo call#%u: EXITING SOCKS5 block (will hit legacy direct nw_connection path next)",
                 thisCall);
+        // W2179 fail-closed: reaching here under SOCKS5-active means the per-socket relay was unavailable
+        // (no-relay) OR the §7 wrap failed — both would otherwise fall through to the DIRECT nw_connection
+        // (Mac fleet IP) below. Drop the datagram (the Wave .335 "drop rather than leak" precedent) under
+        // REQUIRE_PROXY=1 (no dev-direct) instead of leaking. UDP is lossy by contract → a drop is safe;
+        // ICE fails the candidate. This covers the per-socket/per-send relay-failure window the
+        // createUDPSocket SHARED-relay hard-block does not.
+        if (driftstackRequireProxyNoDirect()) {
+            static bool loggedSendFailClosedOnce = false;
+            if (!loggedSendFailClosedOnce) {
+                loggedSendFailClosedOnce = true;
+                WTFLogAlways("[Driftstack-EG-WK-1.8] sendTo: REQUIRE_PROXY=1 + per-socket relay unavailable → FAIL-CLOSED (datagram dropped, NOT sent direct from Mac fleet IP). Set DRIFTSTACK_DIRECT_BROWSE/DIRECT_EGRESS=1 to allow direct (dev only).");
+            }
+            return;
+        }
     }
 #endif
 
