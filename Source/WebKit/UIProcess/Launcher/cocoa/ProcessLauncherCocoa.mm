@@ -453,6 +453,8 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_AUDIO_ATLAS", getenv("DRIFTSTACK_AUDIO_ATLAS") },
             { "DRIFTSTACK_AUDIO_ATLAS_PATH", getenv("DRIFTSTACK_AUDIO_ATLAS_PATH") },
             { "DRIFTSTACK_ADVANCE_ATLAS_PATH", getenv("DRIFTSTACK_ADVANCE_ATLAS_PATH") },
+            { "DRIFTSTACK_DOMGEOM_ATLAS_PATH", getenv("DRIFTSTACK_DOMGEOM_ATLAS_PATH") }, // W2619 archetype DOM-geometry atlas (exotic-Unicode tail)
+            { "DRIFTSTACK_ARCHETYPE", getenv("DRIFTSTACK_ARCHETYPE") }, // W2619 archetype slug for the DOM-geom atlas default-path resolution
             { "DRIFTSTACK_ASCII_ATLAS_PATH", getenv("DRIFTSTACK_ASCII_ATLAS_PATH") },
             { "DRIFTSTACK_EMOJI_ATLAS_PATH", getenv("DRIFTSTACK_EMOJI_ATLAS_PATH") },
             { "DRIFTSTACK_COMPOSITE_ATLAS_PATH", getenv("DRIFTSTACK_COMPOSITE_ATLAS_PATH") },

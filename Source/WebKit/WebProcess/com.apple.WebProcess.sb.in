@@ -128,6 +128,10 @@
     (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_ascii_atlas"))
     (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_webgpu_atlas"))
     (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_audio_atlas"))
+    ;;; W2619: archetype-keyed binary DOM-geometry atlas (domgeom-<archetype>.bin) — the
+    ;;; additive overlay for the exotic-Unicode tail consulted by driftstackServeGlyphHashGeom.
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/domgeom-atlas"))
+    (subpath "/var/driftstack/atlas")
     ;;; Wave 29-373: canvas-fuzz atlas directory (correctly-named home for
     ;;; V-510 atlas binaries; the legacy driftstack-canvas-fuzz-atlas.bin
     ;;; happens to live in driftstack_audio_atlas/ due to historic naming.

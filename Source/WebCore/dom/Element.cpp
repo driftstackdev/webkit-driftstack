@@ -48,6 +48,7 @@
 #include "DOMRect.h"
 #include "DOMRectList.h"
 #include "DOMTokenList.h"
+#include "DriftstackDOMGeomAtlas.h"
 #include "DocumentFullscreen.h"
 #include "DocumentInlines.h"
 #include "DocumentQuirks.h"
@@ -1609,8 +1610,28 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // natural). None of these cps are in the glyphHash 43-cp set, so c587ed44 is untouched.
     bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
         || cp == 0x1CF5 || (cp >= 0x2002 && cp <= 0x205D) || (cp >= 0x2E1A && cp <= 0x2E31) || (cp >= 0x3003 && cp <= 0x303F) || (cp >= 0xFE50 && cp <= 0xFE6B));
-    if (!isGlyphHashCp && !isSymbolServeCp)
+    if (!isGlyphHashCp && !isSymbolServeCp) {
+        // W2619: codepoint not in the hardcoded (verified, glyphHash-locked) table — consult the
+        // archetype-keyed binary DOM-geometry atlas (additive; covers the unbounded exotic-Unicode
+        // tail — Halfwidth/Fullwidth, Enclosed Alphanumerics, super/subscripts, etc.). The atlas is
+        // captured per-archetype from the iOS reference and EXCLUDES every table cp, so c587ed44 and
+        // the closed blocks are untouched. Atlas entries are at the gated size; off-size → miss → natural.
+        auto& atlas = DriftstackDOMGeomAtlas::singleton();
+        if (atlas.isAvailable()) {
+            RefPtr<Element> atlasFontElement = element.firstElementChild();
+            int atlasBucket = driftstackGlyphHashGenericBucket(atlasFontElement ? *atlasFontElement : element);
+            float atlasSize = 16;
+            if (CheckedPtr atlasSizeRenderer = atlasFontElement ? atlasFontElement->renderer() : element.renderer())
+                atlasSize = atlasSizeRenderer->style().fontDescription().computedSize();
+            uint16_t aw = 0, ah = 0;
+            if (atlas.lookup(cp, static_cast<uint8_t>(atlasBucket), static_cast<uint8_t>(std::lround(atlasSize)), aw, ah)) {
+                outWidth = aw;
+                outHeight = ah;
+                return true;
+            }
+        }
         return false;
+    }
     // The codepoint is rendered by the text-bearing descendant's font (the inner
     // span), not the queried element's own font: for the block div>span the div
     // inherits the default font, while the span carries the generic. Resolve the
