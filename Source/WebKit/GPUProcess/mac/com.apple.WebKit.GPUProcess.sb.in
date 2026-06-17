@@ -156,6 +156,14 @@
     ;;; V-770.A: text-run atlas (DSCFA2)
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_v1.bin"))
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_v1.bin.manifest.json"))
+    ;;; W2199 (A3 sandbox-grant audit): the GPUProcess font-draw display-list replay (FontCascadeCoreText)
+    ;;; reads the SAME text-run atlas WebContent does, but production loads the ARCHETYPE-SUFFIXED variant
+    ;;; (driftstack_text_run_atlas_iphone17thirds_v1.bin), which the stale _v1.bin literal above does NOT
+    ;;; cover → the GPU-side open() silently EPERMs → text-run substitution misses in GPU = wrong/detectable
+    ;;; glyphs, no crash. Grant-parity with WebProcess.sb.in:148+151 (the per-glyph/advance atlases were
+    ;;; already granted in both processes; only text-run was left behind by Wave-29-286's archetype variants).
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas"))
+    (regex (string-append "^" (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_[a-z0-9_]+\\.bin$"))
     ;;; V-790.L: per-glyph DSPGA1 atlas
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_per_glyph_atlas.bin"))
     ;;; V-689: advance atlas
