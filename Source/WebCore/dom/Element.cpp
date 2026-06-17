@@ -1601,8 +1601,14 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // font-selection (no Mac font gives 8) AND the V-689 advance atlas (it keys by the rendering font, and
     // Noto Sans Kannada is Mac-only — absent from the iOS-captured atlas). Width is the advance (structure-
     // independent) and the natural height already matches iOS (24), so serving is a clean width-only close.
+    // W2614: exotic General Punctuation (U+2023..U+205D — reversed primes, reference mark, interrobang,
+    // undertie, quill brackets, asterism, swung dash, two-dot/tricolon, line/para separators) where the fork
+    // serif cascades to Lucida Grande (a Mac-only font iOS lacks) / Hiragino Mincho giving wrong advances. The
+    // COMMON General Punctuation (dashes/curly-quotes/ellipsis/bullet) already matches and is NOT in range/table.
+    // The range gates the function; the exact (cp,bucket) table below gates which actually serve (others fall to
+    // natural). None of these cps are in the glyphHash 43-cp set, so c587ed44 is untouched.
     bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
-        || cp == 0x1CF5);
+        || cp == 0x1CF5 || (cp >= 0x2023 && cp <= 0x205D));
     if (!isGlyphHashCp && !isSymbolServeCp)
         return false;
     // The codepoint is rendered by the text-bearing descendant's font (the inner
@@ -1635,7 +1641,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 58> table { {
+    static constexpr std::array<Entry, 88> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1660,6 +1666,18 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
         // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
         { 0x05C6, 6, 6, 20 },
+        // W2614 exotic General Punctuation serif (bucket 2) — iOS-sim 16px width,height (fork serif->Lucida Grande wrong):
+        { 0x2023, 2, 6, 21 }, { 0x2036, 2, 8, 21 }, { 0x2037, 2, 11, 21 }, { 0x2038, 2, 5, 21 },
+        { 0x203B, 2, 9, 21 }, { 0x203D, 2, 9, 21 }, { 0x203F, 2, 16, 21 }, { 0x2040, 2, 16, 21 },
+        { 0x2041, 2, 10, 21 }, { 0x2042, 2, 13, 21 }, { 0x2045, 2, 4, 21 }, { 0x2046, 2, 4, 21 },
+        { 0x2047, 2, 18, 21 }, { 0x2048, 2, 13, 21 }, { 0x2049, 2, 13, 21 }, { 0x204B, 2, 9, 21 },
+        { 0x204E, 2, 6, 21 }, { 0x204F, 2, 4, 21 }, { 0x2050, 2, 16, 21 }, { 0x2051, 2, 6, 21 },
+        { 0x2052, 2, 14, 21 }, { 0x2053, 2, 14, 21 }, { 0x2054, 2, 16, 21 }, { 0x2057, 2, 14, 21 },
+        { 0x205A, 2, 4, 21 }, { 0x205D, 2, 4, 21 },
+        // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
+        { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
+        // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
+        { 0x203C, 6, 23, 20 }, { 0x2049, 6, 23, 20 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
