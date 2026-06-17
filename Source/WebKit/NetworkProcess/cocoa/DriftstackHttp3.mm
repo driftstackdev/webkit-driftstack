@@ -42,7 +42,9 @@
 #import <zlib.h>  // Wave 29-499.329 — gzip/deflate decode for h3 responses
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
+#import <Security/Security.h>   // W2202 — cert-validation Landing 2: server cert chain/hostname SecTrust eval (h3)
 #import <wtf/Assertions.h>
+#import <wtf/RetainPtr.h>       // W2202 — RetainPtr/adoptCF for the SecTrust eval (mirrors DriftstackTLS13Client.mm)
 #import <wtf/Condition.h>
 #import <wtf/HashMap.h>
 #import <wtf/HashSet.h>
@@ -640,6 +642,7 @@ struct DriftstackQuicConn {
     bool ctEnabled { false };
     String ctSni;                            // SNI hostname for the CH
     Vector<uint8_t> ctTranscript;            // CH, SH, EE, Cert, CV, server Fin, client Fin
+    RetainPtr<SecCertificateRef> ctLeafCert; // W2202 L2 — validated leaf cert; kept for Landing 3 (CertificateVerify)
     Vector<uint8_t> ctX25519Priv;            // ephemeral X25519 private (for ECDH on SH)
     MLKEM768Keypair ctMlkem;                 // ephemeral MLKEM768 (hybrid decap on SH)
     Vector<uint8_t> ctTransportParams;       // encoded transport params (for CH ext 0x0039)
@@ -1127,6 +1130,59 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                     }
                     q += 4 + el;
                 }
+            }
+        } else if (hsType == 0x0b) { // Certificate → validate server cert chain/hostname (cert-validation Landing 2, W2202; mirrors the proven h2 parser in DriftstackTLS13Client.mm)
+            static const bool s_validateCert = []() {
+                const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                return e && e[0] == '1';
+            }();
+            // SNI-empty = the relay/smoke handshake path (no hostname to bind) → skip, don't reject.
+            if (s_validateCert && !qc->ctSni.isEmpty()) {
+                // TLS 1.3 Certificate body (cb, hsLen bytes), offsets RELATIVE to cb:
+                // 1B ctx_len + ctx + 3B list_len + [3B cert_len + DER + 2B ext_len + ext]* — byte-identical to the h2 layout.
+                const uint8_t* cb = b + off + 4;
+                if (hsLen < 1) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert msg too short — rejecting"); return -1; }
+                size_t cOff = 0;
+                uint8_t ctxLen = cb[cOff];
+                cOff += 1 + static_cast<size_t>(ctxLen);
+                if (cOff + 3 > hsLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert ctx OOB — rejecting"); return -1; }
+                uint32_t listLen = (uint32_t(cb[cOff]) << 16) | (uint32_t(cb[cOff + 1]) << 8) | cb[cOff + 2];
+                cOff += 3;
+                size_t listEnd = cOff + listLen;
+                if (listEnd > hsLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert list OOB — rejecting"); return -1; }
+                RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+                RetainPtr<SecCertificateRef> leaf;
+                while (cOff + 3 <= listEnd) {
+                    uint32_t certLen = (uint32_t(cb[cOff]) << 16) | (uint32_t(cb[cOff + 1]) << 8) | cb[cOff + 2];
+                    cOff += 3;
+                    if (cOff + certLen > listEnd) break;
+                    RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, cb + cOff, certLen));
+                    RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
+                    if (cert) {
+                        if (!leaf) leaf = cert;
+                        CFArrayAppendValue(certArray.get(), cert.get());
+                    }
+                    cOff += certLen;
+                    if (cOff + 2 > listEnd) break;
+                    uint16_t extLen = (uint16_t(cb[cOff]) << 8) | cb[cOff + 1];
+                    cOff += 2 + static_cast<size_t>(extLen);
+                }
+                if (!CFArrayGetCount(certArray.get())) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 no parseable server certs — rejecting"); return -1; }
+                RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, qc->ctSni.createCFString().get()));
+                SecTrustRef trust = nullptr;
+                OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
+                RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
+                if (st != errSecSuccess || !trustRef) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 SecTrustCreateWithCertificates failed — rejecting"); return -1; }
+                CFErrorRef evalErr = nullptr;
+                bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
+                if (evalErr)
+                    CFRelease(evalErr);
+                if (!trusted) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CERT VALIDATION FAILED for %s — rejecting (MITM defense)", qc->ctSni.utf8().data());
+                    return -1;
+                }
+                qc->ctLeafCert = leaf; // retained for Landing 3 (CertificateVerify key-possession check)
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server cert chain validated OK for %s", qc->ctSni.utf8().data());
             }
         } else if (hsType == 0x14) { // server Finished → 1-RTT keys + client Finished
             Vector<uint8_t> chSFHash = ctTranscriptHash(qc);  // hash through server Finished
