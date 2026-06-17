@@ -1608,7 +1608,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // The range gates the function; the exact (cp,bucket) table below gates which actually serve (others fall to
     // natural). None of these cps are in the glyphHash 43-cp set, so c587ed44 is untouched.
     bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
-        || cp == 0x1CF5 || (cp >= 0x2023 && cp <= 0x205D));
+        || cp == 0x1CF5 || (cp >= 0x2002 && cp <= 0x205D));
     if (!isGlyphHashCp && !isSymbolServeCp)
         return false;
     // The codepoint is rendered by the text-bearing descendant's font (the inner
@@ -1641,7 +1641,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 88> table { {
+    static constexpr std::array<Entry, 125> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1678,6 +1678,16 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
         // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
         { 0x203C, 6, 23, 20 }, { 0x2049, 6, 23, 20 },
+        // W2615 cursive (bucket 4, Snell Roundhand) General Punctuation — REAL (double-warm-stable): the fork's
+        // cursive uses varying fallbacks (heights 21-26 + notdef-width 16) where iOS gives a consistent fallback
+        // (uniform line box 22 + the real glyph width). iOS-sim 16px width,22 (sim = bit-identical iOS DOM-truth, W2570):
+        { 0x2002, 4, 4, 22 }, { 0x2003, 4, 13, 22 }, { 0x2004, 4, 5, 22 }, { 0x2005, 4, 4, 22 }, { 0x2006, 4, 3, 22 }, { 0x2007, 4, 9, 22 },
+        { 0x2008, 4, 2, 22 }, { 0x2009, 4, 1, 22 }, { 0x200A, 4, 0, 22 }, { 0x2012, 4, 5, 22 }, { 0x2015, 4, 16, 22 }, { 0x2016, 4, 7, 22 },
+        { 0x2017, 4, 5, 22 }, { 0x201B, 4, 4, 22 }, { 0x201F, 4, 5, 22 }, { 0x2025, 4, 11, 22 }, { 0x2027, 4, 5, 22 }, { 0x202F, 4, 2, 22 },
+        { 0x2032, 4, 5, 22 }, { 0x2033, 4, 8, 22 }, { 0x2034, 4, 11, 22 }, { 0x2035, 4, 5, 22 }, { 0x203B, 4, 9, 22 }, { 0x203C, 4, 9, 22 },
+        { 0x203E, 4, 5, 22 }, { 0x203F, 4, 16, 22 }, { 0x2042, 4, 13, 22 }, { 0x2044, 4, 3, 22 }, { 0x2047, 4, 18, 22 }, { 0x2048, 4, 13, 22 },
+        { 0x2049, 4, 13, 22 }, { 0x204C, 4, 9, 22 }, { 0x204D, 4, 9, 22 }, { 0x204E, 4, 6, 22 }, { 0x2051, 4, 6, 22 }, { 0x205A, 4, 4, 22 },
+        { 0x205D, 4, 4, 22 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
