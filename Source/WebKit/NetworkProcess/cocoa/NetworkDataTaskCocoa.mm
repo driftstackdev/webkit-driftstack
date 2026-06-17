@@ -761,11 +761,24 @@ void NetworkDataTaskCocoa::resume()
                 }
             }
         }
-        if (isLoopback || isEventStream || hasUnflattenableBody) {
+        // W2200 #68 (fork-egress audit wl7p6pkhu): a PAGE-driven loopback/RFC1918 destination on the LIVE PathB
+        // route was falling through to a DIRECT NSURLSession connection to the fleet's own LAN (other WebContent
+        // sessions, the control plane) = cross-tenant SSRF, bypassing the customer proxy. Fail-CLOSED unless
+        // dev-direct. directOk MUST include DIRECT_EGRESS (capture-probe.sh sets it), not just DIRECT_BROWSE —
+        // else capture-probe's localhost load breaks. (The W2532 #68 deny in DriftstackSocks5URLProtocol is inert
+        // for page loads — canInitWithRequest isn't called — so the live chokepoint is HERE.)
+        bool directOk = []{ const char* b = getenv("DRIFTSTACK_DIRECT_BROWSE"); const char* e = getenv("DRIFTSTACK_DIRECT_EGRESS"); return (b && b[0] == '1') || (e && e[0] == '1'); }();
+        if (isLoopback && !directOk) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#68] DENY page-driven loopback/RFC1918 '%s' (fail-closed — no fleet-LAN reach, cross-tenant SSRF defense)", host.UTF8String);
+            WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), NSURLErrorCannotConnectToHost, firstRequest().url(), "loopback/RFC1918 egress denied (cross-tenant SSRF defense)"_s, WebCore::ResourceError::Type::General);
+            didCompleteWithError(error, WebCore::NetworkLoadMetrics { });
+            return;
+        }
+        if (isEventStream || hasUnflattenableBody || (isLoopback && directOk)) {
             static bool loggedLoopbackOnce = false;
             if (isLoopback && !loggedLoopbackOnce) {
                 loggedLoopbackOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.273] bypass PathB v2 for loopback/private host '%s' (direct via NSURLSession)", host.UTF8String);
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.273] bypass PathB v2 for loopback/private host '%s' (DIRECT via NSURLSession — dev-direct mode)", host.UTF8String);
             }
             // Fall through to NSURLSession resume below
         } else {

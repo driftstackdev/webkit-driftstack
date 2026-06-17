@@ -1163,8 +1163,21 @@ void DriftstackNetworkLoader::resume()
 
         String proxyEnvStr = String::fromUTF8(proxyEnv);
         size_t colon = proxyEnvStr.find(':');
-        if (colon == notFound)
+        if (colon == notFound) {
+            // W2200 (fork-egress audit): a malformed DRIFTSTACK_SOCKS5_PROXY must FAIL the load (mirror the
+            // no-proxy branch above), not bare-return — a bare return left m_completionStarted=false forever →
+            // the request hung until the page-load watchdog (the NSURLSession path was already bypassed).
+            auto* clientPtr = m_task.client();
+            if (clientPtr) {
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY malformed (no host:port colon)"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
+            }
             return;
+        }
         String proxyHostStr = proxyEnvStr.left(colon);
         int proxyPort = 0;
         {
@@ -1175,8 +1188,19 @@ void DriftstackNetworkLoader::resume()
                 proxyPort = proxyPort * 10 + (c - '0');
             }
         }
-        if (proxyPort == 0)
+        if (proxyPort == 0) {
+            // W2200: same fail-closed contract as the malformed-colon branch above (was a bare-return hang).
+            auto* clientPtr = m_task.client();
+            if (clientPtr) {
+                WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY malformed (bad/zero port)"_s, WebCore::ResourceError::Type::General);
+                if (!tryBeginCompletion()) return;
+                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    WebCore::NetworkLoadMetrics metrics;
+                    clientPtr->didCompleteWithError(error, metrics);
+                });
+            }
             return;
+        }
 
         Socks5Endpoint proxy;
         proxy.host = proxyHostStr;
