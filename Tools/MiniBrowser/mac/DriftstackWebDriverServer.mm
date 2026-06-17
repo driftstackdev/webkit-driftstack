@@ -11,6 +11,8 @@
 #import "SessionHost.h"
 #import "WebDriverService.h"
 #import <WebKit/_WKAutomationSession.h>
+#import <errno.h>
+#import <fcntl.h>
 #import <memory>
 #import <netinet/in.h>
 #import <string.h>
@@ -79,19 +81,31 @@ void DriftstackStartWebDriverServer(NSString *sessionID, _WKAutomationSession *s
         return;
     }
 
-    // Write the port-file the instant the socket is accepting (A3 W161: the harness
-    // polls /tmp/driftstack-webdriver-<sessionId>.port; writing it now — before any
-    // heavy init — shrinks the harness connect head-of-line window). atomically:YES
-    // so the harness never reads a half-written file. W2174: line 1 = port, line 2 = the bearer token.
+    // Write the port-file the instant the socket is accepting (A3 W161: the harness polls
+    // /tmp/driftstack-webdriver-<sessionId>.port; writing it now — before any heavy init — shrinks the
+    // harness connect head-of-line window). W2174: line 1 = port, line 2 = the bearer token. The file now
+    // carries a secret, so create it 0600 FROM CREATION (a 0600 temp + atomic rename) — NOT
+    // writeToFile:atomically + setAttributes, which leaves a brief window where the renamed file is the
+    // temp's default 0644 perms with the token already in it. The temp+rename is BOTH atomic (the harness
+    // never reads partial content) AND never 0644-readable. The newline-terminated 2-line shape is unchanged.
     NSString *portPath = [NSString stringWithFormat:@"/tmp/driftstack-webdriver-%@.port", sessionID];
+    NSString *tmpPath = [portPath stringByAppendingString:@".tmp"];
     NSString *portStr = [NSString stringWithFormat:@"%u\n%@\n", port, token];
-    NSError *error = nil;
-    if (![portStr writeToFile:portPath atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
-        NSLog(@"[Driftstack] WebDriver: failed to write port-file %@: %@", portPath, error);
+    NSData *portData = [portStr dataUsingEncoding:NSUTF8StringEncoding];
+    const char *tmpFS = [tmpPath fileSystemRepresentation];
+    BOOL portFileOK = NO;
+    int fd = open(tmpFS, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    if (fd >= 0) {
+        ssize_t written = write(fd, portData.bytes, portData.length);
+        close(fd);
+        portFileOK = (written == (ssize_t)portData.length)
+            && (rename(tmpFS, [portPath fileSystemRepresentation]) == 0);
+    }
+    if (!portFileOK) {
+        unlink(tmpFS);
+        NSLog(@"[Driftstack] WebDriver: failed to write 0600 port-file %@ (errno=%d)", portPath, errno);
         return;
     }
-    // W2174: the port-file now carries the auth token → restrict to 0600 (was default perms).
-    [[NSFileManager defaultManager] setAttributes:@{ NSFilePosixPermissions: @(0600) } ofItemAtPath:portPath error:nil];
 
     NSLog(@"[Driftstack] WebDriver: in-process server on 127.0.0.1:%u, port-file %@", port, portPath);
 }
