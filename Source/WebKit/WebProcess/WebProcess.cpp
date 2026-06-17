@@ -513,6 +513,14 @@ static void driftstackEnsureProductionFingerprintHooks()
         "DRIFTSTACK_POSCLASS_THIRDS", "DRIFTSTACK_RAF_DELTA_CLAMP",
         "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", "DRIFTSTACK_SF_PRO_PLUS_ONE",
         "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", "DRIFTSTACK_V790L_N1_SUB",
+        // PROBE_SIGNATURE_EMIT: infra-emission (op-signatures on atlas-miss → the ProbeSig→BS-replay
+        // priority-atlas learning crawl). In launch-env-v1.sh but was missing here — a worker omitting it
+        // silently stops feeding the learning pipeline. Does NOT alter rendered output → safe to force on.
+        "DRIFTSTACK_PROBE_SIGNATURE_EMIT",
+        // NOTE (true-100 plan 2026-06-17): GLYPHHASH_GEOM_SERVE / MEASURE_TEXT_OVERRIDE / CANVAS_FP10X_OVERRIDE
+        // / UNICODE_RENDERING_OVERRIDE above are per-probe SERVES slated for deletion once the render-fix
+        // (font-fallback block/property generalization + iOS-exact shaping advances + inline rounding) lands
+        // and the natural path emerges iOS-identical. They stay default-on ONLY until then.
     };
     for (const char* k : kOnFlags)
         setenv(k, "1", 0);
