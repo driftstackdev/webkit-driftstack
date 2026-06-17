@@ -402,20 +402,62 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
 
         // Process-scope registration so CTFont creation paths can resolve the binary.
         CFErrorRef regError = nullptr;
-        CTFontManagerRegisterFontsForURL(fontURL.get(), kCTFontManagerScopeProcess, &regError);
-        if (regError)
+        bool registered = CTFontManagerRegisterFontsForURL(fontURL.get(), kCTFontManagerScopeProcess, &regError);
+        static const bool s_w2196Diag = std::getenv("DRIFTSTACK_TEXT_RUN_ATLAS_DIAG") != nullptr;
+        if (regError) {
+            if (s_w2196Diag) {
+                RetainPtr<CFStringRef> ed = adoptCF(CFErrorCopyDescription(regError));
+                WTFLogAlways("[Driftstack-W2196] %s: registerFonts FAILED: %s", fullPath.c_str(), ed ? String(ed.get()).utf8().data() : "?");
+            }
             CFRelease(regError);
+        }
 
-        // Read all variants in the binary (.ttc collections may contain multiple)
-        // and add each (family, weight, italic) tuple into the map.
+        // Read all variants in the binary (.ttc collections may contain multiple).
         RetainPtr<CFArrayRef> descs = adoptCF(CTFontManagerCreateFontDescriptorsFromURL(fontURL.get()));
-        if (!descs) {
+        CFIndex count = descs ? CFArrayGetCount(descs.get()) : 0;
+        // W2196 (macOS 26.4 fleet): the URL-based descriptor API returns a non-null but EMPTY array for
+        // these iOS fonts on 26.4 (parseFailed=0 + 0 families fits "walked, no parse error, 0 usable
+        // descriptors"), so the override map stayed empty and the realize-fallbacks below never ran.
+        // Fall back to reading the font bytes + CTFontManagerCreateFontDescriptorsFromData (URL/
+        // registration-independent). Inert on 26.2 (the URL path already yields descriptors there).
+        if (!count) {
+            RetainPtr<CFDataRef> fontData;
+            int ffd = ::open(fullPath.c_str(), O_RDONLY);
+            if (ffd >= 0) {
+                struct stat fst;
+                if (::fstat(ffd, &fst) == 0 && fst.st_size > 0 && fst.st_size < (256LL << 20)) {
+                    RetainPtr<CFMutableDataRef> md = adoptCF(CFDataCreateMutable(kCFAllocatorDefault, fst.st_size));
+                    if (md) {
+                        CFDataSetLength(md.get(), fst.st_size);
+                        off_t total = 0;
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+                        uint8_t* buf = CFDataGetMutableBytePtr(md.get());
+                        while (total < fst.st_size) {
+                            ssize_t r = ::read(ffd, buf + total, fst.st_size - total);
+                            if (r <= 0)
+                                break;
+                            total += r;
+                        }
+                        WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+                        if (total == fst.st_size)
+                            fontData = md;
+                    }
+                }
+                ::close(ffd);
+            }
+            if (fontData) {
+                descs = adoptCF(CTFontManagerCreateFontDescriptorsFromData(fontData.get()));
+                count = descs ? CFArrayGetCount(descs.get()) : 0;
+            }
+        }
+        if (s_w2196Diag)
+            WTFLogAlways("[Driftstack-W2196] %s: registered=%d descCount=%ld", fullPath.c_str(), registered ? 1 : 0, static_cast<long>(count));
+        if (!count) {
             ++parseFailedCount;
             // V-487: log which font binary CTFontManager failed to parse.
             WTFLogAlways("[Driftstack-V487-PARSEFAIL] %s", fullPath.c_str());
             continue;
         }
-        CFIndex count = CFArrayGetCount(descs.get());
 
         // W332 (#26b) — cross-linked family-name map for this binary's faces,
         // read DIRECTLY from its sfnt name tables (see
