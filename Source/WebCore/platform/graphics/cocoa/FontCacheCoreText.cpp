@@ -354,7 +354,7 @@ static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<S
     close(fd);
 }
 
-static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& map, size_t& mappedCount, size_t& parseFailedCount)
+static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoodHashMap<String, Vector<DriftstackIOSFontVariant>>& map, size_t& mappedCount, size_t& parseFailedCount, size_t& filesWalked, size_t& urlEmptyCount, size_t& dataRescuedCount)
 {
     DIR* dir = opendir(root.c_str());
     if (!dir)
@@ -386,7 +386,7 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         std::string fullPath = root + "/" + name.utf8().data();
 
         if (entry.isDir) {
-            driftstackWalkFontDir(fullPath, map, mappedCount, parseFailedCount);
+            driftstackWalkFontDir(fullPath, map, mappedCount, parseFailedCount, filesWalked, urlEmptyCount, dataRescuedCount);
             continue;
         }
 
@@ -394,6 +394,8 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             && !name.endsWithIgnoringASCIICase(".ttc"_s)
             && !name.endsWithIgnoringASCIICase(".otf"_s))
             continue;
+
+        ++filesWalked; // W2196 diag: count font files that actually reach the descriptor path.
 
         RetainPtr<CFStringRef> pathCF = adoptCF(CFStringCreateWithCString(kCFAllocatorDefault, fullPath.c_str(), kCFStringEncodingUTF8));
         RetainPtr<CFURLRef> fontURL = adoptCF(CFURLCreateWithFileSystemPath(kCFAllocatorDefault, pathCF.get(), kCFURLPOSIXPathStyle, false));
@@ -421,6 +423,7 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         // Fall back to reading the font bytes + CTFontManagerCreateFontDescriptorsFromData (URL/
         // registration-independent). Inert on 26.2 (the URL path already yields descriptors there).
         if (!count) {
+            ++urlEmptyCount; // W2196 diag: the URL-descriptor API returned empty for this file (data-fallback territory).
             RetainPtr<CFDataRef> fontData;
             int ffd = ::open(fullPath.c_str(), O_RDONLY);
             if (ffd >= 0) {
@@ -448,6 +451,8 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
             if (fontData) {
                 descs = adoptCF(CTFontManagerCreateFontDescriptorsFromData(fontData.get()));
                 count = descs ? CFArrayGetCount(descs.get()) : 0;
+                if (count)
+                    ++dataRescuedCount; // W2196 diag: data-fallback recovered descriptors the URL API missed.
             }
         }
         if (s_w2196Diag)
@@ -489,6 +494,22 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
                     realizedDesc = adoptCF(CTFontCopyFontDescriptor(realizedFont.get()));
                     if (realizedDesc)
                         desc = realizedDesc.get();
+                }
+                // W2196 one-shot diag (capped at 8): this branch runs ONLY when the descriptor's family
+                // attribute was null — which on macOS 26.2 NEVER happens (the attr is eager there), so this
+                // log is SILENT in production and fires only on the 26.4 fleet box. Since `mapped` can only
+                // stay 0 (with count>0) if familyCF is null for EVERY descriptor (the family key is always
+                // in aliasKeys downstream → an extracted family always increments mapped), this pins the
+                // exact sub-step where extraction dies: realizeOk=0 → CTFontCreateWithFontDescriptor itself
+                // fails on 26.4; realizeOk=1 + family=(null) → CTFontCopyFamilyName fails on the realized
+                // font (→ fall back to the sfnt name table, which driftstackBuildLocalizedFamilyMap already
+                // reads); realizeOk=1 + a real name → extraction worked, look further downstream.
+                static unsigned s_w2196FamDiag = 0;
+                if (s_w2196FamDiag < 8) {
+                    ++s_w2196FamDiag;
+                    WTFLogAlways("[Driftstack-W2196-fam] %s desc#%ld: attrFamilyNull=1 realizeOk=%d familyAfterRealize=%s",
+                        fullPath.c_str(), static_cast<long>(i), realizedFont ? 1 : 0,
+                        familyCF ? String(familyCF.get()).utf8().data() : "(null)");
                 }
             }
             if (!familyCF)
@@ -730,8 +751,21 @@ static void initializeDriftstackIOSFontMapIfNeeded()
 
     size_t mapped = 0;
     size_t parseFailed = 0;
-    driftstackWalkFontDir(root, driftstackIOSFontMap(), mapped, parseFailed);
-    WTFLogAlways("[Driftstack] FontCache: %zu families mapped to iOS font binaries (parseFailed=%zu, dir=%s)", mapped, parseFailed, root.c_str());
+    size_t filesWalked = 0;
+    size_t urlEmpty = 0;
+    size_t dataRescued = 0;
+    driftstackWalkFontDir(root, driftstackIOSFontMap(), mapped, parseFailed, filesWalked, urlEmpty, dataRescued);
+    // W2196 (macOS 26.4 fleet font bug) — this summary line is UNCONDITIONAL and reaches the WebContent
+    // process stderr on every run, unlike the per-file DRIFTSTACK_TEXT_RUN_ATLAS_DIAG-gated lines (the flag
+    // was not reaching the sandboxed WebContent process, so those never fired on the box). The extra counters
+    // decisively distinguish the candidate failure modes for "0 families mapped":
+    //   filesWalked==0                              → no font files walked at all (path/recursion/extension)
+    //   filesWalked>0, urlEmpty==0, mapped==0       → descriptors created (URL API non-empty) but family
+    //                                                 extraction fails downstream on 26.4 (NOT the empty-array
+    //                                                 hypothesis — parseFailed==0 already implied this)
+    //   filesWalked>0, urlEmpty>0, dataRescued>0    → URL API empty but data-fallback recovered; mapped still 0 → downstream
+    //   filesWalked>0, urlEmpty>0, dataRescued==0   → both descriptor APIs empty (deeper 26.4 font-data policy)
+    WTFLogAlways("[Driftstack] FontCache: %zu families mapped to iOS font binaries (parseFailed=%zu, filesWalked=%zu, urlEmpty=%zu, dataRescued=%zu, dir=%s)", mapped, parseFailed, filesWalked, urlEmpty, dataRescued, root.c_str());
 
     // V-486 diagnostic: dump all registered family keys containing 'ping' (CJK
     // PingFang) to identify the actual lowercase form for Track 7 D candidates.
