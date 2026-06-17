@@ -487,9 +487,47 @@ static void scheduleLogMemoryStatistics(LogMemoryStatisticsReason reason)
     });
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Durable fix (founder directive 2026-06-17): the production fingerprint hook FLAGS must be ON
+// whenever the fork runs in any context, so a harness/launcher/worker that forgets an env var can
+// NEVER silently disable a fingerprint surface. That silent-disable was the root cause of (a) the
+// fork-fp-render.sh harness drifting 15 hooks from launch-env-v1.sh — which made arbitrary-canvas
+// TEXT render Mac-native — and (b) the Mac-worker's atlases sitting at a sandbox-denied path. This
+// forces each production flag to its launch-env-v1.sh value ONLY IF it is not already set (setenv
+// overwrite=0), so: production (launch-env sets all of them) is a pure no-op — ZERO behavior change
+// for the shipped config; an explicit value (e.g. "0" to disable a hook for a test) is RESPECTED;
+// an OMITTED hook now defaults to the production value instead of off. Atlas PATHS are deliberately
+// NOT forced here — they resolve from DRIFTSTACK_DATA_ROOT, and a flag whose atlas is absent
+// gracefully no-ops to host-native rather than crashing. Keep this list == the launch-env-v1.sh
+// fingerprint set; egress/diag/per-customer vars stay env-driven.
+static void driftstackEnsureProductionFingerprintHooks()
+{
+    static const char* const kOnFlags[] = {
+        "DRIFTSTACK_AUDIO_ATLAS", "DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH",
+        "DRIFTSTACK_CANVAS_FP10X_OVERRIDE", "DRIFTSTACK_CANVAS_FUZZ_ATLAS",
+        "DRIFTSTACK_DISPATCH_PER_GLYPH", "DRIFTSTACK_EAGER_INIT_ATLAS",
+        "DRIFTSTACK_EMOJI_COLOR_ATLAS", "DRIFTSTACK_GETIMAGEDATA_ATLAS",
+        "DRIFTSTACK_VIDEOFRAME_ATLAS", "DRIFTSTACK_GLYPHHASH_GEOM_SERVE",
+        "DRIFTSTACK_INLINE_OFFSET_SNAP", "DRIFTSTACK_INT_INLINE_LAYOUT",
+        "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", "DRIFTSTACK_ORPHAN_MARK_SPACING",
+        "DRIFTSTACK_POSCLASS_THIRDS", "DRIFTSTACK_RAF_DELTA_CLAMP",
+        "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", "DRIFTSTACK_SF_PRO_PLUS_ONE",
+        "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", "DRIFTSTACK_V790L_N1_SUB",
+    };
+    for (const char* k : kOnFlags)
+        setenv(k, "1", 0);
+    // AFP noise OFF by default for bit-identity (production sets =0); a tracker context can still
+    // re-enable via an explicit env value because overwrite=0 leaves any pre-set value intact.
+    setenv("DRIFTSTACK_AFP_FALLBACK_ENABLED", "0", 0);
+}
+#endif
+
 void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters, CompletionHandler<void(ProcessIdentity)>&& completionHandler)
 {
     TraceScope traceScope(InitializeWebProcessStart, InitializeWebProcessEnd);
+#if PLATFORM(DRIFTSTACK)
+    driftstackEnsureProductionFingerprintHooks(); // before any lazy getenv-gated fingerprint init
+#endif
     // Reply immediately so that the identity is available as soon as possible.
     completionHandler(ProcessIdentity { ProcessIdentity::CurrentProcess });
 
