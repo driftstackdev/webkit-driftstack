@@ -3204,8 +3204,69 @@ void FontCache::prewarm(PrewarmInformation&& prewarmInformation)
     });
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2625: a real iPhone has every system font loaded at boot, so its DOM geometry is deterministic.
+// The fork's lazily-loaded fallback fonts (cursive/fantasy/CJK/Hebrew/Thai/Indic/combining-mark) warm
+// only on first render, so a codepoint's COLD (first-render) advance/line-box can differ from its WARM
+// value — a run-to-run non-determinism a real iPhone never shows (observed on Cyrillic-Ext-A combining
+// marks: serif line box 22 cold vs 21 warm). On this platform the upstream prewarm is compiled out
+// (HAVE(STATIC_FONT_REGISTRY)). So warm the full fork fallback set + the CoreText per-character system-
+// fallback cache (the lazy/non-deterministic path used by systemFallbackForCharacterCluster) for a
+// representative span of warming-sensitive codepoints at WebProcess startup, once — every later page
+// render is then already warm = deterministic = iPhone-like. Cheap (~20 fonts x ~30 cps) and run-once.
+static void driftstackPrewarmFonts()
+{
+    // Run-once via C++11 thread-safe function-local static init (no <mutex> — it conflicts in this TU).
+    static bool warmed = [] {
+        static constexpr std::array<ASCIILiteral, 24> families { {
+            "Helvetica"_s, "Times New Roman"_s, "Courier"_s, "Courier New"_s, "Menlo"_s,
+            "Snell Roundhand"_s, "Papyrus"_s, ".AppleSystemUIFont"_s, ".SF Hebrew"_s, "Arial Hebrew"_s,
+            "Hiragino Sans"_s, "Hiragino Mincho ProN"_s, "Songti SC"_s, "PingFang SC"_s, "Thonburi"_s,
+            "Apple Color Emoji"_s, "Apple Symbols"_s, "STIX Two Math"_s, "Noto Sans Kannada"_s,
+            "Lucida Grande"_s, "Kohinoor Devanagari"_s, "Kohinoor Bangla"_s, "Mishafi"_s, "Kailasa"_s,
+        } };
+        // One representative codepoint per fallback-font class is enough (loading a font warms all its
+        // glyphs): combining marks across scripts + exotic letters/ligatures + CJK/kana/bopomofo + symbols.
+        static constexpr std::array<char32_t, 32> warmCps { {
+            0x0300, 0x0301, 0x0653, 0x05B0, 0x064B, 0x0901, 0x093C, 0x0E31, 0x0E48, 0x0F39,
+            0x1AB0, 0x1DC0, 0x20D0, 0x2DE0, 0x2DFF, 0x302A, 0xFE20, 0x1EFA, 0xFB00, 0xFB13,
+            0x2C60, 0x4E00, 0x3041, 0x30A1, 0x3105, 0xA000, 0x2460, 0x2070, 0x2155, 0x2500,
+            0x2E80, 0x25CA,
+        } };
+        for (auto family : families) {
+            RetainPtr<CFStringRef> name = String(family).createCFString();
+            RetainPtr<CTFontRef> base = adoptCF(CTFontCreateWithName(name.get(), 16, nullptr));
+            if (!base)
+                continue;
+            for (char32_t cp : warmCps) {
+                UniChar buf[2];
+                CFIndex len = 0;
+                if (cp > 0xFFFF) {
+                    char32_t c = cp - 0x10000;
+                    buf[0] = static_cast<UniChar>(0xD800 + (c >> 10));
+                    buf[1] = static_cast<UniChar>(0xDC00 + (c & 0x3FF));
+                    len = 2;
+                } else {
+                    buf[0] = static_cast<UniChar>(cp);
+                    len = 1;
+                }
+                CFIndex covered = 0;
+                // Warms CoreText's per-character system-fallback cache (the lazy/non-deterministic path).
+                RetainPtr<CTFontRef> warmFallback = adoptCF(CTFontCreateForCharactersWithLanguageAndOption(base.get(), buf, len, nullptr, kCTFontFallbackOptionSystem, &covered));
+                (void)warmFallback;
+            }
+        }
+        return true;
+    }();
+    (void)warmed;
+}
+#endif
+
 void FontCache::prewarmGlobally()
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackPrewarmFonts();
+#endif
 #if !HAVE(STATIC_FONT_REGISTRY)
     if (MemoryPressureHandler::singleton().isUnderMemoryPressure())
         return;

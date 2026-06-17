@@ -752,6 +752,12 @@ void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters,
     if (m_processType == ProcessType::PrewarmedWebContent)
         prewarmGlobally();
     else {
+#if PLATFORM(DRIFTSTACK)
+        // W2625: the fork runs one WebProcess per session (non-prewarmed), so it would otherwise skip
+        // the font prewarm. Warm the fork fallback fonts here too so DOM geometry is deterministic from
+        // the first render — a real iPhone's fonts are always loaded, so it has no cold-vs-warm variance.
+        prewarmGlobally();
+#endif
         // Prewarm some commonly used caches soon even for non-prewarmed web content.
         RunLoop::currentSingleton().dispatch([]() {
             defaultLanguage();
