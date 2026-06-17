@@ -1026,10 +1026,26 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // italic + weight matches our chosen variant. Falls back to the first
     // descriptor if no match.
     CTFontDescriptorRef chosen = nullptr;
+    RetainPtr<CTFontDescriptorRef> chosenHolder; // keeps a realized descriptor alive past the loop (macOS 26.4)
     CFIndex count = CFArrayGetCount(descs.get());
     for (CFIndex i = 0; i < count; ++i) {
         CTFontDescriptorRef d = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
+        RetainPtr<CTFontDescriptorRef> realizedD;
         RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(d, kCTFontFamilyNameAttribute)));
+        if (!familyCF) {
+            // W2196 (macOS 26.4 fleet): CTFontManagerCreateFontDescriptorsFromURL leaves the descriptor
+            // attrs (family/traits/style) lazy/null → this .ttc face-match would skip every descriptor
+            // and fall to descriptor[0] = the WRONG face/weight for multi-face fonts (Hiragino W3/W6/W8,
+            // Papyrus Regular/Condensed). Realize the font + match off the realized descriptor. Inert on
+            // 26.2 (attr non-null there). Sibling of the override-map fix at line ~429.
+            RetainPtr<CTFontRef> rf = adoptCF(CTFontCreateWithFontDescriptor(d, 0.0, nullptr));
+            if (rf) {
+                familyCF = adoptCF(CTFontCopyFamilyName(rf.get()));
+                realizedD = adoptCF(CTFontCopyFontDescriptor(rf.get()));
+                if (realizedD)
+                    d = realizedD.get();
+            }
+        }
         if (!familyCF || String(familyCF.get()).convertToASCIILowercase() != lowercase)
             continue;
         // Match style by traits.
@@ -1055,6 +1071,7 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
             if (!styleCF || String(styleCF.get()) != chosenVariant.styleName)
                 continue;
             chosen = d;
+            chosenHolder = realizedD; // null on the 26.2 path (d points into descs, which outlives)
             break;
         }
     }
@@ -2190,6 +2207,16 @@ static RetainPtr<CTFontRef> driftstackLookupIOSFontByCandidates(std::span<const 
         for (CFIndex j = 0; j < descCount; ++j) {
             CTFontDescriptorRef candDesc = (CTFontDescriptorRef)CFArrayGetValueAtIndex(descs.get(), j);
             RetainPtr<CFStringRef> descFamilyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(candDesc, kCTFontFamilyNameAttribute)));
+            if (!descFamilyCF) {
+                // W2196 (macOS 26.4): the family attr is lazy/null on URL-created descriptors, so this
+                // multi-family .ttc match would skip every descriptor and fall to descs[0] (the
+                // alphabetically-first family, e.g. .SF Bangla for a .sf-devanagari request → wrong
+                // glyphs). Realize the font to read its family for the match decision. fd below stays the
+                // array descriptor (CTFontCreateWithFontDescriptor realizes it). Inert on 26.2.
+                RetainPtr<CTFontRef> rf = adoptCF(CTFontCreateWithFontDescriptor(candDesc, 0.0, nullptr));
+                if (rf)
+                    descFamilyCF = adoptCF(CTFontCopyFamilyName(rf.get()));
+            }
             if (!descFamilyCF)
                 continue;
             String descFamily = String(descFamilyCF.get()).convertToASCIILowercase();
