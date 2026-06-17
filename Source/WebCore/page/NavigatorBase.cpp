@@ -166,6 +166,12 @@ String NavigatorBase::language()
         if (auto lang = cfg.lang(); !lang.isEmpty())
             return lang;
     }
+    // W2613: NEVER fall through to defaultLanguage() (host Mac CFLocaleCopyPreferredLanguages) on the
+    // no-geo (APPLELANGUAGES unset) + no-config (archetypeConfigPath nil on the v1.0 session path) path —
+    // that leaks the fleet host's system language (per-Mac variance + geo↔language incoherence) with no
+    // PLATFORM(DRIFTSTACK) pin, unlike Screen.colorDepth=24 / AudioContext.sampleRate=48000. Hard-pin the
+    // launch-archetype default en-US. Tier-1 geo (APPLELANGUAGES) and tier-2 (config.lang) still win.
+    return "en-US"_s;
 #endif
     return defaultLanguage();
 }
@@ -183,6 +189,8 @@ Vector<String> NavigatorBase::languages()
         if (auto lang = cfg.lang(); !lang.isEmpty())
             return { lang };
     }
+    // W2613: hard-pin en-US instead of leaking the host Mac CFLocale on the no-geo/no-config path (see language()).
+    return { "en-US"_s };
 #endif
     // We intentionally expose only the primary language for privacy reasons.
     return { defaultLanguage() };

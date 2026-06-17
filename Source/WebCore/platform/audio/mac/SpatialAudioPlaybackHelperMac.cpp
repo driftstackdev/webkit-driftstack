@@ -40,6 +40,17 @@ bool SpatialAudioPlaybackHelper::supportsSpatialAudioPlaybackForConfiguration(co
     if (!configuration.audio)
         return false;
 
+#if PLATFORM(DRIFTSTACK)
+    // W2613: MediaCapabilities.decodingInfo({audio:{spatialRendering:true}}) must NOT read the host Mac's
+    // audio-device spatial preferences (AudioGetDeviceSpatialPreferencesForContentType below) — the available
+    // spatial sources depend on the fleet host's connected output (a Mac with AirPods/multichannel reports a
+    // Multichannel source; one without reports none), so the value VARIES per host and is a fleet-fingerprint
+    // leak (confirmed: aac-5.1+spatialRendering returns supported=true on this Mac, would be false elsewhere).
+    // Pin to the iPhone-17 capability deterministically: multichannel (>2ch) content supports spatial rendering,
+    // mono/stereo does not — this is the Apple-Silicon spatial capability (== iPhone by architecture, the same
+    // parity used for WebGL/GPU surfaces) made host-independent. (Exact per-config value is BS-refinable.)
+    return configuration.audio->channels.toDouble() > 2;
+#else
     if (!PAL::canLoad_AudioToolbox_AudioGetDeviceSpatialPreferencesForContentType())
         return false;
 
@@ -62,6 +73,7 @@ bool SpatialAudioPlaybackHelper::supportsSpatialAudioPlaybackForConfiguration(co
     }
 
     return false;
+#endif // PLATFORM(DRIFTSTACK)
 }
 
 } // namespace WebCore
