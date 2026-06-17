@@ -1608,7 +1608,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // The range gates the function; the exact (cp,bucket) table below gates which actually serve (others fall to
     // natural). None of these cps are in the glyphHash 43-cp set, so c587ed44 is untouched.
     bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
-        || cp == 0x1CF5 || (cp >= 0x2002 && cp <= 0x205D));
+        || cp == 0x1CF5 || (cp >= 0x2002 && cp <= 0x205D) || (cp >= 0x2E1A && cp <= 0x2E31));
     if (!isGlyphHashCp && !isSymbolServeCp)
         return false;
     // The codepoint is rendered by the text-bearing descendant's font (the inner
@@ -1641,7 +1641,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 125> table { {
+    static constexpr std::array<Entry, 231> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1688,6 +1688,28 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x203E, 4, 5, 22 }, { 0x203F, 4, 16, 22 }, { 0x2042, 4, 13, 22 }, { 0x2044, 4, 3, 22 }, { 0x2047, 4, 18, 22 }, { 0x2048, 4, 13, 22 },
         { 0x2049, 4, 13, 22 }, { 0x204C, 4, 9, 22 }, { 0x204D, 4, 9, 22 }, { 0x204E, 4, 6, 22 }, { 0x2051, 4, 6, 22 }, { 0x205A, 4, 4, 22 },
         { 0x205D, 4, 4, 22 },
+        // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
+        // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
+        // system-ui only) where the fork renders a DIFFERENT tofu. Matching Apple's actual notdef advance. iOS-sim values:
+        { 0x2E1A, 2, 12, 20 }, { 0x2E1A, 1, 10, 20 }, { 0x2E1A, 3, 10, 17 }, { 0x2E1A, 4, 8, 21 }, { 0x2E1A, 5, 8, 26 }, { 0x2E1A, 6, 16, 20 },
+        { 0x2E1B, 2, 12, 20 }, { 0x2E1B, 1, 10, 20 }, { 0x2E1B, 3, 10, 17 }, { 0x2E1B, 4, 8, 21 }, { 0x2E1B, 5, 8, 26 }, { 0x2E1B, 6, 16, 20 },
+        { 0x2E1E, 2, 12, 20 }, { 0x2E1E, 1, 10, 20 }, { 0x2E1E, 3, 10, 17 }, { 0x2E1E, 4, 8, 21 }, { 0x2E1E, 5, 8, 26 }, { 0x2E1E, 6, 16, 20 },
+        { 0x2E1F, 2, 12, 20 }, { 0x2E1F, 1, 10, 20 }, { 0x2E1F, 3, 10, 17 }, { 0x2E1F, 4, 8, 21 }, { 0x2E1F, 5, 8, 26 }, { 0x2E1F, 6, 16, 20 },
+        { 0x2E20, 2, 12, 20 }, { 0x2E20, 1, 10, 20 }, { 0x2E20, 3, 10, 17 }, { 0x2E20, 4, 8, 21 }, { 0x2E20, 5, 8, 26 }, { 0x2E20, 6, 16, 20 },
+        { 0x2E21, 2, 12, 20 }, { 0x2E21, 1, 10, 20 }, { 0x2E21, 3, 10, 17 }, { 0x2E21, 4, 8, 21 }, { 0x2E21, 5, 8, 26 }, { 0x2E21, 6, 16, 20 },
+        { 0x2E22, 2, 12, 20 }, { 0x2E22, 1, 10, 20 }, { 0x2E22, 3, 10, 17 }, { 0x2E22, 4, 8, 21 }, { 0x2E22, 5, 8, 26 }, { 0x2E22, 6, 16, 20 },
+        { 0x2E23, 2, 12, 20 }, { 0x2E23, 1, 10, 20 }, { 0x2E23, 3, 10, 17 }, { 0x2E23, 4, 8, 21 }, { 0x2E23, 5, 8, 26 }, { 0x2E23, 6, 16, 20 },
+        { 0x2E24, 2, 12, 20 }, { 0x2E24, 1, 10, 20 }, { 0x2E24, 3, 10, 17 }, { 0x2E24, 4, 8, 21 }, { 0x2E24, 5, 8, 26 }, { 0x2E24, 6, 16, 20 },
+        { 0x2E25, 2, 12, 20 }, { 0x2E25, 1, 10, 20 }, { 0x2E25, 3, 10, 17 }, { 0x2E25, 4, 8, 21 }, { 0x2E25, 5, 8, 26 }, { 0x2E25, 6, 16, 20 },
+        { 0x2E26, 2, 12, 20 }, { 0x2E26, 1, 10, 20 }, { 0x2E26, 3, 10, 17 }, { 0x2E26, 4, 8, 21 }, { 0x2E26, 5, 8, 26 }, { 0x2E26, 6, 16, 20 },
+        { 0x2E27, 2, 12, 20 }, { 0x2E27, 1, 10, 20 }, { 0x2E27, 3, 10, 17 }, { 0x2E27, 4, 8, 21 }, { 0x2E27, 5, 8, 26 }, { 0x2E27, 6, 16, 20 },
+        { 0x2E28, 6, 9, 23 }, { 0x2E29, 6, 9, 23 },
+        { 0x2E2A, 2, 12, 20 }, { 0x2E2A, 1, 10, 20 }, { 0x2E2A, 3, 10, 17 }, { 0x2E2A, 4, 8, 21 }, { 0x2E2A, 5, 8, 26 }, { 0x2E2A, 6, 16, 20 },
+        { 0x2E2B, 2, 12, 20 }, { 0x2E2B, 1, 10, 20 }, { 0x2E2B, 3, 10, 17 }, { 0x2E2B, 4, 8, 21 }, { 0x2E2B, 5, 8, 26 }, { 0x2E2B, 6, 16, 20 },
+        { 0x2E2C, 2, 12, 20 }, { 0x2E2C, 1, 10, 20 }, { 0x2E2C, 3, 10, 17 }, { 0x2E2C, 4, 8, 21 }, { 0x2E2C, 5, 8, 26 }, { 0x2E2C, 6, 16, 20 },
+        { 0x2E2D, 2, 12, 20 }, { 0x2E2D, 1, 10, 20 }, { 0x2E2D, 3, 10, 17 }, { 0x2E2D, 4, 8, 21 }, { 0x2E2D, 5, 8, 26 }, { 0x2E2D, 6, 16, 20 },
+        { 0x2E2F, 2, 12, 20 }, { 0x2E2F, 1, 10, 20 }, { 0x2E2F, 3, 10, 17 }, { 0x2E2F, 4, 8, 21 }, { 0x2E2F, 5, 8, 26 }, { 0x2E2F, 6, 16, 20 },
+        { 0x2E30, 6, 6, 23 }, { 0x2E31, 6, 7, 23 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
