@@ -2823,6 +2823,17 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         }
         return nullptr;
     }
+    case 0x05C0: case 0x05C3: { // ׀ ׃ Hebrew Paseq / Sof Pasuq (Po) — W2612. sans-serif (Helvetica base) falls to
+        // Lucida Grande (a Mac-only font, DOM line box 20) vs iOS 22; route sans-serif -> Arial Hebrew (its DOM line
+        // box is 22, and advance 4.4/4.45 -> round 4 = iOS width 4, so 4x22 EXACT). The proven U+05BE Arial Hebrew
+        // route confirms Arial Hebrew gives DOM height 22 in sans-serif. Only sans-serif diverges (serif/mono/cursive/
+        // fantasy/system-ui already match iOS) so route baseIsSansSerif ONLY, leave the rest natural. (Po/Lo residual.)
+        if (baseIsSansSerif) {
+            static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
+            return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        }
+        return nullptr;
+    }
     case 0x0E32: case 0x0E33: { // ◌ Thai Sara Aa / Sara Am (Lo) — monospace (Courier lacks Thai -> fork notdef 10)
         // vs iOS 9/17. iOS uses Thonburi (U+0E32=9, U+0E33=17); proportional generics already match Thonburi's
         // value, so route unconditionally (Thonburi gives the iOS value in every generic). (Po/Lo orphan residual.)

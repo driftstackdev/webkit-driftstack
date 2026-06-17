@@ -1576,6 +1576,7 @@ static int driftstackGlyphHashGenericBucket(const Element& fontElement)
     if (fam == "monospace"_s) return 3;
     if (fam == "cursive"_s) return 4;
     if (fam == "fantasy"_s) return 5;
+    if (fam == "system-ui"_s) return 6; // W2612: distinct from 'default' (Times/serif) — system-ui is San Francisco
     return 0; // standard / any non-generic
 }
 
@@ -1621,12 +1622,20 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         computedSize = sizeRenderer->style().fontDescription().computedSize();
     // The glyphHash probe renders monospace at the 13px medium-size quirk; the symbol-sweep probe sets an explicit
     // 16px (no quirk). So the glyphHash cps gate monospace to 13px, the new symbol cps to 16px.
+    // W2612: U+05C6 monospace at 16px (no quirk) -> iOS width 10. The orphan-mark advance atlas gives 6 and no Mac
+    // monospace font reproduces iOS's 10; the 13px-quirk mono (glyphHash) is served by the bucket-3 table entry
+    // below, so this size-specific carve-out cannot perturb c587ed44 (different size).
+    if (cp == 0x05C6 && bucket == 3 && std::lround(computedSize) == 16) {
+        outWidth = 10;
+        outHeight = 19;
+        return true;
+    }
     int expectedSize = (bucket == 3) ? (isGlyphHashCp ? 13 : 16) : 16;
     if (std::lround(computedSize) != expectedSize)
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 57> table { {
+    static constexpr std::array<Entry, 58> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1649,12 +1658,25 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x25CA, 3, 10, 20 },
         // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
         { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
+        // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
+        { 0x05C6, 6, 6, 20 },
     } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
             outWidth = e.w;
             outHeight = e.h;
             return true;
+        }
+    }
+    // W2612: system-ui (bucket 6) without a system-ui-specific entry falls back to the default (bucket 0) value,
+    // preserving every other served cp's prior system-ui behavior; only U+05C6 carries a distinct system-ui entry.
+    if (bucket == 6) {
+        for (const auto& e : table) {
+            if (e.cp == cp && e.generic == 0) {
+                outWidth = e.w;
+                outHeight = e.h;
+                return true;
+            }
         }
     }
     return false;
