@@ -427,6 +427,28 @@ static void driftstackWalkFontDir(const std::string& root, MemoryCompactRobinHoo
         for (CFIndex i = 0; i < count; ++i) {
             CTFontDescriptorRef desc = static_cast<CTFontDescriptorRef>(CFArrayGetValueAtIndex(descs.get(), i));
             RetainPtr<CFStringRef> familyCF = adoptCF(static_cast<CFStringRef>(CTFontDescriptorCopyAttribute(desc, kCTFontFamilyNameAttribute)));
+            RetainPtr<CTFontDescriptorRef> realizedDesc; // keeps the realized descriptor alive if used below
+            if (!familyCF) {
+                // W2196 (A3 Mac-worker on-box repro, macOS 26.4): on fleet hosts running macOS 26.4+,
+                // CTFontManagerCreateFontDescriptorsFromURL returns descriptors WITHOUT
+                // kCTFontFamilyNameAttribute populated (it is lazy on 26.4; macOS 26.2 populated it
+                // eagerly). With the attribute null, every iOS font was skipped here → the override map
+                // mapped 0 families → ALL glyph/font/measureText surfaces fell back to Mac-native CoreText
+                // on the fleet (glyphHash 777d587f instead of c587ed44). Realize the font from this
+                // descriptor (which carries the file URL, so it resolves to THIS binary, not a name-
+                // matched Mac system font) and read the family name off the realized CTFont. Inert on
+                // 26.2 (the descriptor attribute is non-null there, so this branch never runs).
+                RetainPtr<CTFontRef> realizedFont = adoptCF(CTFontCreateWithFontDescriptor(desc, 0.0, nullptr));
+                if (realizedFont) {
+                    familyCF = adoptCF(CTFontCopyFamilyName(realizedFont.get()));
+                    // The descriptor's traits/style/PostScript attributes are lazy too on 26.4 — point
+                    // all subsequent reads (weight/slant/style/PS below) at the REALIZED font's
+                    // descriptor so face-variant selection is correct, not just the family.
+                    realizedDesc = adoptCF(CTFontCopyFontDescriptor(realizedFont.get()));
+                    if (realizedDesc)
+                        desc = realizedDesc.get();
+                }
+            }
             if (!familyCF)
                 continue;
             String family = String(familyCF.get()).convertToASCIILowercase();
