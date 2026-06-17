@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 463> table { {
+    static constexpr std::array<Entry, 464> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1687,6 +1687,10 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
         // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
         { 0x05C6, 6, 6, 20 },
+        // W2620 U+2B06 (up-arrow, emoji-presentation) system-ui (bucket 6, San Francisco) = 23,20 — distinct
+        // from the glyphHash default/serif emoji width (bucket 0 = 21,27). The glyphHash probe never measures
+        // system-ui, so this is c587ed44-safe. (Atlas drift-guard excludes U+2B06 as a glyphHash cp.)
+        { 0x2B06, 6, 23, 20 },
         // W2614 exotic General Punctuation serif (bucket 2) — iOS-sim 16px width,height (fork serif->Lucida Grande wrong):
         { 0x2023, 2, 6, 21 }, { 0x2036, 2, 8, 21 }, { 0x2037, 2, 11, 21 }, { 0x2038, 2, 5, 21 },
         { 0x203B, 2, 9, 21 }, { 0x203D, 2, 9, 21 }, { 0x203F, 2, 16, 21 }, { 0x2040, 2, 16, 21 },
