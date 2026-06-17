@@ -240,6 +240,50 @@ typedef bool (*DriftstackQuicTcpInterposeActiveFn)(void);
 typedef nw_connection_t (*NwConnectionCreateFn)(nw_endpoint_t, nw_parameters_t);
 static NwConnectionCreateFn originalNwConnectionCreate = nullptr;
 
+// W2202 (fork-egress audit wl7p6pkhu): fail-CLOSED gate for the UDP/QUIC + TCP-interpose relay-FAILURE sites.
+// A connection whose SOCKS5 relay could NOT be established must NOT fall through to a DIRECT real-peer socket
+// (the cardinal "no egress without proxy" invariant — leaks the real Mac fleet IP). The WebRTC UDP path already
+// fail-closes this way; this mirrors NetworkRTCUDPSocketCocoa.mm:409 VERBATIM. Armed only when the customer
+// proxy is required AND no dev-direct override (DIRECT_BROWSE/DIRECT_EGRESS → capture-probe/human-inspect stay
+// direct). Cached once (getenv at first call; env is present — the constructor already read CUSTOM_SOCKS5).
+static bool driftstackRequireProxyNoDirect()
+{
+    static const bool value = [] {
+        const char* req = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE");
+        const char* de = getenv("DRIFTSTACK_DIRECT_EGRESS");
+        bool require = req && req[0] == '1';
+        bool direct = (db && db[0] == '1') || (de && de[0] == '1');
+        return require && !direct;
+    }();
+    return value;
+}
+
+// W2202: build a DEAD-reject nw_connection to a loopback port nothing listens on (127.0.0.1:1) with FRESH
+// minimal params (NOT the real peer's — avoids carrying its SNI/ALPN AND the param-embedded-host re-derivation
+// risk). CFNetwork's engine handles it via its unreachable-peer lifecycle (handshake timeout → h3->h2 fallback)
+// with ZERO real-peer egress — all loopback. Built via originalNwConnectionCreate (the raw Mach-O symbol, NEVER
+// re-interposed → no recursion). Returned DIRECTLY (never stored as an nw_connection_t local — the ARC
+// bridge-cast caveat at the top of this file). Preferred over returning nullptr: CFNetwork's private QUIC
+// initiator is not proven nil-tolerant (crash risk). ⚠️ The loopback-only behavior is the load-bearing claim
+// to confirm with the relay-DOWN tcpdump prod-egress smoke before deploy (see quic-egress-failclosed-design.md).
+static nw_connection_t driftstackMakeLocalDeadReject(bool tcp)
+{
+    if (!originalNwConnectionCreate)
+        return nullptr;
+    static bool loggedDeadRejectOnce = false;
+    if (!loggedDeadRejectOnce) {
+        loggedDeadRejectOnce = true;
+        fprintf(stderr, "[Driftstack-W2202] egress FAIL-CLOSED: SOCKS5 relay unavailable + REQUIRE_PROXY=1 (no dev-direct) → dead loopback reject (127.0.0.1:1, fresh %s params) instead of direct egress — no real-peer packet, no IP leak.\n", tcp ? "tcp" : "udp");
+        fflush(stderr);
+    }
+    nw_endpoint_t deadEndpoint = nw_endpoint_create_host("127.0.0.1", "1");
+    nw_parameters_t freshParams = tcp
+        ? nw_parameters_create_secure_tcp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION)
+        : nw_parameters_create_secure_udp(NW_PARAMETERS_DISABLE_PROTOCOL, NW_PARAMETERS_DEFAULT_CONFIGURATION);
+    return originalNwConnectionCreate(deadEndpoint, freshParams);
+}
+
 static void resolveOriginalNwConnectionCreate()
 {
     if (originalNwConnectionCreate != nullptr)
@@ -419,8 +463,17 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
         --s_inInterposeDepth;
         if (tcpRelay)
             return tcpRelay;
+        // W2202: TCP-interpose relay FAILED. This connection was meant to be SOCKS5-CONNECT-proxied, so
+        // fail-CLOSED under require-proxy instead of a direct fall-through (was a leak). Dev-direct keeps direct.
+        if (driftstackRequireProxyNoDirect())
+            return driftstackMakeLocalDeadReject(/*tcp=*/true);
         return originalNwConnectionCreate(endpoint, parameters);
     }
+    // W2202 RESIDUAL (do NOT gate here): the bridge-unresolved sites above (!bridgeIsActive / dlsym race) and
+    // this !needsRelay site are reached BEFORE the UDP-vs-TCP determination — plain HTTPS egresses via
+    // CFNetwork's SEPARATE SOCKS5 proxy-dict (safe even on this "direct" interpose return), so fail-closing
+    // here would wrongly kill HTTPS. The bridge-unresolved early-session window is a narrower residual to close
+    // with a UDP-only determination (tracked, task #10) — NOT gated now to avoid the HTTPS regression.
     if (!needsRelay)
         return originalNwConnectionCreate(endpoint, parameters);
 
@@ -439,10 +492,15 @@ extern "C" nw_connection_t driftstack_nw_connection_create(nw_endpoint_t endpoin
     if (relayConnection)
         return relayConnection;
 
-    // Bridge returned nil → fall through to original (relay-establish
-    // failure path; Slice 16.4.b.5 ProcessLauncher injection paired
-    // with DRIFTSTACK_REQUIRE_PROXY=1 will hard-block at socket-open
-    // time when proxy unreachable).
+    // W2202 (fork-egress audit): the SOCKS5 UDP/QUIC relay FAILED to establish (proxy down / lacks
+    // UDP_ASSOCIATE / transient). We are unambiguously in the UDP/QUIC-relay branch, so FAIL-CLOSED to a dead
+    // loopback reject instead of a DIRECT real-peer UDP socket (the cardinal no-egress-without-proxy invariant
+    // — was an IP leak; the in-code "Slice 16.4.b.5 will hard-block" below was never built). Dev-direct (gate
+    // false) keeps the original direct fall-through for capture-probe/human-inspect.
+    if (driftstackRequireProxyNoDirect())
+        return driftstackMakeLocalDeadReject(/*tcp=*/false);
+
+    // Bridge returned nil + NOT require-proxy (dev-direct) → original direct path (Slice 16.4.b.5 future).
     return originalNwConnectionCreate(endpoint, parameters);
 }
 
