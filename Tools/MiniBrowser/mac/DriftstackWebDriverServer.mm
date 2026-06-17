@@ -50,6 +50,19 @@ void DriftstackStartWebDriverServer(NSString *sessionID, _WKAutomationSession *s
     if (!sessionID.length || !session)
         return;
 
+    // W2176 (fork-audit, defense-in-depth): the harness restricts sessionId to [A-Za-z0-9_-] ≤128 (W157),
+    // but the fork must not TRUST it — it's interpolated into the /tmp port-file path, so a `/`, `..`, or NUL
+    // would traverse/break the path. Re-validate here (a public binary could be launched directly).
+    BOOL safeID = sessionID.length <= 128;
+    for (NSUInteger i = 0; safeID && i < sessionID.length; i++) {
+        unichar c = [sessionID characterAtIndex:i];
+        safeID = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+    }
+    if (!safeID) {
+        NSLog(@"[Driftstack] WebDriver: refusing unsafe sessionID (must be [A-Za-z0-9_-], <=128 chars)");
+        return;
+    }
+
     // One WD server per process; keep it alive for the process lifetime.
     static std::unique_ptr<WebDriver::WebDriverService> s_service;
     if (s_service)
@@ -89,21 +102,29 @@ void DriftstackStartWebDriverServer(NSString *sessionID, _WKAutomationSession *s
     // temp's default 0644 perms with the token already in it. The temp+rename is BOTH atomic (the harness
     // never reads partial content) AND never 0644-readable. The newline-terminated 2-line shape is unchanged.
     NSString *portPath = [NSString stringWithFormat:@"/tmp/driftstack-webdriver-%@.port", sessionID];
-    NSString *tmpPath = [portPath stringByAppendingString:@".tmp"];
     NSString *portStr = [NSString stringWithFormat:@"%u\n%@\n", port, token];
     NSData *portData = [portStr dataUsingEncoding:NSUTF8StringEncoding];
-    const char *tmpFS = [tmpPath fileSystemRepresentation];
+    // W2176 (fork-audit P2): write via mkstemp (a RANDOM 0600 temp name) + atomic rename — NOT a PREDICTABLE
+    // `<portPath>.tmp` + open(), which a same-uid co-resident could pre-plant as a symlink to redirect/disclose
+    // the token write. mkstemp's random name defeats the pre-plant + creates 0600; rename atomically replaces
+    // any symlink already at portPath (rename doesn't follow the target). (Root fix P1 — move OUT of shared
+    // /tmp into the per-session 0700 data dir — is the queued follow-up; this hardens the interim /tmp path.)
+    char tmplBuf[] = "/tmp/driftstack-webdriver-tmp.XXXXXX";
     BOOL portFileOK = NO;
-    int fd = open(tmpFS, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    int fd = mkstemp(tmplBuf);
     if (fd >= 0) {
         ssize_t written = write(fd, portData.bytes, portData.length);
         close(fd);
         portFileOK = (written == (ssize_t)portData.length)
-            && (rename(tmpFS, [portPath fileSystemRepresentation]) == 0);
+            && (rename(tmplBuf, [portPath fileSystemRepresentation]) == 0);
+        if (!portFileOK)
+            unlink(tmplBuf);
     }
     if (!portFileOK) {
-        unlink(tmpFS);
-        NSLog(@"[Driftstack] WebDriver: failed to write 0600 port-file %@ (errno=%d)", portPath, errno);
+        // W2176 (fork-audit P4): tear down the already-listening, token-authed server instead of orphaning a
+        // live socket for the process lifetime (the `if (s_service) return` guard would also block any retry).
+        NSLog(@"[Driftstack] WebDriver: failed to write port-file %@ (errno=%d) — tearing down the listener", portPath, errno);
+        s_service = nullptr;
         return;
     }
 

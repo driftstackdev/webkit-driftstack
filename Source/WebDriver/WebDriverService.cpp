@@ -360,6 +360,15 @@ bool WebDriverService::findCommand(HTTPMethod method, const String& path, Comman
     return false;
 }
 
+// W2176 (fork-audit P7): the W2174 auth lives ONLY on the handleRequest (HTTP) path. The BiDi WebSocket
+// entry points (acceptHandshake/handleMessage) bypass it. BiDi is compiled OUT of the Driftstack MiniBrowser
+// (ENABLE_WEBDRIVER_BIDI=0), so the "every WD request carries the token" invariant holds today — but enabling
+// it later WITHOUT auth would reopen the cross-tenant hole. Fail the build if that ever happens silently:
+// whoever enables BiDi must first enforce the bearer token in acceptHandshake (reject the upgrade) + handleMessage.
+#if PLATFORM(DRIFTSTACK) && ENABLE(WEBDRIVER_BIDI)
+#error "Driftstack: BiDi bypasses the W2174 WD-auth token. Enforce the bearer in acceptHandshake/handleMessage before enabling WEBDRIVER_BIDI (cross-tenant isolation, W2104/W2174)."
+#endif
+
 // Driftstack W2174: per-session WebDriver auth (cross-tenant isolation, W2104/W2131). When
 // DriftstackWebDriverServer has set a per-session token (generated + written to the 0600 port-file line 2),
 // every WD request MUST carry a matching `Authorization: Bearer <token>` header. A co-resident session that
