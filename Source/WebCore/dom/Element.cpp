@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 88> table { {
+    static constexpr std::array<Entry, 70> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1674,12 +1674,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x2B06, 0, 21, 27 }, { 0x2B06, 1, 21, 27 }, { 0x2B06, 2, 21, 27 },
  { 0x2B06, 3, 17, 23 }, { 0x2B06, 4, 21, 27 }, { 0x2B06, 5, 21, 30 },
  // W2605 notdef-width currency (iOS-sim 16px, per generic) + U+25CA monospace
- { 0x20B6, 0, 10, 23 }, { 0x20B6, 1, 10, 24 }, { 0x20B6, 2, 10, 23 },
- { 0x20B6, 3, 10, 23 }, { 0x20B6, 4, 10, 23 }, { 0x20B6, 5, 10, 26 },
- { 0x20B7, 0, 12, 23 }, { 0x20B7, 1, 12, 24 }, { 0x20B7, 2, 12, 23 },
- { 0x20B7, 3, 12, 23 }, { 0x20B7, 4, 12, 23 }, { 0x20B7, 5, 12, 26 },
- { 0x20BB, 0, 14, 23 }, { 0x20BB, 1, 14, 24 }, { 0x20BB, 2, 14, 23 },
- { 0x20BB, 3, 14, 23 }, { 0x20BB, 4, 14, 23 }, { 0x20BB, 5, 14, 26 },
+
+
+
+
+
+
  { 0x20BF, 0, 10, 21 }, { 0x20BF, 1, 10, 21 }, { 0x20BF, 2, 10, 21 },
  { 0x20BF, 3, 10, 21 }, { 0x20BF, 4, 10, 22 }, { 0x20BF, 5, 10, 26 },
  { 0x25CA, 3, 10, 20 },

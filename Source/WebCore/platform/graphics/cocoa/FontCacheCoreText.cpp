@@ -3157,6 +3157,16 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "apple sd gothic neo"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2639: rare currency symbols (U+20B6 Livre Tournois, U+20B7 Spesmilo, U+20BB Nordic Mark) — the iOS-26.5
+    // simruntime font scan proves a real iPhone renders these in ROCKWELL (CoreUI/Rockwell.ttc, an iOS font hidden
+    // from browserleaks detection — the workflow's iOS-set filter missed it). Verified 7/7 generics == iOS sim
+    // (width 10/12/14, height 23/24/26 per-generic strut). glyphHash-SAFE (non-GCPS; GCPS currency 20B8/B9/BA/BD/B0
+    // NOT here). U+20BF (Bitcoin) EXCLUDED — iOS renders it in SF UI (height 21, not Rockwell's 23); needs the iOS
+    // SF font (Mac SF gives width 11≠10), kept served Class-B. After sim-diff, DELETE the 20B6/B7/BB serves.
+    case 0x20B6: case 0x20B7: case 0x20BB: {
+        static const std::array<ASCIILiteral, 1> candidates { "rockwell"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     default:
         return nullptr;
     }
