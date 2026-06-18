@@ -288,6 +288,14 @@ static nw_framer_start_result_t handshakeStartHandler(nw_framer_t framer)
     nw_framer_set_cleanup_handler(framer, ^(nw_framer_t /*f*/) {
         fprintf(stderr, "[Wave29-499.121] cleanup_handler fired — framer torn down (state=%d)\n", (int)instance->state);
         fflush(stderr);
+        // SEC-2026-06-18 (audit LOW): free the claimPendingDestination() heap FramerInstance (+ its WTF::String
+        // destHost/proxyUser/proxyPass backing StringImpl buffers). cleanup_handler is the framer-teardown/LAST
+        // callback (fires on framer dealloc, after stop/input quiesce) → no stop/wakeup/input handler runs after
+        // this, so the delete is leak-fix-only with NO use-after-free. Without it the instance leaked once per
+        // SOCKS5-TCP-CONNECT framer (unbounded in a long-lived NetworkProcess), reachable only under
+        // DRIFTSTACK_SOCKS5_TCP_INTERPOSE=1 (not the production launch-env, so production-safe; fixed for the smoke/
+        // interpose path and the no-accepted-leaks bar).
+        delete instance;
     });
     nw_framer_set_stop_handler(framer, ^bool(nw_framer_t /*f*/) {
         fprintf(stderr, "[Wave29-499.121] stop_handler fired — framer stopping\n");
