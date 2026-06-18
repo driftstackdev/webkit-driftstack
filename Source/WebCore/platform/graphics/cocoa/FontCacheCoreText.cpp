@@ -2641,7 +2641,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false, double baseWeight = 0)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false, double baseWeight = 0, bool baseIsSerif = false)
 {
     constexpr double kDriftstackHeavyBaseWeight = 0.35; // W2608: ≥ this -> weight-matched bold Latin/Indic fallback
     if (cluster.isEmpty())
@@ -3072,6 +3072,26 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "apple symbols"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2635: CJK Symbols/Punctuation real-glyph cps — WIDTH already matches iOS (full-width 16); only the line-box
+    // HEIGHT diverges, driven by the FALLBACK FONT (single inline glyph => the fallback's metrics ARE the line box).
+    // U+3003/3005/3006/3007/3012/3013 (ditto/iteration/postal/geta marks): fork serif/cursive cascade picks Songti SC
+    // (lineH 23) but a real iPhone uses HIRAGINO MINCHO ProN (lineH 25) → DOM height 25. U+301C (wave dash): fork picks
+    // Hiragino Mincho (25) but iOS uses PINGFANG SC (lineH 23) → 23. Route ONLY the serif+cursive generics (default/
+    // sans/mono already match iOS — their natural PingFang/Hiragino cascade gives the right value). Same mechanism +
+    // height-via-fallback proven by case 0x3095 (Hiragino Sans -> DOM 25). glyphHash-SAFE (disjoint from the 5 glyphHash
+    // cps). After build + REAL-iPhone geomserve-diff verifies height==iOS, DELETE the W2617 CJK rows for these cps.
+    case 0x3003: case 0x3005: case 0x3006: case 0x3007: case 0x3012: case 0x3013: {
+        if (!(baseIsSerif || baseIsCursive))
+            return nullptr;
+        static const std::array<ASCIILiteral, 2> candidates { "hiragino mincho pron"_s, "hiragino sans"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x301C: {
+        if (!(baseIsSerif || baseIsCursive))
+            return nullptr;
+        static const std::array<ASCIILiteral, 2> candidates { "pingfang sc"_s, "pingfangsc"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     default:
         return nullptr;
     }
@@ -3107,6 +3127,9 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     // W2607: the sans-serif generic resolves to Helvetica; some cps (U+05BE) need the sans/cursive/fantasy
     // fallback DIFFERENT from default/serif, so distinguish the Helvetica (sans-serif) base too.
     bool driftstackBaseIsSansSerif = equalLettersIgnoringASCIICase(driftstackBaseFamily, "helvetica"_s);
+    // W2635: the CSS serif generic resolves to Times New Roman; some CJK symbol cps need the serif (+cursive)
+    // fallback DIFFERENT from default/sans/mono — so distinguish the Times (serif) base too.
+    bool driftstackBaseIsSerif = driftstackBaseFamily.startsWith("Times"_s);
     // W2608: the base font's kCTFontWeightTrait (float -1..1) SURVIVES WebKit's font-build here (verified via the
     // DRIFTSTACK_LOG_FONT_RESOLVE diagnostic), unlike the symbolic kCTFontTraitBold which is stripped (W2598). iOS
     // weight-matches the Latin/Indic fallback for ₹/ॿ to the base font's weight: a HEAVY base (DB LCD 0.62, DIN/
@@ -3132,7 +3155,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             driftstackBaseWeight = 0.5;
     }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight)) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight, driftstackBaseIsSerif)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
