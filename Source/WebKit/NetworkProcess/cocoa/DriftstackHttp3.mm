@@ -2849,6 +2849,17 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
         ::close(fd); return false;
     }
 
+    // W2646 (founder white-screen fix): bound the SOCKS5 greeting/auth/UDP_ASSOCIATE handshake recvs with a
+    // ~4s timeout. A no-UDP SOCKS5 proxy accepts the TCP control channel but NEVER replies to UDP_ASSOCIATE,
+    // so the MSG_WAITALL recvs below would block FOREVER on the loaderQueue — and this runs under g_dnsLock,
+    // so every concurrent load wedges too → blank page, no error. With the timeout the handshake fails fast
+    // → UDP relay reported unavailable → the caller falls back to h2/TCP. (Mirrors DriftstackSocks5Client.mm
+    // W1531.) The fd is only parked as a keepalive after a SUCCESSFUL associate (DNS rides g_dnsUdpFd), so a
+    // handshake-only timeout never touches a working proxy's data path.
+    { struct timeval _tv { 4, 0 };
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &_tv, sizeof(_tv));
+      setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &_tv, sizeof(_tv)); }
+
     // Method negotiation — offer user/pass (0x02).
     uint8_t greet[3] = { 0x05, 0x01, 0x02 };
     if (::send(fd, greet, 3, 0) != 3) { ::close(fd); return false; }
@@ -3059,8 +3070,17 @@ void driftstackDnsReaderLoop()
 }
 } // anonymous namespace
 
+// W2646 (founder white-screen fix — gate half): once the SOCKS5 proxy is found NOT to support UDP relay
+// (the UDP_ASSOCIATE handshake failed/timed-out — see driftstackQuicRawSocks5Associate's else below), latch
+// it so every later h3 check returns false INSTANTLY — no repeated ~4s associate attempts under g_dnsLock
+// (the per-host stall that wedged the tab). Auto-detect + cache: UDP-capable proxies never set it → h3
+// unchanged (no regression). h2/TCP fallback is safe (DNS already proxy-resolved via ATYP=0x03 hostname).
+static std::atomic<bool> s_udpRelayDown { false };
+
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
 {
+    if (s_udpRelayDown.load(std::memory_order_relaxed))
+        return false; // known no-UDP proxy → skip h3, page loads instantly over h2/TCP
     {
         Locker locker { g_dnsLock };
         auto it = g_dnsHostCache().find(host);
@@ -3102,6 +3122,10 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
                     (void)cf; // control fd parked open for the relay's lifetime
                 } else if (cf >= 0)
                     ::close(cf);
+            } else {
+                // W2646: the proxy refused/timed-out UDP_ASSOCIATE → no UDP relay. Latch it so the gate at the
+                // top of this fn skips h3 from now on (instant h2/TCP fallback, no per-host ~4s stall).
+                s_udpRelayDown.store(true, std::memory_order_relaxed);
             }
         }
         if (g_dnsUdpFd >= 0 && !g_dnsReaderStarted) {
