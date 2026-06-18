@@ -1184,7 +1184,35 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                 qc->ctLeafCert = leaf; // retained for Landing 3 (CertificateVerify key-possession check)
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server cert chain validated OK for %s", qc->ctSni.utf8().data());
             }
-        } else if (hsType == 0x14) { // server Finished → 1-RTT keys + client Finished
+        } else if (hsType == 0x14) { // server Finished → verify MAC, then 1-RTT keys + client Finished
+            // W2202 STEP 2 (verify-gate ws4cffit6): verify the server Finished verify_data MAC BEFORE deriving
+            // app secrets. The 0x0b cert chain proves server IDENTITY; this proves the peer HOLDS the handshake
+            // keys (RFC 8446 §4.4.4) — without it a MITM completing its own ECDHE is accepted. Gated like 0x0b.
+            static const bool s_validateFin = []() {
+                const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                return e && e[0] == '1';
+            }();
+            if (s_validateFin && !qc->ctSni.isEmpty()) {
+                // This server Finished is ALREADY appended to ctTranscript at the loop top, so the server's
+                // verify_data covers Transcript-Hash(CH..CertificateVerify) = the prefix EXCLUDING the trailing
+                // msgTotal bytes. (Hashing the FULL transcript here includes the Finished → false-rejects EVERY
+                // handshake — the gate's pinned off-by-one.) server_finished_key = HKDF-Expand-Label(server HS
+                // secret, "finished"); verify_data = HMAC(key, that hash). Constant-time compare, fail-closed.
+                if (qc->ctTranscript.size() < msgTotal) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 Finished transcript underflow — rejecting"); return -1; }
+                size_t prefixLen = qc->ctTranscript.size() - msgTotal;
+                Vector<uint8_t> thruCV = (qc->ctCipher == 0x1302)
+                    ? driftstackSHA384(qc->ctTranscript.span().data(), prefixLen)
+                    : driftstackSHA256(qc->ctTranscript.span().data(), prefixLen);
+                Vector<uint8_t> finKey = ctHkdfExpandLabel(qc->ctCipher, qc->ctKeySchedule.serverHandshakeSecret(), "finished", qc->ctKeySchedule.hashLen());
+                Vector<uint8_t> expected = (qc->ctCipher == 0x1302)
+                    ? driftstackHmacSha384(finKey, thruCV) : driftstackHmacSha256(finKey, thruCV);
+                const uint8_t* recvVd = b + off + 4;   // server Finished body (hsLen bytes, == verify_data)
+                if (hsLen != expected.size()) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server Finished length %u != %zu — rejecting", hsLen, expected.size()); return -1; }
+                uint8_t diff = 0;
+                for (size_t i = 0; i < expected.size(); ++i) diff |= (expected[i] ^ recvVd[i]);  // constant-time (no early-exit)
+                if (diff != 0) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server Finished MAC INVALID — rejecting (handshake auth failure)"); return -1; }
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server Finished MAC verified OK");
+            }
             Vector<uint8_t> chSFHash = ctTranscriptHash(qc);  // hash through server Finished
             if (!qc->ctKeySchedule.deriveApplicationSecrets(chSFHash)) {
                 WTFLogAlways("[Wave29-499.349] CT: deriveApplicationSecrets FAILED"); return -1;
