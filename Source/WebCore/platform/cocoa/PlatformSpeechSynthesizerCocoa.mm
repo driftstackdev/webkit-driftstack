@@ -414,8 +414,65 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
     }
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2640 — per-archetype speech-voice list from a gold-truth file.
+// The host Mac's AVSpeechSynthesisVoice catalog matches the LAUNCH archetype
+// (iPhone 17 / Safari 26.4 = 68 voices), but Family-A iOS 18.6 ships a DIFFERENT,
+// larger catalog (223 voices, BS-captured from a real iPhone 16 Pro / 18.6). The host
+// path cannot produce it, so an 18.6 session served the host's ~68 = a per-archetype
+// voice tell. This reader loads the BS-captured list when the launcher sets
+// DRIFTSTACK_VOICES_LIST_PATH (file schema: { "voices_results": [ { "voiceURI",
+// "name", "lang", "localService", "default" }, ... ] }). INERT when the env is unset
+// (every current launch-env, including the launch archetype) → the host path is
+// unchanged and glyphHash/cumrig are unaffected. Returns true (and fills outList) only
+// on a fully-parsed, non-empty file; any error → false → caller falls through to host.
+static bool driftstackTryLoadVoiceListFromFile(Vector<Ref<PlatformSpeechSynthesisVoice>>& outList)
+{
+    const char* path = getenv("DRIFTSTACK_VOICES_LIST_PATH");
+    if (!path || !path[0])
+        return false;
+    RetainPtr<NSString> nsPath = [NSString stringWithUTF8String:path];
+    if (!nsPath)
+        return false;
+    RetainPtr<NSData> data = [NSData dataWithContentsOfFile:nsPath.get()];
+    if (!data)
+        return false;
+    NSError *error = nil;
+    id root = [NSJSONSerialization JSONObjectWithData:data.get() options:0 error:&error];
+    if (error || ![root isKindOfClass:[NSDictionary class]])
+        return false;
+    id results = [(NSDictionary *)root objectForKey:@"voices_results"];
+    if (![results isKindOfClass:[NSArray class]])
+        return false;
+    for (id entry in (NSArray *)results) {
+        if (![entry isKindOfClass:[NSDictionary class]])
+            continue;
+        NSString *uri = [(NSDictionary *)entry objectForKey:@"voiceURI"];
+        NSString *name = [(NSDictionary *)entry objectForKey:@"name"];
+        NSString *lang = [(NSDictionary *)entry objectForKey:@"lang"];
+        if (![uri isKindOfClass:[NSString class]] || ![name isKindOfClass:[NSString class]] || ![lang isKindOfClass:[NSString class]])
+            continue;
+        id localObj = [(NSDictionary *)entry objectForKey:@"localService"];
+        id defaultObj = [(NSDictionary *)entry objectForKey:@"default"];
+        bool localService = [localObj isKindOfClass:[NSNumber class]] ? [localObj boolValue] : true;
+        bool isDefault = [defaultObj isKindOfClass:[NSNumber class]] ? [defaultObj boolValue] : false;
+        outList.append(PlatformSpeechSynthesisVoice::create(uri, name, lang, localService, isDefault));
+    }
+    return !outList.isEmpty();
+}
+#endif
+
 void PlatformSpeechSynthesizer::initializeVoiceList()
 {
+#if PLATFORM(DRIFTSTACK)
+    // Fills m_voiceList directly; returns false (leaving it untouched/empty) on any
+    // parse error → fall through to the host AVSpeechSynthesisVoice path below.
+    if (driftstackTryLoadVoiceListFromFile(m_voiceList)) {
+        m_speechSynthesizerClient.voicesDidChange();
+        return;
+    }
+#endif
+
     if (!PAL::isAVFoundationFrameworkAvailable())
         return;
 

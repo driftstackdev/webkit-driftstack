@@ -132,6 +132,12 @@
     ;;; additive overlay for the exotic-Unicode tail consulted by driftstackServeGlyphHashGeom.
     (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/domgeom-atlas"))
     (subpath "/var/driftstack/atlas")
+    ;;; W2640: per-archetype speech-voice list. Family-A iOS 18.6 ships 223 voices vs the
+    ;;; host Mac's launch-archetype 68; PlatformSpeechSynthesizer::initializeVoiceList reads
+    ;;; the BS-captured list from DRIFTSTACK_VOICES_LIST_PATH (a file under this dir). Shipped
+    ;;; to fleet workers by cmd_atlas_sync like the audio atlas.
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_voices"))
+    (subpath "/var/driftstack/voices")
     ;;; Wave 29-373: canvas-fuzz atlas directory (correctly-named home for
     ;;; V-510 atlas binaries; the legacy driftstack-canvas-fuzz-atlas.bin
     ;;; happens to live in driftstack_audio_atlas/ due to historic naming.
