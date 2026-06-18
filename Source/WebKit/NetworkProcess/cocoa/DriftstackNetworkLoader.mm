@@ -537,6 +537,14 @@ DriftstackNetworkLoader::DriftstackNetworkLoader(NetworkDataTaskCocoa& task, con
     }
 }
 
+// W2202 STEP 5: upgrade the ThreadSafeWeakPtr to a strong RefPtr — null if the task was destroyed (it dies on
+// the main thread; this must be called ON the main thread before touching client()). Defined here where
+// NetworkDataTaskCocoa is a complete type.
+RefPtr<NetworkDataTaskCocoa> DriftstackNetworkLoader::protectedTask() const
+{
+    return m_task.get();
+}
+
 DriftstackNetworkLoader::~DriftstackNetworkLoader()
 {
     // Wave 29-499.272 — DON'T close m_fd here. The fd is owned by the
@@ -969,18 +977,27 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
     if (!redirectURL.isValid() || !redirectURL.protocolIsInHTTPFamily())
         return false;
 
-    auto* clientPtr = m_task.client();
-    if (!clientPtr)
+    // W2202 STEP 5: this runs on loaderQueue — never cache the raw client across the main-thread
+    // hop. Use a task-existence early-out only; re-acquire the client inside the callOnMainRunLoop block.
+    RefPtr task = protectedTask();
+    if (!task)
         return false;
+    Ref<DriftstackNetworkLoader> protectedThis { *this };
 
     // Chain guard — match common browser cap; fail cleanly past it.
     if (++m_redirectCount > 20) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.344] redirect chain exceeded 20 hops for %s — failing", currentURL.string().utf8().data());
         if (tryBeginCompletion()) {
             WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, currentURL, "too many redirects"_s, WebCore::ResourceError::Type::General);
-            callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+            callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                RefPtr task = protectedThis->protectedTask();
+                if (!task)
+                    return;
+                RefPtr client = task->client();
+                if (!client)
+                    return;
                 WebCore::NetworkLoadMetrics metrics;
-                clientPtr->didCompleteWithError(error, metrics);
+                client->didCompleteWithError(error, metrics);
             });
         }
         return true;
@@ -1011,18 +1028,26 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.344] following %d redirect: %s → %s (hop %d)",
         statusCode, currentURL.string().utf8().data(), redirectURL.string().utf8().data(), m_redirectCount);
 
-    Ref<DriftstackNetworkLoader> protectedThis { *this };
-    callOnMainRunLoop([this, protectedThis, clientPtr, redirectResponse = WebCore::ResourceResponse(response), newRequest = WebCore::ResourceRequest(newRequest)]() mutable {
-        clientPtr->willPerformHTTPRedirection(WTF::move(redirectResponse), WTF::move(newRequest),
+    callOnMainRunLoop([this, protectedThis, redirectResponse = WebCore::ResourceResponse(response), newRequest = WebCore::ResourceRequest(newRequest)]() mutable {
+        RefPtr task = protectedThis->protectedTask();
+        if (!task)
+            return;
+        RefPtr client = task->client();
+        if (!client)
+            return;
+        client->willPerformHTTPRedirection(WTF::move(redirectResponse), WTF::move(newRequest),
             [this, protectedThis](WebCore::ResourceRequest&& finalRequest) mutable {
                 if (m_cancelled)
                     return;
                 if (finalRequest.isNull()) {
                     // Policy (CSP/mixed-content/etc.) declined the redirect → cancel cleanly.
-                    auto* c = m_task.client();
-                    if (c && tryBeginCompletion()) {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (task && tryBeginCompletion()) {
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
                         WebCore::NetworkLoadMetrics metrics;
-                        c->didCompleteWithError(WebCore::ResourceError { WebCore::ResourceError::Type::Cancellation }, metrics);
+                        client->didCompleteWithError(WebCore::ResourceError { WebCore::ResourceError::Type::Cancellation }, metrics);
                     }
                     return;
                 }
@@ -1092,13 +1117,21 @@ void DriftstackNetworkLoader::resume()
         // load — never send a partial body.
         if (!driftstackResolveRequestBody(*fd, requestBody)) {
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.348] request-body resolution FAILED (file part unreadable) for %s — failing load", url.string().utf8().data());
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            // W2202 STEP 5: this branch runs synchronously on the main thread (inside resume()),
+            // but the callOnMainRunLoop re-defers delivery → re-acquire task/client inside the block.
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "request body file part unreadable"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis = Ref { *this }, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1149,13 +1182,19 @@ void DriftstackNetworkLoader::resume()
         // Read proxy + creds from env (same path as DriftstackSocks5URLProtocol)
         const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
         if (!proxyEnv || !proxyEnv[0]) {
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY not set"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1167,13 +1206,19 @@ void DriftstackNetworkLoader::resume()
             // W2200 (fork-egress audit): a malformed DRIFTSTACK_SOCKS5_PROXY must FAIL the load (mirror the
             // no-proxy branch above), not bare-return — a bare return left m_completionStarted=false forever →
             // the request hung until the page-load watchdog (the NSURLSession path was already bypassed).
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY malformed (no host:port colon)"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1190,13 +1235,19 @@ void DriftstackNetworkLoader::resume()
         }
         if (proxyPort == 0) {
             // W2200: same fail-closed contract as the malformed-colon branch above (was a bare-return hang).
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "DRIFTSTACK_SOCKS5_PROXY malformed (bad/zero port)"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1368,8 +1419,10 @@ void DriftstackNetworkLoader::resume()
                 if (!h3PoolHandled)
                     h3resp = WebKit::driftstackHttp3Execute(nullptr, h3req);
 
-                auto* clientPtr = m_task.client();
-                if (!clientPtr) return;
+                {
+                RefPtr task = protectedTask();
+                if (!task) return;
+                }
                 if (!h3resp.failed && h3resp.statusCode) {
                     String mimeType = "text/html"_s, charset = "UTF-8"_s;
                     long long expectedLength = -1;
@@ -1402,13 +1455,25 @@ void DriftstackNetworkLoader::resume()
                     WebKit::driftstackDecodeContentEncoding(h3resp.body, h3resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                    callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
-                        clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                            [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                    callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                        RefPtr task = protectedThis->protectedTask();
+                        if (!task)
+                            return;
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
+                        client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                            [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                                 if (action == WebCore::PolicyAction::Use) {
-                                    clientPtr->didReceiveData(bodyBuffer.get());
+                                    RefPtr task = protectedThis->protectedTask();
+                                    if (!task)
+                                        return;
+                                    RefPtr client = task->client();
+                                    if (!client)
+                                        return;
+                                    client->didReceiveData(bodyBuffer.get());
                                     WebCore::NetworkLoadMetrics metrics;
-                                    clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                                    client->didCompleteWithError(WebCore::ResourceError(), metrics);
                                 }
                             });
                     });
@@ -1441,8 +1506,10 @@ void DriftstackNetworkLoader::resume()
                 String poolHost = url.host().toString();
                 auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost);
                 WebKit::DriftstackHttp2Response h2resp = session->execute(h2req);
-                auto* clientPtr = m_task.client();
-                if (!clientPtr) return;
+                {
+                RefPtr task = protectedTask();
+                if (!task) return;
+                }
                 if (!h2resp.failed && h2resp.statusCode) {
                     String mimeType = "text/html"_s, charset = "UTF-8"_s;
                     long long expectedLength = -1;
@@ -1477,13 +1544,25 @@ void DriftstackNetworkLoader::resume()
                     // probe endpoints so we can diff our TLS/QUIC family vs the real-iPhone reference.
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                    callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
-                        clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                            [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                    callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                        RefPtr task = protectedThis->protectedTask();
+                        if (!task)
+                            return;
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
+                        client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                            [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                                 if (action == WebCore::PolicyAction::Use) {
-                                    clientPtr->didReceiveData(bodyBuffer.get());
+                                    RefPtr task = protectedThis->protectedTask();
+                                    if (!task)
+                                        return;
+                                    RefPtr client = task->client();
+                                    if (!client)
+                                        return;
+                                    client->didReceiveData(bodyBuffer.get());
                                     WebCore::NetworkLoadMetrics metrics;
-                                    clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                                    client->didCompleteWithError(WebCore::ResourceError(), metrics);
                                 }
                             });
                     });
@@ -1506,13 +1585,19 @@ void DriftstackNetworkLoader::resume()
         auto socks5Client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
         auto handshakeResult = socks5Client->performHandshake();
         if (handshakeResult != Socks5Result::Success) {
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 handshake failed"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1539,13 +1624,19 @@ void DriftstackNetworkLoader::resume()
                     });
                 return;
             }
-            auto* clientPtr = m_task.client();
-            if (clientPtr) {
+            RefPtr task = protectedTask();
+            if (task) {
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "SOCKS5 CONNECT failed"_s, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
             }
             return;
@@ -1574,13 +1665,19 @@ void DriftstackNetworkLoader::resume()
                         });
                     return;
                 }
-                auto* clientPtr = m_task.client();
-                if (clientPtr) {
+                RefPtr task = protectedTask();
+                if (task) {
                     WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), "BoringSSL TLS handshake failed"_s, WebCore::ResourceError::Type::General);
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                    callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                    callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                        RefPtr task = protectedThis->protectedTask();
+                        if (!task)
+                            return;
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
                         WebCore::NetworkLoadMetrics metrics;
-                        clientPtr->didCompleteWithError(error, metrics);
+                        client->didCompleteWithError(error, metrics);
                     });
                 }
                 return;
@@ -1764,8 +1861,13 @@ void DriftstackNetworkLoader::resume()
                 // originally handled only customTLSClient → flaky SSE).
                 if (isSSE) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.350] SSE stream → incremental PathB delivery for %s", url.string().utf8().data());
-                    auto* clientPtr = m_task.client();
-                    if (!clientPtr) return;
+                    // W2202 STEP 5: SSE fires onHeaders/onBodyChunk repeatedly over the stream lifetime on
+                    // loaderQueue — never cache the raw client. Task-existence early-out only; selfRef keeps
+                    // the loader alive across every hop; re-acquire protectedTask()->client() inside each block.
+                    {
+                    RefPtr task = protectedTask();
+                    if (!task) return;
+                    }
                     Ref<DriftstackNetworkLoader> selfRef { *this };
 
                     struct StreamPolicy {
@@ -1776,8 +1878,8 @@ void DriftstackNetworkLoader::resume()
                     };
                     auto policy = std::make_shared<StreamPolicy>();
 
-                    h2req.onHeaders = [this, policy, clientPtr, url](int statusCode, const Vector<std::pair<String, String>>& headers) -> bool {
-                        if (m_cancelled) return false;
+                    h2req.onHeaders = [selfRef, policy, url](int statusCode, const Vector<std::pair<String, String>>& headers) -> bool {
+                        if (selfRef->m_cancelled) return false;
                         String mimeType = "text/event-stream"_s, charset = "UTF-8"_s;
                         for (auto& [k, v] : headers) {
                             if (equalIgnoringASCIICase(k, "content-type"_s)) {
@@ -1789,8 +1891,25 @@ void DriftstackNetworkLoader::resume()
                         response.setHTTPStatusCode(statusCode);
                         for (auto& [k, v] : headers)
                             response.setHTTPHeaderField(k, v);
-                        callOnMainRunLoop([clientPtr, response = WebCore::ResourceResponse(response), policy]() mutable {
-                            clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                        callOnMainRunLoop([selfRef, response = WebCore::ResourceResponse(response), policy]() mutable {
+                            RefPtr task = selfRef->protectedTask();
+                            if (!task) {
+                                // Task gone: unblock the loaderQueue wait below so the stream tears down.
+                                Locker locker { policy->lock };
+                                policy->use = false;
+                                policy->received = true;
+                                policy->cond.notifyAll();
+                                return;
+                            }
+                            RefPtr client = task->client();
+                            if (!client) {
+                                Locker locker { policy->lock };
+                                policy->use = false;
+                                policy->received = true;
+                                policy->cond.notifyAll();
+                                return;
+                            }
+                            client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
                                 [policy](WebCore::PolicyAction action) mutable {
                                     Locker locker { policy->lock };
                                     policy->use = (action == WebCore::PolicyAction::Use);
@@ -1801,13 +1920,19 @@ void DriftstackNetworkLoader::resume()
                         Locker locker { policy->lock };
                         while (!policy->received)
                             policy->cond.wait(policy->lock);
-                        return policy->use && !m_cancelled;
+                        return policy->use && !selfRef->m_cancelled;
                     };
-                    h2req.onBodyChunk = [this, clientPtr](std::span<const uint8_t> chunk) -> bool {
-                        if (m_cancelled) return false;
+                    h2req.onBodyChunk = [selfRef](std::span<const uint8_t> chunk) -> bool {
+                        if (selfRef->m_cancelled) return false;
                         auto buf = WebCore::SharedBuffer::create(chunk);
-                        callOnMainRunLoop([clientPtr, buf]() mutable {
-                            clientPtr->didReceiveData(buf.get());
+                        callOnMainRunLoop([selfRef, buf]() mutable {
+                            RefPtr task = selfRef->protectedTask();
+                            if (!task)
+                                return;
+                            RefPtr client = task->client();
+                            if (!client)
+                                return;
+                            client->didReceiveData(buf.get());
                         });
                         return true;
                     };
@@ -1834,15 +1959,21 @@ void DriftstackNetworkLoader::resume()
 #endif
                     }
 
-                    auto* doneClient = m_task.client();
-                    if (!doneClient) return;
+                    RefPtr doneTask = protectedTask();
+                    if (!doneTask) return;
                     if (!tryBeginCompletion()) return;
                     WebCore::ResourceError err = sseResp.failed && !m_cancelled
                         ? WebCore::ResourceError(String("DriftstackNetworkLoader"_s), 0, URL(url), sseResp.errorMessage, WebCore::ResourceError::Type::General)
                         : WebCore::ResourceError();
-                    callOnMainRunLoop([doneClient, err = WebCore::ResourceError(err)]() mutable {
+                    callOnMainRunLoop([selfRef, err = WebCore::ResourceError(err)]() mutable {
+                        RefPtr task = selfRef->protectedTask();
+                        if (!task)
+                            return;
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
                         WebCore::NetworkLoadMetrics metrics;
-                        doneClient->didCompleteWithError(err, metrics);
+                        client->didCompleteWithError(err, metrics);
                     });
                     return;
                 }
@@ -1895,8 +2026,10 @@ void DriftstackNetworkLoader::resume()
             }
 #endif
 
-            auto* clientPtr = m_task.client();
-            if (!clientPtr) return;
+            {
+            RefPtr task = protectedTask();
+            if (!task) return;
+            }
 
             if (h2resp.failed) {
                 if (canRetry) {
@@ -1911,9 +2044,15 @@ void DriftstackNetworkLoader::resume()
                 }
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), h2resp.errorMessage, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                callOnMainRunLoop([clientPtr, error = std::move(error)]() mutable {
+                callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {
+                    RefPtr task = protectedThis->protectedTask();
+                    if (!task)
+                        return;
+                    RefPtr client = task->client();
+                    if (!client)
+                        return;
                     WebCore::NetworkLoadMetrics metrics;
-                    clientPtr->didCompleteWithError(error, metrics);
+                    client->didCompleteWithError(error, metrics);
                 });
                 return;
             }
@@ -1982,13 +2121,25 @@ void DriftstackNetworkLoader::resume()
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
             if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-            callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse), bodyBuffer = std::move(bodyBuffer)]() mutable {
-                clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                    [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+            callOnMainRunLoop([protectedThis, response = std::move(deliveryResponse), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                RefPtr task = protectedThis->protectedTask();
+                if (!task)
+                    return;
+                RefPtr client = task->client();
+                if (!client)
+                    return;
+                client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                    [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                         if (action == WebCore::PolicyAction::Use) {
-                            clientPtr->didReceiveData(bodyBuffer.get());
+                            RefPtr task = protectedThis->protectedTask();
+                            if (!task)
+                                return;
+                            RefPtr client = task->client();
+                            if (!client)
+                                return;
+                            client->didReceiveData(bodyBuffer.get());
                             WebCore::NetworkLoadMetrics metrics;
-                            clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                            client->didCompleteWithError(WebCore::ResourceError(), metrics);
                         }
                     });
             });
@@ -2244,20 +2395,34 @@ _Pragma("clang diagnostic pop")
         if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
         // Dispatch callbacks. Use the DECODED body for SharedBuffer.
         auto bodyBuffer = WebCore::SharedBuffer::create(h1body.span());
-        auto* clientPtr = m_task.client();
-        if (!clientPtr)
+        {
+        RefPtr task = protectedTask();
+        if (!task)
             return;
+        }
 
         // Wave 29-499.269b — CFStream fallback also marshalled via main runloop
         auto deliveryResponse2 = WebCore::ResourceResponse(response);
         if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-        callOnMainRunLoop([clientPtr, response = std::move(deliveryResponse2), bodyBuffer = std::move(bodyBuffer)]() mutable {
-            clientPtr->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                [clientPtr, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+        callOnMainRunLoop([protectedThis, response = std::move(deliveryResponse2), bodyBuffer = std::move(bodyBuffer)]() mutable {
+            RefPtr task = protectedThis->protectedTask();
+            if (!task)
+                return;
+            RefPtr client = task->client();
+            if (!client)
+                return;
+            client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
                     if (action == WebCore::PolicyAction::Use) {
-                        clientPtr->didReceiveData(bodyBuffer.get());
+                        RefPtr task = protectedThis->protectedTask();
+                        if (!task)
+                            return;
+                        RefPtr client = task->client();
+                        if (!client)
+                            return;
+                        client->didReceiveData(bodyBuffer.get());
                         WebCore::NetworkLoadMetrics metrics;
-                        clientPtr->didCompleteWithError(WebCore::ResourceError(), metrics);
+                        client->didCompleteWithError(WebCore::ResourceError(), metrics);
                     }
                 });
         });

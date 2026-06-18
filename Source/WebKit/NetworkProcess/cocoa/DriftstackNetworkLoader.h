@@ -48,6 +48,7 @@
 #include <wtf/CompletionHandler.h>
 #include <wtf/Forward.h>
 #include <wtf/RefCounted.h>
+#include <wtf/ThreadSafeWeakPtr.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -75,7 +76,13 @@ public:
 private:
     DriftstackNetworkLoader(NetworkDataTaskCocoa&, const WebCore::ResourceRequest&);
 
-    [[maybe_unused]] NetworkDataTaskCocoa& m_task;
+    // W2202 STEP 5 (fork-egress audit ws4cffit6): the loader runs I/O on a concurrent loaderQueue and marshals
+    // delivery back via callOnMainRunLoop; the task (a ThreadSafeRefCounted NetworkDataTask, destroyed on the
+    // main thread) can die mid-flight — a bare `NetworkDataTaskCocoa&` dangled + a cached raw client() ptr was a
+    // UAF. Hold a ThreadSafeWeakPtr; upgrade to a strong RefPtr ON the main thread (protectedTask) inside each
+    // delivery block + re-acquire client() there; never cache the raw client ptr across the queue→main hop.
+    ThreadSafeWeakPtr<NetworkDataTaskCocoa> m_task;
+    RefPtr<NetworkDataTaskCocoa> protectedTask() const;   // strong upgrade (null if the task is gone); defn in .mm (type complete there)
     WebCore::ResourceRequest m_request;
     // W2341 (task #58): atomic — cancel() runs on another thread while the concurrent
     // dispatch block's read loops poll it (was a plain-bool data race; now also the
