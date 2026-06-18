@@ -3092,6 +3092,30 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "pingfang sc"_s, "pingfangsc"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2636 NOTDEF CLASS: these cps are notdef in EVERY iOS font (no glyph anywhere). A real iPhone renders the
+    // REQUESTING generic's missing-glyph box, whose advance + line-box is a per-generic CONSTANT (default/serif 13,20 /
+    // sans 11,21 / mono 10,20 / cursive 8,21 / fantasy 8,26 / sysui 16,21). The fork's natural cascade instead finds a
+    // MAC-ONLY font (Geneva / Arial Unicode MS — absent on iOS) that HAS a real glyph, rendering the wrong (generic-
+    // uniform) advance. FIX: return ANY iOS font that also lacks the glyph → WebKit falls to the ORIGINAL requesting
+    // font's missing-glyph box at the per-generic advance+line-box (the returned font's identity is irrelevant; it only
+    // must lack the glyph — EMPIRICALLY PROVEN: returning "times new roman" for both default and system-ui yielded 13
+    // vs 16, i.e. the box comes from the requesting font, not the returned one). Verified byte-exact vs the iOS-26.5 sim
+    // for all 7 generics on U+2E1A. Routes each generic to its own primary (all lack these notdef cps): sans→Helvetica,
+    // mono→Menlo, cursive→Snell, fantasy→Papyrus, default/serif/system-ui→Times. The 31 cps are EXACTLY those whose iOS
+    // sim row equals the standard notdef signature; GCPS U+302E is EXCLUDED (glyphHash-load-bearing, handled separately).
+    // Currency notdef (U+20B6..BF) has a DIFFERENT box signature → separate class. After build verifies natural==sim per
+    // (cp,generic), DELETE the matching GEOM_SERVE rows. glyphHash-SAFE (all 31 disjoint from the 43 GCPS).
+    case 0x2E1A: case 0x2E1B: case 0x2E1E: case 0x2E1F: case 0x2E20: case 0x2E21: case 0x2E22: case 0x2E23:
+    case 0x2E24: case 0x2E25: case 0x2E26: case 0x2E27: case 0x2E2A: case 0x2E2B: case 0x2E2C: case 0x2E2D:
+    case 0x2E2F: case 0x302A: case 0x302B: case 0x302C: case 0x302D: case 0x302F: case 0x3031: case 0x3032:
+    case 0x3037: case 0x3038: case 0x3039: case 0x303A: case 0x303F: case 0xFE53: case 0xFE67: {
+        if (baseIsSansSerif) { static const std::array<ASCIILiteral, 1> c { "helvetica"_s }; return driftstackLookupIOSFontByCandidates(c, description, size); }
+        if (baseFontIsMonospace) { static const std::array<ASCIILiteral, 1> c { "menlo"_s }; return driftstackLookupIOSFontByCandidates(c, description, size); }
+        if (baseIsCursive) { static const std::array<ASCIILiteral, 1> c { "snell roundhand"_s }; return driftstackLookupIOSFontByCandidates(c, description, size); }
+        if (baseIsFantasy) { static const std::array<ASCIILiteral, 1> c { "papyrus"_s }; return driftstackLookupIOSFontByCandidates(c, description, size); }
+        static const std::array<ASCIILiteral, 1> c { "times new roman"_s };
+        return driftstackLookupIOSFontByCandidates(c, description, size);
+    }
     default:
         return nullptr;
     }
