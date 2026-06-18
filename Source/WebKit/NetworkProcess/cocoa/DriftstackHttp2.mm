@@ -101,7 +101,10 @@ struct SSLFns {
 static SSLFns& sslFns()
 {
     static SSLFns s;
-    if (!s.ready) {
+    // SEC-2026-06-18 (audit INFO): dispatch_once removes the formal first-use data race on the non-atomic
+    // s.ready flag/pointers (benign — idempotent dlsym, identical word-aligned writes on arm64 — but TSan-flagged).
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         // Wave 29-499.167 — dlsym from Apple's /usr/lib/libssl.48.dylib
         // (LibreSSL 3.3.6 — iPhone-compatible TLS with 3DES support).
         // SSL* type and read/write ABI come from same library as
@@ -112,14 +115,10 @@ static SSLFns& sslFns()
             s.read = (FnSSL_read)dlsym(h, "SSL_read");
             s.write = (FnSSL_write)dlsym(h, "SSL_write");
             s.ready = s.read && s.write;
-            static bool loggedOnce = false;
-            if (!loggedOnce) {
-                loggedOnce = true;
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.164] DriftstackHttp2 SSL fns from libwebrtc: read=%p write=%p ready=%d",
-                    (void*)s.read, (void*)s.write, s.ready);
-            }
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.164] DriftstackHttp2 SSL fns from libwebrtc: read=%p write=%p ready=%d",
+                (void*)s.read, (void*)s.write, s.ready);
         }
-    }
+    });
     return s;
 }
 

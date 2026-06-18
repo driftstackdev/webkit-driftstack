@@ -36,14 +36,16 @@ struct StunCryptoFns {
 StunCryptoFns& stunCryptoFns()
 {
     static StunCryptoFns f;
-    if (!f.ready) {
+    // SEC-2026-06-18 (audit INFO): dispatch_once removes the formal first-use data race on the non-atomic f.ready.
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         void* h = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
         if (h) {
             f.hmac = (FnHMAC)dlsym(h, "HMAC");
             f.sha1 = (FnSha)dlsym(h, "EVP_sha1");
             f.ready = f.hmac && f.sha1;
         }
-    }
+    });
     return f;
 }
 
@@ -274,16 +276,17 @@ Vector<uint8_t> driftstackLongTermKey(const String& username, const String& real
 uint32_t driftstackCrc32(const uint8_t* data, size_t len)
 {
     static uint32_t table[256];
-    static bool tableInit = false;
-    if (!tableInit) {
+    // SEC-2026-06-18 (audit INFO): dispatch_once removes the formal first-use data race on the non-atomic tableInit
+    // flag (benign — the table fill is deterministic — but TSan-flagged).
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         for (uint32_t i = 0; i < 256; ++i) {
             uint32_t c = i;
             for (int k = 0; k < 8; ++k)
                 c = (c & 1) ? (0xEDB88320U ^ (c >> 1)) : (c >> 1);
             table[i] = c;
         }
-        tableInit = true;
-    }
+    });
     uint32_t crc = 0xFFFFFFFFU;
     for (size_t i = 0; i < len; ++i)
         crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
