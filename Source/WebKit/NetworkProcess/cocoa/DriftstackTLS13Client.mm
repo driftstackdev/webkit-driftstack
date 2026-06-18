@@ -13,6 +13,7 @@
 #import "DriftstackCustomTLS.h"
 #import "DriftstackTLS13.h"
 #import "DriftstackCrypto.h"
+#import "DriftstackTLS13Verify.h"   // W2202 L3: the shared CertificateVerify helper (decl); defined below + called by the h2 + h3 0x0f arms
 #import <Security/Security.h>
 #import <wtf/RetainPtr.h>
 #import <wtf/text/MakeString.h>
@@ -1242,6 +1243,77 @@ Vector<uint8_t> DriftstackTLS13Client::readTLS12Record()
     Vector<uint8_t> pt = driftstackAes128GcmDecrypt(m_t12ServerKey, nonce, ct, aad);
     m_t12ServerSeq++;
     return pt;
+}
+
+// === W2202 cert-validation Landing 3: CertificateVerify (0x0f) signature verification ===
+// Defined HERE (not a standalone TU) so the h2 (this file) AND h3 (DriftstackHttp3.mm) 0x0f arms share ONE
+// implementation via intra-framework linkage, avoiding a pbxproj-wired TU. The whole file is already inside the
+// WTF_ALLOW_UNSAFE_BUFFER_USAGE region (top), so the raw-buffer ops below are permitted. RFC 8446 §4.4.3.
+
+// TLS SignatureScheme (RFC 8446 §4.2.3) → SecKeyAlgorithm. nullptr = unsupported/forbidden (caller fails closed).
+// TLS 1.3 CertificateVerify FORBIDS rsa_pkcs1_* (0x0401/0501/0601) — not mapped. ed25519 (0x0807) has NO EdDSA
+// SecKeyAlgorithm constant in the macOS SDK → rejected (fail-closed). ...Message... variants (NOT ...Digest...)
+// so SecKeyVerifySignature digests the full signed content itself.
+static SecKeyAlgorithm driftstackSecKeyAlgorithmForScheme(uint16_t scheme)
+{
+    switch (scheme) {
+    case 0x0804: return kSecKeyAlgorithmRSASignatureMessagePSSSHA256;     // rsa_pss_rsae_sha256
+    case 0x0805: return kSecKeyAlgorithmRSASignatureMessagePSSSHA384;     // rsa_pss_rsae_sha384
+    case 0x0806: return kSecKeyAlgorithmRSASignatureMessagePSSSHA512;     // rsa_pss_rsae_sha512
+    case 0x0809: return kSecKeyAlgorithmRSASignatureMessagePSSSHA256;     // rsa_pss_pss_sha256 (key-keyed; same alg)
+    case 0x080a: return kSecKeyAlgorithmRSASignatureMessagePSSSHA384;     // rsa_pss_pss_sha384
+    case 0x080b: return kSecKeyAlgorithmRSASignatureMessagePSSSHA512;     // rsa_pss_pss_sha512
+    case 0x0403: return kSecKeyAlgorithmECDSASignatureMessageX962SHA256;  // ecdsa_secp256r1_sha256 (DER r,s)
+    case 0x0503: return kSecKeyAlgorithmECDSASignatureMessageX962SHA384;  // ecdsa_secp384r1_sha384
+    case 0x0603: return kSecKeyAlgorithmECDSASignatureMessageX962SHA512;  // ecdsa_secp521r1_sha512
+    default:     return nullptr;
+    }
+}
+
+bool driftstackVerifyCertificateVerify(SecCertificateRef leaf, std::span<const uint8_t> sig, uint16_t sigScheme,
+    const Vector<uint8_t>& transcriptHashThroughCert, bool isServerContext, String& outError)
+{
+    if (!leaf) { outError = "no leaf certificate"_s; return false; }
+    if (sig.empty()) { outError = "empty CertificateVerify signature"_s; return false; }
+    if (transcriptHashThroughCert.isEmpty()) { outError = "empty transcript hash"_s; return false; }
+
+    SecKeyAlgorithm alg = driftstackSecKeyAlgorithmForScheme(sigScheme);
+    if (!alg) {
+        outError = "unsupported/forbidden CertificateVerify sigScheme"_s;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] CertificateVerify sigScheme 0x%04x unsupported/forbidden — rejecting (fail-closed)", sigScheme);
+        return false;
+    }
+
+    RetainPtr<SecKeyRef> pubKey = adoptCF(SecCertificateCopyKey(leaf));
+    if (!pubKey) { outError = "could not extract leaf public key"_s; return false; }
+
+    // RFC 8446 §4.4.3 signed content: 64×0x20 || context-string || 0x00 || Transcript-Hash(CH..Certificate).
+    // The SERVER context string is exactly "TLS 1.3, server CertificateVerify" (33 bytes, NO trailing NUL).
+    const char* ctx = isServerContext ? "TLS 1.3, server CertificateVerify" : "TLS 1.3, client CertificateVerify";
+    constexpr size_t kCtxLen = 33;
+    Vector<uint8_t> signedContent;
+    signedContent.reserveInitialCapacity(64 + kCtxLen + 1 + transcriptHashThroughCert.size());
+    for (size_t i = 0; i < 64; ++i)
+        signedContent.append(static_cast<uint8_t>(0x20));
+    for (size_t i = 0; i < kCtxLen; ++i)
+        signedContent.append(static_cast<uint8_t>(ctx[i]));  // exactly 33 bytes, NOT the implicit NUL at [33]
+    signedContent.append(static_cast<uint8_t>(0x00));
+    signedContent.append(transcriptHashThroughCert.span());
+
+    RetainPtr<CFDataRef> contentData = adoptCF(CFDataCreate(nullptr, signedContent.span().data(), signedContent.size()));
+    RetainPtr<CFDataRef> sigData = adoptCF(CFDataCreate(nullptr, sig.data(), sig.size()));
+    if (!contentData || !sigData) { outError = "CFDataCreate failed"_s; return false; }
+
+    CFErrorRef cfErr = nullptr;
+    bool ok = SecKeyVerifySignature(pubKey.get(), alg, contentData.get(), sigData.get(), &cfErr);
+    if (cfErr)
+        CFRelease(cfErr);
+    if (!ok) {
+        outError = "CertificateVerify signature verification FAILED"_s;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] CertificateVerify signature INVALID (scheme 0x%04x) — rejecting (MITM defense)", sigScheme);
+        return false;
+    }
+    return true;
 }
 
 } // namespace WebKit
