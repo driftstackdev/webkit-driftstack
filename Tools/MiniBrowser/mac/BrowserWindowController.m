@@ -103,8 +103,24 @@
         [self.window standardWindowButton:NSWindowZoomButton].hidden = YES;
         // W1371: stop the chrome greying when the window isn't focused (founder W1370). Force
         // always-active DRAWING via the appearance-only window subclass (real focus/responder
-        // status untouched). isa-swap is layout-safe (subclass adds no ivars).
-        object_setClass(self.window, [DriftstackAlwaysActiveWindow class]);
+        // status untouched).
+        // W2229 (A3): force the always-active appearance via CLASS-METHOD replacement, NOT object_setClass.
+        // object_setClass changes the window's isa, which clobbers KVO's isa bookkeeping: the iOS-26 bottom-bar
+        // NSHostingView observes the window's `opaque` key path, so KVO isa-swizzles the window to a
+        // NSKVONotifying_… subclass; object_setClass overwrites that isa → the `opaque` observer removal later
+        // fails ("Cannot remove an observer ... not registered") → NSRangeException → SIGABRT on EVERY
+        // SAFARI_CHROME=1 launch via the AppKit window-setup/reopen path (verified: a clean launch with zero
+        // saved state still crashed). Replacing -hasKeyAppearance/-hasMainAppearance on the window's class to
+        // return YES gives the identical always-active drawing with NO isa change → KVO untouched → no crash.
+        // The fork hosts a single session window, so class-scoping the override is fine. (Was object_setClass
+        // → DriftstackAlwaysActiveWindow; that subclass is now unused but left for reference.)
+        static dispatch_once_t driftActiveOnce;
+        dispatch_once(&driftActiveOnce, ^{
+            Class wc = [self.window class];
+            IMP yesImp = imp_implementationWithBlock(^BOOL(__unused id _self){ return YES; });
+            class_replaceMethod(wc, @selector(hasKeyAppearance), yesImp, "B@:");
+            class_replaceMethod(wc, @selector(hasMainAppearance), yesImp, "B@:");
+        });
         // W1378 (founder: "fancier iOS 26 look, url bar at BOTTOM like Safari, tabs"): build the
         // iOS-26 Safari-style BOTTOM toolbar (translucent glass, always-active). Deferred to the next
         // runloop so the nib's containerView + the WK2 subclass's webView are created/laid out first.
