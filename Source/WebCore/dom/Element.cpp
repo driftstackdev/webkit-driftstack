@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 464> table { {
+    static constexpr std::array<Entry, 452> table { {
         { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
         { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
         { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1692,12 +1692,15 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         // system-ui, so this is c587ed44-safe. (Atlas drift-guard excludes U+2B06 as a glyphHash cp.)
         { 0x2B06, 6, 23, 20 },
         // W2614 exotic General Punctuation serif (bucket 2) — iOS-sim 16px width,height (fork serif->Lucida Grande wrong):
-        { 0x2023, 2, 6, 21 }, { 0x2036, 2, 8, 21 }, { 0x2037, 2, 11, 21 }, { 0x2038, 2, 5, 21 },
-        { 0x203B, 2, 9, 21 }, { 0x203D, 2, 9, 21 }, { 0x203F, 2, 16, 21 }, { 0x2040, 2, 16, 21 },
-        { 0x2041, 2, 10, 21 }, { 0x2042, 2, 13, 21 }, { 0x2045, 2, 4, 21 }, { 0x2046, 2, 4, 21 },
-        { 0x2047, 2, 18, 21 }, { 0x2048, 2, 13, 21 }, { 0x2049, 2, 13, 21 }, { 0x204B, 2, 9, 21 },
-        { 0x204E, 2, 6, 21 }, { 0x204F, 2, 4, 21 }, { 0x2050, 2, 16, 21 }, { 0x2051, 2, 6, 21 },
-        { 0x2052, 2, 14, 21 }, { 0x2053, 2, 14, 21 }, { 0x2054, 2, 16, 21 }, { 0x2057, 2, 14, 21 },
+        // W2633: 12 serif rows DELETED (U+2023/2037/203D/203F/2040/2041/2042/2047/204B/2050/2054/2057) —
+        // render-fixed via FontCacheCoreText Helvetica routing; natural serif now == the served value == iOS-sim
+        // (browserleaks-DOM and probe-DOM agree for these, so deletion is a verified no-op). KEPT below: 2036/2038/
+        // 2049 (NOT routed — emoji-split/unmeasured) + 203B/2045/2046/2048/204E/204F/2051/2052/2053/205A/205D
+        // (served=browserleaks-DOM value differs from the iOS-sim by +1 sub-pixel rounding; keep until a
+        // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
+        { 0x2036, 2, 8, 21 }, { 0x2038, 2, 5, 21 }, { 0x203B, 2, 9, 21 }, { 0x2045, 2, 4, 21 },
+        { 0x2046, 2, 4, 21 }, { 0x2048, 2, 13, 21 }, { 0x2049, 2, 13, 21 }, { 0x204E, 2, 6, 21 },
+        { 0x204F, 2, 4, 21 }, { 0x2051, 2, 6, 21 }, { 0x2052, 2, 14, 21 }, { 0x2053, 2, 14, 21 },
         { 0x205A, 2, 4, 21 }, { 0x205D, 2, 4, 21 },
         // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
         { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
