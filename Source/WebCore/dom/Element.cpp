@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 324> table { {
+    static constexpr std::array<Entry, 310> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1673,7 +1673,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x05C6, 3, 8, 20 }, { 0x05C6, 4, 6, 21 }, { 0x05C6, 5, 6, 26 },
  { 0x2B06, 0, 21, 27 }, { 0x2B06, 1, 21, 27 }, { 0x2B06, 2, 21, 27 },
  { 0x2B06, 3, 17, 23 }, { 0x2B06, 4, 21, 27 }, { 0x2B06, 5, 21, 30 },
-        // W2605 notdef-width currency (iOS-sim 16px, per generic) + U+25CA monospace
+ // W2605 notdef-width currency (iOS-sim 16px, per generic) + U+25CA monospace
  { 0x20B6, 0, 10, 23 }, { 0x20B6, 1, 10, 24 }, { 0x20B6, 2, 10, 23 },
  { 0x20B6, 3, 10, 23 }, { 0x20B6, 4, 10, 23 }, { 0x20B6, 5, 10, 26 },
  { 0x20B7, 0, 12, 23 }, { 0x20B7, 1, 12, 24 }, { 0x20B7, 2, 12, 23 },
@@ -1683,30 +1683,30 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x20BF, 0, 10, 21 }, { 0x20BF, 1, 10, 21 }, { 0x20BF, 2, 10, 21 },
  { 0x20BF, 3, 10, 21 }, { 0x20BF, 4, 10, 22 }, { 0x20BF, 5, 10, 26 },
  { 0x25CA, 3, 10, 20 },
-        // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
+ // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
  { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
-        // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
+ // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
  { 0x05C6, 6, 6, 20 },
-        // W2620 U+2B06 (up-arrow, emoji-presentation) system-ui (bucket 6, San Francisco) = 23,20 — distinct
-        // from the glyphHash default/serif emoji width (bucket 0 = 21,27). The glyphHash probe never measures
-        // system-ui, so this is c587ed44-safe. (Atlas drift-guard excludes U+2B06 as a glyphHash cp.)
+ // W2620 U+2B06 (up-arrow, emoji-presentation) system-ui (bucket 6, San Francisco) = 23,20 — distinct
+ // from the glyphHash default/serif emoji width (bucket 0 = 21,27). The glyphHash probe never measures
+ // system-ui, so this is c587ed44-safe. (Atlas drift-guard excludes U+2B06 as a glyphHash cp.)
  { 0x2B06, 6, 23, 20 },
-        // W2614 exotic General Punctuation serif (bucket 2) — iOS-sim 16px width,height (fork serif->Lucida Grande wrong):
-        // W2633: 12 serif rows DELETED (U+2023/2037/203D/203F/2040/2041/2042/2047/204B/2050/2054/2057) —
-        // render-fixed via FontCacheCoreText Helvetica routing; natural serif now == the served value == iOS-sim
-        // (browserleaks-DOM and probe-DOM agree for these, so deletion is a verified no-op). KEPT below: 2036/2038/
-        // 2049 (NOT routed — emoji-split/unmeasured) + 203B/2045/2046/2048/204E/204F/2051/2052/2053/205A/205D
-        // (served=browserleaks-DOM value differs from the iOS-sim by +1 sub-pixel rounding; keep until a
-        // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
+ // W2614 exotic General Punctuation serif (bucket 2) — iOS-sim 16px width,height (fork serif->Lucida Grande wrong):
+ // W2633: 12 serif rows DELETED (U+2023/2037/203D/203F/2040/2041/2042/2047/204B/2050/2054/2057) —
+ // render-fixed via FontCacheCoreText Helvetica routing; natural serif now == the served value == iOS-sim
+ // (browserleaks-DOM and probe-DOM agree for these, so deletion is a verified no-op). KEPT below: 2036/2038/
+ // 2049 (NOT routed — emoji-split/unmeasured) + 203B/2045/2046/2048/204E/204F/2051/2052/2053/205A/205D
+ // (served=browserleaks-DOM value differs from the iOS-sim by +1 sub-pixel rounding; keep until a
+ // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
  { 0x2036, 2, 8, 21 }, { 0x2038, 2, 5, 21 },
  { 0x2049, 2, 13, 21 },
-        // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
+ // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
  { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
-        // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
+ // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
  { 0x203C, 6, 23, 20 }, { 0x2049, 6, 23, 20 },
-        // W2615 cursive (bucket 4, Snell Roundhand) General Punctuation — REAL (double-warm-stable): the fork's
-        // cursive uses varying fallbacks (heights 21-26 + notdef-width 16) where iOS gives a consistent fallback
-        // (uniform line box 22 + the real glyph width). iOS-sim 16px width,22 (sim = bit-identical iOS DOM-truth, W2570):
+ // W2615 cursive (bucket 4, Snell Roundhand) General Punctuation — REAL (double-warm-stable): the fork's
+ // cursive uses varying fallbacks (heights 21-26 + notdef-width 16) where iOS gives a consistent fallback
+ // (uniform line box 22 + the real glyph width). iOS-sim 16px width,22 (sim = bit-identical iOS DOM-truth, W2570):
  { 0x2002, 4, 4, 22 }, { 0x2003, 4, 13, 22 }, { 0x2004, 4, 5, 22 }, { 0x2005, 4, 4, 22 }, { 0x2006, 4, 3, 22 }, { 0x2007, 4, 9, 22 },
  { 0x2008, 4, 2, 22 }, { 0x2009, 4, 1, 22 }, { 0x200A, 4, 0, 22 }, { 0x2012, 4, 5, 22 }, { 0x2015, 4, 16, 22 }, { 0x2016, 4, 7, 22 },
  { 0x2017, 4, 5, 22 }, { 0x201B, 4, 4, 22 }, { 0x201F, 4, 5, 22 }, { 0x2025, 4, 11, 22 }, { 0x2027, 4, 5, 22 }, { 0x202F, 4, 2, 22 },
@@ -1714,9 +1714,9 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x203E, 4, 5, 22 }, { 0x203F, 4, 16, 22 }, { 0x2042, 4, 13, 22 }, { 0x2044, 4, 3, 22 }, { 0x2047, 4, 18, 22 }, { 0x2048, 4, 13, 22 },
  { 0x2049, 4, 13, 22 }, { 0x204C, 4, 9, 22 }, { 0x204D, 4, 9, 22 }, { 0x204E, 4, 6, 22 }, { 0x2051, 4, 6, 22 }, { 0x205A, 4, 4, 22 },
  { 0x205D, 4, 4, 22 },
-        // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
-        // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
-        // system-ui only) where the fork renders a DIFFERENT tofu. Matching Apple's actual notdef advance. iOS-sim values:
+ // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
+ // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
+ // system-ui only) where the fork renders a DIFFERENT tofu. Matching Apple's actual notdef advance. iOS-sim values:
  { 0x2E1A, 2, 12, 20 }, { 0x2E1A, 1, 10, 20 }, { 0x2E1A, 3, 10, 17 }, { 0x2E1A, 4, 8, 21 }, { 0x2E1A, 5, 8, 26 }, { 0x2E1A, 6, 16, 20 },
  { 0x2E1B, 2, 12, 20 }, { 0x2E1B, 1, 10, 20 }, { 0x2E1B, 3, 10, 17 }, { 0x2E1B, 4, 8, 21 }, { 0x2E1B, 5, 8, 26 }, { 0x2E1B, 6, 16, 20 },
  { 0x2E1E, 2, 12, 20 }, { 0x2E1E, 1, 10, 20 }, { 0x2E1E, 3, 10, 17 }, { 0x2E1E, 4, 8, 21 }, { 0x2E1E, 5, 8, 26 }, { 0x2E1E, 6, 16, 20 },
@@ -1736,12 +1736,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x2E2D, 2, 12, 20 }, { 0x2E2D, 1, 10, 20 }, { 0x2E2D, 3, 10, 17 }, { 0x2E2D, 4, 8, 21 }, { 0x2E2D, 5, 8, 26 }, { 0x2E2D, 6, 16, 20 },
  { 0x2E2F, 2, 12, 20 }, { 0x2E2F, 1, 10, 20 }, { 0x2E2F, 3, 10, 17 }, { 0x2E2F, 4, 8, 21 }, { 0x2E2F, 5, 8, 26 }, { 0x2E2F, 6, 16, 20 },
  { 0x2E30, 6, 6, 23 }, { 0x2E31, 6, 7, 23 },
-        // W2617 CJK Symbols/Punct U+3003-303F + Small Form Variants U+FE50-FE6B — real-glyph fallback divergences
-        // (fork cascades to Songti SC/Hiragino full-width 16; iOS uses narrower glyphs / taller CJK line box).
-        // Some CJK tone marks (U+302A-302D/3037-303A) are .notdef tofu value-set. iOS-sim values:
- { 0x3003, 2, 16, 25 }, { 0x3003, 4, 16, 25 }, { 0x3005, 2, 16, 25 }, { 0x3005, 4, 16, 25 }, { 0x3006, 2, 16, 25 }, { 0x3006, 4, 16, 25 },
- { 0x3007, 2, 16, 25 }, { 0x3007, 4, 16, 25 }, { 0x3012, 2, 16, 25 }, { 0x3012, 4, 16, 25 }, { 0x3013, 2, 16, 25 }, { 0x3013, 4, 16, 25 },
- { 0x301A, 6, 9, 23 }, { 0x301B, 6, 9, 23 }, { 0x301C, 2, 16, 23 }, { 0x301C, 4, 16, 23 }, { 0x302A, 2, 12, 20 }, { 0x302A, 1, 10, 20 },
+ // W2617 CJK Symbols/Punct U+3003-303F + Small Form Variants U+FE50-FE6B — real-glyph fallback divergences
+ // (fork cascades to Songti SC/Hiragino full-width 16; iOS uses narrower glyphs / taller CJK line box).
+ // Some CJK tone marks (U+302A-302D/3037-303A) are .notdef tofu value-set. iOS-sim values:
+ 
+ 
+ { 0x301A, 6, 9, 23 }, { 0x301B, 6, 9, 23 }, { 0x302A, 2, 12, 20 }, { 0x302A, 1, 10, 20 },
  { 0x302A, 3, 10, 17 }, { 0x302A, 4, 8, 21 }, { 0x302A, 5, 8, 26 }, { 0x302A, 6, 16, 20 }, { 0x302B, 2, 12, 20 }, { 0x302B, 1, 10, 20 },
  { 0x302B, 3, 10, 17 }, { 0x302B, 4, 8, 21 }, { 0x302B, 5, 8, 26 }, { 0x302B, 6, 16, 20 }, { 0x302C, 2, 12, 20 }, { 0x302C, 1, 10, 20 },
  { 0x302C, 3, 10, 17 }, { 0x302C, 4, 8, 21 }, { 0x302C, 5, 8, 26 }, { 0x302C, 6, 16, 20 }, { 0x302D, 2, 12, 20 }, { 0x302D, 1, 10, 20 },
@@ -1760,7 +1760,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0xFE59, 2, 14, 20 }, { 0xFE59, 1, 14, 21 },
  { 0xFE59, 3, 14, 20 }, { 0xFE59, 4, 14, 21 }, { 0xFE59, 5, 14, 26 }, { 0xFE5A, 2, 14, 20 }, { 0xFE5A, 1, 14, 21 }, { 0xFE5A, 3, 14, 20 },
  { 0xFE5A, 4, 14, 21 }, { 0xFE5A, 5, 14, 26 },
-    } };
+ } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
             outWidth = e.w;
