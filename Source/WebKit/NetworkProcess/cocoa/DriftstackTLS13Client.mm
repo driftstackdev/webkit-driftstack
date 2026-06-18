@@ -975,7 +975,7 @@ int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t le
     return static_cast<int>(len);
 }
 
-Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
+Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord(int depth)
 {
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] readAppRecord cipher=0x%04x seqNum=%llu",
         m_negotiatedCipher, (unsigned long long)m_serverAppKey.seqNum);
@@ -1018,8 +1018,17 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord()
     } else if (innerType == 0x16) {
         // Post-handshake message (NewSessionTicket, KeyUpdate). Append to
         // transcript and recurse to read next real app data record.
+        // W2209 (parser-robustness audit weta2casf): a hostile server flooding inner-0x16 post-handshake
+        // records drove UNBOUNDED recursion here (stack-exhaustion crash) + unbounded m_transcriptBytes growth.
+        // Bound the recursion depth (a legit server sends a few NewSessionTickets / rare KeyUpdate — 32 is huge
+        // headroom + stack-safe) AND the transcript size (cross-call growth → 1 MiB, far above any handshake).
+        if (depth >= 32 || m_transcriptBytes.size() > (static_cast<size_t>(1) << 20)) {
+            m_errorMessage = "too many post-handshake records — rejecting (DoS defense)"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2209] post-handshake 0x16 flood (depth=%d transcript=%zu) — rejecting (recursion/alloc DoS defense)", depth, m_transcriptBytes.size());
+            return { };
+        }
         m_transcriptBytes.append(pt.span());
-        return readApplicationRecord();
+        return readApplicationRecord(depth + 1);
     } else if (innerType == 0x15) {
         // Wave 29-499.208 — parse TLS Alert (RFC 8446 §6)
         // Alert payload: level(1) + description(1)
@@ -1426,14 +1435,19 @@ int DriftstackTLS13Client::writeTLS12Record(const uint8_t* data, size_t len, uin
     return static_cast<int>(len);
 }
 
-Vector<uint8_t> DriftstackTLS13Client::readTLS12Record()
+Vector<uint8_t> DriftstackTLS13Client::readTLS12Record(int depth)
 {
     uint8_t recType; uint16_t recVer; Vector<uint8_t> body;
     if (!driftstackReadTLSRecord(m_fd, recType, recVer, body)) return {};
     if (recType == 0x15) return {}; // alert (incl. close_notify)
     if (recType != 0x17) {
         // ChangeCipherSpec / handshake (e.g. post-handshake NewSessionTicket): skip, read next.
-        if (recType == 0x14 || recType == 0x16) return readTLS12Record();
+        // W2209: bound the post-handshake recursion — a hostile 1.2 server flooding CCS/0x16 records would
+        // otherwise recurse unbounded → stack exhaustion. 32 is far above any legit CCS+NewSessionTicket flight.
+        if (recType == 0x14 || recType == 0x16) {
+            if (depth >= 32) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2209] TLS1.2 post-handshake skip flood (depth=%d) — rejecting (recursion DoS defense)", depth); return { }; }
+            return readTLS12Record(depth + 1);
+        }
         return {};
     }
     if (body.size() < 8 + 16) return {};

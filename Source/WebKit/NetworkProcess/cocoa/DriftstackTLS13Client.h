@@ -140,12 +140,12 @@ private:
     bool readEncryptedHandshakeMessages();
     bool sendClientFinished();
     int writeApplicationRecord(const uint8_t* data, size_t len);
-    Vector<uint8_t> readApplicationRecord();
+    Vector<uint8_t> readApplicationRecord(int depth = 0);   // W2209: depth bounds the post-handshake (inner-0x16) recursion
 
     // Wave 29-499.340 — TLS 1.2 handshake + record layer.
     bool doTLS12Handshake(const TLS13ServerHello& sh);
     int writeTLS12Record(const uint8_t* data, size_t len, uint8_t contentType = 0x17);
-    Vector<uint8_t> readTLS12Record();
+    Vector<uint8_t> readTLS12Record(int depth = 0);   // W2209: depth bounds the post-handshake (CCS/0x16) recursion
 };
 
 } // namespace WebKit
