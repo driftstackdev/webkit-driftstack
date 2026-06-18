@@ -286,7 +286,7 @@ static RetainPtr<nw_parameters_t> createParameters(NetworkConnectionToWebProcess
 // group socket, which is a different Network.framework symbol). Verbatim mirror of DriftstackQuicInterposeMain.mm
 // + the WebRTC fail-close. Armed ONLY when the customer proxy is required AND no dev-direct override
 // (DIRECT_BROWSE/DIRECT_EGRESS → capture-probe/human-inspect stay direct).
-static bool driftstackWebTransportRequireProxyNoDirect()   // unique name: this file is unified with DriftstackQuicInterposeMain.mm (same static helper)
+static bool driftstackWebTransportRequireProxyNoDirect()   // unique name: this file is unified (UnifiedSource7-nonARC) with NetworkRTCUDPSocketCocoa.mm which has the same static helper
 {
     static const bool value = [] {
         const char* req = getenv("DRIFTSTACK_REQUIRE_PROXY");
