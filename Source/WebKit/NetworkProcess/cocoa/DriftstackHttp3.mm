@@ -3480,6 +3480,9 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
         reinterpret_cast<const struct sockaddr*>(&peer), sizeof(peer), authHost);
     if (!qc) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.237] connectQuic returned nullptr");
+        ::close(udpFd);   // W2202 #1 (fork-egress audit): the one-shot path keeps udpFd as a bare local; on the !qc
+                          // branch qc is null so it never adopted the fd → close it (the pooled path already does)
+                          // — else a flapping relay/peer leaks one UDP socket fd per failed h3 attempt.
         bsf.SSL_free(ssl);
         bsf.SSL_CTX_free(ctx);
         resp.failed = true;
