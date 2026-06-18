@@ -3057,6 +3057,21 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2634: Small Form Variants (U+FE50..U+FE6B, excl. FE53/FE59/FE5A/FE67) — the NARROW CJK small-form
+    // punctuation/ASCII variants. The fork's cascade resolves these to Songti SC / .CJK Symbols Fallback SC
+    // rendered FULL-WIDTH (advance 16), but a real iPhone renders them in APPLE SYMBOLS at their true narrow
+    // small-form width (FE50→6, FE52→5, FE5F→7, …). ctdirect-confirmed: ceil(Apple-Symbols advance@16) ==
+    // the iOS-26.5-sim width for 24/28 cps × all generics (120/140 cells); the per-generic iOS values are
+    // uniform so route every generic. EXCLUDED: FE53/FE67 (Apple Symbols lacks the glyph) + FE59/FE5A (small
+    // parens, iOS=14 wide ≠ Apple-Symbols 5) — kept served. glyphHash-SAFE (disjoint from the 5 glyphHash cps).
+    // After build + geomserve-table sim-diff verifies natural==iOS, DELETE the matching W2617 SmallForm rows.
+    case 0xFE50: case 0xFE51: case 0xFE52: case 0xFE54: case 0xFE55: case 0xFE56:
+    case 0xFE57: case 0xFE58: case 0xFE5B: case 0xFE5C: case 0xFE5D: case 0xFE5E:
+    case 0xFE5F: case 0xFE60: case 0xFE61: case 0xFE62: case 0xFE63: case 0xFE64:
+    case 0xFE65: case 0xFE66: case 0xFE68: case 0xFE69: case 0xFE6A: case 0xFE6B: {
+        static const std::array<ASCIILiteral, 1> candidates { "apple symbols"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     default:
         return nullptr;
     }
