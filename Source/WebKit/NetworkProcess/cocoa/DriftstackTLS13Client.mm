@@ -731,8 +731,10 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         if (cOff + certLen > listEnd) break;
                         RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, plaintext.span().data() + cOff, certLen));
                         RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
-                        if (cert)
+                        if (cert) {
+                            if (!m_leafCert) m_leafCert = cert;   // W2202 L3: the leaf (first cert) — for CertificateVerify key-possession
                             CFArrayAppendValue(certArray.get(), cert.get());
+                        }
                         cOff += certLen;
                         if (cOff + 2 > listEnd) break;
                         uint16_t extLen = (static_cast<uint16_t>(plaintext[cOff]) << 8) | plaintext[cOff + 1];
@@ -754,6 +756,32 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         return false;
                     }
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] server cert chain validated OK for %s", m_sniHostname.utf8().data());
+                    // W2202 L3: capture Transcript-Hash(CH..Certificate) NOW — m_transcriptBytes ends exactly at the
+                    // Certificate (0x0b appended at the loop top; CertificateVerify 0x0f arrives next iteration). The
+                    // 0x0f arm verifies the server's signature over THIS hash (RFC 8446 §4.4.3).
+                    m_transcriptHashThroughCert = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+                }
+            }
+
+            if (hsType == 0x0f) {  // CertificateVerify — W2202 L3: verify the server's signature over Transcript-Hash(CH..Certificate)
+                static const bool s_validateCV = []() {
+                    const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                    return e && e[0] == '1';
+                }();
+                if (s_validateCV && !m_sniHostname.isEmpty()) {
+                    // CV body (plaintext[off+4..], hsLen bytes): 2B SignatureScheme + 2B sig_len + sig.
+                    if (hsLen < 4 || off + 8 > plaintext.size()) { m_errorMessage = "CertificateVerify too short"_s; return false; }
+                    uint16_t scheme = (static_cast<uint16_t>(plaintext[off + 4]) << 8) | plaintext[off + 5];
+                    uint16_t sigLen = (static_cast<uint16_t>(plaintext[off + 6]) << 8) | plaintext[off + 7];
+                    if (static_cast<size_t>(8) + sigLen > static_cast<size_t>(4) + hsLen || off + 8 + static_cast<size_t>(sigLen) > plaintext.size()) { m_errorMessage = "CertificateVerify sig OOB"_s; return false; }
+                    std::span<const uint8_t> sig(plaintext.span().data() + off + 8, sigLen);
+                    String cvErr;
+                    if (!driftstackVerifyCertificateVerify(m_leafCert.get(), sig, scheme, m_transcriptHashThroughCert, /*isServerContext=*/true, cvErr)) {
+                        m_errorMessage = makeString("CertificateVerify FAILED: "_s, cvErr);
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 CertificateVerify FAILED (%s) for %s — rejecting (MITM key-possession defense)", cvErr.utf8().data(), m_sniHostname.utf8().data());
+                        return false;
+                    }
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 CertificateVerify OK for %s", m_sniHostname.utf8().data());
                 }
             }
 

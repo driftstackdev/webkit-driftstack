@@ -31,6 +31,8 @@
 #include <stdint.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
+#include <Security/Security.h>   // W2202 L3: SecCertificateRef for the retained leaf cert
+#include <wtf/RetainPtr.h>
 
 namespace WebKit {
 
@@ -79,6 +81,8 @@ private:
     // bytes; compute hash on demand using the negotiated cipher's digest.
     uint16_t m_negotiatedCipher { 0 };
     Vector<uint8_t> m_transcriptBytes;
+    RetainPtr<SecCertificateRef> m_leafCert;        // W2202 L3: validated leaf cert (set in the 0x0b arm) — for CertificateVerify key-possession
+    Vector<uint8_t> m_transcriptHashThroughCert;    // W2202 L3: Transcript-Hash(CH..Certificate), captured in 0x0b, verified in 0x0f
 
     // Key schedule
     TLS13KeySchedule m_keySchedule;
