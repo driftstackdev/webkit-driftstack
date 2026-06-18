@@ -606,9 +606,9 @@ bool Element::dispatchWheelEvent(const PlatformWheelEvent& platformEvent, Option
         processing.add(EventHandling::DispatchedToDOM);
 
     dispatchEvent(event);
-    
+
     LOG_WITH_STREAM(Scrolling, stream << "Element " << *this << " dispatchWheelEvent: (cancelable " << event->cancelable() << ") defaultPrevented " << event->defaultPrevented() << " defaultHandled " << event->defaultHandled());
-    
+
     if (event->defaultPrevented())
         processing.add(EventHandling::DefaultPrevented);
 
@@ -814,7 +814,7 @@ void Element::synchronizeAllAttributes() const
         ASSERT(isStyledElement());
         static_cast<const StyledElement*>(this)->synchronizeStyleAttributeInternal();
     }
-    
+
     if (auto* svgElement = dynamicDowncast<SVGElement>(*this))
         const_cast<SVGElement&>(*svgElement).synchronizeAllAttributes();
 }
@@ -1013,7 +1013,7 @@ void Element::setFocus(bool value, FocusVisibility visibility)
 {
     if (value == focused())
         return;
-    
+
     Style::PseudoClassChangeInvalidation focusStyleInvalidation(*this, { { CSSSelector::PseudoClass::Focus, value }, { CSSSelector::PseudoClass::FocusVisible, value } });
     document().userActionElements().setFocused(*this, value);
 
@@ -1199,7 +1199,7 @@ static std::optional<std::pair<SingleThreadWeakPtr<RenderElement>, LayoutRect>> 
     CheckedPtr renderListBox = dynamicDowncast<RenderListBox>(selectElement->renderer());
     if (!renderListBox)
         return std::nullopt;
-    
+
     auto itemIndex = selectElement->listItems().find(&element);
     if (itemIndex != notFound)
         renderListBox->scrollToRevealElementAtListIndex(itemIndex);
@@ -1263,7 +1263,7 @@ void Element::scrollIntoView(Variant<bool, ScrollIntoViewOptions>&& arg)
     LocalFrameView::scrollRectToVisible(absoluteBounds, *renderer, insideFixed, visibleOptions);
 }
 
-void Element::scrollIntoView(bool alignToTop) 
+void Element::scrollIntoView(bool alignToTop)
 {
     protect(document())->updateLayoutIgnorePendingStylesheets(LayoutOptions::UpdateCompositingLayers);
 
@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 310> table { {
+    static constexpr std::array<Entry, 136> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1717,46 +1717,36 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
  // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
  // system-ui only) where the fork renders a DIFFERENT tofu. Matching Apple's actual notdef advance. iOS-sim values:
- { 0x2E1A, 2, 12, 20 }, { 0x2E1A, 1, 10, 20 }, { 0x2E1A, 3, 10, 17 }, { 0x2E1A, 4, 8, 21 }, { 0x2E1A, 5, 8, 26 }, { 0x2E1A, 6, 16, 20 },
- { 0x2E1B, 2, 12, 20 }, { 0x2E1B, 1, 10, 20 }, { 0x2E1B, 3, 10, 17 }, { 0x2E1B, 4, 8, 21 }, { 0x2E1B, 5, 8, 26 }, { 0x2E1B, 6, 16, 20 },
- { 0x2E1E, 2, 12, 20 }, { 0x2E1E, 1, 10, 20 }, { 0x2E1E, 3, 10, 17 }, { 0x2E1E, 4, 8, 21 }, { 0x2E1E, 5, 8, 26 }, { 0x2E1E, 6, 16, 20 },
- { 0x2E1F, 2, 12, 20 }, { 0x2E1F, 1, 10, 20 }, { 0x2E1F, 3, 10, 17 }, { 0x2E1F, 4, 8, 21 }, { 0x2E1F, 5, 8, 26 }, { 0x2E1F, 6, 16, 20 },
- { 0x2E20, 2, 12, 20 }, { 0x2E20, 1, 10, 20 }, { 0x2E20, 3, 10, 17 }, { 0x2E20, 4, 8, 21 }, { 0x2E20, 5, 8, 26 }, { 0x2E20, 6, 16, 20 },
- { 0x2E21, 2, 12, 20 }, { 0x2E21, 1, 10, 20 }, { 0x2E21, 3, 10, 17 }, { 0x2E21, 4, 8, 21 }, { 0x2E21, 5, 8, 26 }, { 0x2E21, 6, 16, 20 },
- { 0x2E22, 2, 12, 20 }, { 0x2E22, 1, 10, 20 }, { 0x2E22, 3, 10, 17 }, { 0x2E22, 4, 8, 21 }, { 0x2E22, 5, 8, 26 }, { 0x2E22, 6, 16, 20 },
- { 0x2E23, 2, 12, 20 }, { 0x2E23, 1, 10, 20 }, { 0x2E23, 3, 10, 17 }, { 0x2E23, 4, 8, 21 }, { 0x2E23, 5, 8, 26 }, { 0x2E23, 6, 16, 20 },
- { 0x2E24, 2, 12, 20 }, { 0x2E24, 1, 10, 20 }, { 0x2E24, 3, 10, 17 }, { 0x2E24, 4, 8, 21 }, { 0x2E24, 5, 8, 26 }, { 0x2E24, 6, 16, 20 },
- { 0x2E25, 2, 12, 20 }, { 0x2E25, 1, 10, 20 }, { 0x2E25, 3, 10, 17 }, { 0x2E25, 4, 8, 21 }, { 0x2E25, 5, 8, 26 }, { 0x2E25, 6, 16, 20 },
- { 0x2E26, 2, 12, 20 }, { 0x2E26, 1, 10, 20 }, { 0x2E26, 3, 10, 17 }, { 0x2E26, 4, 8, 21 }, { 0x2E26, 5, 8, 26 }, { 0x2E26, 6, 16, 20 },
- { 0x2E27, 2, 12, 20 }, { 0x2E27, 1, 10, 20 }, { 0x2E27, 3, 10, 17 }, { 0x2E27, 4, 8, 21 }, { 0x2E27, 5, 8, 26 }, { 0x2E27, 6, 16, 20 },
+
+
+
+
+
+
+
+
  { 0x2E28, 6, 9, 23 }, { 0x2E29, 6, 9, 23 },
- { 0x2E2A, 2, 12, 20 }, { 0x2E2A, 1, 10, 20 }, { 0x2E2A, 3, 10, 17 }, { 0x2E2A, 4, 8, 21 }, { 0x2E2A, 5, 8, 26 }, { 0x2E2A, 6, 16, 20 },
- { 0x2E2B, 2, 12, 20 }, { 0x2E2B, 1, 10, 20 }, { 0x2E2B, 3, 10, 17 }, { 0x2E2B, 4, 8, 21 }, { 0x2E2B, 5, 8, 26 }, { 0x2E2B, 6, 16, 20 },
- { 0x2E2C, 2, 12, 20 }, { 0x2E2C, 1, 10, 20 }, { 0x2E2C, 3, 10, 17 }, { 0x2E2C, 4, 8, 21 }, { 0x2E2C, 5, 8, 26 }, { 0x2E2C, 6, 16, 20 },
- { 0x2E2D, 2, 12, 20 }, { 0x2E2D, 1, 10, 20 }, { 0x2E2D, 3, 10, 17 }, { 0x2E2D, 4, 8, 21 }, { 0x2E2D, 5, 8, 26 }, { 0x2E2D, 6, 16, 20 },
- { 0x2E2F, 2, 12, 20 }, { 0x2E2F, 1, 10, 20 }, { 0x2E2F, 3, 10, 17 }, { 0x2E2F, 4, 8, 21 }, { 0x2E2F, 5, 8, 26 }, { 0x2E2F, 6, 16, 20 },
+
+
+
  { 0x2E30, 6, 6, 23 }, { 0x2E31, 6, 7, 23 },
  // W2617 CJK Symbols/Punct U+3003-303F + Small Form Variants U+FE50-FE6B — real-glyph fallback divergences
  // (fork cascades to Songti SC/Hiragino full-width 16; iOS uses narrower glyphs / taller CJK line box).
  // Some CJK tone marks (U+302A-302D/3037-303A) are .notdef tofu value-set. iOS-sim values:
- 
- 
- { 0x301A, 6, 9, 23 }, { 0x301B, 6, 9, 23 }, { 0x302A, 2, 12, 20 }, { 0x302A, 1, 10, 20 },
- { 0x302A, 3, 10, 17 }, { 0x302A, 4, 8, 21 }, { 0x302A, 5, 8, 26 }, { 0x302A, 6, 16, 20 }, { 0x302B, 2, 12, 20 }, { 0x302B, 1, 10, 20 },
- { 0x302B, 3, 10, 17 }, { 0x302B, 4, 8, 21 }, { 0x302B, 5, 8, 26 }, { 0x302B, 6, 16, 20 }, { 0x302C, 2, 12, 20 }, { 0x302C, 1, 10, 20 },
- { 0x302C, 3, 10, 17 }, { 0x302C, 4, 8, 21 }, { 0x302C, 5, 8, 26 }, { 0x302C, 6, 16, 20 }, { 0x302D, 2, 12, 20 }, { 0x302D, 1, 10, 20 },
- { 0x302D, 3, 10, 17 }, { 0x302D, 4, 8, 21 }, { 0x302D, 5, 8, 26 }, { 0x302D, 6, 16, 20 }, { 0x302F, 2, 12, 20 }, { 0x302F, 1, 10, 20 },
- { 0x302F, 3, 10, 17 }, { 0x302F, 4, 8, 21 }, { 0x302F, 5, 8, 26 }, { 0x302F, 6, 16, 20 }, { 0x3030, 2, 21, 27 }, { 0x3030, 1, 21, 27 },
- { 0x3030, 3, 21, 27 }, { 0x3030, 4, 21, 27 }, { 0x3030, 5, 21, 30 }, { 0x3030, 6, 23, 20 }, { 0x3031, 2, 12, 20 }, { 0x3031, 1, 10, 20 },
- { 0x3031, 3, 10, 17 }, { 0x3031, 4, 8, 21 }, { 0x3031, 5, 8, 26 }, { 0x3031, 6, 16, 20 }, { 0x3032, 2, 12, 20 }, { 0x3032, 1, 10, 20 },
- { 0x3032, 3, 10, 17 }, { 0x3032, 4, 8, 21 }, { 0x3032, 5, 8, 26 }, { 0x3032, 6, 16, 20 }, { 0x3037, 2, 12, 20 }, { 0x3037, 1, 10, 20 },
- { 0x3037, 3, 10, 17 }, { 0x3037, 4, 8, 21 }, { 0x3037, 5, 8, 26 }, { 0x3037, 6, 16, 20 }, { 0x3038, 2, 12, 20 }, { 0x3038, 1, 10, 20 },
- { 0x3038, 3, 10, 17 }, { 0x3038, 4, 8, 21 }, { 0x3038, 5, 8, 26 }, { 0x3038, 6, 16, 20 }, { 0x3039, 2, 12, 20 }, { 0x3039, 1, 10, 20 },
- { 0x3039, 3, 10, 17 }, { 0x3039, 4, 8, 21 }, { 0x3039, 5, 8, 26 }, { 0x3039, 6, 16, 20 }, { 0x303A, 2, 12, 20 }, { 0x303A, 1, 10, 20 },
- { 0x303A, 3, 10, 17 }, { 0x303A, 4, 8, 21 }, { 0x303A, 5, 8, 26 }, { 0x303A, 6, 16, 20 }, { 0x303D, 2, 21, 27 }, { 0x303D, 1, 21, 27 },
+
+ { 0x301A, 6, 9, 23 }, { 0x301B, 6, 9, 23 },
+
+
+
+ { 0x3030, 2, 21, 27 }, { 0x3030, 1, 21, 27 },
+ { 0x3030, 3, 21, 27 }, { 0x3030, 4, 21, 27 }, { 0x3030, 5, 21, 30 }, { 0x3030, 6, 23, 20 },
+
+
+
+ { 0x303D, 2, 21, 27 }, { 0x303D, 1, 21, 27 },
  { 0x303D, 3, 21, 27 }, { 0x303D, 4, 21, 27 }, { 0x303D, 5, 21, 30 }, { 0x303D, 6, 23, 20 }, { 0x303E, 2, 16, 21 }, { 0x303E, 1, 16, 20 },
- { 0x303E, 3, 16, 20 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 }, { 0x303F, 2, 12, 20 }, { 0x303F, 1, 10, 20 }, { 0x303F, 3, 10, 17 },
- { 0x303F, 4, 8, 21 }, { 0x303F, 5, 8, 26 }, { 0x303F, 6, 16, 20 },
+ { 0x303E, 3, 16, 20 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 },
+
  { 0xFE59, 2, 14, 20 }, { 0xFE59, 1, 14, 21 },
  { 0xFE59, 3, 14, 20 }, { 0xFE59, 4, 14, 21 }, { 0xFE59, 5, 14, 26 }, { 0xFE5A, 2, 14, 20 }, { 0xFE5A, 1, 14, 21 }, { 0xFE5A, 3, 14, 20 },
  { 0xFE5A, 4, 14, 21 }, { 0xFE5A, 5, 14, 26 },
@@ -1870,7 +1860,7 @@ int Element::clientWidth()
     bool inQuirksMode = document->inQuirksMode();
     if ((!inQuirksMode && document->documentElement() == this) || (inQuirksMode && isHTMLElement() && document->bodyOrFrameset() == this))
         return Style::adjustForAbsoluteZoom(renderView->frameView().layoutWidth(), renderView);
-    
+
     if (CheckedPtr renderer = renderBox()) {
         auto clientWidth = LayoutUnit { roundToInt(renderer->clientWidth()) };
         // clientWidth/Height is the visual portion of the box content, not including
@@ -2180,7 +2170,7 @@ LayoutRect Element::absoluteEventBounds(bool& boundsIncludeAllDescendantElements
         CheckedPtr renderer = this->renderer();
         if (CheckedPtr box = dynamicDowncast<RenderBox>(renderer.get())) {
             bool computedBounds = false;
-            
+
             if (CheckedPtr fragmentedFlow = box->enclosingFragmentedFlow()) {
                 bool wasFixed = false;
                 Vector<FloatQuad> quads;
@@ -2828,7 +2818,7 @@ void Element::setElementAttribute(const QualifiedName& attributeName, Element* e
     setAttribute(attributeName, emptyAtom());
 
     explicitlySetAttrElementsMap().set(attributeName, Vector<WeakPtr<Element, WeakPtrImplWithEventTargetData>> { element });
-    
+
     if (CheckedPtr cache = document().existingAXObjectCache())
         cache->updateRelations(*this, attributeName);
 }
@@ -4579,7 +4569,7 @@ void Element::updateFocusAppearance(SelectionRestorationMode, SelectionRevealMod
         RefPtr frame { document().frame() };
         if (!frame)
             return;
-        
+
         // When focusing an editable element in an iframe, don't reset the selection if it already contains a selection.
         if (this == frame->selection().selection().rootEditableElement()) {
             frame->selection().revealSelection();
@@ -4588,7 +4578,7 @@ void Element::updateFocusAppearance(SelectionRestorationMode, SelectionRevealMod
 
         // FIXME: We should restore the previous selection if there is one.
         VisibleSelection newSelection = VisibleSelection(firstPositionInOrBeforeNode(this));
-        
+
         if (frame->selection().shouldChangeSelection(newSelection)) {
             frame->selection().setSelection(newSelection, FrameSelection::defaultSetSelectionOptions(), Element::defaultFocusTextStateChangeIntent());
             frame->selection().revealSelection({ revealMode });
