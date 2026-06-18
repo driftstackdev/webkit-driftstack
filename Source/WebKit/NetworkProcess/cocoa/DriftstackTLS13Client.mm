@@ -324,6 +324,18 @@ bool DriftstackTLS13Client::receiveServerHello()
 
     // Wave 29-499.215 — HRR handling (RFC 8446 §4.1.4) for P-256
     if (sh.isHelloRetryRequest) {
+        // W2208 (parser-robustness audit weta2casf P1): RFC 8446 §4.1.4 — a client MUST abort on a SECOND
+        // HelloRetryRequest. receiveServerHello() recurses on HRR (the `return receiveServerHello()` below);
+        // with NO depth guard a hostile peer (this runs pre-cert-validation) answering every ClientHello with
+        // a valid P-256 HRR drives unbounded recursion → NetworkProcess stack exhaustion (SIGSEGV) → session
+        // crash-loop. At most ONE HRR is legitimate, so this bounds recursion to depth ≤2 with zero impact on
+        // a real handshake (which sends 0 or 1 HRR).
+        if (m_hrrSeen) {
+            m_errorMessage = "second HelloRetryRequest (RFC 8446 §4.1.4 forbids) — rejecting"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] second HelloRetryRequest — rejecting (unbounded-recursion DoS defense)");
+            return false;
+        }
+        m_hrrSeen = true;
         if (sh.keyShareGroup != 0x0017 /*P-256*/) {
             m_errorMessage = makeString("HRR requested non-P-256 group 0x"_s,
                 hex(sh.keyShareGroup, 4), " (only P-256 supported in HRR retry)"_s);
@@ -586,7 +598,25 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
     // with server_hs_key + per-record nonce.
 
     bool gotServerFinished = false;
+    size_t hsRecordsRead = 0;
     while (!gotServerFinished) {
+        // W2208 (parser-robustness audit weta2casf P2): bound a hostile peer (this runs pre-cert-validation)
+        // that keeps the handshake never-completing — a stream of ChangeCipherSpec records (skipped below
+        // WITHOUT advancing gotServerFinished), inner non-0x16 records, or unbounded handshake messages, while
+        // never sending Finished → infinite reader-thread spin (the per-record recv timeout resets on each
+        // record that has data) + unbounded m_transcriptBytes growth (memory DoS). A legit server handshake is
+        // a handful of records (< ~30 even with a fragmented cert chain) totalling well under these caps, so
+        // they reject ONLY a malicious stream (zero false-reject on a real handshake).
+        if (++hsRecordsRead > 512) {
+            m_errorMessage = "server sent >512 handshake records without Finished — rejecting (DoS defense)"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.3 handshake record cap (512) exceeded without Finished — rejecting (hostile-peer DoS defense)");
+            return false;
+        }
+        if (m_transcriptBytes.size() > (static_cast<size_t>(1) << 20)) {   // 1 MiB — vastly above any legit transcript
+            m_errorMessage = "handshake transcript exceeded 1 MiB without Finished — rejecting (DoS defense)"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.3 transcript >1 MiB without Finished — rejecting (unbounded-alloc DoS defense)");
+            return false;
+        }
         uint8_t recType;
         uint16_t recVer;
         Vector<uint8_t> recBody;
@@ -1150,7 +1180,22 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
     RetainPtr<SecCertificateRef> t12Leaf;
     bool t12CertValidated = false, t12SkeVerified = false;
 
+    size_t t12RecordsRead = 0;
     while (!gotSHD) {
+        // W2208 (parser-robustness audit weta2casf P3): bound a hostile TLS1.2 server (reachable via downgrade)
+        // that streams handshake records forever without ServerHelloDone (0x0e) → unbounded `acc` growth +
+        // infinite loop (the per-record recv timeout resets on each record). A legit 1.2 server flight
+        // (Certificate + ServerKeyExchange + ServerHelloDone) is a few records totalling well under these caps.
+        if (++t12RecordsRead > 512) {
+            m_errorMessage = "TLS1.2: >512 handshake records without ServerHelloDone — rejecting (DoS defense)"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.2 handshake record cap (512) exceeded without ServerHelloDone — rejecting (hostile-peer DoS defense)");
+            return false;
+        }
+        if (acc.size() > (static_cast<size_t>(1) << 20)) {   // 1 MiB — vastly above any legit 1.2 server flight
+            m_errorMessage = "TLS1.2: handshake accumulation exceeded 1 MiB without ServerHelloDone — rejecting (DoS defense)"_s;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.2 acc >1 MiB without ServerHelloDone — rejecting (unbounded-alloc DoS defense)");
+            return false;
+        }
         uint8_t recType; uint16_t recVer; Vector<uint8_t> recBody;
         if (!driftstackReadTLSRecord(m_fd, recType, recVer, recBody)) {
             m_errorMessage = "TLS1.2: read handshake record failed"_s; return false;

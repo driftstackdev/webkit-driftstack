@@ -84,6 +84,7 @@ private:
     RetainPtr<SecCertificateRef> m_leafCert;        // W2202 L3: validated leaf cert (set in the 0x0b arm) — for CertificateVerify key-possession
     Vector<uint8_t> m_transcriptHashThroughCert;    // W2202 L3: Transcript-Hash(CH..Certificate), captured in 0x0b, verified in 0x0f
     bool m_gotCertVerify { false };                 // W2202 L3: set true ONLY after a CertificateVerify SUCCESSFULLY verifies — the Finished arm REQUIRES this (a MITM that omits 0x0f must be rejected, not silently accepted)
+    bool m_hrrSeen { false };                       // W2208: true once a HelloRetryRequest was processed — a SECOND HRR is rejected (RFC 8446 §4.1.4) to bound receiveServerHello()'s recursion (hostile-peer stack-exhaustion DoS defense)
 
     // Key schedule
     TLS13KeySchedule m_keySchedule;
