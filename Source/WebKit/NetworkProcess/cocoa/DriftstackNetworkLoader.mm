@@ -1334,7 +1334,11 @@ void DriftstackNetworkLoader::resume()
                 if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
                     driftstackLoaderRememberH3Host(h3host);
             }
-            if (h3enabled && h3https && h3bodyless && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
+            // W2648 (audit udp-1): the Alt-Svc-learned known-h3 registry bypassed the no-UDP latch — on a
+            // no-UDP proxy, request 1 went h2 and learned `alt-svc: h3`, then request 2+ took THIS gate and
+            // hung ~4-16s per request (silent white screen). Consult the shared latch here too, so once UDP is
+            // known-down every request (DNS-RR gate AND this Alt-Svc gate) chooses h2/TCP.
+            if (h3enabled && h3https && h3bodyless && !WebKit::driftstackUdpRelayKnownDown() && (h3forced || driftstackLoaderHostKnownH3(h3host))) {
                 WebKit::DriftstackHttp3Request h3req;
                 h3req.method = httpMethod;
                 h3req.scheme = "https"_s;

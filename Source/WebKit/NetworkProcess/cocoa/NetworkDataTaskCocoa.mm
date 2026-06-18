@@ -28,6 +28,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #import "DriftstackNetworkLoader.h"
+#import "DriftstackHttp3.h" // W2648 — driftstackUdpRelayKnownDown() for the setAssumesHTTP3Capable gate
 #endif
 
 #import "AuthenticationChallengeDisposition.h"
@@ -249,7 +250,10 @@ NetworkDataTaskCocoa::NetworkDataTaskCocoa(NetworkSession& session, NetworkDataT
     {
         const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
         bool socks5Active = customSocks5 && customSocks5[0] == '1';
-        if (socks5Active) {
+        // W2648 (audit udp-5): do NOT tell CFNetwork to assume h3 once the proxy is known not to relay UDP —
+        // otherwise CFNetwork keeps preferring h3 on every request and stalls ~4s on the dead UDP_ASSOCIATE
+        // (the no-UDP white screen). On a UDP-capable proxy the latch is never set → unchanged (h3 preferred).
+        if (socks5Active && !driftstackUdpRelayKnownDown()) {
             [mutableRequest setAssumesHTTP3Capable:YES];
             static bool loggedOnce = false;
             if (!loggedOnce) {

@@ -2811,7 +2811,11 @@ static int s_quicSocks5CtrlFd = -1;
 // fd lifetime (e.g. a short-lived DNS query closes it right after). When null,
 // the fd is parked in s_quicSocks5CtrlFd and kept open for the QUIC connection
 // lifetime (the original behaviour).
-static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr)
+// W2648 tri-state: *outUdpRefused is set true ONLY when the proxy genuinely refuses/ignores
+// UDP_ASSOCIATE (the reply mismatch or the 4s recv timeout at the areq recv below) — NOT for a
+// TCP-connect/auth/parse error. The caller latches s_udpRelayDown only on a genuine UDP refusal,
+// so a transient TCP blip never permanently disables QUIC on a UDP-capable proxy.
+static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr, bool* outUdpRefused = nullptr)
 {
     const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
     const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
@@ -2889,6 +2893,7 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
     uint8_t arep[10];
     if (::recv(fd, arep, 10, MSG_WAITALL) != 10 || arep[0] != 0x05 || arep[1] != 0x00) {
         WTFLogAlways("[Wave29-499.311] raw associate: UDP_ASSOCIATE rejected rep0=%02x rep1=%02x", arep[0], arep[1]);
+        if (outUdpRefused) *outUdpRefused = true; // W2648: the genuine no-UDP signal (refusal or 4s recv timeout)
         ::close(fd); return false;
     }
     // BND.ADDR (4) + BND.PORT (2). If BND.ADDR is 0.0.0.0, use the proxy IP.
@@ -3077,6 +3082,12 @@ void driftstackDnsReaderLoop()
 // unchanged (no regression). h2/TCP fallback is safe (DNS already proxy-resolved via ATYP=0x03 hostname).
 static std::atomic<bool> s_udpRelayDown { false };
 
+// W2648 — the shared no-UDP latch accessor/setter (declared in DriftstackHttp3.h). Every h3
+// entry point consults driftstackUdpRelayKnownDown() and chooses h2/TCP when it's set; the
+// request-path associates call driftstackMarkUdpRelayDown() on a genuine UDP_ASSOCIATE refusal.
+bool driftstackUdpRelayKnownDown() { return s_udpRelayDown.load(std::memory_order_relaxed); }
+void driftstackMarkUdpRelayDown() { s_udpRelayDown.store(true, std::memory_order_relaxed); }
+
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
 {
     if (s_udpRelayDown.load(std::memory_order_relaxed))
@@ -3109,7 +3120,8 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
         if (g_dnsUdpFd < 0) {
             struct sockaddr_in rs { };
             int cf = -1;
-            if (driftstackQuicRawSocks5Associate(&rs, &cf)) {
+            bool udpRefused = false;
+            if (driftstackQuicRawSocks5Associate(&rs, &cf, &udpRefused)) {
                 int uf = socket(AF_INET, SOCK_DGRAM, 0);
                 if (uf >= 0) {
                     struct sockaddr_in lb { };
@@ -3122,9 +3134,11 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
                     (void)cf; // control fd parked open for the relay's lifetime
                 } else if (cf >= 0)
                     ::close(cf);
-            } else {
-                // W2646: the proxy refused/timed-out UDP_ASSOCIATE → no UDP relay. Latch it so the gate at the
-                // top of this fn skips h3 from now on (instant h2/TCP fallback, no per-host ~4s stall).
+            } else if (udpRefused) {
+                // W2646/W2648: a GENUINE UDP_ASSOCIATE refusal/timeout → latch so the gate at the top of this
+                // fn skips h3 from now on (instant h2/TCP fallback, no per-host ~4s stall). A transient TCP/auth
+                // error does NOT latch — that would wrongly disable QUIC on a UDP-capable proxy (founder: "do
+                // NOT mess with UDP proxies").
                 s_udpRelayDown.store(true, std::memory_order_relaxed);
             }
         }
@@ -3425,7 +3439,20 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     // client approaches used a separate internal UDP socket → responses routed
     // elsewhere → packetsReceived=0.)
     struct sockaddr_in relaySa { };
-    if (!driftstackQuicRawSocks5Associate(&relaySa)) {
+    // W2648 (audit udp-3): if the proxy is already known not to relay UDP, fail h3 IMMEDIATELY so the
+    // loader falls back to h2/TCP — never re-incur the ~4s UDP_ASSOCIATE timeout per request (the no-UDP
+    // white-screen-per-resource stall). A UDP-capable proxy never trips the latch → byte-unchanged.
+    if (driftstackUdpRelayKnownDown()) {
+        bsf.SSL_free(ssl);
+        bsf.SSL_CTX_free(ctx);
+        resp.failed = true;
+        resp.errorMessage = "SOCKS5 UDP relay known-down — h3 disabled, falling back to h2"_s;
+        return resp;
+    }
+    bool relayUdpRefused = false;
+    if (!driftstackQuicRawSocks5Associate(&relaySa, nullptr, &relayUdpRefused)) {
+        if (relayUdpRefused)
+            driftstackMarkUdpRelayDown(); // latch so subsequent requests skip h3 instantly
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.311] raw SOCKS5 associate FAILED — h3 falls back to h2");
         bsf.SSL_free(ssl);
         bsf.SSL_CTX_free(ctx);
@@ -3977,7 +4004,15 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
     auto cleanup = [&]() { bsf.SSL_free(ssl); bsf.SSL_CTX_free(ctx); };
 
     struct sockaddr_in relaySa { };
-    if (!driftstackQuicRawSocks5Associate(&relaySa)) {
+    // W2648 (audit udp-3): known no-UDP proxy → don't open a pooled h3 session (skip the ~4s associate).
+    if (driftstackUdpRelayKnownDown()) {
+        cleanup();
+        return nullptr;
+    }
+    bool relayUdpRefused = false;
+    if (!driftstackQuicRawSocks5Associate(&relaySa, nullptr, &relayUdpRefused)) {
+        if (relayUdpRefused)
+            driftstackMarkUdpRelayDown();
         WTFLogAlways("[Wave29-499.322/H3POOL] SOCKS5 UDP_ASSOCIATE failed for %s", authority.utf8().data());
         cleanup();
         return nullptr;

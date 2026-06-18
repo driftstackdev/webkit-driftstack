@@ -92,6 +92,18 @@ bool driftstackHttp3Enabled();
 // for FIRST contact (before any Alt-Svc response header). Result cached per host.
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host);
 
+// W2648 (founder no-UDP white-screen, audit udp-1/3/5) — the shared "the SOCKS5 proxy
+// does NOT relay UDP" latch. Set once a genuine UDP_ASSOCIATE refusal/timeout is observed
+// (NOT a TCP/auth/parse error — see the tri-state in driftstackQuicRawSocks5Associate);
+// thereafter EVERY h3 entry point (DNS-RR gate, the Alt-Svc known-h3 gate in the loader,
+// the request-path execute/session-create associates, and setAssumesHTTP3Capable) must
+// consult it and choose h2/TCP — so a no-UDP proxy never re-incurs the ~4s associate stall
+// that wedged the page (white screen, no error). UDP-capable proxies never set it → h3 path
+// is byte-unchanged (founder's "do NOT mess with UDP proxies"). Exported for the cross-TU
+// gates in DriftstackNetworkLoader.mm + NetworkDataTaskCocoa.mm.
+bool driftstackUdpRelayKnownDown();
+void driftstackMarkUdpRelayDown();
+
 // Wave 29-499.322 (Phase 3.5) — PERSISTENT HTTP/3 session for connection pooling.
 // Like real Safari, ONE QUIC connection per origin is established once (handshake
 // + nghttp3 setup) and REUSED for every request to that origin, instead of a fresh
