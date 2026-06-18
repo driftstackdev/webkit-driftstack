@@ -3034,6 +3034,29 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
+    // W2633: exotic General Punctuation real-glyph cps (U+2023..U+205D — triangular bullet, primes/reversed
+    // primes, reference/swung/asterism marks, quill brackets, interrobang family, tricolons). The serif/default
+    // primary (Times / document default) LACKS these → the fork's notdef cascade resolves to LUCIDA GRANDE
+    // (Mac-only, iOS lacks) at the wrong advance; a real iPhone renders them in HELVETICA. ctdirect/ctcascade-
+    // confirmed: ceil(Helvetica advance@16) == the iOS-26.5-sim width for ALL 25 (e.g. U+203F 8→16, U+2050 8→16,
+    // U+2023 8→6, U+2047 13→18), and the DOM line-box stays the base strut (serif 21 == iOS) because Helvetica's
+    // box (16) is shorter and does not extend it — a clean COHERENT width-only fix (offsetWidth/measureText/canvas
+    // all then use the Helvetica glyph, unlike the DOM-only Element.cpp serve). Fires only on the serif/default
+    // notdef path: mono/cursive/fantasy/sans are excluded (they already match iOS — sans IS Helvetica so never
+    // notdefs; system-ui's SF carries most of these glyphs natively so rarely reaches this fallback). U+2049/U+203C
+    // are EXCLUDED (emoji-presentation per-generic split — their system-ui wants Apple Color Emoji). glyphHash-SAFE:
+    // disjoint from the 5 glyphHash cps (U+1CDA/20E3/2581/05C6/2B06). After build + geomserve-table(DS_GEOM_SERVE=0)
+    // sim-diff confirms natural==iOS for every generic, DELETE the W2614 serif rows from Element.cpp.
+    case 0x2023: case 0x2031: case 0x2037: case 0x203B: case 0x203D: case 0x203F:
+    case 0x2040: case 0x2041: case 0x2042: case 0x2045: case 0x2046: case 0x2047:
+    case 0x2048: case 0x204A: case 0x204B: case 0x204E: case 0x204F: case 0x2050:
+    case 0x2051: case 0x2052: case 0x2053: case 0x2054: case 0x2057: case 0x205A:
+    case 0x205D: {
+        if (baseFontIsMonospace || baseIsCursive || baseIsFantasy || baseIsSansSerif)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     default:
         return nullptr;
     }
