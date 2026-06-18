@@ -846,6 +846,15 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                 uint8_t ftype, fflags;
                 uint32_t fsid;
                 decodeFrameHeader(fhdr, flen, ftype, fflags, fsid);
+                // W2210 (parser-audit weta2casf): the send-window-blocked drain read a frame via the raw 24-bit
+                // length (up to 16 MiB) WITHOUT the per-frame cap the normal recv loop applies (:966). A hostile
+                // upstream that stalls our send window could force a 16 MiB resize per stashed frame. Mirror the
+                // recv guard (kMaxRecvFrameBytes = 1 MiB, far above the 16384 default → no legit false-reject).
+                if (flen > kMaxRecvFrameBytes) {
+                    resp.failed = true;
+                    resp.errorMessage = "frame exceeds max receive size"_s;
+                    return resp;
+                }
                 Vector<uint8_t> fpayload;
                 fpayload.resize(flen);
                 if (flen > 0 && !sslReadExact(ssl, transport, fpayload.mutableSpan().data(), flen)) {
@@ -1572,6 +1581,20 @@ void DriftstackHttp2Session::readerLoop()
             {
                 Locker locker { m_lock };
                 if (auto it = m_streams.find(sid); it != m_streams.end()) {
+                    // W2210 (parser-audit weta2casf): cap the per-response body — the one-shot path enforces
+                    // kMaxBodyBytes (:924/:1088) but the POOLED path had NO body cap, so a hostile site streaming
+                    // unbounded DATA (the window is replenished every frame below) → NetworkProcess OOM. 128 MB
+                    // mirrors the one-shot cap (no false-reject of a legit large download; SSE never takes the
+                    // pooled/buffered path). On exceed: fail+complete the stream + skip the window replenish so the
+                    // server's send window closes (break exits the case before the WINDOW_UPDATE below).
+                    constexpr size_t kMaxPooledBodyBytes = 128 * 1024 * 1024;
+                    if (it->value->resp.body.size() + dataSpan.size() > kMaxPooledBodyBytes) {
+                        it->value->resp.failed = true;
+                        it->value->resp.errorMessage = "response body exceeds 128MB cap"_s;
+                        it->value->complete = true;
+                        m_cond.notifyAll();
+                        break;
+                    }
                     it->value->resp.body.append(dataSpan);
                     if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
                 }
