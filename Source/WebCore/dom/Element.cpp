@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 132> table { {
+    static constexpr std::array<Entry, 88> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1707,13 +1707,13 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // W2615 cursive (bucket 4, Snell Roundhand) General Punctuation — REAL (double-warm-stable): the fork's
  // cursive uses varying fallbacks (heights 21-26 + notdef-width 16) where iOS gives a consistent fallback
  // (uniform line box 22 + the real glyph width). iOS-sim 16px width,22 (sim = bit-identical iOS DOM-truth, W2570):
- { 0x2002, 4, 4, 22 }, { 0x2003, 4, 13, 22 }, { 0x2004, 4, 5, 22 }, { 0x2005, 4, 4, 22 }, { 0x2006, 4, 3, 22 }, { 0x2007, 4, 9, 22 },
- { 0x2008, 4, 2, 22 }, { 0x2009, 4, 1, 22 }, { 0x200A, 4, 0, 22 }, { 0x2012, 4, 5, 22 }, { 0x2015, 4, 16, 22 }, { 0x2016, 4, 7, 22 },
- { 0x2017, 4, 5, 22 }, { 0x201B, 4, 4, 22 }, { 0x201F, 4, 5, 22 }, { 0x2025, 4, 11, 22 }, { 0x2027, 4, 5, 22 }, { 0x202F, 4, 2, 22 },
- { 0x2032, 4, 5, 22 }, { 0x2033, 4, 8, 22 }, { 0x2034, 4, 11, 22 }, { 0x2035, 4, 5, 22 }, { 0x203B, 4, 9, 22 }, { 0x203C, 4, 9, 22 },
- { 0x203E, 4, 5, 22 }, { 0x203F, 4, 16, 22 }, { 0x2042, 4, 13, 22 }, { 0x2044, 4, 3, 22 }, { 0x2047, 4, 18, 22 }, { 0x2048, 4, 13, 22 },
- { 0x2049, 4, 13, 22 }, { 0x204C, 4, 9, 22 }, { 0x204D, 4, 9, 22 }, { 0x204E, 4, 6, 22 }, { 0x2051, 4, 6, 22 }, { 0x205A, 4, 4, 22 },
- { 0x205D, 4, 4, 22 },
+
+ { 0x2008, 4, 2, 22 },
+
+ { 0x203C, 4, 9, 22 },
+
+ { 0x2049, 4, 13, 22 },
+
  // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
  // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
  // system-ui only) where the fork renders a DIFFERENT tofu. Matching Apple's actual notdef advance. iOS-sim values:
@@ -1747,9 +1747,9 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x303D, 3, 21, 27 }, { 0x303D, 4, 21, 27 }, { 0x303D, 5, 21, 30 }, { 0x303D, 6, 23, 20 }, { 0x303E, 2, 16, 21 }, { 0x303E, 1, 16, 20 },
  { 0x303E, 3, 16, 20 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 },
 
- { 0xFE59, 2, 14, 20 }, { 0xFE59, 1, 14, 21 },
- { 0xFE59, 3, 14, 20 }, { 0xFE59, 4, 14, 21 }, { 0xFE59, 5, 14, 26 }, { 0xFE5A, 2, 14, 20 }, { 0xFE5A, 1, 14, 21 }, { 0xFE5A, 3, 14, 20 },
- { 0xFE5A, 4, 14, 21 }, { 0xFE5A, 5, 14, 26 },
+
+
+
  } };
     for (const auto& e : table) {
         if (e.cp == cp && e.generic == bucket) {
