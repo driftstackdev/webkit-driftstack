@@ -279,6 +279,27 @@ static RetainPtr<nw_parameters_t> createParameters(NetworkConnectionToWebProcess
     return adoptNS(softLink_Network_nw_parameters_create_webtransport_http(configureWebTransport, configureTLS, configureQUIC, configureTCP));
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2202 STEP 1 (fork-egress audit ws4cffit6): a WebTransport session whose SOCKS5 relay-swap FAILED must NOT
+// fall through to a DIRECT real-peer nw_connection_group (the cardinal "no egress without proxy" invariant —
+// it would leak the real Mac fleet IP; the W2202 nw_connection_create DYLD interpose does NOT see WebTransport's
+// group socket, which is a different Network.framework symbol). Verbatim mirror of DriftstackQuicInterposeMain.mm
+// + the WebRTC fail-close. Armed ONLY when the customer proxy is required AND no dev-direct override
+// (DIRECT_BROWSE/DIRECT_EGRESS → capture-probe/human-inspect stay direct).
+static bool driftstackWebTransportRequireProxyNoDirect()   // unique name: this file is unified with DriftstackQuicInterposeMain.mm (same static helper)
+{
+    static const bool value = [] {
+        const char* req = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        const char* db = getenv("DRIFTSTACK_DIRECT_BROWSE");
+        const char* de = getenv("DRIFTSTACK_DIRECT_EGRESS");
+        bool require = req && req[0] == '1';
+        bool direct = (db && db[0] == '1') || (de && de[0] == '1');
+        return require && !direct;
+    }();
+    return value;
+}
+#endif
+
 RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectionToWebProcess& connectionToWebProcess, WebTransportSessionIdentifier identifier, URL&& url, WebCore::WebTransportOptions&& options, WebKit::WebPageProxyIdentifier&& pageID, WebCore::ClientOrigin&& clientOrigin)
 {
     if (!canLoad_Network_nw_parameters_create_webtransport_http()
@@ -326,6 +347,7 @@ RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectio
     // path retained as a fail-open during scaffold; Slice 16.4.b.7
     // closes the leak gap on the CFNetwork interpose side; this hook
     // closes the explicit WebTransport API side).
+    bool relaySwapped = false;   // W2202 STEP 1: true ONLY when the group descriptor is rebound to the SOCKS5 relay
     if (DriftstackQuic::isCustomSocks5Active()) {
         String destHost;
         uint16_t destPort = 0;
@@ -335,6 +357,7 @@ RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectio
                 RetainPtr relayGroupDescriptor = adoptNS(nw_group_descriptor_create_multiplex(relayEndpoint.get()));
                 if (relayGroupDescriptor) {
                     groupDescriptor = WTF::move(relayGroupDescriptor);
+                    relaySwapped = true;   // W2202 STEP 1: relay-swap succeeded → egress goes through the SOCKS5 relay
                     static bool loggedSwapOnce = false;
                     if (!loggedSwapOnce) {
                         loggedSwapOnce = true;
@@ -354,6 +377,17 @@ RefPtr<NetworkTransportSession> NetworkTransportSession::create(NetworkConnectio
                 WTFLogAlways("[Driftstack-EG-WK-1.10/Task#16] NetworkTransportSession::create: endpoint extract or framer attach failed — fall through to direct UDP (LEAK)");
             }
         }
+    }
+    // W2202 STEP 1: EVERY relay-swap failure above falls through to the DIRECT nw_connection_group_create below
+    // (the documented LEAK). Fail CLOSED instead when the proxy is required + no dev-direct override — a dropped
+    // WebTransport session is correct vs leaking the real fleet IP. nullptr is the documented create-failure contract.
+    if (!relaySwapped && driftstackWebTransportRequireProxyNoDirect()) {
+        static bool loggedFailClosedOnce = false;
+        if (!loggedFailClosedOnce) {
+            loggedFailClosedOnce = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.10/W2202] NetworkTransportSession::create: relay swap NOT active + REQUIRE_PROXY=1 (no dev-direct) → FAIL-CLOSED (nullptr) — no direct WebTransport UDP, no fleet-IP leak.");
+        }
+        return nullptr;
     }
 #endif
 
