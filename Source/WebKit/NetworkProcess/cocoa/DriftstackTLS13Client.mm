@@ -1079,6 +1079,47 @@ Vector<uint8_t> slice(const Vector<uint8_t>& v, size_t off, size_t len)
 }
 } // namespace
 
+// W2202 L4: verify a TLS 1.2 ServerKeyExchange signature (RFC 5246 §7.4.3 / RFC 4492 §5.4) — the 1.2 analogue
+// of CertificateVerify: the server signs client_random || server_random || ServerECDHParams with the leaf
+// private key, proving key-possession (the Finished MAC only proves ECDHE-key-possession, which a MITM has).
+// The 2-byte field is a SignatureScheme (RFC 8446-style) OR the legacy {hash,sig} pair — same wire values for
+// the schemes a real iPhone-negotiated 1.2 server uses. Unlike 1.3, TLS 1.2 PERMITS rsa_pkcs1_* — map it HERE
+// (the shared 1.3 mapper driftstackSecKeyAlgorithmForScheme rejects PKCS1). ...Message... variants → SecKey
+// hashes the blob itself. Self-contained (defined before doTLS12Handshake; no dep on the 1.3 mapper below).
+static bool driftstackVerifyTLS12Signature(SecCertificateRef leaf, std::span<const uint8_t> signedData,
+    std::span<const uint8_t> sig, uint16_t sigScheme, String& outError)
+{
+    if (!leaf) { outError = "no leaf cert"_s; return false; }
+    if (sig.empty() || signedData.empty()) { outError = "empty SKE sig/data"_s; return false; }
+    SecKeyAlgorithm alg = nullptr;
+    switch (sigScheme) {
+    case 0x0401: alg = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA256; break; // rsa_pkcs1_sha256 (1.2-legal; == legacy {SHA256,RSA})
+    case 0x0501: alg = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA384; break;
+    case 0x0601: alg = kSecKeyAlgorithmRSASignatureMessagePKCS1v15SHA512; break;
+    case 0x0804: alg = kSecKeyAlgorithmRSASignatureMessagePSSSHA256; break;      // rsa_pss_rsae_sha256
+    case 0x0805: alg = kSecKeyAlgorithmRSASignatureMessagePSSSHA384; break;
+    case 0x0806: alg = kSecKeyAlgorithmRSASignatureMessagePSSSHA512; break;
+    case 0x0403: alg = kSecKeyAlgorithmECDSASignatureMessageX962SHA256; break;   // ecdsa_secp256r1_sha256 (DER r,s)
+    case 0x0503: alg = kSecKeyAlgorithmECDSASignatureMessageX962SHA384; break;
+    case 0x0603: alg = kSecKeyAlgorithmECDSASignatureMessageX962SHA512; break;
+    default:
+        outError = makeString("unsupported TLS1.2 SKE sig scheme 0x"_s, hex(sigScheme, 4));
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 SKE sig scheme 0x%04x unsupported — rejecting (fail-closed)", sigScheme);
+        return false;
+    }
+    RetainPtr<SecKeyRef> pubKey = adoptCF(SecCertificateCopyKey(leaf));
+    if (!pubKey) { outError = "SecCertificateCopyKey failed"_s; return false; }
+    RetainPtr<CFDataRef> dataCF = adoptCF(CFDataCreate(nullptr, signedData.data(), signedData.size()));
+    RetainPtr<CFDataRef> sigCF = adoptCF(CFDataCreate(nullptr, sig.data(), sig.size()));
+    if (!dataCF || !sigCF) { outError = "CFDataCreate failed"_s; return false; }
+    CFErrorRef cfErr = nullptr;
+    bool ok = SecKeyVerifySignature(pubKey.get(), alg, dataCF.get(), sigCF.get(), &cfErr);
+    if (cfErr)
+        CFRelease(cfErr);
+    if (!ok) { outError = "TLS1.2 SKE signature INVALID"_s; return false; }
+    return true;
+}
+
 bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
 {
     // This record layer + PRF assume AES-128-GCM with the SHA256 PRF
@@ -1095,6 +1136,19 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
     Vector<uint8_t> serverEcPub;
     bool gotSKE = false, gotSHD = false;
     Vector<uint8_t> acc;
+
+    // W2202 L4: TLS 1.2 server authentication (workflow w2tykgdqj finding #6). Without this the 1.2 fallback
+    // accepts ANY/self-signed/no cert — a network MITM or malicious SOCKS5 exit downgrades to 1.2+0xc02f and
+    // fully re-opens the cert-skip MITM the 1.3 require-gate closed. Gate like 1.3 (validate flag + non-empty
+    // SNI; relay/smoke handshakes skip). We REQUIRE both a chain-valid Certificate (0x0b) AND a verified
+    // ServerKeyExchange signature (the 1.2 key-possession proof) before returning true.
+    static const bool s_validateT12 = []() {
+        const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+        return e && e[0] == '1';
+    }();
+    const bool doValidate = s_validateT12 && !m_sniHostname.isEmpty();
+    RetainPtr<SecCertificateRef> t12Leaf;
+    bool t12CertValidated = false, t12SkeVerified = false;
 
     while (!gotSHD) {
         uint8_t recType; uint16_t recVer; Vector<uint8_t> recBody;
@@ -1113,13 +1167,69 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
             if (off + 4 + l > acc.size()) break; // incomplete — await next record
             m_transcriptBytes.append(std::span<const uint8_t>(acc.span().data() + off, 4 + l));
             const uint8_t* mb = acc.span().data() + off + 4;
-            if (t == 0x0c && l >= 4 && mb[0] == 0x03) { // ServerKeyExchange, named_curve
+            if (t == 0x0b && doValidate) { // Certificate → SecTrust chain+hostname (W2202 L4; mirrors the 1.3 0x0b arm)
+                // TLS 1.2 Certificate body: 3B cert_list_len + [3B cert_len + DER]* (NO per-cert extensions — that's 1.3 only).
+                if (l < 3) { m_errorMessage = "TLS1.2: Certificate msg too short"_s; return false; }
+                uint32_t listLen = (static_cast<uint32_t>(mb[0]) << 16) | (static_cast<uint32_t>(mb[1]) << 8) | mb[2];
+                size_t cOff = 3, listEnd = static_cast<size_t>(3) + listLen;
+                if (listEnd > l) { m_errorMessage = "TLS1.2: Certificate list OOB"_s; return false; }
+                RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+                while (cOff + 3 <= listEnd) {
+                    uint32_t certLen = (static_cast<uint32_t>(mb[cOff]) << 16) | (static_cast<uint32_t>(mb[cOff + 1]) << 8) | mb[cOff + 2];
+                    cOff += 3;
+                    if (cOff + certLen > listEnd) break;
+                    RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, mb + cOff, certLen));
+                    RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
+                    if (cert) { if (!t12Leaf) t12Leaf = cert; CFArrayAppendValue(certArray.get(), cert.get()); }
+                    cOff += certLen;
+                }
+                if (!CFArrayGetCount(certArray.get())) { m_errorMessage = "TLS1.2: no parseable server certs"_s; return false; }
+                RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, m_sniHostname.createCFString().get()));
+                SecTrustRef trust = nullptr;
+                OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
+                RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
+                if (st != errSecSuccess || !trustRef) { m_errorMessage = "TLS1.2: SecTrustCreateWithCertificates failed"_s; return false; }
+                CFErrorRef evalErr = nullptr;
+                bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
+                if (evalErr)
+                    CFRelease(evalErr);
+                if (!trusted) {
+                    m_errorMessage = makeString("TLS1.2: server cert chain UNTRUSTED for "_s, m_sniHostname);
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 CERT VALIDATION FAILED for %s — rejecting (MITM defense)", m_sniHostname.utf8().data());
+                    return false;
+                }
+                t12CertValidated = true;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 server cert chain validated OK for %s", m_sniHostname.utf8().data());
+            } else if (t == 0x0c && l >= 4 && mb[0] == 0x03) { // ServerKeyExchange, named_curve
                 serverCurve = (static_cast<uint16_t>(mb[1]) << 8) | mb[2];
                 uint8_t pubLen = mb[3];
                 if (static_cast<uint32_t>(4) + pubLen <= l) {
                     serverEcPub.clear();
                     serverEcPub.append(std::span<const uint8_t>(mb + 4, pubLen));
                     gotSKE = true;
+                    // W2202 L4: verify the SKE signature = the 1.2 key-possession proof. After the ServerECDHParams
+                    // (curve_type(1)=0x03 || named_curve(2) || pubLen(1) || pub) come SignatureScheme(2) + sig_len(2) + sig.
+                    // The signed blob is client_random || server_random || ServerECDHParams. 0x0b precedes 0x0c, so t12Leaf is set.
+                    if (doValidate) {
+                        size_t pOff = static_cast<size_t>(4) + pubLen; // == params length; start of SignatureScheme
+                        if (pOff + 4 > l) { m_errorMessage = "TLS1.2: SKE missing signature"_s; return false; }
+                        uint16_t sigScheme = (static_cast<uint16_t>(mb[pOff]) << 8) | mb[pOff + 1];
+                        uint16_t skeSigLen = (static_cast<uint16_t>(mb[pOff + 2]) << 8) | mb[pOff + 3];
+                        if (pOff + 4 + static_cast<size_t>(skeSigLen) > l) { m_errorMessage = "TLS1.2: SKE sig OOB"_s; return false; }
+                        Vector<uint8_t> signedBlob;
+                        signedBlob.append(m_clientRandom.span());
+                        signedBlob.append(m_serverRandom.span());
+                        signedBlob.append(std::span<const uint8_t>(mb, pOff)); // ServerECDHParams (curve_type..pub)
+                        std::span<const uint8_t> skeSig(mb + pOff + 4, skeSigLen);
+                        String skeErr;
+                        if (!driftstackVerifyTLS12Signature(t12Leaf.get(), signedBlob.span(), skeSig, sigScheme, skeErr)) {
+                            m_errorMessage = makeString("TLS1.2: SKE signature verify FAILED: "_s, skeErr);
+                            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 SKE signature INVALID (%s) for %s — rejecting (MITM key-possession defense)", skeErr.utf8().data(), m_sniHostname.utf8().data());
+                            return false;
+                        }
+                        t12SkeVerified = true;
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 SKE signature OK for %s", m_sniHostname.utf8().data());
+                    }
                 }
             } else if (t == 0x0e)
                 gotSHD = true;
@@ -1233,6 +1343,14 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
         }
     }
     if (!serverFinished) { m_errorMessage = "TLS1.2: never received server Finished"_s; return false; }
+    // W2202 L4 REQUIRE-gate: a MITM could OMIT the Certificate or send an unsigned ServerKeyExchange. Require
+    // BOTH a chain-valid leaf AND a verified SKE signature before completing (analogue of the 1.3 m_gotCertVerify
+    // gate). Gated on doValidate so relay/smoke handshakes (no SNI) are unaffected.
+    if (doValidate && (!t12CertValidated || !t12SkeVerified)) {
+        m_errorMessage = makeString("TLS1.2: server omitted Certificate or SKE-signature (MITM downgrade) for "_s, m_sniHostname);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 handshake MISSING validated cert + SKE-sig for %s — rejecting (MITM downgrade defense)", m_sniHostname.utf8().data());
+        return false;
+    }
     return true;
 }
 
