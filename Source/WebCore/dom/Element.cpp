@@ -1662,7 +1662,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 136> table { {
+    static constexpr std::array<Entry, 132> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1684,7 +1684,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x20BF, 3, 10, 21 }, { 0x20BF, 4, 10, 22 }, { 0x20BF, 5, 10, 26 },
  { 0x25CA, 3, 10, 20 },
  // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
- { 0x1CF5, 2, 8, 24 }, { 0x1CF5, 4, 8, 24 },
+
  // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
  { 0x05C6, 6, 6, 20 },
  // W2620 U+2B06 (up-arrow, emoji-presentation) system-ui (bucket 6, San Francisco) = 23,20 — distinct
@@ -1698,7 +1698,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // 2049 (NOT routed — emoji-split/unmeasured) + 203B/2045/2046/2048/204E/204F/2051/2052/2053/205A/205D
  // (served=browserleaks-DOM value differs from the iOS-sim by +1 sub-pixel rounding; keep until a
  // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
- { 0x2036, 2, 8, 21 }, { 0x2038, 2, 5, 21 },
+
  { 0x2049, 2, 13, 21 },
  // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
  { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
