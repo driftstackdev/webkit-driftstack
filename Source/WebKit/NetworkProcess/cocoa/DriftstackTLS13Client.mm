@@ -757,6 +757,38 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
             }
 
             if (hsType == 0x14) {  // Finished
+                // W2202 STEP 3a (verify-gate ws4cffit6): verify the server Finished verify_data MAC BEFORE
+                // deriving app secrets / setting gotServerFinished. The 0x0b cert chain proves IDENTITY; this
+                // proves key-possession (RFC 8446 §4.4.4) — without it a MITM with its own ECDHE is accepted.
+                static const bool s_validateFin = []() {
+                    const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                    return e && e[0] == '1';
+                }();
+                if (s_validateFin && !m_sniHostname.isEmpty()) {
+                    // m_transcriptBytes ALREADY includes this server Finished (appended at the loop top), so the
+                    // server's verify_data covers Transcript-Hash(CH..CertificateVerify) = the prefix EXCLUDING
+                    // the trailing 4+hsLen bytes. (Hashing the FULL transcript here would include the Finished →
+                    // false-reject EVERY handshake. NOTE: the app-secret chSFhash below DELIBERATELY hashes the
+                    // FULL transcript incl. Finished — the two windows differ; do not unify them.)
+                    size_t finMsgLen = 4 + hsLen;
+                    if (m_transcriptBytes.size() < finMsgLen) { m_errorMessage = "server Finished transcript underflow"_s; return false; }
+                    size_t prefixLen = m_transcriptBytes.size() - finMsgLen;
+                    Vector<uint8_t> thruCV = (m_negotiatedCipher == 0x1302)
+                        ? driftstackSHA384(m_transcriptBytes.span().data(), prefixLen)
+                        : driftstackSHA256(m_transcriptBytes.span().data(), prefixLen);
+                    auto sFinKey = hkdfExpandLabel(m_negotiatedCipher, m_keySchedule.serverHandshakeSecret(), "finished", {}, m_keySchedule.hashLen());
+                    auto expected = hmac(m_negotiatedCipher, sFinKey, thruCV);
+                    if (hsLen != expected.size() || off + 4 + hsLen > plaintext.size()) { m_errorMessage = "server Finished length mismatch"_s; return false; }
+                    const uint8_t* recvVd = plaintext.span().data() + off + 4;
+                    uint8_t diff = 0;
+                    for (size_t i = 0; i < expected.size(); ++i) diff |= (expected[i] ^ recvVd[i]);  // constant-time
+                    if (diff != 0) {
+                        m_errorMessage = makeString("server Finished MAC INVALID for "_s, m_sniHostname);
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 server Finished MAC INVALID — rejecting (handshake auth failure)");
+                        return false;
+                    }
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 server Finished MAC verified OK");
+                }
                 gotServerFinished = true;
                 auto chSFhash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
                 if (!m_keySchedule.deriveApplicationSecrets(chSFhash)) {
