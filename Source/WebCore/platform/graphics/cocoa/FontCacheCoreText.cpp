@@ -3047,11 +3047,9 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     // are EXCLUDED (emoji-presentation per-generic split — their system-ui wants Apple Color Emoji). glyphHash-SAFE:
     // disjoint from the 5 glyphHash cps (U+1CDA/20E3/2581/05C6/2B06). After build + geomserve-table(DS_GEOM_SERVE=0)
     // sim-diff confirms natural==iOS for every generic, DELETE the W2614 serif rows from Element.cpp.
-    case 0x2023: case 0x2031: case 0x2037: case 0x203B: case 0x203D: case 0x203F:
-    case 0x2040: case 0x2041: case 0x2042: case 0x2045: case 0x2046: case 0x2047:
-    case 0x2048: case 0x204A: case 0x204B: case 0x204E: case 0x204F: case 0x2050:
-    case 0x2051: case 0x2052: case 0x2053: case 0x2054: case 0x2057: case 0x205A:
-    case 0x205D: {
+    case 0x2023: case 0x2031: case 0x2037: case 0x203D: case 0x2040: case 0x2041:
+    case 0x2045: case 0x2046: case 0x204A: case 0x204B: case 0x204F: case 0x2050:
+    case 0x2052: case 0x2053: case 0x2054: case 0x2057: {
         if (baseFontIsMonospace || baseIsCursive || baseIsFantasy || baseIsSansSerif)
             return nullptr;
         static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
@@ -3115,6 +3113,49 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         if (baseIsFantasy) { static const std::array<ASCIILiteral, 1> c { "papyrus"_s }; return driftstackLookupIOSFontByCandidates(c, description, size); }
         static const std::array<ASCIILiteral, 1> c { "times new roman"_s };
         return driftstackLookupIOSFontByCandidates(c, description, size);
+    }
+    // W2638: General Punctuation CURSIVE-cascade fix. The cursive generic (Snell Roundhand base) lacks these space/
+    // dash/prime/mark/punctuation glyphs → the fork notdef-cascades to Geneva (Mac-only, iOS lacks) at the wrong
+    // advance; a real iPhone renders the cursive fallback in HELVETICA NEUE. fontscan-confirmed ceil(Helvetica Neue
+    // advance@16) == the iOS-26.5-sim CURSIVE width for every cp. Fires ONLY on cursive (the other 6 generics are
+    // already fork-natural-correct, so non-cursive returns nullptr → unchanged). glyphHash-SAFE (disjoint from the 5
+    // GCPS cps). After build + sim-diff confirms cursive==iOS, DELETE the cursive GEOM_SERVE rows for these cps.
+    case 0x2002: case 0x2003: case 0x2004: case 0x2005: case 0x2006: case 0x2007:
+    case 0x2009: case 0x200A: case 0x2012: case 0x2015: case 0x2016: case 0x2017:
+    case 0x201B: case 0x201F: case 0x2025: case 0x2027: case 0x202F: case 0x2032:
+    case 0x2033: case 0x2034: case 0x2035: case 0x203E: case 0x2044: case 0x204C:
+    case 0x204D: {
+        if (!baseIsCursive)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica neue"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2638: the 9 General Punctuation cps that need BOTH serif/default→Helvetica (the W2633 width fix) AND
+    // cursive→Helvetica Neue (the W2638 cursive fix). Split out of the W2633 block so cursive routes too.
+    case 0x203B: case 0x203F: case 0x2042: case 0x2047: case 0x2048: case 0x204E:
+    case 0x2051: case 0x205A: case 0x205D: {
+        if (baseIsCursive) {
+            static const std::array<ASCIILiteral, 1> candidates { "helvetica neue"_s };
+            return driftstackLookupIOSFontByCandidates(candidates, description, size);
+        }
+        if (baseFontIsMonospace || baseIsFantasy || baseIsSansSerif)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "helvetica"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2638: U+2028/2029 LINE/PARAGRAPH SEPARATOR — the monospace generic renders them at width 10 (MENLO); the other
+    // generics are 0-width. Gate on monospace; the line-box height (17→20) rides the integer-inline-layout path (W2575).
+    case 0x2028: case 0x2029: {
+        if (!baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "menlo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    // W2638: U+FE59/FE5A SMALL PARENTHESES — uniform width 14 across ALL generics via APPLE SD GOTHIC NEO (the iOS
+    // small-form CJK font). W2634 kept these served because Apple Symbols gave the wrong width. Unconditional route.
+    case 0xFE59: case 0xFE5A: {
+        static const std::array<ASCIILiteral, 1> candidates { "apple sd gothic neo"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     default:
         return nullptr;
