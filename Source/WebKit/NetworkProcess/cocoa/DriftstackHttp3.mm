@@ -22,6 +22,7 @@
 #import "DriftstackTLS13KeySchedule.h"   // Wave .349 — custom QUIC-TLS engine key schedule
 #import "DriftstackCustomTLS.h"          // Wave .349 — iPhone QUIC ClientHello builder
 #import "DriftstackTLS13.h"              // Wave .349 — ServerHello parser (driftstackParseServerHello)
+#import "DriftstackTLS13Verify.h"        // W2202 L3 — driftstackVerifyCertificateVerify (shared with the h2 path)
 // Wave 29-499.238 — pull in SOCKS5 §7 wrap/unwrap helpers + relay channel
 // establishment. Reuses the same DriftstackRTC infrastructure that already
 // works for WebRTC (Wave 29-499.99-106) per the V-2026-05-23-W29-499.221
@@ -643,6 +644,8 @@ struct DriftstackQuicConn {
     String ctSni;                            // SNI hostname for the CH
     Vector<uint8_t> ctTranscript;            // CH, SH, EE, Cert, CV, server Fin, client Fin
     RetainPtr<SecCertificateRef> ctLeafCert; // W2202 L2 — validated leaf cert; kept for Landing 3 (CertificateVerify)
+    Vector<uint8_t> ctTranscriptHashThroughCert; // W2202 L3b — Transcript-Hash(CH..Certificate), captured in 0x0b, verified in 0x0f
+    bool ctGotCertVerify { false };          // W2202 L3b — set true ONLY after a CertificateVerify SUCCESSFULLY verifies; the Finished arm REQUIRES it (a MITM that omits 0x0f must be rejected)
     Vector<uint8_t> ctX25519Priv;            // ephemeral X25519 private (for ECDH on SH)
     MLKEM768Keypair ctMlkem;                 // ephemeral MLKEM768 (hybrid decap on SH)
     Vector<uint8_t> ctTransportParams;       // encoded transport params (for CH ext 0x0039)
@@ -1182,7 +1185,34 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                     return -1;
                 }
                 qc->ctLeafCert = leaf; // retained for Landing 3 (CertificateVerify key-possession check)
+                // W2202 L3b: capture Transcript-Hash(CH..Certificate) HERE — Certificate is the last message
+                // appended to ctTranscript (CV/Finished arrive in later loop iterations), so the full transcript
+                // hash at this point is exactly what the server signs in CertificateVerify (no exclusion, unlike
+                // the 0x14 Finished window). Reused in the 0x0f arm below.
+                qc->ctTranscriptHashThroughCert = ctTranscriptHash(qc);
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server cert chain validated OK for %s", qc->ctSni.utf8().data());
+            }
+        } else if (hsType == 0x0f) { // CertificateVerify → prove the peer holds the LEAF private key (W2202 L3b; mirrors the soak-proven h2 0x0f arm in DriftstackTLS13Client.mm)
+            static const bool s_validateCV = []() {
+                const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                return e && e[0] == '1';
+            }();
+            if (s_validateCV && !qc->ctSni.isEmpty()) {
+                // CertificateVerify body (cv, hsLen bytes): 2B SignatureScheme + 2B sig_len + signature.
+                // hsLen bytes at cv are guaranteed present (the off+4+hsLen<=buf check at the loop top).
+                const uint8_t* cv = b + off + 4;
+                if (hsLen < 4) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CertificateVerify too short — rejecting"); return -1; }
+                uint16_t scheme = (uint16_t(cv[0]) << 8) | cv[1];
+                uint16_t sigLen = (uint16_t(cv[2]) << 8) | cv[3];
+                if (static_cast<size_t>(4) + sigLen > hsLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CertificateVerify sig OOB — rejecting"); return -1; }
+                std::span<const uint8_t> sig(cv + 4, sigLen);
+                String cvErr;
+                if (!driftstackVerifyCertificateVerify(qc->ctLeafCert.get(), sig, scheme, qc->ctTranscriptHashThroughCert, /*isServerContext=*/true, cvErr)) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CertificateVerify FAILED (%s) for %s — rejecting (MITM key-possession defense)", cvErr.utf8().data(), qc->ctSni.utf8().data());
+                    return -1;
+                }
+                qc->ctGotCertVerify = true;  // W2202 L3b: REQUIRED by the Finished arm — a verified CertificateVerify must have been seen
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CertificateVerify OK for %s", qc->ctSni.utf8().data());
             }
         } else if (hsType == 0x14) { // server Finished → verify MAC, then 1-RTT keys + client Finished
             // W2202 STEP 2 (verify-gate ws4cffit6): verify the server Finished verify_data MAC BEFORE deriving
@@ -1212,6 +1242,16 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                 for (size_t i = 0; i < expected.size(); ++i) diff |= (expected[i] ^ recvVd[i]);  // constant-time (no early-exit)
                 if (diff != 0) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server Finished MAC INVALID — rejecting (handshake auth failure)"); return -1; }
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server Finished MAC verified OK");
+                // W2202 L3b REQUIRE-gate (workflow wmxshy3ke finding #5): the 0x0f arm only verifies a
+                // CertificateVerify IF one is sent. A MITM that replays a chain-valid cert it does not own
+                // can forge this ECDHE-based Finished MAC and simply OMIT CertificateVerify — the 0x0f arm
+                // never runs. CertificateVerify is the ONLY proof of leaf-private-key possession (RFC 8446
+                // §4.4.3), so REQUIRE it was verified before completing the handshake. (ctGotCertVerify is
+                // set true only after a successful verify, which requires a chain-valid leaf.)
+                if (!qc->ctGotCertVerify) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 handshake MISSING verified CertificateVerify for %s — rejecting (MITM cert-skip defense)", qc->ctSni.utf8().data());
+                    return -1;
+                }
             }
             Vector<uint8_t> chSFHash = ctTranscriptHash(qc);  // hash through server Finished
             if (!qc->ctKeySchedule.deriveApplicationSecrets(chSFHash)) {

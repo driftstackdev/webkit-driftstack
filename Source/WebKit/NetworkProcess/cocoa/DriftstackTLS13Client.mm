@@ -781,6 +781,7 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 CertificateVerify FAILED (%s) for %s — rejecting (MITM key-possession defense)", cvErr.utf8().data(), m_sniHostname.utf8().data());
                         return false;
                     }
+                    m_gotCertVerify = true;  // W2202 L3: REQUIRED by the Finished arm below — set ONLY after a successful verify (which itself requires a chain-valid leaf)
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 CertificateVerify OK for %s", m_sniHostname.utf8().data());
                 }
             }
@@ -817,6 +818,18 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                         return false;
                     }
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 server Finished MAC verified OK");
+                    // W2202 L3 REQUIRE-gate (workflow wmxshy3ke finding #5): the 0x0f arm only verifies a
+                    // CertificateVerify IF one is sent. A MITM that replays a chain-valid cert it does not own
+                    // can forge this ECDHE-based Finished MAC and simply OMIT CertificateVerify — the 0x0f arm
+                    // never runs, and verify-if-present would silently accept. CertificateVerify is the ONLY
+                    // proof of leaf-private-key possession (RFC 8446 §4.4.3), so REQUIRE it was verified.
+                    // (m_gotCertVerify is set true only after a successful verify, which requires a chain-valid
+                    // leaf — so this one check closes cert-omit, certverify-omit, and both-omit.)
+                    if (!m_gotCertVerify) {
+                        m_errorMessage = makeString("server omitted CertificateVerify (MITM cert-skip) for "_s, m_sniHostname);
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h2 handshake MISSING verified CertificateVerify — rejecting (MITM cert-skip defense)");
+                        return false;
+                    }
                 }
                 gotServerFinished = true;
                 auto chSFhash = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
