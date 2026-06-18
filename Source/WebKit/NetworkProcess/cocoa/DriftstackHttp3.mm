@@ -2927,9 +2927,19 @@ String driftstackResolveHostOverSocks5Proxy(const String& host);
 // (zero-regression). Exposed (non-static) for DriftstackQuicSocks5Bridge::wrapOutgoingQuicPacket.
 String driftstackResolveHostOverSocks5Proxy(const String& host)
 {
+    // W2648 follow-on (audit udp-7): this QUIC §7 pre-resolve helper (called from the QUIC interpose
+    // wrapOutgoingQuicPacket path) re-opened a full UDP_ASSOCIATE per new destination — on a no-UDP proxy
+    // a wasted ~8s stall that can't carry the DNS query anyway. Bail immediately if UDP is known-down (the
+    // caller falls back to local getaddrinfo — zero regression vs the existing null-return); and thread
+    // outUdpRefused so if THIS is the first associate of the session it latches for every other h3 gate.
+    if (driftstackUdpRelayKnownDown())
+        return String();
     struct sockaddr_in relaySa { };
     int controlFd = -1;
-    if (!driftstackQuicRawSocks5Associate(&relaySa, &controlFd)) {
+    bool dnsUdpRefused = false;
+    if (!driftstackQuicRawSocks5Associate(&relaySa, &controlFd, &dnsUdpRefused)) {
+        if (dnsUdpRefused)
+            driftstackMarkUdpRelayDown(); // genuine no-UDP signal → latch so every h3 entry point skips fast
         if (controlFd >= 0)
             ::close(controlFd);
         return String();
