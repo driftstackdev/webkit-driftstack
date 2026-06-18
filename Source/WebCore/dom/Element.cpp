@@ -1699,11 +1699,11 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // (served=browserleaks-DOM value differs from the iOS-sim by +1 sub-pixel rounding; keep until a
  // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
 
- { 0x2049, 2, 13, 21 },
+ { 0x2049, 2, 14, 21 },
  // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
- { 0x2028, 3, 10, 17 }, { 0x2029, 3, 10, 17 },
+ { 0x2028, 3, 10, 20 }, { 0x2029, 3, 10, 20 },
  // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
- { 0x203C, 6, 23, 20 }, { 0x2049, 6, 23, 20 },
+ { 0x203C, 6, 23, 21 }, { 0x2049, 6, 23, 21 },
  // W2615 cursive (bucket 4, Snell Roundhand) General Punctuation — REAL (double-warm-stable): the fork's
  // cursive uses varying fallbacks (heights 21-26 + notdef-width 16) where iOS gives a consistent fallback
  // (uniform line box 22 + the real glyph width). iOS-sim 16px width,22 (sim = bit-identical iOS DOM-truth, W2570):
@@ -1712,7 +1712,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
 
  { 0x203C, 4, 9, 22 },
 
- { 0x2049, 4, 13, 22 },
+ { 0x2049, 4, 14, 22 },
 
  // W2616 Supplemental Punctuation U+2E1A-2E31 — iOS .notdef tofu widths (most share the per-generic tofu
  // value-set serif12/sans10/mono10/cursive8/fantasy8/sysui16; U+2E28/29/30/31 are real glyphs diverging in
@@ -1734,18 +1734,18 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // (fork cascades to Songti SC/Hiragino full-width 16; iOS uses narrower glyphs / taller CJK line box).
  // Some CJK tone marks (U+302A-302D/3037-303A) are .notdef tofu value-set. iOS-sim values:
 
- { 0x301A, 6, 9, 23 }, { 0x301B, 6, 9, 23 },
+ { 0x301A, 6, 10, 23 }, { 0x301B, 6, 10, 23 },
 
 
 
  { 0x3030, 2, 21, 27 }, { 0x3030, 1, 21, 27 },
- { 0x3030, 3, 21, 27 }, { 0x3030, 4, 21, 27 }, { 0x3030, 5, 21, 30 }, { 0x3030, 6, 23, 20 },
+ { 0x3030, 3, 21, 27 }, { 0x3030, 4, 21, 27 }, { 0x3030, 5, 21, 30 }, { 0x3030, 6, 23, 21 },
 
 
 
  { 0x303D, 2, 21, 27 }, { 0x303D, 1, 21, 27 },
- { 0x303D, 3, 21, 27 }, { 0x303D, 4, 21, 27 }, { 0x303D, 5, 21, 30 }, { 0x303D, 6, 23, 20 }, { 0x303E, 2, 16, 21 }, { 0x303E, 1, 16, 20 },
- { 0x303E, 3, 16, 20 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 },
+ { 0x303D, 3, 21, 27 }, { 0x303D, 4, 21, 27 }, { 0x303D, 5, 21, 30 }, { 0x303D, 6, 23, 21 }, { 0x303E, 2, 16, 21 }, { 0x303E, 1, 16, 21 },
+ { 0x303E, 3, 16, 21 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 },
 
 
 
