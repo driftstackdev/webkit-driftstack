@@ -172,10 +172,14 @@ void ScriptedAnimationController::serviceRequestAnimationFrameCallbacks(ReducedR
         if (m_driftstackCallbackInvocationCount == 0) {
             m_driftstackFirstCallbackTimestampMs = highResNowMs;
         } else if (m_driftstackCallbackInvocationCount == 1) {
-            // Clamp ts[1] to firstCallback + 10ms (iPhone pattern).
-            // Record the shift so subsequent ts values preserve the
-            // 16-17ms cadence relative to clamped ts[1].
-            double iphonePatternMs = m_driftstackFirstCallbackTimestampMs + 10.0;
+            // W2643: cap ts[1] at firstCallback + 43ms (the real iPhone-17 first-delta
+            // MAX across 12 /aio refs; median ~20, range 2-43). The prior +10.0 forced a
+            // DETERMINISTIC 10ms first delta (matched only 1/12 refs, low end) — a cross-load
+            // determinism tell. The fork's NATURAL first delta is 15-18ms (varies per load,
+            // in the real range), so capping at the real max lets that natural variance through
+            // and only clamps a genuine Mac contention outlier. Record the shift so subsequent
+            // ts values preserve cadence relative to the (now rarely) clamped ts[1].
+            double iphonePatternMs = m_driftstackFirstCallbackTimestampMs + 43.0;
             if (highResNowMs > iphonePatternMs) {
                 m_driftstackTimestampShiftMs = highResNowMs - iphonePatternMs;
                 highResNowMs = iphonePatternMs;
@@ -208,9 +212,13 @@ void ScriptedAnimationController::serviceRequestAnimationFrameCallbacks(ReducedR
         const char* env = getenv("DRIFTSTACK_RAF_DELTA_CLAMP");
         return env && env[0] == '1';
     }();
-    // Default 17.0ms = iPhone 60Hz quantum (non-fast ProMotion). Override
-    // requires WTF-safe parsing; current scope keeps it hardcoded.
-    constexpr double s_rafDeltaClampMs = 17.0;
+    // W2643: 21.0ms = the real iPhone-17 steady-state delta MAX (across 12 /aio refs;
+    // median 17, ~2.4% of deltas are 18-21). The prior 17.0 HARD-capped every delta at 17,
+    // erasing the real 18-21 tail (a histogram/maxDelta determinism tell). The fork's NATURAL
+    // steady deltas are 16-18 (median 17, a small ~3-7% 18 tail) — already iPhone-like — so
+    // clamping at the real max (21) lets that natural distribution through and only catches a
+    // genuine Mac contention outlier (the 50-376ms GC/layout spikes), mapping it to the real max.
+    constexpr double s_rafDeltaClampMs = 21.0;
     if (s_rafDeltaClamp && m_driftstackLastClampedTimestampMs > 0.0) {
         double maxAllowed = m_driftstackLastClampedTimestampMs + s_rafDeltaClampMs;
         if (highResNowMs > maxAllowed) {
