@@ -434,12 +434,12 @@ struct FramerDestination {
 struct FramerDestinationRegistry {
     Lock lock;
     HashMap<uintptr_t, FramerDestination> byFramerPtr WTF_GUARDED_BY_LOCK(lock);
-    // Most-recently-set destination — used by start_handler since the
-    // framer pointer is the only handle we have at that point. Single-
-    // connection scenarios (v1.0 norm) write/read in lockstep order
-    // (createRelayConnectionForQuic → nw_connection_create → start_handler
-    // fires synchronously on the same thread for the just-set framer).
-    FramerDestination pendingDestination WTF_GUARDED_BY_LOCK(lock);
+    // W2202 STEP 4 (fork-egress audit ws4cffit6): a FIFO QUEUE, not a single slot. Under H3_POOL multi-origin
+    // concurrency a 2nd setPendingFramerDestination overwrote the 1st before its start_handler claimed it →
+    // cross-origin §7 mis-route (one origin's QUIC wrapped to another's SOCKS5 dest) for that connection's life.
+    // Mirrors the race-safe FIFO in the sibling DriftstackSocks5TCPFramer.mm: framers start in creation order, so
+    // claim pops first. Single-connection (v1.0 norm) = a 1-entry queue → identical behaviour.
+    Vector<FramerDestination> pendingQueue WTF_GUARDED_BY_LOCK(lock);
 };
 
 static FramerDestinationRegistry& framerDestinationRegistry()
@@ -491,15 +491,21 @@ static void setPendingFramerDestination(const String& host, uint16_t port)
     }
     auto& registry = framerDestinationRegistry();
     Locker locker { registry.lock };
-    registry.pendingDestination.host = resolvedHost;
-    registry.pendingDestination.port = port;
+    if (registry.pendingQueue.size() >= 256)   // cap: a never-claimed entry (cancelled-before-start framer) can't grow unbounded
+        registry.pendingQueue.removeAt(0);
+    registry.pendingQueue.append(FramerDestination { resolvedHost, port });
 }
 
 static FramerDestination claimDestinationForFramer(nw_framer_t framer)
 {
     auto& registry = framerDestinationRegistry();
     Locker locker { registry.lock };
-    auto pending = registry.pendingDestination;
+    // FIFO: framers start in the order their QUIC connections were created (mirrors DriftstackSocks5TCPFramer.mm).
+    FramerDestination pending;
+    if (!registry.pendingQueue.isEmpty()) {
+        pending = WTF::move(registry.pendingQueue.first());
+        registry.pendingQueue.removeAt(0);
+    }
     registry.byFramerPtr.set(reinterpret_cast<uintptr_t>(framer), pending);
     return pending;
 }
