@@ -173,7 +173,13 @@ static CompositeIndexEntry readCompositeEntry(std::span<const uint8_t> indexSpan
     CompositeIndexEntry e;
     auto entrySpan = indexSpan.subspan(i * kEntrySize, kEntrySize);
     auto seqSpan = entrySpan.subspan(0, kSequenceBytes);
-    e.sequenceLen = uint16_t(entrySpan[64]) | (uint16_t(entrySpan[65]) << 8);
+    // SEC-2026-06-18 (audit-w2 LOW): clamp the raw 0..65535 sequenceLen read from the mmap'd .bin to the 64-byte
+    // sequence field BEFORE the subspan below — an unclamped sequenceLen>64 makes seqSpan.subspan(0, sequenceLen)
+    // std::span UB (count>size()). Benign today (compareBytes only reads min(a,b) bounded by the <=64-byte query)
+    // but a latent landmine for any future consumer trusting sequenceBytes.size(). Mirrors the W2394/W2307 per-entry
+    // hardening on offsetInPayload/pngBytesLen.
+    uint16_t rawSequenceLen = uint16_t(entrySpan[64]) | (uint16_t(entrySpan[65]) << 8);
+    e.sequenceLen = std::min<uint16_t>(rawSequenceLen, kSequenceBytes);
     e.strikeIdx = uint16_t(entrySpan[66]) | (uint16_t(entrySpan[67]) << 8);
     // entry[68..72] reserved
     e.offsetInPayload = uint32_t(entrySpan[72]) | (uint32_t(entrySpan[73]) << 8) | (uint32_t(entrySpan[74]) << 16) | (uint32_t(entrySpan[75]) << 24);

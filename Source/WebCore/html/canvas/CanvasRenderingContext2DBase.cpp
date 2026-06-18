@@ -2800,8 +2800,11 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
         && sw > 0 && sh > 0
         && sx >= 0 && sy >= 0
-        && static_cast<unsigned>(sx + sw) <= canvasBase().width()
-        && static_cast<unsigned>(sy + sh) <= canvasBase().height()) {
+        // SEC-2026-06-18 (audit-w2 INFO): compute the bounds in size_t — `sx + sw` are JS-controlled int32 and
+        // `static_cast<unsigned>(sx + sw)` overflows in signed int BEFORE the cast (UB). sx/sy>=0 & sw/sh>0 here, so
+        // size_t addition cannot overflow. Matches the W2530 64-bit-arithmetic convention used in the atlas offset checks.
+        && static_cast<size_t>(sx) + static_cast<size_t>(sw) <= canvasBase().width()
+        && static_cast<size_t>(sy) + static_cast<size_t>(sh) <= canvasBase().height()) {
         const auto fullW = canvasBase().width();
         const auto fullH = canvasBase().height();
         std::span<const uint8_t> fullRGBA;
@@ -2869,8 +2872,9 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         if (s_getImageDataAtlas
             && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
             && sw > 0 && sh > 0 && sx >= 0 && sy >= 0
-            && static_cast<unsigned>(sx + sw) <= canvasBase().width()
-            && static_cast<unsigned>(sy + sh) <= canvasBase().height()) {
+            // SEC-2026-06-18 (audit-w2 INFO): size_t bounds — avoid the signed-int `sx + sw` overflow UB (W2530 convention).
+            && static_cast<size_t>(sx) + static_cast<size_t>(sw) <= canvasBase().width()
+            && static_cast<size_t>(sy) + static_cast<size_t>(sh) <= canvasBase().height()) {
             const auto fullW = canvasBase().width();
             const auto fullH = canvasBase().height();
             uint16_t wSig = static_cast<uint16_t>(std::min<unsigned>(fullW, 0xffff));
