@@ -28,6 +28,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #import "DriftstackSocks5URLProtocol.h"
+#import "DriftstackHttp3.h" // W2651 (udp-4): driftstackMarkUdpRelayDown() — pre-seed the custom-h3 latch from the config-time UDP probe
 #endif
 
 #import "AppStoreDaemonSPI.h"
@@ -1667,6 +1668,15 @@ ALLOW_DEPRECATED_DECLARATIONS_END
                             // gate to prevent QUIC UDP leaks.
                             bool udpRelaySupported = driftstackSocks5UdpSupported();
                             if (!udpRelaySupported) {
+                                // W2651 (udp-4): this Slice 16.7.a probe disables CFNetwork's NATIVE h3
+                                // (_allowsHTTP3=NO), but the fork's CUSTOM h3 path (DriftstackNetworkLoader +
+                                // DriftstackHttp3 PathB-v2) is separate and was NOT covered — that gap was the
+                                // founder's no-UDP white-screen (W2646/W2648). Pre-seed the shared custom-h3
+                                // latch HERE, at session-config time (this probe is eager + call_once-cached),
+                                // so the fork's h3 entry points are suppressed BEFORE the first navigation —
+                                // eliminating the one-time ~4s associate stall the first page would otherwise
+                                // pay, and unifying both gates under this one authoritative UDP_ASSOCIATE probe.
+                                driftstackMarkUdpRelayDown();
                                 @try {
                                     [configuration.get() setValue:@NO forKey:@"_allowsHTTP3"];
                                     static bool loggedOnceH3 = false;
