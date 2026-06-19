@@ -98,10 +98,36 @@ uint32_t GPUSupportedLimits::maxUniformBuffersPerShaderStage() const
     return m_backing->maxUniformBuffersPerShaderStage();
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Per-minor WebGPU large-buffer cap: real iPhone Safari 26.0 reports 644245092 for
+// maxBufferSize / maxUniformBufferBindingSize / maxStorageBufferBindingSize; 26.3/26.4+
+// report 1073741824 (webgpu capture). 26.0 ONLY — 26.3 keeps the 26.4 value. Unset
+// (the 26.4 launch default) returns 1073741824. (NOTE: the 26.0 limits-COUNT delta —
+// 36 vs 32 — needs a separate runtime mechanism and is tracked in the closure ledger.)
+static uint64_t driftstackWebGPUBufferCap()
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return 1073741824ULL;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return 1073741824ULL;
+    sv.remove_prefix(pos + 6);
+    int maj = 0, min = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+    return (maj == 26 && min == 0) ? 644245092ULL : 1073741824ULL;
+}
+#endif
+
 uint64_t GPUSupportedLimits::maxUniformBufferBindingSize() const
 {
 #if PLATFORM(DRIFTSTACK)
-    return std::min<uint64_t>(m_backing->maxUniformBufferBindingSize(), 1073741824ULL);
+    return std::min<uint64_t>(m_backing->maxUniformBufferBindingSize(), driftstackWebGPUBufferCap());
 #endif
     return m_backing->maxUniformBufferBindingSize();
 }
@@ -109,7 +135,7 @@ uint64_t GPUSupportedLimits::maxUniformBufferBindingSize() const
 uint64_t GPUSupportedLimits::maxStorageBufferBindingSize() const
 {
 #if PLATFORM(DRIFTSTACK)
-    return std::min<uint64_t>(m_backing->maxStorageBufferBindingSize(), 1073741824ULL);
+    return std::min<uint64_t>(m_backing->maxStorageBufferBindingSize(), driftstackWebGPUBufferCap());
 #endif
     return m_backing->maxStorageBufferBindingSize();
 }
@@ -132,7 +158,7 @@ uint32_t GPUSupportedLimits::maxVertexBuffers() const
 uint64_t GPUSupportedLimits::maxBufferSize() const
 {
 #if PLATFORM(DRIFTSTACK)
-    return std::min<uint64_t>(m_backing->maxBufferSize(), 1073741824ULL);
+    return std::min<uint64_t>(m_backing->maxBufferSize(), driftstackWebGPUBufferCap());
 #endif
     return m_backing->maxBufferSize();
 }

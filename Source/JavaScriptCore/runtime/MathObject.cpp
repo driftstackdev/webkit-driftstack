@@ -126,6 +126,30 @@ void MathObject::finishCreation(VM& vm, JSGlobalObject* globalObject)
     putDirectNativeFunctionWithoutTransition(vm, globalObject, Identifier::fromString(vm, "trunc"_s), 1, mathProtoFuncTrunc, ImplementationVisibility::Public, TruncIntrinsic, static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirectNativeFunctionWithoutTransition(vm, globalObject, Identifier::fromString(vm, "imul"_s), 2, mathProtoFuncIMul, ImplementationVisibility::Public, IMulIntrinsic, static_cast<unsigned>(PropertyAttribute::DontEnum));
     putDirectNativeFunctionWithoutTransition(vm, globalObject, Identifier::fromString(vm, "f16round"_s), 1, mathProtoFuncF16Round, ImplementationVisibility::Public, F16RoundIntrinsic, static_cast<unsigned>(PropertyAttribute::DontEnum));
+#if PLATFORM(DRIFTSTACK)
+    // Math.sumPrecise landed at Safari 26.2 — real iPhone Safari 18.x AND 26.0 do NOT have it
+    // (window.safari26FeatureTells: undefined on 18.6/26.0, 'function' on 26.3+). Skip the
+    // install for <26.2 archetypes so 26.0 (and the launchable 18.6 band) match. Unset
+    // (the 26.4 launch default) keeps it.
+    bool driftstackInstallSumPrecise = []() {
+        const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!arch || !arch[0])
+            return true;
+        std::string_view sv(arch);
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos)
+            return true;
+        sv.remove_prefix(pos + 6);
+        int maj = 0, min = 0;
+        size_t i = 0;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+        if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+            ++i;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+        return maj > 26 || (maj == 26 && min >= 2);
+    }();
+    if (driftstackInstallSumPrecise)
+#endif
     putDirectNativeFunctionWithoutTransition(vm, globalObject, Identifier::fromString(vm, "sumPrecise"_s), 1, mathProtoFuncSumPrecise, ImplementationVisibility::Public, NoIntrinsic, static_cast<unsigned>(PropertyAttribute::DontEnum));
 }
 
