@@ -223,6 +223,13 @@ static bool driftstackSubstituteAnalyserData(BaseAudioContext& context, Realtime
 {
     if (!Driftstack::isRealtimeAnalyserOverrideEnabled())
         return false;
+    // 2026-06-19 tracker-fidelity (#103): if Safari's tracker-context audio noise is active
+    // (NoiseInjectionPolicy::Enhanced, set when the reading script is a known tracker), DEFER to the
+    // upstream RealtimeAnalyser noised path (RealtimeAnalyser.cpp:181) so a tracker gets the same
+    // noised frequency bins a real iPhone produces (the salt is random-per-domain-per-session upstream,
+    // so the noise is statistically identical). Serve the V-374 canonical only to non-tracker (first-party).
+    if (context.noiseInjectionPolicies().contains(NoiseInjectionPolicy::Enhanced))
+        return false;
     uint32_t sampleRate = static_cast<uint32_t>(context.sampleRate());
     uint32_t fftSize = analyser.fftSize();
     std::span<const uint8_t> overrideBytes;

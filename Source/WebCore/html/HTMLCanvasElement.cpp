@@ -1231,7 +1231,14 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // already done for V-510 atlas lookup later, so we just move it.
     // Per founder direction "bit identical on any canvas/font test ...
     // for any randomized test any site might make".
-    if (s_canvasFp10xOverrideEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
+    if (s_canvasFp10xOverrideEnabled && encodingMIMEType.containsIgnoringASCIICase("png"_s)
+        // 2026-06-19 tracker-fidelity (#100): in a ScriptTrackingPrivacy tracker context a real
+        // iPhone returns AFP noise (createImageForNoiseInjection, see below) for canvas reads.
+        // DEFER here so the FP10X canonical does NOT override the tracker noise — else a tracker
+        // reading toDataURL gets canonical while getImageData gets noise (a cross-method tell).
+        // The salt is random-per-domain-per-session (upstream), so the deferred upstream noise is
+        // statistically identical to a real iPhone's. Canonical still serves first-party (non-tracker).
+        && !document->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas)) {
         // Try V-510 atlas first via a tentative encode. We compute the
         // op-sequence sha + Mac fork dataURL, look up, return iPhone
         // bytes on hit. Only on V-510 miss do we proceed to V-241.
@@ -1559,6 +1566,10 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         return env && env[0] == '1';
     }();
     if (s_canvasFp10xOverrideToBlob && !blobData.isEmpty()
+        // 2026-06-19 tracker-fidelity (#100): defer so FP10X canonical does NOT overwrite the
+        // tracker-context AFP noise already filled into blobData (line ~1533) — matches getImageData
+        // + a real iPhone (coherent noise across all canvas read methods for a tracker).
+        && !document->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas)
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         // Wave 29-349: V-510 atlas lookup (in-TU direct call) +
         // V-241 fallback. Mirrors toDataURL dispatch above.

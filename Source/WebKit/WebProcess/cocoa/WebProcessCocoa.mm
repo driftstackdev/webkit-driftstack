@@ -1337,6 +1337,12 @@ void WebProcess::updateFreezerStatus()
 #if PLATFORM(MAC)
 void WebProcess::scrollerStylePreferenceChanged(bool useOverlayScrollbars)
 {
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-19 (#99): a real iPhone is always overlay; ignore the host Mac's runtime scroller-style
+    // change so a mid-session "Show scroll bars" toggle can't flip the fleet to legacy scrollbars
+    // (the ~15px + clientWidth-gutter tell). Force overlay regardless of the UIProcess-relayed value.
+    useOverlayScrollbars = true;
+#endif
     ScrollerStyle::setUseOverlayScrollbars(useOverlayScrollbars);
 
     ScrollbarTheme& theme = ScrollbarTheme::theme();

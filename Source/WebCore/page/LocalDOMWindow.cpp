@@ -1318,6 +1318,14 @@ int LocalDOMWindow::outerHeight() const
     // Screen::height()) so the multi-model matrix stays coherent — a hardcoded 874
     // would mismatch screen.height for any non-402x874 archetype (an outer/screen
     // incoherence tell). MiniBrowser's actual NSWindow height on Mac is unrelated.
+    // 2026-06-19 tracker-fidelity (#103): in a ScriptTrackingPrivacy tracker context a real
+    // iPhone returns innerHeight() (the #else protection path below) — DEFER to it so the fork
+    // does not leak outerHeight==screen.height (874) where a real-iPhone tracker reads
+    // outerHeight==innerHeight (714). The Config pin applies only to non-tracker (first-party).
+    if (RefPtr deferFrame = this->frame()) {
+        if (RefPtr deferPage = deferFrame->page(); deferPage && deferPage->shouldApplyScreenFingerprintingProtections(*protect(document())))
+            return innerHeight();
+    }
     if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
         return h;
     return 874;  // iPhone 17 / 16 Pro portrait fallback when Config not loaded
@@ -1356,6 +1364,14 @@ int LocalDOMWindow::outerWidth() const
     // Derive from the archetype Config (same source + fallback as Screen::width()) so
     // every matrix model stays coherent; a hardcoded 402 would mismatch screen.width
     // for any non-402-wide archetype.
+    // 2026-06-19 tracker-fidelity (#103): a real iPhone returns innerWidth() in a
+    // ScriptTrackingPrivacy tracker context (the #else protection path below) — DEFER so the
+    // fork does not leak outerWidth==screen.width (402) where a real-iPhone tracker on a
+    // no-<meta viewport> page reads outerWidth==innerWidth (980). Pin = non-tracker only.
+    if (RefPtr deferFrame = this->frame()) {
+        if (RefPtr deferPage = deferFrame->page(); deferPage && deferPage->shouldApplyScreenFingerprintingProtections(*protect(document())))
+            return innerWidth();
+    }
     if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
         return w;
     return 402;  // iPhone 17 / 16 Pro portrait fallback when Config not loaded

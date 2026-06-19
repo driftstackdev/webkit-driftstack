@@ -343,6 +343,10 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         return env && env[0] == '1';
     }();
     if (s_canvasFp10xOverrideEnabled && !blobData.isEmpty()
+        // 2026-06-19 tracker-fidelity (#100): defer so FP10X canonical does NOT overwrite the
+        // tracker-context AFP noise already filled into blobData (line ~322) — coherent with
+        // toDataURL/toBlob/getImageData + a real iPhone (same noise across all read methods for a tracker).
+        && !(context && context->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         // Wave 29-349: V-510 atlas lookup via the public Driftstack::
         // wrapper, falling back to V-241 canonical table on miss. Mirrors

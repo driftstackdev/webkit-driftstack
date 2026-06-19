@@ -497,10 +497,24 @@ static ShouldIgnoreMouseEvent dispatchPointerEventIfNeeded(Element& element, con
         UNUSED_PARAM(platformEvent);
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+        // 2026-06-19 (#101): the fork synthesizes a tap via the compat mouse sequence but has NO
+        // touch-path PointerEvents (the iOS PointerCaptureController touch path is MAC-gated out).
+        // A real iPhone tap fires pointerType="touch" pointerdown/pointerup. So for a OneFingerTap do
+        // NOT early-return — fall through and dispatch the pointer event below with pointerType="touch"
+        // (matches the advertised maxTouchPoints=5 + onpointerdown; closes the empty-pointer-track tell).
+        bool driftstackTouchTap = platformEvent.syntheticClickType() == SyntheticClickType::OneFingerTap && !isAnyClick(mouseEvent) && mouseEvent.type() != eventNames().contextmenuEvent;
+        if (platformEvent.syntheticClickType() != SyntheticClickType::NoTap && !driftstackTouchTap && !isAnyClick(mouseEvent) && mouseEvent.type() != eventNames().contextmenuEvent)
+            return ShouldIgnoreMouseEvent::No;
+
+        auto driftstackPointerType = driftstackTouchTap ? "touch"_s : platformEvent.pointerType();
+        if (RefPtr pointerEvent = pointerCaptureController.pointerEventForMouseEvent(mouseEvent, platformEvent.pointerId(), driftstackPointerType)) {
+#else
         if (platformEvent.syntheticClickType() != SyntheticClickType::NoTap && !isAnyClick(mouseEvent) && mouseEvent.type() != eventNames().contextmenuEvent)
             return ShouldIgnoreMouseEvent::No;
 
         if (RefPtr pointerEvent = pointerCaptureController.pointerEventForMouseEvent(mouseEvent, platformEvent.pointerId(), platformEvent.pointerType())) {
+#endif
             pointerCaptureController.dispatchEvent(*pointerEvent, &element);
             if (isCompatibilityMouseEvent(mouseEvent) && pointerCaptureController.preventsCompatibilityMouseEventsForIdentifier(pointerEvent->pointerId()))
                 return ShouldIgnoreMouseEvent::Yes;

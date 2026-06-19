@@ -451,7 +451,18 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     auto screenProperties = WebCore::collectScreenProperties();
     parameters.screenProperties = WTF::move(screenProperties);
 #if PLATFORM(MAC)
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-19 (#99 host-leak): a real iPhone always uses overlay scrollbars (scrollbarWidth 0,
+    // constant across all 40 realdevice captures). The host Mac's "Show scroll bars" System Setting
+    // (preferredScrollerStyle) is host-derived with no iPhone pin — a fleet Mac set to "Always"
+    // (NSScrollerStyleLegacy) leaks scrollbarWidth ~15 + a clientWidth layout gutter (JS-observable
+    // via innerWidth-documentElement.clientWidth / ::-webkit-scrollbar). The default/dev Mac passes
+    // only coincidentally (default=overlay). Pin overlay host-independently. (Runtime changes are
+    // short-circuited in WebProcess::scrollerStylePreferenceChanged.)
+    parameters.useOverlayScrollbars = true;
+#else
     parameters.useOverlayScrollbars = ([NSScroller preferredScrollerStyle] == NSScrollerStyleOverlay);
+#endif
 #endif
 
 #if PLATFORM(VISION)
