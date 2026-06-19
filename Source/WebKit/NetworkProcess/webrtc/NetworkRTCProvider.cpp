@@ -351,6 +351,18 @@ void NetworkRTCProvider::createUDPSocket(LibWebRTCSocketIdentifier identifier, c
             WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] createUDPSocket: DRIFTSTACK_REQUIRE_PROXY unset — falling through to direct nw_connection (LEAK ALLOWED for debugging). Set DRIFTSTACK_REQUIRE_PROXY=1 to enforce egress lock.");
         }
     } else {
+        // EGRESS channel-5 hardening (2026-06-18 channel-leak enumeration): SOCKS5 INACTIVE. Under
+        // REQUIRE_PROXY=1 a WebRTC UDP socket must NOT be created direct — NetworkRTCUDPSocketCocoa would
+        // nw_connection at the Mac fleet IP, and its sendTo/setListeningPort fail-closed are gated on
+        // isCustomSocks5Active() so they DON'T fire in this state → leak. Hard-block like the SOCKS5-active-
+        // relay-unavailable case above (348). NOT reachable today (the spawn env couples DRIFTSTACK_CUSTOM_SOCKS5
+        // + DRIFTSTACK_REQUIRE_PROXY); defense-in-depth so a future decoupling can't leak.
+        const char* requireProxyInactive = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        if (requireProxyInactive && requireProxyInactive[0] == '1') {
+            WTFLogAlways("[Driftstack-EG-WK-1.8] createUDPSocket: REQUIRE_PROXY=1 + DRIFTSTACK_CUSTOM_SOCKS5 unset → HARD-BLOCK (no direct WebRTC UDP socket; id=%" PRIu64 ").", identifier.toUInt64());
+            signalSocketIsClosed(identifier);
+            return;
+        }
         // Legacy Wave 29-383 observability when DRIFTSTACK_CUSTOM_SOCKS5
         // unset but DRIFTSTACK_SOCKS5_PROXY set (env-fallback path Wave
         // 29-366 active for HTTP/HTTPS but not WebRTC yet).
@@ -398,6 +410,22 @@ void NetworkRTCProvider::createClientTCPSocket(LibWebRTCSocketIdentifier identif
         addSocket(identifier, WTF::move(socket));
         rawSocket->beginAsyncConnect();
         return;
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // EGRESS channel-5 hardening (2026-06-18): SOCKS5 INACTIVE (the isCustomSocks5Active tunnel above didn't
+    // fire). Under REQUIRE_PROXY=1 do NOT create a DIRECT TCP socket — NetworkRTCTCPSocketCocoa nw_connections
+    // at the Mac fleet IP = leak. Fail closed (signalSocketIsClosed → libwebrtc abandons the candidate), the same
+    // posture as the createUDPSocket hard-block. NOT reachable today (spawn env couples CUSTOM_SOCKS5 +
+    // REQUIRE_PROXY); defense-in-depth so a future decoupling can't leak TURN-TCP direct.
+    {
+        const char* requireProxyTCP = getenv("DRIFTSTACK_REQUIRE_PROXY");
+        if (requireProxyTCP && requireProxyTCP[0] == '1') {
+            WTFLogAlways("[Driftstack-EG-WK-1.8] createClientTCPSocket: REQUIRE_PROXY=1 + DRIFTSTACK_CUSTOM_SOCKS5 unset → FAIL-CLOSED (no direct TCP socket; id=%" PRIu64 ").", identifier.toUInt64());
+            signalSocketIsClosed(identifier);
+            return;
+        }
     }
 #endif
 
