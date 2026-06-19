@@ -776,6 +776,15 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
                     OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
                     RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
                     if (st != errSecSuccess || !trustRef) { m_errorMessage = "SecTrustCreateWithCertificates failed"_s; return false; }
+                    // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
+                    // revocation fetches. Without this, SecTrustEvaluateWithError lets `trustd` (a separate system
+                    // daemon that does NOT honor our SOCKS5 proxy) fetch OCSP/CRL DIRECT off the Mac IP = a
+                    // customer-egress leak (the CA + on-path observers see the fleet IP + the browsing pattern). It
+                    // is ALSO an iPhone divergence: modern Apple platforms use OCSP stapling + the aggregated
+                    // valid.apple.com revocation cache, NOT live per-cert OCSP from the device. Disabling network
+                    // fetch keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression,
+                    // matches iPhone, and the trustd OCSP/CRL traffic can never leave the host.
+                    SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
                     CFErrorRef evalErr = nullptr;
                     bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
                     if (evalErr)
@@ -1243,6 +1252,11 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
                 OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
                 RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
                 if (st != errSecSuccess || !trustRef) { m_errorMessage = "TLS1.2: SecTrustCreateWithCertificates failed"_s; return false; }
+                // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
+                // revocation fetches so trustd cannot fetch OCSP/CRL DIRECT off the Mac IP (egress leak +
+                // non-iPhone traffic; iOS uses stapling + valid.apple.com aggregation, not live per-cert OCSP).
+                // Keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression.
+                SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
                 CFErrorRef evalErr = nullptr;
                 bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
                 if (evalErr)

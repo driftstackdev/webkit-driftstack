@@ -503,6 +503,16 @@ static void updateIgnoreStrictTransportSecuritySetting(RetainPtr<NSURLRequest>& 
 
 static inline void processServerTrustEvaluation(NetworkSessionCocoa& session, SessionWrapper& sessionWrapper, NSURLAuthenticationChallenge *challenge, NegotiatedLegacyTLS negotiatedLegacyTLS, NetworkDataTaskCocoa::TaskIdentifier taskIdentifier, NetworkDataTaskCocoa* networkDataTask, CompletionHandler<void(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential *credential)>&& completionHandler)
 {
+    // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK revocation
+    // fetches on the CFNetwork HTTPS-BULK-path server trust (the bulk of browsing). Without this, the system
+    // trust evaluation (via continueDidReceiveChallenge) lets `trustd` (a separate system daemon that does NOT
+    // honor our SOCKS5 proxy) fetch OCSP/CRL DIRECT off the Mac IP = a customer-egress leak + non-iPhone
+    // traffic. iOS uses OCSP stapling + the aggregated valid.apple.com revocation cache, NOT live per-cert OCSP
+    // from the device. Keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression,
+    // matches iPhone. The custom TLS1.3/h3 PathB-v2 trust sites are gated separately (DriftstackTLS13Client.mm
+    // + DriftstackHttp3.mm). nil-safe (no-op for a non-serverTrust challenge).
+    if (SecTrustRef serverTrustToHarden = challenge.protectionSpace.serverTrust)
+        SecTrustSetNetworkFetchAllowed(serverTrustToHarden, false);
     session.continueDidReceiveChallenge(sessionWrapper, challenge, negotiatedLegacyTLS, taskIdentifier, networkDataTask, [completionHandler = WTF::move(completionHandler), secTrust = retainPtr(challenge.protectionSpace.serverTrust)] (WebKit::AuthenticationChallengeDisposition disposition, const WebCore::Credential& credential) mutable {
         // FIXME: UIProcess should send us back non nil credentials but the credential IPC encoder currently only serializes ns credentials for username/password.
         if (disposition == WebKit::AuthenticationChallengeDisposition::UseCredential && !credential.nsCredential()) {

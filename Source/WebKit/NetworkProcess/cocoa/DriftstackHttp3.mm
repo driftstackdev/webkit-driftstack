@@ -1176,6 +1176,11 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                 OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
                 RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
                 if (st != errSecSuccess || !trustRef) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 SecTrustCreateWithCertificates failed — rejecting"); return -1; }
+                // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
+                // revocation fetches so trustd cannot fetch OCSP/CRL DIRECT off the Mac IP (egress leak +
+                // non-iPhone traffic; iOS uses stapling + valid.apple.com aggregation, not live per-cert OCSP).
+                // Keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression.
+                SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
                 CFErrorRef evalErr = nullptr;
                 bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
                 if (evalErr)
