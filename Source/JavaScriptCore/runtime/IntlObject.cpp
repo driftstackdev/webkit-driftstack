@@ -1767,33 +1767,53 @@ CalendarID iso8601CalendarIDSlow()
 }
 
 // https://tc39.es/proposal-intl-enumeration/#sec-availablecalendars
+#if PLATFORM(DRIFTSTACK)
+// Parse Safari major.minor from the DRIFTSTACK_ARCHETYPE slug (e.g. "..._safari26_0").
+// Returns false when unset/unparseable → caller treats it as the 26.4 launch default.
+// JSC-local (cannot depend on the WebKit-layer WebPage.cpp helper); mirrors its parser.
+// Lets the Intl per-minor gates distinguish Safari 26.0 from 26.3, which the prior
+// Family-A substring check (safari17_..25_) could not.
+static bool driftstackArchetypeSafariVersion(int& outMajor, int& outMinor)
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    if (sv.empty() || sv[0] < '0' || sv[0] > '9')
+        return false;
+    int major = 0, minor = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+    outMajor = major;
+    outMinor = minor;
+    return true;
+}
+#endif
+
 static JSArray* availableCalendars(JSGlobalObject* globalObject)
 {
 #if PLATFORM(DRIFTSTACK)
-    // Wave 29-499 §91.J (2026-05-20): real iPhone Safari 18.6 (Family A BS
-    // REF) lists 3 calendars Mac WebKit's bundled ICU doesn't include:
-    // hindu-lunar, hindu-solar, malayalam. Append + re-sort to match REF.
-    // Family B (iOS 26.4) REF doesn't include them either (Apple removed
-    // those calendars at some iOS major) — gate to Family A only.
-    static const bool s_appendFamilyACalendars = []() {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return false;
-        std::string_view sv(archetype);
-        return sv.find("safari17_") != std::string_view::npos
-            || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari20_") != std::string_view::npos
-            || sv.find("safari21_") != std::string_view::npos
-            || sv.find("safari22_") != std::string_view::npos
-            || sv.find("safari23_") != std::string_view::npos
-            || sv.find("safari24_") != std::string_view::npos
-            || sv.find("safari25_") != std::string_view::npos;
-    }();
-    if (s_appendFamilyACalendars) {
+    // Per-minor calendar surface (real-capture, intl-deltas-260-263.json): Mac base = 26.
+    // Pre-26 (Safari 18.x) lists hindu-lunar + hindu-solar + malayalam (29); Safari 26.0
+    // lists ONLY malayalam (27); Safari 26.3/26.4+ list none (26 = base). The prior gate
+    // was Family-A-only (all 3 for any safari17_..25_) and left 26.0 at the bare base.
+    int dsCalMajor = 0, dsCalMinor = 0;
+    bool dsCalHas = driftstackArchetypeSafariVersion(dsCalMajor, dsCalMinor);
+    bool appendFullTrio = dsCalHas && dsCalMajor < 26;                          // 18.x → +3 (29)
+    bool append260Malayalam = dsCalHas && dsCalMajor == 26 && dsCalMinor == 0;  // 26.0 → +malayalam (27)
+    if (appendFullTrio || append260Malayalam) {
         Vector<String> extendedCalendars = intlAvailableCalendars();
-        extendedCalendars.append("hindu-lunar"_s);
-        extendedCalendars.append("hindu-solar"_s);
+        if (appendFullTrio) {
+            extendedCalendars.append("hindu-lunar"_s);
+            extendedCalendars.append("hindu-solar"_s);
+        }
         extendedCalendars.append("malayalam"_s);
         std::sort(extendedCalendars.begin(), extendedCalendars.end(),
             [](const String& a, const String& b) {
@@ -1978,22 +1998,13 @@ static JSArray* availableNumberingSystems(JSGlobalObject* globalObject)
     // BS REF) do NOT list 'tols' — that's iOS 26.4+ only. Gate the append
     // on Family B (safari26_+) archetypes.
     static const bool s_appendTols = []() {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return true; // default Family B behavior (preserves existing).
-        std::string_view sv(archetype);
-        // Family A (safari17_ through safari25_) does NOT append.
-        if (sv.find("safari17_") != std::string_view::npos
-            || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari20_") != std::string_view::npos
-            || sv.find("safari21_") != std::string_view::npos
-            || sv.find("safari22_") != std::string_view::npos
-            || sv.find("safari23_") != std::string_view::npos
-            || sv.find("safari24_") != std::string_view::npos
-            || sv.find("safari25_") != std::string_view::npos)
-            return false;
-        return true; // Family B + future.
+        // 'tols' numbering system was added at Safari 26.4 — real iPhone Safari 18.x AND
+        // 26.0/26.3 do NOT list it (numberingSystem count 77; 26.4 = 78). The prior gate
+        // appended for ALL non-Family-A (safari26_*), wrongly giving 26.0/26.3 'tols'.
+        int maj = 0, min = 0;
+        if (!driftstackArchetypeSafariVersion(maj, min))
+            return true; // unset = 26.4 launch default = lists 'tols'.
+        return maj > 26 || (maj == 26 && min >= 4);
     }();
     if (s_appendTols)
         elements.append("tols"_s);
@@ -2308,26 +2319,17 @@ static JSArray* availablePrimaryTimeZoneIdentifiers(JSGlobalObject* globalObject
     // returns 445. Mac includes Etc/GMT+1..+12 + America/Coyhaique + others
     // that iOS 18.6 doesn't list. Filter to Family A REF shape. Family A
     // additionally has Asia/Choibalsan which Mac lacks — append.
-    static const bool s_filterToFamilyAREF = []() {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return false;
-        std::string_view sv(archetype);
-        return sv.find("safari17_") != std::string_view::npos
-            || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari20_") != std::string_view::npos
-            || sv.find("safari21_") != std::string_view::npos
-            || sv.find("safari22_") != std::string_view::npos
-            || sv.find("safari23_") != std::string_view::npos
-            || sv.find("safari24_") != std::string_view::npos
-            || sv.find("safari25_") != std::string_view::npos;
-    }();
-    if (s_filterToFamilyAREF) {
-        // Family-A-extra (Mac-only): the timezone names captured from Mac
-        // cumrig that DON'T appear in FA REF. Remove these from output.
-        static constexpr ASCIILiteral kMacOnlyTimeZones[] = {
-            "America/Coyhaique"_s,
+    // Per-minor timezone surface (real-capture, intl-deltas-260-263.json): Mac base = 445.
+    // Pre-26 (Safari 18.x) = 419: drop America/Coyhaique + the 26 Etc/GMT zones, append
+    // Asia/Choibalsan. Safari 26.0 = a DIFFERENT 419: drop ONLY the 26 Etc/GMT (real 26.0
+    // KEEPS America/Coyhaique and does NOT list Asia/Choibalsan). 26.3/26.4+ = 445 (no filter).
+    int dsTzMajor = 0, dsTzMinor = 0;
+    bool dsTzHas = driftstackArchetypeSafariVersion(dsTzMajor, dsTzMinor);
+    bool tzFilterFA = dsTzHas && dsTzMajor < 26;                         // 18.x branch
+    bool tzFilter260 = dsTzHas && dsTzMajor == 26 && dsTzMinor == 0;     // Safari 26.0 only
+    if (tzFilterFA || tzFilter260) {
+        // The 26 Etc/GMT zones Mac lists that NEITHER 18.x nor 26.0 do (both drop them).
+        static constexpr ASCIILiteral kEtcGMTZones[] = {
             "Etc/GMT+1"_s, "Etc/GMT+10"_s, "Etc/GMT+11"_s, "Etc/GMT+12"_s,
             "Etc/GMT+2"_s, "Etc/GMT+3"_s, "Etc/GMT+4"_s, "Etc/GMT+5"_s,
             "Etc/GMT+6"_s, "Etc/GMT+7"_s, "Etc/GMT+8"_s, "Etc/GMT+9"_s,
@@ -2339,14 +2341,18 @@ static JSArray* availablePrimaryTimeZoneIdentifiers(JSGlobalObject* globalObject
         Vector<String> filtered;
         for (const String& zone : intlAvailableTimeZones()) {
             bool skip = false;
-            for (auto macOnly : kMacOnlyTimeZones) {
-                if (zone == macOnly) { skip = true; break; }
+            for (auto z : kEtcGMTZones) {
+                if (zone == z) { skip = true; break; }
             }
+            // 18.x ALSO drops America/Coyhaique; real Safari 26.0 KEEPS it.
+            if (tzFilterFA && zone == "America/Coyhaique"_s)
+                skip = true;
             if (!skip)
                 filtered.append(zone);
         }
-        // Family-A-only (REF has, Mac lacks): re-add.
-        filtered.append("Asia/Choibalsan"_s);
+        // 18.x lists Asia/Choibalsan (Mac lacks → re-add); real 26.0 does NOT list it.
+        if (tzFilterFA)
+            filtered.append("Asia/Choibalsan"_s);
         std::sort(filtered.begin(), filtered.end(),
             [](const String& a, const String& b) {
                 return WTF::codePointCompare(a, b) < 0;

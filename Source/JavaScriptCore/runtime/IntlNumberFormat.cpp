@@ -339,17 +339,26 @@ void IntlNumberFormat::initializeNumberFormat(JSGlobalObject* globalObject, JSVa
     // maps the latn output digits → Tolong. Capture-pinned: '1' = U+11DE1 (high 0xD807, low 0xDDE0+d).
     if (!numberingSystem.isNull() && m_numberingSystem == "latn"_s
         && numberingSystem.convertToASCIILowercase() == "tols"_s) {
-        bool familyB = true;
+        // 'tols' was added at Safari 26.4 — coherent with availableNumberingSystems()
+        // in IntlObject.cpp, which now lists 'tols' only for >=26.4. Parse the slug's
+        // major.minor so 26.0/26.3 neither LIST nor FORMAT 'tols' (was: any non-FA → format,
+        // which left 26.0/26.3 formatting a system they don't list). Unset = 26.4 launch.
+        bool tolsFormats = true;
         if (const char* arch = getenv("DRIFTSTACK_ARCHETYPE"); arch && arch[0]) {
             std::string_view sv(arch);
-            if (sv.find("safari17_") != std::string_view::npos || sv.find("safari18_") != std::string_view::npos
-                || sv.find("safari19_") != std::string_view::npos || sv.find("safari20_") != std::string_view::npos
-                || sv.find("safari21_") != std::string_view::npos || sv.find("safari22_") != std::string_view::npos
-                || sv.find("safari23_") != std::string_view::npos || sv.find("safari24_") != std::string_view::npos
-                || sv.find("safari25_") != std::string_view::npos)
-                familyB = false;
+            tolsFormats = false;
+            if (auto pos = sv.find("safari"); pos != std::string_view::npos) {
+                sv.remove_prefix(pos + 6);
+                int maj = 0, min = 0;
+                size_t i = 0;
+                while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+                if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+                    ++i;
+                while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+                tolsFormats = maj > 26 || (maj == 26 && min >= 4);
+            }
         }
-        m_driftstackTolsDigits = familyB;
+        m_driftstackTolsDigits = tolsFormats;
     }
 #endif
 
