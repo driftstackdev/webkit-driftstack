@@ -1448,7 +1448,35 @@ ALLOW_DEPRECATED_DECLARATIONS_END
         const char* requireEnv = getenv("DRIFTSTACK_REQUIRE_PROXY");
         bool requireProxy = requireEnv && requireEnv[0] == '1';
         const char* socks5EnvCheck = getenv("DRIFTSTACK_SOCKS5_PROXY");
-        bool socks5Set = socks5EnvCheck && socks5EnvCheck[0];
+        // EGRESS channel-1 hardening (2026-06-18 channel-leak enumeration, workflow wptut210u): a SOCKS5 value
+        // counts as "set" for this fail-closed gate ONLY if it PARSES as host:port (non-empty host before the
+        // FIRST ':', numeric port 1..65535) — the SAME acceptance the env-fallback injection below (~line 1850)
+        // requires. A MALFORMED value (non-empty but unparseable) would otherwise make socks5Set=true → SKIP the
+        // dead-proxy backstop, while the injection silently no-ops on the same value → connectionProxyDictionary
+        // stays nil → CFNetwork DIRECT egress = a customer-egress LEAK. Tying the gate to a successful parse makes
+        // a malformed value fail CLOSED (the dead-proxy backstop fires). NOT reachable in production today (the
+        // harness always emits "127.0.0.1:<UInt16>"); defense-in-depth on the catastrophic egress surface. No
+        // fingerprint/cumrig impact (egress proxy-setup only; REQUIRE_PROXY is unset in cumrig).
+        bool socks5Set = false;
+        if (socks5EnvCheck && socks5EnvCheck[0]) {
+            // WTF::String parse (NOT raw char* — WebKit -Werror,-Wunsafe-buffer-usage rejects pointer arithmetic),
+            // mirroring the env-fallback injection below (~line 1850) byte-for-byte so the gate accepts EXACTLY
+            // what the injection injects: a ':' present, numeric port 1..65535.
+            String spec = String::fromLatin1(socks5EnvCheck);
+            size_t colon = spec.find(':');
+            if (colon != notFound) {
+                String portStr = spec.substring(colon + 1);
+                bool portOK = true;
+                int portInt = 0;
+                for (unsigned i = 0; i < portStr.length(); ++i) {
+                    UChar c = portStr[i];
+                    if (c < '0' || c > '9') { portOK = false; break; }
+                    portInt = portInt * 10 + (c - '0');
+                    if (portInt > 65535) { portOK = false; break; }
+                }
+                socks5Set = portOK && portInt > 0;
+            }
+        }
         bool httpProxySet = parameters.proxyConfiguration
             || !parameters.httpProxy.isEmpty()
             || !parameters.httpsProxy.isEmpty();
