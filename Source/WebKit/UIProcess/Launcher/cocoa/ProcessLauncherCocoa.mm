@@ -805,6 +805,27 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // The process has finished launching, grab the pid from the connection.
             pid_t processIdentifier = xpc_connection_get_pid(m_xpcConnection.get());
 
+#if PLATFORM(DRIFTSTACK)
+            // Driftstack task #13: self-report each launchd-brokered XPC child PID to THIS UIProcess's stderr so
+            // the harness can attribute it per-session. responsibility()/coalitions both collapse every co-resident
+            // session's WebContent to one root/launchd PID (see per-session-resource-overuse-design §R.0); each
+            // session's own stderr pipe makes a PID seen on it unambiguously THIS session's child. Benign stderr
+            // log only — zero behavioral/fingerprint effect; the harness ignores it unless DRIFTSTACK_RESOURCE_OVERUSE_DETECTION
+            // is on. const char* + if-else (not ASCIILiteral/switch) to avoid the %s-signedness + -Wswitch -Werror traps.
+            if (processIdentifier > 0) {
+                const char* kindString = "Other";
+                if (m_launchOptions.processType == ProcessLauncher::ProcessType::Web)
+                    kindString = "WebContent";
+                else if (m_launchOptions.processType == ProcessLauncher::ProcessType::Network)
+                    kindString = "Network";
+#if ENABLE(GPU_PROCESS)
+                else if (m_launchOptions.processType == ProcessLauncher::ProcessType::GPU)
+                    kindString = "GPU";
+#endif
+                WTFLogAlways("[Driftstack-ChildPID kind=%s pid=%d]", kindString, (int)processIdentifier);
+            }
+#endif
+
             didFinishLaunchingProcess(processIdentifier, IPC::Connection::Identifier(listeningPort, m_xpcConnection));
             m_xpcConnection = nullptr;
         }

@@ -82,6 +82,12 @@
 #import <WebCore/ResourceError.h>
 #import <WebCore/ResourceResponse.h>
 #import <WebCore/SharedBuffer.h>
+// PathB v2 ITP: cookie filtering + 3rd-party referer downgrade (match real iPhone NSURLSession path).
+#import <WebCore/NetworkStorageSession.h>   // cookieRequestHeaderFieldValue + ApplyTrackingPrevention/IsKnownCrossSiteTracker enums
+#import <WebCore/SameSiteInfo.h>            // SameSiteInfo::create(ResourceRequest&)
+#import <WebCore/CookieJar.h>               // full enum class IncludeSecureCookies { No, Yes }
+#import "NetworkProcess.h"                  // shouldRelaxThirdPartyCookieBlockingForPage (precedent: NetworkDataTask.cpp:33)
+#import "NetworkSession.h"                  // networkStorageSession / networkProcess / isResourceFromKnownCrossSiteTracker
 #import <dispatch/dispatch.h>
 #import <stdlib.h>
 #import <wtf/Assertions.h>
@@ -891,7 +897,7 @@ static int driftstackCancelAwareTlsWrite(void* ctxIn, const uint8_t* buf, size_t
 // path so the wire fingerprint is identical regardless of pooling.
 static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& url,
     const String& httpMethod, const WebCore::HTTPHeaderMap& httpHeaders,
-    const Vector<uint8_t>& requestBody, const String& host)
+    const Vector<uint8_t>& requestBody, const String& host, const String& cookieHeader)
 {
     WebKit::DriftstackHttp2Request h2req;
     h2req.method = httpMethod;
@@ -902,21 +908,9 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     if (h2req.path.isEmpty()) h2req.path = "/"_s;
     if (!url.query().isEmpty())
         h2req.path = makeString(h2req.path, '?', url.query());
-    // Cookie injection (NSHTTPCookieStorage), same as the one-shot path.
-    {
-        auto nsURLPtr = url.createNSURL();
-        NSURL* nsURL = nsURLPtr.get();
-        if (nsURL) {
-            NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
-            NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
-            if (cookies.count > 0) {
-                NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
-                NSString* cookie = fields[@"Cookie"];
-                if (cookie)
-                    h2req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
-            }
-        }
-    }
+    // PathB v2 ITP: caller passes the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
+    if (!cookieHeader.isEmpty())
+        h2req.extraHeaders.append({ "cookie"_s, cookieHeader });
     // iPhone Safari 26 canonical header ORDER, WebKit's natural values.
     HashMap<String, String> webkitHdrs;
     for (auto& header : httpHeaders)
@@ -1095,6 +1089,41 @@ static bool driftstackResolveRequestBody(WebCore::FormData& formData, Vector<uin
     return true;
 }
 
+// PathB v2 ITP: compute the EXACT Cookie header real Safari's NSURLSession would send for this request.
+// PathB replaces NSURLSession, which is where CFNetwork applies WebKit's Intelligent Tracking Prevention;
+// the prior 4 sites sourced cookies raw from NSHTTPCookieStorage (requestHeaderFieldsWithCookies) and so
+// bypassed 3rd-party cookie blocking entirely — a tracker-handling tell vs a real iPhone. This routes
+// through NetworkStorageSession::cookieRequestHeaderFieldValue (the 9-arg ITP overload) with the same args
+// the in-browser path uses (NetworkConnectionToWebProcess.cpp:848). Returns the full Cookie header value,
+// or a null/empty String when ITP blocks all cookies (caller injects NO Cookie header). MAIN THREAD ONLY
+// (touches m_request + task ITP state — not safe on loaderQueue). NetworkProcess-only => glyphHash-neutral.
+String DriftstackNetworkLoader::driftstackITPCookieHeader()
+{
+    RefPtr task = protectedTask();
+    if (!task)
+        return { };
+    WebKit::NetworkSession* session = task->networkSession();
+    if (!session)
+        return { };
+    CheckedPtr<WebCore::NetworkStorageSession> storageSession = session->networkStorageSession();
+    if (!storageSession)
+        return { };
+
+    const URL& firstParty = m_request.firstPartyForCookies();
+    const URL& url = m_request.url();
+    WebCore::SameSiteInfo sameSiteInfo = WebCore::SameSiteInfo::create(m_request);
+    WebCore::IncludeSecureCookies includeSecureCookies = url.protocolIs("https"_s)
+        ? WebCore::IncludeSecureCookies::Yes : WebCore::IncludeSecureCookies::No;
+
+    auto [cookieHeader, secureCookiesAccessed] = storageSession->cookieRequestHeaderFieldValue(
+        firstParty, sameSiteInfo, url, task->frameID(), task->pageID(), includeSecureCookies,
+        WebCore::ApplyTrackingPrevention::Yes,
+        session->networkProcess().shouldRelaxThirdPartyCookieBlockingForPage(task->webPageProxyID()),
+        WebKit::NetworkSession::isResourceFromKnownCrossSiteTracker(firstParty, url));
+    (void)secureCookiesAccessed;
+    return cookieHeader; // null/empty => ITP blocked all cookies => caller injects NO Cookie header
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // Capture request data on the calling thread; do network work async.
@@ -1102,6 +1131,20 @@ void DriftstackNetworkLoader::resume()
     String httpMethod = m_request.httpMethod();
     if (httpMethod.isEmpty()) httpMethod = "GET"_s;
     auto httpHeaders = m_request.httpHeaderFields();
+    // PathB v2 ITP (main thread, before dispatch): (a) compute the ITP-filtered Cookie header ONCE and
+    // thread it to all transports; (b) apply the 3rd-party Referer->origin downgrade in-place, replicating
+    // NetworkDataTask::restrictRequestReferrerToOriginIfNeeded (that method is protected on NetworkDataTask,
+    // not callable here). Both must happen here: ResourceRequest + the ITP state are not thread-safe on loaderQueue.
+    String driftstackCookieHeader = driftstackITPCookieHeader();
+    if (RefPtr task = protectedTask()) {
+        if (WebKit::NetworkSession* session = task->networkSession()) {
+            if ((session->sessionID().isEphemeral() || session->isTrackingPreventionEnabled())
+                && session->shouldDowngradeReferrer() && m_request.isThirdParty())
+                m_request.setExistingHTTPReferrerToOriginString();
+        }
+    }
+    // Re-read headers AFTER the possible referer downgrade so every transport forwards the downgraded value.
+    httpHeaders = m_request.httpHeaderFields();
     // Wave 29-499.321 — request-body (POST/PUT) support. Flatten the FormData to
     // bytes on the calling thread (FormData isn't thread-safe to touch off the
     // main thread). driftstackHttp2Execute already emits request.body as an h2
@@ -1369,14 +1412,9 @@ void DriftstackNetworkLoader::resume()
                 // WebKit doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
                 h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s) : "u=0, i"_s });
                 h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
-                // cookies
-                if (auto nsURLPtr = url.createNSURL()) {
-                    NSArray<NSHTTPCookie*>* cookies = [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookiesForURL:nsURLPtr.get()];
-                    if (cookies.count > 0) {
-                        NSString* cookie = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies][@"Cookie"];
-                        if (cookie) h3req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
-                    }
-                }
+                // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
+                if (!driftstackCookieHeader.isEmpty())
+                    h3req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
 
                 WTFLogAlways("[Wave29-499.321/LOADER] HTTP/3 path for https://%s%s (forced=%d known=%d)",
                     h3host.utf8().data(), h3req.path.utf8().data(), h3forced, driftstackLoaderHostKnownH3(h3host));
@@ -1508,7 +1546,7 @@ void DriftstackNetworkLoader::resume()
             h2PoolWinner = h2Claim.second;
             if (RefPtr<WebKit::DriftstackHttp2Session> session = h2Claim.first) {
                 String poolHost = url.host().toString();
-                auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost);
+                auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost, driftstackCookieHeader);
                 WebKit::DriftstackHttp2Response h2resp = session->execute(h2req);
                 {
                 RefPtr task = protectedTask();
@@ -1736,21 +1774,9 @@ void DriftstackNetworkLoader::resume()
             if (h2req.path.isEmpty()) h2req.path = "/"_s;
             if (!url.query().isEmpty())
                 h2req.path = makeString(h2req.path, '?', url.query());
-            // Wave 29-499.146 — cookie injection for h2 path
-            {
-                auto nsURLPtr = url.createNSURL();
-            NSURL* nsURL = nsURLPtr.get();
-                if (nsURL) {
-                    NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
-                    NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
-                    if (cookies.count > 0) {
-                        NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
-                        NSString* cookie = fields[@"Cookie"];
-                        if (cookie)
-                            h2req.extraHeaders.append({ "cookie"_s, String::fromUTF8([cookie UTF8String]) });
-                    }
-                }
-            }
+            // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
+            if (!driftstackCookieHeader.isEmpty())
+                h2req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
             // Wave 29-499.201 — iPhone Safari 26.0 EXACT HTTP/2 header order
             // (verified via tls.peet.ws default-mode capture).
             // Order matters for JA4H + Akamai pseudo-header order.
@@ -2231,20 +2257,9 @@ _Pragma("clang diagnostic pop")
         // for cookies matching destination URL, inject Cookie header.
         // For PathB v2 we bypass NSURLSession's auto-cookie path entirely;
         // explicit lookup is required.
-        String cookieHeader;
-        {
-            auto nsURLPtr = url.createNSURL();
-            NSURL* nsURL = nsURLPtr.get();
-            if (nsURL) {
-                NSHTTPCookieStorage* storage = [NSHTTPCookieStorage sharedHTTPCookieStorage];
-                NSArray<NSHTTPCookie*>* cookies = [storage cookiesForURL:nsURL];
-                if (cookies.count > 0) {
-                    NSDictionary* fields = [NSHTTPCookie requestHeaderFieldsWithCookies:cookies];
-                    NSString* cookie = fields[@"Cookie"];
-                    if (cookie) cookieHeader = String::fromUTF8([cookie UTF8String]);
-                }
-            }
-        }
+        // PathB v2 ITP: use the ITP-filtered Cookie header computed on the main thread (resume()).
+        // Empty => ITP blocked all cookies => the `if (!cookieHeader.isEmpty())` below injects no Cookie line.
+        String cookieHeader = driftstackCookieHeader;
 
         StringBuilder rb;
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);

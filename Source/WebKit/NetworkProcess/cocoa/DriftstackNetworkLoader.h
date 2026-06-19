@@ -83,6 +83,7 @@ private:
     // delivery block + re-acquire client() there; never cache the raw client ptr across the queue→main hop.
     ThreadSafeWeakPtr<NetworkDataTaskCocoa> m_task;
     RefPtr<NetworkDataTaskCocoa> protectedTask() const;   // strong upgrade (null if the task is gone); defn in .mm (type complete there)
+    WTF::String driftstackITPCookieHeader();   // PathB v2 ITP (task #14): the ITP-filtered Cookie header real Safari's NSURLSession would send (computed on the main thread in resume())
     WebCore::ResourceRequest m_request;
     // W2341 (task #58): atomic — cancel() runs on another thread while the concurrent
     // dispatch block's read loops poll it (was a plain-bool data race; now also the
