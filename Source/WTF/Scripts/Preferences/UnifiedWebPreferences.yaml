@@ -9604,6 +9604,20 @@ WebGLTimerQueriesEnabled:
     WebCore:
       default: false
 
+WebGPUAdapterInfoEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "WebGPU GPUDevice.adapterInfo"
+  humanReadableDescription: "Expose GPUDevice.adapterInfo (real iPhone Safari adds it at 26.3)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 WebGPUEnabled:
   type: bool
   status: Webgpu_feature_status

@@ -5593,6 +5593,10 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // ==26.0 only — Apple REMOVED OverflowEvent after 26.0 (present 26.0, absent 26.3/26.4):
         if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 1))
             settings.setOverflowEventEnabled(true);
+        // <26.3 — GPUDevice.adapterInfo added at Safari 26.3 (real 26.0 lacks it, 26.3/26.4 have
+        // it). Only observable on WebGPU-capable models at 26.0 (18.x has no WebGPU → no-op there).
+        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 3))
+            settings.setWebGPUAdapterInfoEnabled(false);
     }
 #endif
 
