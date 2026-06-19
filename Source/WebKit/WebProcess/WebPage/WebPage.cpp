@@ -5564,6 +5564,36 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // - CSS.supports scrollbar-color: false
         settings.setCSSScrollbarColorEnabled(false);
     }
+
+    // ── 26.0/26.3 per-minor DOM-API surface (Class C/F, master closure ledger) ──
+    // The s_isFamilyAArchetype block above covers ONLY pre-26 (safari17_..25_), so
+    // safari26_0/26_3 currently fall through to the Family-B 26.4 defaults and OVER-
+    // expose members Apple added at a LATER 26.x minor. Real-capture triangulated
+    // (15× real 26.0 + 1× 26.3 + 26.2 + 26.4 aio captures): boundaries are PER-MEMBER.
+    // GUARDRAIL (the landmine): driftstackArchetypeSafariAtLeast() returns false when
+    // DRIFTSTACK_ARCHETYPE is UNSET, so each block MUST also require dsHasArch — else
+    // it would fire on the unset 26.4 launch default and regress it.
+    // See docs/internal/26-0-26-3-master-closure-ledger.md.
+    {
+        const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
+        const bool dsHasArch = dsArch && dsArch[0];
+        // <26.4 — absent on BOTH 26.0 AND 26.3 (real 26.0==26.3 lack; real 26.4 has):
+        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 4)) {
+            settings.setWebTransportEnabled(false);           // window.WebTransport + 10 stream interfaces
+            settings.setCaptionDisplaySettingsEnabled(false); // HTMLVideoElement.showCaptionDisplaySettings
+            settings.setCSSFieldSizingEnabled(false);         // CSS.supports('field-sizing: content')
+            settings.setCSSScrollbarColorEnabled(false);      // CSS.supports('scrollbar-color')
+        }
+        // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2):
+        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 2)) {
+            settings.setNavigationAPIEnabled(false);          // window.Navigation/NavigateEvent/… (26.0 undefined)
+            settings.setEventTimingEnabled(false);            // Performance.eventCounts/interactionCount, EventCounts, PerformanceEventTiming
+            settings.setLargestContentfulPaintEnabled(false); // LargestContentfulPaint + perfObs entry types (26.0=5, 26.2+=8)
+        }
+        // ==26.0 only — Apple REMOVED OverflowEvent after 26.0 (present 26.0, absent 26.3/26.4):
+        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 1))
+            settings.setOverflowEventEnabled(true);
+    }
 #endif
 
 #if !PLATFORM(GTK) && !PLATFORM(WIN) && !PLATFORM(PLAYSTATION) && !PLATFORM(WPE)

@@ -180,11 +180,11 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
         return sv.find("safari17_") != std::string_view::npos
             || sv.find("safari18_") != std::string_view::npos
             || sv.find("safari19_") != std::string_view::npos
-            || (sv.find("safari26_") != std::string_view::npos
-                && (sv.find("safari26_0") != std::string_view::npos
-                    || sv.find("safari26_1") != std::string_view::npos
-                    || sv.find("safari26_2") != std::string_view::npos
-                    || sv.find("safari26_3") != std::string_view::npos));
+            // Storage-access query: real iPhone REJECTS on pre-26 (Family-A) AND 26.0,
+            // but the IDL/enum landed at Safari 26.2 → real 26.2/26.3 SUPPORT it
+            // (count=7/prompt). The prior gate over-reached to 26_1/2/3 (a per-minor
+            // tell); narrow to 26_0 only. (26-0-26-3-master-closure-ledger Class C.)
+            || sv.find("safari26_0") != std::string_view::npos;
     }();
     if (s_familyA && permissionDescriptor.name == PermissionName::StorageAccess) {
         promise.reject(Exception { ExceptionCode::TypeError, "Type error"_s });
