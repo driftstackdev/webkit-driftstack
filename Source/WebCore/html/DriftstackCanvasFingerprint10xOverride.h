@@ -63891,6 +63891,38 @@ inline bool driftstackArchetypeIsFamilyB(const char* slug)
     return false;
 }
 
+// Canvas band key for the fp10x cross-archetype fallback. There are THREE distinct canvas
+// rasterization bands, but driftstackArchetypeIsFamilyB() only distinguishes two — so a
+// Family-A 26.0/26.3 slug (no own fp10x entries yet) would borrow 18.6's Family-A pixels,
+// a cross-Safari-minor tell (real 26.0/26.3 canvas == 1547682188461364 ≠ 18.6 ≠ 26.4's
+// 7355058941896426). Key: 0 = Family B (Safari 26.4+); 1 = Family A 26.0–26.3 (shared
+// band); 2 = Family A 18.x. The fallback requires a band match, so a 26.0/26.3 slug never
+// borrows 18.6 (and vice versa); with no 26.0/26.3 entries it returns nullptr → the per-
+// minor text-run atlas serves the canvas instead.
+inline int driftstackCanvasBandKey(const char* slug)
+{
+    if (!slug)
+        return 0;
+    std::string_view s { slug };
+    auto pos = s.rfind("_safari");
+    if (pos == std::string_view::npos)
+        return 2; // legacy "_ios18_6" slug (pre-26.4 capture) = 18.x band
+    auto rest = s.substr(pos + 7);
+    auto under = rest.find('_');
+    if (under == std::string_view::npos || under == 0 || under == rest.size() - 1)
+        return 0;
+    auto majSV = rest.substr(0, under);
+    auto minSV = rest.substr(under + 1);
+    int major = 0, minor = 0;
+    for (char c : majSV) { if (c < '0' || c > '9') return 0; major = major * 10 + (c - '0'); }
+    for (char c : minSV) { if (c < '0' || c > '9') return 0; minor = minor * 10 + (c - '0'); }
+    if (major > 26 || (major == 26 && minor >= 4))
+        return 0; // Family B (Safari 26.4+)
+    if (major == 26)
+        return 1; // Family A 26.0–26.3 (shared canvas band)
+    return 2;     // Family A 18.x
+}
+
 // V-245 archetype-aware content-aware dispatch (preferred path).
 // Tries (archetype, w, h, fillText) exact match first.
 inline const char* lookupCanvasFp10xCanonicalForArchetypeWithText(
@@ -63931,14 +63963,14 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
         return hit;
     // Wave 29-360 Item 5: family-constrained cross-archetype content-match.
     // Current archetype's family determines which entries are eligible.
-    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
+    int currentBand = driftstackCanvasBandKey(arch);
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
         if (entry.width != width || entry.height != height)
             continue;
         if (fillText != String::fromUTF8(entry.lastFillText))
             continue;
-        if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
-            continue; // Family mismatch — skip to preserve canvas pipeline coherence
+        if (driftstackCanvasBandKey(entry.archetype) != currentBand)
+            continue; // Canvas-band mismatch (band-aware: 26.0/26.3 never borrows 18.6's pixels)
         return entry.dataURL;
     }
     return nullptr;
@@ -63953,12 +63985,12 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
     const char* arch = driftstackCurrentArchetypeCStr();
     if (auto* hit = lookupCanvasFp10xCanonicalForArchetype(arch, width, height))
         return hit;
-    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
+    int currentBand = driftstackCanvasBandKey(arch);
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
         if (entry.width != width || entry.height != height)
             continue;
-        if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
-            continue; // Family mismatch — skip per Wave 29-360 Item 5
+        if (driftstackCanvasBandKey(entry.archetype) != currentBand)
+            continue; // Canvas-band mismatch (band-aware: 26.0/26.3 never borrows 18.6's pixels)
         return entry.dataURL;
     }
     return nullptr;
