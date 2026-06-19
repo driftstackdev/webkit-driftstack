@@ -59,6 +59,85 @@ static void* keyValueObservingContext = &keyValueObservingContext;
 static const int testHeaderBannerHeight = 42;
 static const int testFooterBannerHeight = 58;
 
+// Driftstack (W2649): make a FAILED customer load VISIBLE. When a navigation genuinely fails
+// (DNS/connect/cert/timeout/proxy error) the customer browser window otherwise shows a blank white
+// page with no indication of what went wrong — founder report. We render a neutral, Safari-like
+// "can't open the page" error page IN the webView so it streams to the customer. This is MiniBrowser
+// HARNESS chrome (Tools/MiniBrowser) ONLY — it does NOT touch any WebContent/fork render or font path,
+// so glyphHash / the fingerprint surface is UNAFFECTED (it appears only on failure, when no site is
+// loaded, so it is not a fingerprint surface).
+
+// Escape a string for safe interpolation into HTML text/attribute context (avoid injection from the
+// failing URL or the NSError reason). & must be replaced first.
+static NSString *driftstackHTMLEscape(NSString *raw)
+{
+    if (!raw.length)
+        return @"";
+    NSMutableString *s = [raw mutableCopy];
+    [s replaceOccurrencesOfString:@"&" withString:@"&amp;" options:0 range:NSMakeRange(0, s.length)];
+    [s replaceOccurrencesOfString:@"<" withString:@"&lt;" options:0 range:NSMakeRange(0, s.length)];
+    [s replaceOccurrencesOfString:@">" withString:@"&gt;" options:0 range:NSMakeRange(0, s.length)];
+    [s replaceOccurrencesOfString:@"\"" withString:@"&quot;" options:0 range:NSMakeRange(0, s.length)];
+    [s replaceOccurrencesOfString:@"'" withString:@"&#39;" options:0 range:NSMakeRange(0, s.length)];
+    return s;
+}
+
+// Render the on-screen error page for a genuine load failure. Skips the benign cancellation/supersede
+// (NSURLErrorCancelled / -999) — that is a normal navigation supersede and must NOT show an error page.
+static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
+{
+    if (!webView || !error)
+        return;
+    // A superseded/cancelled navigation (-999) is normal (e.g. a new load started). Do not surface it.
+    if ([error.domain isEqualToString:NSURLErrorDomain] && error.code == NSURLErrorCancelled)
+        return;
+
+    // Prefer the explicit failing URL from the error; fall back to the webView's current URL.
+    // (NSURLErrorFailingURLStringErrorKey is deprecated as of macOS 15.4 — use the NSURL key.)
+    NSURL *failingURL = error.userInfo[NSURLErrorFailingURLErrorKey];
+    NSString *failingURLString = failingURL.absoluteString;
+    if (!failingURLString.length)
+        failingURLString = webView.URL.absoluteString;
+    if (!failingURLString.length)
+        failingURLString = @"";
+
+    NSString *reason = error.localizedDescription.length ? error.localizedDescription : @"The load failed.";
+    NSString *escURL = driftstackHTMLEscape(failingURLString);
+    NSString *escReason = driftstackHTMLEscape(reason);
+    NSString *escDomain = driftstackHTMLEscape(error.domain ?: @"");
+
+    NSString *html = [NSString stringWithFormat:@""
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>This page could not be loaded</title>"
+        "<style>"
+        "html,body{margin:0;height:100%%;background:#f2f2f7;"
+        "font-family:-apple-system,'SF Pro Text','Helvetica Neue',sans-serif;color:#1c1c1e;}"
+        ".wrap{box-sizing:border-box;min-height:100%%;display:flex;flex-direction:column;"
+        "align-items:center;justify-content:center;text-align:center;padding:48px 28px;}"
+        "h1{font-size:22px;font-weight:600;margin:0 0 12px;}"
+        ".reason{font-size:16px;line-height:1.45;color:#3a3a3c;margin:0 0 18px;max-width:34em;}"
+        ".url{font-size:13px;color:#6c6c70;word-break:break-all;max-width:36em;margin:0 0 6px;}"
+        ".code{font-size:12px;color:#8e8e93;margin-top:18px;}"
+        "</style></head><body><div class=\"wrap\">"
+        "<h1>This page could not be loaded</h1>"
+        "<p class=\"reason\">%@</p>"
+        "<p class=\"url\">%@</p>"
+        "<p class=\"code\">%@ &middot; error %ld</p>"
+        "</div></body></html>",
+        escReason, escURL, escDomain, (long)error.code];
+
+    NSURL *unreachableURL = failingURLString.length ? [NSURL URLWithString:failingURLString] : nil;
+
+    // Keep the failed URL in the address bar WITHOUT adding a history entry. _loadAlternateHTMLString
+    // is WK SPI (declared in WKWebViewPrivate.h, already imported); fall back to loadHTMLString if the
+    // unreachable URL could not be parsed.
+    if (unreachableURL && [webView respondsToSelector:@selector(_loadAlternateHTMLString:baseURL:forUnreachableURL:)])
+        [webView _loadAlternateHTMLString:html baseURL:unreachableURL forUnreachableURL:unreachableURL];
+    else
+        [webView loadHTMLString:html baseURL:unreachableURL];
+}
+
 @interface MiniBrowserNSTextFinder : NSTextFinder
 
 @property (nonatomic, copy) dispatch_block_t hideInterfaceCallback;
@@ -1411,6 +1490,9 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error
 {
     LOG(@"didFailProvisionalNavigation: %@navigation, error: %@", navigation, error);
+    // Driftstack (W2649): show an on-screen error page so a failed customer load is VISIBLE in the
+    // stream (not a blank white page). Skips the -999/cancelled supersede inside the helper.
+    driftstackShowLoadFailurePage(webView, error);
 }
 
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation
@@ -1516,6 +1598,9 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error
 {
     LOG(@"didFailNavigation: %@, error %@", navigation, error);
+    // Driftstack (W2649): a committed-then-failed load also leaves a partial/blank page — surface the
+    // same on-screen error page. Skips the -999/cancelled supersede inside the helper.
+    driftstackShowLoadFailurePage(webView, error);
 }
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
