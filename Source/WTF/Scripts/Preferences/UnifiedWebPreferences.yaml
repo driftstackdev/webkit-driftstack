@@ -6886,6 +6886,20 @@ SWVPDecodersAlwaysEnabled:
     WebKit:
       default: false
 
+Safari262PrototypeMembersEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Safari 26.2 prototype members"
+  humanReadableDescription: "Expose SVGAnimationElement.onbegin/onrepeat (added in Safari 26.2)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 Safari265PrototypeMembersEnabled:
   type: bool
   status: stable

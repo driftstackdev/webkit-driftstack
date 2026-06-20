@@ -5600,6 +5600,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             settings.setCommandAttributesEnabled(false);        // window.CommandEvent + GlobalEventHandlers.oncommand
             settings.setHiddenUntilFoundEnabled(false);         // GlobalEventHandlers.onbeforematch (+ document)
             settings.setScrollendEventEnabled(false);           // GlobalEventHandlers.onscrollend (+ document)
+            settings.setSafari262PrototypeMembersEnabled(false); // SVGAnimationElement.onbegin/onrepeat (added 26.2)
             // Apple REMOVED OverflowEvent at 26.2 (present 26.0/26.1, absent 26.2+) — force ON for <26.2:
             settings.setOverflowEventEnabled(true);
         }

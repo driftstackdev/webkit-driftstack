@@ -40,9 +40,9 @@
     undefined endElement();
     undefined endElementAt(float offset);
 
-    [ImplementedAs=onbeginEvent] attribute EventHandler onbegin;
+    [EnabledBySetting=Safari262PrototypeMembersEnabled, ImplementedAs=onbeginEvent] attribute EventHandler onbegin;
     [EnabledBySetting=Safari265PrototypeMembersEnabled, ImplementedAs=onendEvent] attribute EventHandler onend;
-    [ImplementedAs=onrepeatEvent] attribute EventHandler onrepeat;
+    [EnabledBySetting=Safari262PrototypeMembersEnabled, ImplementedAs=onrepeatEvent] attribute EventHandler onrepeat;
 };
 
 SVGAnimationElement includes SVGTests;
