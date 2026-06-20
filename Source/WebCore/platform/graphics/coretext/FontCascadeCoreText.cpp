@@ -657,7 +657,100 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
             // Selective-by-N: only N=1 case (single-glyph drawGlyphs
             // calls). Codepoint extracted from sourceText (set by
             // FontCascade::drawGlyphBuffer via driftstackCurrentTextSource()).
-            // For N>1 or empty sourceText, atlas lookup is skipped.
+            // #79 (2026-06-20): N>1 sub-pixel COMPOSITION. Multi-glyph canvas runs
+            // (arbitrary fillText strings) were skipped here → native Mac render → sub-pixel
+            // divergence vs iOS. Now: serve each glyph from the per-glyph atlas at ITS pen-x
+            // pos_class (thirds), blitted at the FLOORED integer dest so the cell's baked
+            // sub-pixel (captured at pen 8+{1/6,3/6,5/6}) is preserved (no CG resampling).
+            // SAFE scope: canvas ctx + simple 1:1 ASCII LTR (sourceText all-ASCII, one glyph
+            // per source byte, parallel advances). EXACT pos_class required (no pos-0 fallback);
+            // ANY miss → bail to native (no partial serve). glyphHash-safe: glyphHash renders
+            // single exotic cold-miss glyphs via the N==1 path below (untouched).
+            {
+                static const bool v790lNSubEnabled = std::getenv("DRIFTSTACK_V790L_N1_SUB")
+                    && std::getenv("DRIFTSTACK_V790L_N1_SUB")[0] == '1';
+                if (v790lNSubEnabled && driftstackCanvasCtx && glyphs.size() > 1
+                    && sourceText.is8Bit() && sourceText.length() == glyphs.size()
+                    && advances.size() == glyphs.size() && fontId != UINT16_MAX) {
+                    auto srcBytes = sourceText.span8();
+                    bool allAscii = true;
+                    for (size_t i = 0; i < srcBytes.size(); ++i) {
+                        if (srcBytes[i] >= 0x80) { allAscii = false; break; }
+                    }
+                    if (allAscii) {
+                        auto& pglyphAtlasN = DriftstackPerGlyphAtlas::singleton();
+                        uint16_t ptSizeQ4N = static_cast<uint16_t>(ptSize * 16);
+                        double penYN = anchorPoint.y();
+                        double yFracN = penYN - std::floor(penYN);
+                        uint8_t yBinN = (yFracN > 1e-4) ? 1 : 0;
+                        // Pass 1: require an EXACT-pos_class hit for every glyph.
+                        Vector<DriftstackPerGlyphAtlasEntry, 64> nEntries;
+                        Vector<double, 64> nPenX;
+                        double penXN = anchorPoint.x();
+                        bool allHit = true;
+                        for (size_t i = 0; i < glyphs.size(); ++i) {
+                            uint8_t bN = srcBytes[i];
+                            // Whitespace draws no ink (the capture skips zero-ink glyphs, so it
+                            // has no atlas entry): advance the pen, require no atlas hit.
+                            if (bN == 0x20 || bN == 0x09 || bN == 0x0A) {
+                                penXN += advances[i].width;
+                                continue;
+                            }
+                            double xFracN = penXN - std::floor(penXN);
+                            int xBinN = static_cast<int>(std::floor(std::min(xFracN, 0.99999) * 3.0));
+                            uint8_t pcN = static_cast<uint8_t>((yBinN << 4) | xBinN);
+                            auto hitN = pglyphAtlasN.lookup(fontId, ptSizeQ4N,
+                                static_cast<uint32_t>(bN), static_cast<uint32_t>(pcN));
+                            if (!hitN) { allHit = false; break; }
+                            nEntries.append(*hitN);
+                            nPenX.append(penXN);
+                            penXN += advances[i].width;
+                        }
+                        if (allHit) {
+                            // Pass 2: blit each glyph cell at the floored integer dest.
+                            auto [fr, fg, fb, fa] = context.fillColor().toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                            for (size_t i = 0; i < nEntries.size(); ++i) {
+                                std::array<uint8_t, 64 * 64 * 4> rgbaN;
+                                auto atlasPxN = unsafeMakeSpan(nEntries[i].pixels, 64 * 64);
+                                auto rgbaSpanN = unsafeMakeSpan(rgbaN.data(), 64 * 64 * 4);
+                                for (size_t row = 0; row < 64; ++row) {
+                                    for (size_t col = 0; col < 64; ++col) {
+                                        size_t di = row * 64 + col;
+                                        uint8_t ink = atlasPxN[row * 64 + col];
+                                        float a = (ink / 255.0f) * fa;
+                                        rgbaSpanN[di * 4 + 0] = static_cast<uint8_t>(roundf(fr * a * 255.0f));
+                                        rgbaSpanN[di * 4 + 1] = static_cast<uint8_t>(roundf(fg * a * 255.0f));
+                                        rgbaSpanN[di * 4 + 2] = static_cast<uint8_t>(roundf(fb * a * 255.0f));
+                                        rgbaSpanN[di * 4 + 3] = static_cast<uint8_t>(roundf(a * 255.0f));
+                                    }
+                                }
+                                RetainPtr<CFDataRef> rgbaDataN = adoptCF(CFDataCreate(
+                                    kCFAllocatorDefault, rgbaN.data(), 64 * 64 * 4));
+                                RetainPtr<CGDataProviderRef> dataProviderN = adoptCF(
+                                    CGDataProviderCreateWithCFData(rgbaDataN.get()));
+                                RetainPtr<CGColorSpaceRef> colorSpaceN = adoptCF(
+                                    CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+                                RetainPtr<CGImageRef> glyphImgN = adoptCF(CGImageCreate(
+                                    64, 64, 8, 32, 64 * 4, colorSpaceN.get(),
+                                    kCGImageAlphaPremultipliedLast,
+                                    dataProviderN.get(), nullptr, false, kCGRenderingIntentDefault));
+                                if (!glyphImgN)
+                                    continue;
+                                RefPtr nativeImgN = NativeImage::create(WTF::retainPtr(glyphImgN.get()));
+                                if (!nativeImgN)
+                                    continue;
+                                FloatRect destRectN(std::floor(nPenX[i]) - 8.0, std::floor(penYN) - 46.0, 64, 64);
+                                FloatRect srcRectN(0, 0, 64, 64);
+                                context.drawNativeImage(*nativeImgN, destRectN, srcRectN, { CompositeOperator::SourceOver });
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // For N>1 the per-glyph composition above handles simple ASCII runs; this N==1
+            // path serves single-glyph drawGlyphs calls (incl. cold-miss exotic glyphs).
             if (driftstackCanvasCtx && glyphs.size() == 1 && sourceText.length() >= 1) {
                 // W1092: per-glyph pixel substitution gated to canvas only
                 // (same rationale as the atlas blit above — no boxes on-screen).
