@@ -460,6 +460,33 @@ ALLOW_DEPRECATED_DECLARATIONS_END
     return makeFromComponentsClamping<SRGBA<uint8_t>>(pixel[0], pixel[1], pixel[2], pixel[3]);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors WebPage.cpp driftstackArchetypeSafariAtLeast;
+// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
+static bool driftstackArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
+
 Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOptions> options) const
 {
     const bool useSystemAppearance = options.contains(StyleColorOptions::UseSystemAppearance);
@@ -496,8 +523,15 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
     // the last 3 of the 5 W1410 inverse syscolor tells (indigo / teal / opaque-secondary-fill-disabled) plus
     // opaque-tertiary-fill (the old W242 "iOS keeps it UA-internal" note was WRONG — real iPhone recognizes it
     // in author CSS, rec=True, and uses it for input[type=search] bg rgb(238,238,239)).
-    if (cssValueID == CSSValueAppleSystemIndigo)
+    if (cssValueID == CSSValueAppleSystemIndigo) {
+#if PLATFORM(DRIFTSTACK)
+        // Apple changed DARK -apple-system-indigo at Safari 26.2: 26.0/26.0.1 = rgb(107,93,255),
+        // 26.2+ = rgb(109,124,255) (light rgb(97,85,245) unchanged). Verified across real /aio dark caps.
+        if (useDarkAppearance && !driftstackArchetypeSafariAtLeast(26, 2))
+            return Color { SRGBA<uint8_t> { 107, 93, 255 } };
+#endif
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 109, 124, 255 } } : Color { SRGBA<uint8_t> { 97, 85, 245 } };
+    }
     if (cssValueID == CSSValueAppleSystemTeal)
         return useDarkAppearance ? Color { SRGBA<uint8_t> { 0, 210, 224 } } : Color { SRGBA<uint8_t> { 0, 195, 208 } };
     if (cssValueID == CSSValueAppleSystemOpaqueSecondaryFillDisabled)
