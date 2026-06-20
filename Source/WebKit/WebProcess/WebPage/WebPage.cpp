@@ -5584,6 +5584,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             // NEW 2026-06-20 (verified 26.4 boundary, both 26.0 AND 26.3 lack these):
             settings.setReadableByteStreamAPIEnabled(false);  // window.ReadableByteStreamController/ReadableStreamBYOBReader/BYOBRequest
             settings.setCSSMathDepthEnabled(false);           // CSS 'math-depth' property (apiEnum.cssProperties + CSS.supports)
+            settings.setDriftstackSafari264MembersEnabled(false); // PRT deliveryType/finalResponseHeadersStart/firstInterimResponseStart + CSS flow-tolerance + window.webkit.buffers
         }
         // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2). Boundary
         // VERIFIED across real 26.0/26.2/26.3/26.4/26.5 /aio (apiEnum + cssSupports, 2026-06-19).

@@ -49,8 +49,10 @@ typedef double DOMHighResTimeStamp;
     readonly attribute DOMHighResTimeStamp secureConnectionStart;
     readonly attribute DOMHighResTimeStamp requestStart;
     // https://github.com/w3c/resource-timing/pull/408
-    readonly attribute DOMHighResTimeStamp finalResponseHeadersStart;
-    readonly attribute DOMHighResTimeStamp firstInterimResponseStart;
+    // Driftstack: finalResponseHeadersStart/firstInterimResponseStart/deliveryType are 26.4-added
+    // (absent real 26.0/26.2/26.3, present 26.4+) — gate on DriftstackSafari264MembersEnabled.
+    [EnabledBySetting=DriftstackSafari264MembersEnabled] readonly attribute DOMHighResTimeStamp finalResponseHeadersStart;
+    [EnabledBySetting=DriftstackSafari264MembersEnabled] readonly attribute DOMHighResTimeStamp firstInterimResponseStart;
     readonly attribute DOMHighResTimeStamp responseStart;
     readonly attribute DOMHighResTimeStamp responseEnd;
     readonly attribute unsigned long long transferSize;
@@ -66,7 +68,7 @@ typedef double DOMHighResTimeStamp;
     [EnabledBySetting=PerformanceResourceTimingWorkerRoutingEnabled] readonly attribute DOMString workerFinalRouterSource;
 
     // https://w3c.github.io/resource-timing/#dfn-delivery-type
-    readonly attribute DOMString deliveryType;
+    [EnabledBySetting=DriftstackSafari264MembersEnabled] readonly attribute DOMString deliveryType;
 
     // https://www.w3.org/TR/server-timing/#extension-to-the-performanceresourcetiming-interface
     readonly attribute FrozenArray<PerformanceServerTiming> serverTiming;

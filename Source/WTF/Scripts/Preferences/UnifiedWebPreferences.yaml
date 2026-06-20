@@ -2560,6 +2560,20 @@ DriftstackLegacyCanvasDrawImageFromRectEnabled:
     WebCore:
       default: false
 
+DriftstackSafari264MembersEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Safari 26.4 added members"
+  humanReadableDescription: "Members added in Safari 26.4 (PerformanceResourceTiming deliveryType/finalResponseHeadersStart/firstInterimResponseStart, CSS flow-tolerance, window.webkit.buffers); disabled for the pre-26.4 archetype band"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 DynamicSiteInterventionsEnabled:
   type: bool
   status: unstable

@@ -31,7 +31,8 @@
     Exposed=Window
 ] interface WebKitNamespace {
     readonly attribute UserMessageHandlersNamespace? messageHandlers;
-    readonly attribute WebKitBufferNamespace buffers;
+    // Driftstack: window.webkit.buffers is 26.4-added (absent real 26.0/26.2/26.3) — gate off pre-26.4.
+    [EnabledBySetting=DriftstackSafari264MembersEnabled] readonly attribute WebKitBufferNamespace buffers;
     // Driftstack (#28): window.webkit.evaluateScript is absent on real iPhone-17 (verified on 2 /aio captures;
     // upstream method that shipped iOS Safari does not expose, and Driftstack does not use it). Gate on a
     // setting the fork disables (WebPage.cpp) to match.
