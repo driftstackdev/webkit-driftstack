@@ -46,6 +46,25 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(HTMLScriptElement);
 
 using namespace HTMLNames;
 
+#if PLATFORM(DRIFTSTACK)
+// HTMLScriptElement.supports('speculationrules') must mirror the real per-Safari-minor surface:
+// false on 26.0/26.1 (and 17.x/18.x/19.x), true from 26.2 (verified real /aio 2026-06-19).
+bool HTMLScriptElement::driftstackSpeculationRulesSupported()
+{
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype || !*archetype)
+        return true; // unset → launch default (26.4) supports it
+    std::string_view sv { archetype };
+    if (sv.find("safari17_") != std::string_view::npos
+        || sv.find("safari18_") != std::string_view::npos
+        || sv.find("safari19_") != std::string_view::npos
+        || sv.find("safari26_0") != std::string_view::npos
+        || sv.find("safari26_1") != std::string_view::npos)
+        return false;
+    return true;
+}
+#endif
+
 inline HTMLScriptElement::HTMLScriptElement(const QualifiedName& tagName, Document& document, bool wasInsertedByParser, bool alreadyStarted)
     : HTMLElement(tagName, document, TypeFlag::HasDidMoveToNewDocument)
     , ScriptElement(*this, wasInsertedByParser, alreadyStarted)

@@ -65,7 +65,21 @@ public:
     void ref() const final { HTMLElement::ref(); }
     void deref() const final { HTMLElement::deref(); }
 
+#if PLATFORM(DRIFTSTACK)
+    // SpeculationRules support appears at Safari 26.2 (real /aio: 26.0=false, 26.2+=true).
+    // supports() is static (no Settings access), so gate the "speculationrules" answer on the
+    // archetype slug directly (matches the LocalDOMWindow pre-26.2 hide pattern). The actual
+    // <script type=speculationrules> processing is separately gated by SpeculationRulesPrefetchEnabled.
+    WEBCORE_EXPORT static bool driftstackSpeculationRulesSupported();
+    static bool supports(StringView type)
+    {
+        if (type == "speculationrules"_s)
+            return driftstackSpeculationRulesSupported();
+        return type == "classic"_s || type == "module"_s || type == "importmap"_s;
+    }
+#else
     static bool supports(StringView type) { return type == "classic"_s || type == "module"_s || type == "importmap"_s || type == "speculationrules"_s; }
+#endif
 
     String fetchPriorityForBindings() const;
     RequestPriority fetchPriority() const final;
