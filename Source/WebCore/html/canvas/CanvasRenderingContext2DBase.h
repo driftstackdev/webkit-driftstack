@@ -215,6 +215,13 @@ public:
     ExceptionOr<void> drawImage(CanvasImageSource&&, float dx, float dy, float dw, float dh);
     ExceptionOr<void> drawImage(CanvasImageSource&&, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh);
 
+#if PLATFORM(DRIFTSTACK)
+    // Legacy non-standard Safari method removed upstream at Safari 26.2; re-added behind a
+    // setting so the <26.2 archetype band (real iPhone HAS it) matches. Maps to the
+    // (image, srcRect, dstRect, compositeOp) drawImage path (legacy honored composite only).
+    ExceptionOr<void> drawImageFromRect(HTMLImageElement&, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh, const String& compositeOperation);
+#endif
+
     void clearCanvas();
 
     using StyleVariant = Variant<String, Ref<CanvasGradient>, Ref<CanvasPattern>>;

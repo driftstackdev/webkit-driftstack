@@ -939,6 +939,17 @@ void CanvasRenderingContext2DBase::setGlobalCompositeOperation(const String& ope
     c->setCompositeOperation(op, blendMode);
 }
 
+#if PLATFORM(DRIFTSTACK)
+ExceptionOr<void> CanvasRenderingContext2DBase::drawImageFromRect(HTMLImageElement& image, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh, const String& compositeOperation)
+{
+    CompositeOperator op = CompositeOperator::SourceOver;
+    BlendMode blendMode = BlendMode::Normal;
+    parseCompositeAndBlendOperator(compositeOperation, op, blendMode);
+    // Legacy drawImageFromRect honored only the composite operator (never a blend mode).
+    return drawImage(image, FloatRect(sx, sy, sw, sh), FloatRect(dx, dy, dw, dh), op, BlendMode::Normal);
+}
+#endif
+
 void CanvasRenderingContext2DBase::setFilterString(const String& filterString)
 {
     if (state().filterString == filterString)

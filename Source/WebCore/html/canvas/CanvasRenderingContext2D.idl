@@ -66,6 +66,10 @@ enum RenderingMode {
     undefined clearShadow();
 
     [EnabledBySetting=DOMTestingAPIsEnabled] RenderingMode? getEffectiveRenderingModeForTesting();
+
+    // Non-standard legacy Safari method, removed upstream at Safari 26.2. Re-exposed gated for
+    // the <26.2 archetype band (real iPhone <=26.0 has it on CanvasRenderingContext2D.prototype).
+    [EnabledBySetting=DriftstackLegacyCanvasDrawImageFromRectEnabled] undefined drawImageFromRect(HTMLImageElement image, optional unrestricted float sx = 0, optional unrestricted float sy = 0, optional unrestricted float sw = 0, optional unrestricted float sh = 0, optional unrestricted float dx = 0, optional unrestricted float dy = 0, optional unrestricted float dw = 0, optional unrestricted float dh = 0, optional DOMString compositeOperation = "");
 };
 
 CanvasRenderingContext2D includes CanvasState;

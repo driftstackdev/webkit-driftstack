@@ -2546,6 +2546,20 @@ DownloadAttributeEnabled:
     WebCore:
       default: false
 
+DriftstackLegacyCanvasDrawImageFromRectEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Legacy canvas drawImageFromRect"
+  humanReadableDescription: "Re-expose CanvasRenderingContext2D.drawImageFromRect (removed upstream at Safari 26.2) for the pre-26.2 archetype band"
+  defaultValue:
+    WebKitLegacy:
+      default: false
+    WebKit:
+      default: false
+    WebCore:
+      default: false
+
 DynamicSiteInterventionsEnabled:
   type: bool
   status: unstable

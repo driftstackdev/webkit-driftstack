@@ -5601,8 +5601,10 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             settings.setHiddenUntilFoundEnabled(false);         // GlobalEventHandlers.onbeforematch (+ document)
             settings.setScrollendEventEnabled(false);           // GlobalEventHandlers.onscrollend (+ document)
             settings.setSafari262PrototypeMembersEnabled(false); // SVGAnimationElement.onbegin/onrepeat (added 26.2)
-            // Apple REMOVED OverflowEvent at 26.2 (present 26.0/26.1, absent 26.2+) — force ON for <26.2:
+            // Apple REMOVED OverflowEvent + CanvasRenderingContext2D.drawImageFromRect at 26.2
+            // (both present 26.0/26.1, absent 26.2+) — force the legacy forms ON for <26.2:
             settings.setOverflowEventEnabled(true);
+            settings.setDriftstackLegacyCanvasDrawImageFromRectEnabled(true);
         }
         // <26.3 — GPUDevice.adapterInfo added at Safari 26.3 (real 26.0 lacks it, 26.3/26.4 have
         // it). Only observable on WebGPU-capable models at 26.0 (18.x has no WebGPU → no-op there).
