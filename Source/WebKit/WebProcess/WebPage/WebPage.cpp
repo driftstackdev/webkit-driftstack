@@ -5579,20 +5579,30 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         const bool dsHasArch = dsArch && dsArch[0];
         // <26.4 — absent on BOTH 26.0 AND 26.3 (real 26.0==26.3 lack; real 26.4 has):
         if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 4)) {
-            settings.setWebTransportEnabled(false);           // window.WebTransport + 10 stream interfaces
+            settings.setWebTransportEnabled(false);           // window.WebTransport + 10 stream interfaces (VERIFIED 26.4 boundary)
             settings.setCaptionDisplaySettingsEnabled(false); // HTMLVideoElement.showCaptionDisplaySettings
-            settings.setCSSFieldSizingEnabled(false);         // CSS.supports('field-sizing: content')
-            settings.setCSSScrollbarColorEnabled(false);      // CSS.supports('scrollbar-color')
         }
-        // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2):
+        // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2). Boundary
+        // VERIFIED across real 26.0/26.2/26.3/26.4/26.5 /aio (apiEnum + cssSupports, 2026-06-19).
         if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 2)) {
             settings.setNavigationAPIEnabled(false);          // window.Navigation/NavigateEvent/… (26.0 undefined)
             settings.setEventTimingEnabled(false);            // Performance.eventCounts/interactionCount, EventCounts, PerformanceEventTiming
             settings.setLargestContentfulPaintEnabled(false); // LargestContentfulPaint + perfObs entry types (26.0=5, 26.2+=8)
-        }
-        // ==26.0 only — Apple REMOVED OverflowEvent after 26.0 (present 26.0, absent 26.3/26.4):
-        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 1))
+            // FIX 2026-06-19: these two were wrongly in the <26.4 block — real /aio shows
+            // field-sizing + scrollbar-color present FROM 26.2, so the <26.4 gate hid them on
+            // the 26.3 archetype (26.3 HAS them). Correct boundary is 26.2.
+            settings.setCSSFieldSizingEnabled(false);         // CSS.supports('field-sizing') (26.0=false, 26.2+=true)
+            settings.setCSSScrollbarColorEnabled(false);      // CSS.supports('scrollbar-color') (26.0=false, 26.2+=true)
+            // NEW 2026-06-19 (all False@26.0, True@26.2; each setting gates BOTH the window
+            // global AND the member, so one flag closes the whole surface):
+            settings.setSpeculationRulesPrefetchEnabled(false); // HTMLScriptElement.supports('speculationrules')
+            settings.setCaretPositionFromPointEnabled(false);   // window.CaretPosition + document.caretPositionFromPoint
+            settings.setCommandAttributesEnabled(false);        // window.CommandEvent + GlobalEventHandlers.oncommand
+            settings.setHiddenUntilFoundEnabled(false);         // GlobalEventHandlers.onbeforematch (+ document)
+            settings.setScrollendEventEnabled(false);           // GlobalEventHandlers.onscrollend (+ document)
+            // Apple REMOVED OverflowEvent at 26.2 (present 26.0/26.1, absent 26.2+) — force ON for <26.2:
             settings.setOverflowEventEnabled(true);
+        }
         // <26.3 — GPUDevice.adapterInfo added at Safari 26.3 (real 26.0 lacks it, 26.3/26.4 have
         // it). Only observable on WebGPU-capable models at 26.0 (18.x has no WebGPU → no-op there).
         if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 3))
