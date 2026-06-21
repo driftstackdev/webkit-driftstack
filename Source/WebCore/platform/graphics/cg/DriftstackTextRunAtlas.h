@@ -185,6 +185,13 @@ public:
     ~DriftstackCurrentTextSourceScope();
     DriftstackCurrentTextSourceScope(const DriftstackCurrentTextSourceScope&) = delete;
     DriftstackCurrentTextSourceScope& operator=(const DriftstackCurrentTextSourceScope&) = delete;
+private:
+    // #79: save the previous source so the dtor RESTORES it (the old dtor cleared to
+    // empty → a NESTED empty-source sub-draw wiped the outer run's source before its
+    // own drawGlyphs, so a multi-glyph canvas run that triggers a nested draw — e.g.
+    // fox/Arial — lost its source → the per-glyph N>1 serve was skipped → native).
+    // Owns a copy; empty on the non-nested hot path → no alloc.
+    String m_savedSource;
 };
 
 StringView driftstackCurrentTextSource();

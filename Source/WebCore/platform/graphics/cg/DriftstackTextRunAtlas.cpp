@@ -522,6 +522,13 @@ uint16_t driftstackMapFontToId(const Font& font)
             // atlas. Not in the text-run atlas name table, so resolve it here for the per-glyph
             // canvas serve (DriftstackTextGlyphAtlas::fontIdForFamily lacks the 'Menlo' literal).
             { "Menlo-Regular", 12 },              { "Menlo", 12 },
+            // #79: Arial (PS name "ArialMT") + Verdana — NOT in the text-run atlas name table
+            // (verified: advdiag never resolved fontId 1 → Arial canvas text fell to native Mac
+            // render). The per-glyph atlas has Arial (font_id 1, incl twelfths sub-pixel) + Verdana
+            // (8); resolve them here so the N>1 canvas serve engages (Mac Arial≈iOS but not exact —
+            // the atlas + sidecar advance close fox text byte-exact). glyphHash is DOM (unaffected).
+            { "ArialMT", 1 },                     { "Arial", 1 },
+            { "Arial-BoldMT", 1 },                { "Verdana", 8 },
         };
         for (const auto& e : kAsianUiFonts) {
             if (eq(psBuf, e.name) || eq(familyBuf, e.name))
@@ -600,9 +607,13 @@ static ThreadSpecific<TextSourceSlot>& textSourceSlot()
 DriftstackCurrentTextSourceScope::DriftstackCurrentTextSourceScope(StringView source)
 {
     auto& slot = *textSourceSlot();
-    // No save/restore — drawGlyphBuffer is leaf w.r.t. recursive text emit
-    // in the current code path. If nesting appears later, switch to a
-    // Vector<StringView> push/pop and refactor.
+    // #79: SAVE the previous source (own a copy) so the dtor RESTORES it. Nesting DID
+    // appear: a multi-glyph canvas run (fox/Arial) triggers a nested empty-source
+    // sub-draw whose dtor previously cleared the slot to empty, wiping the outer run's
+    // source before its own drawGlyphs → the per-glyph N>1 serve saw length 0 != glyphs
+    // → skipped → native render. On the non-nested hot path the previous source is empty
+    // → this copy is a no-op (no alloc).
+    m_savedSource = slot.current.toString();
     //
     // W2538: in the canvas-text-draw scope the per-glyph/platform hook reads this
     // source after the backing buffer may be gone, so own a copy there (current
@@ -620,8 +631,10 @@ DriftstackCurrentTextSourceScope::DriftstackCurrentTextSourceScope(StringView so
 DriftstackCurrentTextSourceScope::~DriftstackCurrentTextSourceScope()
 {
     auto& slot = *textSourceSlot();
-    slot.current = StringView { };
-    slot.owned = String { };
+    // #79: RESTORE the previous source (own it so the view stays valid), instead of
+    // clearing to empty. Keeps the outer run's source live across nested sub-draws.
+    slot.owned = std::move(m_savedSource);
+    slot.current = slot.owned;
 }
 
 StringView driftstackCurrentTextSource()

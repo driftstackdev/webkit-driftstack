@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -203,6 +204,72 @@ std::optional<DriftstackPerGlyphAtlasEntry> DriftstackPerGlyphAtlas::lookup(
             lo = mid + 1;
     }
     return std::nullopt;
+}
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+
+// #79 Western canvas-advance sidecar (DSWADV1). Lazy-loaded once into a sorted
+// in-memory table (keys already sorted by (fontId,sizePx,cp) in the file → the
+// packed-u64 key order matches → binary search). Process-lifetime leak by design.
+std::optional<float> driftstackWesternAdvanceSidecar(uint16_t fontId, uint16_t sizePx, uint32_t codepoint)
+{
+    struct Sidecar {
+        std::vector<uint64_t> keys;
+        std::vector<float> widths;
+    };
+    static const Sidecar* s_sidecar = []() -> const Sidecar* {
+        const char* resolved = std::getenv("DRIFTSTACK_WESTERN_ADVANCE_SIDECAR_PATH");
+        if (!resolved)
+            resolved = perGlyphAtlasDefaultPath("/reference/driftstack_western_advance_sidecar.bin");
+        int fd = ::open(resolved, O_RDONLY);
+        if (fd < 0) {
+            WTFLogAlways("[Driftstack-#79-sidecar] open FAILED path=%s errno=%d", resolved, errno);
+            return nullptr;
+        }
+        struct stat st;
+        if (::fstat(fd, &st) != 0 || st.st_size < 16) { ::close(fd); return nullptr; }
+        void* base = ::mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        ::close(fd);
+        if (base == MAP_FAILED)
+            return nullptr;
+        const uint8_t* b = static_cast<const uint8_t*>(base);
+        static const char kSc[8] = { 'D', 'S', 'W', 'A', 'D', 'V', '1', '\0' };
+        uint32_t version = leU32(b + 8);
+        uint32_t count = leU32(b + 12);
+        constexpr size_t kEnt = 12;
+        if (std::memcmp(b, kSc, 8) != 0 || version != 1
+            || static_cast<size_t>(st.st_size) != 16 + static_cast<size_t>(count) * kEnt) {
+            ::munmap(base, st.st_size);
+            return nullptr;
+        }
+        auto* sc = new Sidecar();
+        sc->keys.reserve(count);
+        sc->widths.reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t* e = b + 16 + static_cast<size_t>(i) * kEnt;
+            uint64_t k = (static_cast<uint64_t>(leU16(e)) << 48)
+                       | (static_cast<uint64_t>(leU16(e + 2)) << 32)
+                       | leU32(e + 4);
+            uint32_t wbits = leU32(e + 8);
+            float w;
+            std::memcpy(&w, &wbits, 4);
+            sc->keys.push_back(k);
+            sc->widths.push_back(w);
+        }
+        ::munmap(base, st.st_size);
+        WTFLogAlways("[Driftstack-#79-sidecar] LOADED %u entries from %s", count, resolved);
+        return sc;
+    }();
+    if (!s_sidecar)
+        return std::nullopt;
+    uint64_t key = (static_cast<uint64_t>(fontId) << 48)
+                 | (static_cast<uint64_t>(sizePx) << 32) | codepoint;
+    auto it = std::lower_bound(s_sidecar->keys.begin(), s_sidecar->keys.end(), key);
+    if (it == s_sidecar->keys.end() || *it != key)
+        return std::nullopt;
+    return s_sidecar->widths[static_cast<size_t>(it - s_sidecar->keys.begin())];
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END

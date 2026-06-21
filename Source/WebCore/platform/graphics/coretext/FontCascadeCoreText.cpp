@@ -680,6 +680,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     if (allAscii) {
                         auto& pglyphAtlasN = DriftstackPerGlyphAtlas::singleton();
                         uint16_t ptSizeQ4N = static_cast<uint16_t>(ptSize * 16);
+                        // #79: place each glyph at the iOS canvas advance. The FontCascade advances
+                        // are iOS-correct for fonts the V-689 advance atlas covers densely
+                        // (Menlo/Times/Helvetica) but raw-Mac for the empty ones (Arial/Verdana) →
+                        // wrong sub-pixel frac → wrong pos_class → ±1 AA-edge diffs (fox). The DSWADV1
+                        // sidecar supplies the iOS measureText width WITHOUT touching the
+                        // glyphHash-critical advance/measureText path; miss → FontCascade fallback.
+                        uint16_t sidecarSizePxN = static_cast<uint16_t>(std::lround(ptSize));
+                        auto advanceForN = [&](size_t i, uint8_t b) -> double {
+                            if (auto sa = driftstackWesternAdvanceSidecar(fontId, sidecarSizePxN, static_cast<uint32_t>(b)))
+                                return *sa;
+                            return advances[i].width;
+                        };
                         double penYN = anchorPoint.y();
                         double yFracN = penYN - std::floor(penYN);
                         uint8_t yBinN = (yFracN > 1e-4) ? 1 : 0;
@@ -693,7 +705,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             // Whitespace draws no ink (the capture skips zero-ink glyphs, so it
                             // has no atlas entry): advance the pen, require no atlas hit.
                             if (bN == 0x20 || bN == 0x09 || bN == 0x0A) {
-                                penXN += advances[i].width;
+                                penXN += advanceForN(i, bN);
                                 continue;
                             }
                             // iOS canvas quantizes a MID-STRING glyph's sub-pixel pen-x to a
@@ -712,7 +724,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             if (!hitN) { allHit = false; break; }
                             nEntries.append(*hitN);
                             nPenX.append(penXN);
-                            penXN += advances[i].width;
+                            penXN += advanceForN(i, bN);
                         }
                         if (allHit) {
                             // Pass 2: blit each glyph cell at the floored integer dest.

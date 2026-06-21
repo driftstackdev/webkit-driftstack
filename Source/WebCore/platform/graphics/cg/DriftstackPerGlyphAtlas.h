@@ -69,6 +69,18 @@ private:
     const uint8_t* m_entriesBase { nullptr };
 };
 
+// #79 (2026-06-21): the arbitrary-canvas-text N>1 serve places glyph i at
+// penX_i = anchor.x + Σ advance[0..i-1]. The FontCascade advances are iOS-correct
+// for fonts the DriftstackAdvanceAtlas (V-689) covers densely (Menlo/Times/Helvetica)
+// but UNCORRECTED (raw Mac) for the ones it leaves empty (Arial/Verdana=10 entries)
+// → those glyphs land at the wrong sub-pixel frac → wrong pos_class → ±1 AA-edge diffs.
+// This sidecar (DSWADV1, captured iOS canvas measureText widths) supplies the iOS
+// advance for the Western canvas fonts WITHOUT touching the glyphHash-critical
+// advance/measureText path. Returns nullopt on miss → caller falls back to the
+// FontCascade advance. Lazy-loaded once from DRIFTSTACK_WESTERN_ADVANCE_SIDECAR_PATH
+// (default reference/driftstack_western_advance_sidecar.bin).
+std::optional<float> driftstackWesternAdvanceSidecar(uint16_t fontId, uint16_t sizePx, uint32_t codepoint);
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)
