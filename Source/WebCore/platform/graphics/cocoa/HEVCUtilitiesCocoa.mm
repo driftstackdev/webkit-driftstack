@@ -121,6 +121,16 @@ std::optional<PlatformMediaCapabilitiesInfo> validateHEVCParameters(const HEVCPa
         info.smooth = parameters.generalLevelIDC <= maxPlaybackLevel;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // W2741 host-leak audit + BS real-device (iPhone 17, 45 HEVC configs across the level ladder x
+    // resolution x framerate, 2 captures): real iPhone MediaCapabilities.decodingInfo(HEVC).smooth is
+    // ALWAYS false (supported/powerEfficient stay true). Cause: iOS VideoToolbox does NOT expose
+    // kVTHEVCDecoderProfileCapability_MaxPlaybackLevel for HEVC, so info.smooth keeps its default
+    // (false); the Mac fork's VT DOES expose it → smooth=true above (a host-leak, fleet-axis varying).
+    // H.264 is a separate path and correctly reports smooth=true on iPhone — only HEVC is pinned here.
+    info.smooth = false;
+#endif
+
     return info;
 }
 
