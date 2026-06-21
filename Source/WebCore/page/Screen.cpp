@@ -88,6 +88,9 @@ int Screen::height() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Height);
 
 #if PLATFORM(DRIFTSTACK)
+    // W2742 tracker-fidelity: tracker → iPhone-quantized screen size; first-party → archetype pin.
+    if (shouldApplyScreenFingerprintingProtections(*frame))
+        return static_cast<int>(frame->screenSize().height());
     // V-074 + Wave 29-367: per-archetype screen height (Phase 2 Config) with
     // iPhone 16 Pro portrait fallback when Config not loaded.
     if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
@@ -110,6 +113,12 @@ int Screen::width() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::Width);
 
 #if PLATFORM(DRIFTSTACK)
+    // W2742 tracker-fidelity: a tracker script with ScreenOrViewport protection gets the iPhone
+    // QUANTIZED screen size (LocalFrame::screenSize() → iOS quantization), NOT the canonical pin —
+    // mirrors the upstream defer. First-party (non-tracker) falls through to the archetype pin
+    // (BS-verified: real iPhone 17 first-party screen.width == 402).
+    if (shouldApplyScreenFingerprintingProtections(*frame))
+        return static_cast<int>(frame->screenSize().width());
     // V-074 + Wave 29-367: per-archetype screen width (Phase 2 Config) with
     // iPhone 16 Pro portrait fallback when Config not loaded.
     if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
@@ -198,6 +207,9 @@ int Screen::availHeight() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailHeight);
 
 #if PLATFORM(DRIFTSTACK)
+    // W2742 tracker-fidelity: tracker → iPhone-quantized (== upstream protection); first-party → pin.
+    if (shouldApplyScreenFingerprintingProtections(*frame))
+        return static_cast<int>(frame->screenSize().height());
     // V-074 + Wave 29-367: iPhone Safari fullscreen — availHeight matches screen.height (Config or fallback).
     if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
         return h;
@@ -220,6 +232,9 @@ int Screen::availWidth() const
         ResourceLoadObserver::singleton().logScreenAPIAccessed(*protect(frame->document()), ScreenAPIsAccessed::AvailWidth);
 
 #if PLATFORM(DRIFTSTACK)
+    // W2742 tracker-fidelity: tracker → iPhone-quantized (== upstream protection); first-party → pin.
+    if (shouldApplyScreenFingerprintingProtections(*frame))
+        return static_cast<int>(frame->screenSize().width());
     // V-074 + Wave 29-367: iPhone Safari fullscreen — availWidth matches screen.width (Config or fallback).
     if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
         return w;

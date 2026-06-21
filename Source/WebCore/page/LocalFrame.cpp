@@ -47,6 +47,7 @@
 #include "DocumentLoader.h"
 #include "DocumentPrefetcher.h"
 #include "DocumentQuirks.h"
+#include "DriftstackArchetypeConfig.h"
 #include "DocumentResourceLoader.h"
 #include "DocumentSecurityPolicy.h"
 #include "DocumentSyncClient.h"
@@ -1202,8 +1203,32 @@ FloatSize LocalFrame::screenSize() const
     if (!page)
         return defaultSize;
 
-    if (page->shouldApplyScreenFingerprintingProtections(*document))
+    if (page->shouldApplyScreenFingerprintingProtections(*document)) {
+#if PLATFORM(DRIFTSTACK)
+        // W2742 tracker-fidelity: iPhone Safari, for a tracker script with ScreenOrViewport
+        // protection, QUANTIZES the screen size to one of a fixed set (WebPageIOS.mm
+        // screenSizeForFingerprintingProtections) to cut fingerprint entropy. The Mac
+        // ChromeClient::screenSizeForFingerprintingProtections returns the host content rect
+        // (idiom-gated: the iPhone small-screen quantization path is skipped on macOS), which would
+        // leak a Mac-shaped size to a tracker. Replicate the iOS algorithm here against the ARCHETYPE
+        // screen dims so a tracker on the fork sees the SAME quantized size a real iPhone returns.
+        // First-party (non-tracker) never reaches here (shouldApply* is false) → the canonical pins
+        // in Screen.cpp stand (BS-verified: real iPhone 17 first-party screen.width == 402).
+        float w = DriftstackArchetypeConfig::singleton().screenWidth();
+        if (w <= 0)
+            w = 402; // iPhone 17 fallback
+        static constexpr std::array fixedSizes {
+            FloatSize { 320, 568 }, FloatSize { 375, 667 }, FloatSize { 390, 844 }, FloatSize { 414, 896 },
+        };
+        for (auto fixedSize : fixedSizes) {
+            if (w <= fixedSize.width())
+                return fixedSize;
+        }
+        return fixedSizes[fixedSizes.size() - 1];
+#else
         return page->chrome().client().screenSizeForFingerprintingProtections(*this, defaultSize);
+#endif
+    }
 
     return defaultSize;
 }
