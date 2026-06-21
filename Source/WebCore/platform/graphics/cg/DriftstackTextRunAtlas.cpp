@@ -517,6 +517,11 @@ uint16_t driftstackMapFontToId(const Font& font)
             { ".ThonburiUI-Regular", 37 },        { "LaoSangamMN", 38 },
             { "KhmerSangamMN", 39 },              { "NotoSansMyanmar-Regular", 40 },
             { "KefaIII-Regular", 41 },            { ".AppleIndicFont-Regular", 42 },
+            // #79: Menlo (canvas monospace text) → font_id 12, matching the advance atlas
+            // (DriftstackAdvanceAtlas monospace slot) + the #79 Western per-glyph color/coverage
+            // atlas. Not in the text-run atlas name table, so resolve it here for the per-glyph
+            // canvas serve (DriftstackTextGlyphAtlas::fontIdForFamily lacks the 'Menlo' literal).
+            { "Menlo-Regular", 12 },              { "Menlo", 12 },
         };
         for (const auto& e : kAsianUiFonts) {
             if (eq(psBuf, e.name) || eq(familyBuf, e.name))

@@ -3028,11 +3028,19 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                     auto& rc = recomposeBuffer->context();
                     Color fill = state().fillStyle.color();
                     const auto& fontCascade = proxy->fontCascade();
+                    // ⭐ Mark this as a canvas-text draw so FontCascadeCoreText::drawGlyphs engages
+                    // the per-glyph ATLAS serve (V-790.L N>1 composition) — the SAME captured-iPhone-
+                    // pixel mechanism that makes glyphHash byte-exact. WITHOUT this guard the replay
+                    // falls through to native CTFontDrawGlyphs (the macOS-CT≠iOS-CT ±-edge path); WITH
+                    // it, drawGlyphs blits the iOS-exact atlas coverage at FontCascade's iOS-exact
+                    // advances → byte-exact (verified: atlas coverage + premult/unpremult == iOS).
+                    driftstackPushCanvasTextDraw();
                     for (auto& d : parsed.draws) {
                         rc.setFillColor(fill);
                         TextRun run(d.text);
                         rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
                     }
+                    driftstackPopCanvasTextDraw();
                     PixelBufferFormat rcFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
                     if (RefPtr rcPixels = dynamicDowncast<ByteArrayPixelBuffer>(recomposeBuffer->getPixelBuffer(rcFormat, imageDataRect))) {
                         WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",

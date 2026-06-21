@@ -696,9 +696,12 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                 penXN += advances[i].width;
                                 continue;
                             }
-                            double xFracN = penXN - std::floor(penXN);
-                            int xBinN = static_cast<int>(std::floor(std::min(xFracN, 0.99999) * 3.0));
-                            uint8_t pcN = static_cast<uint8_t>((yBinN << 4) | xBinN);
+                            // iOS canvas INTEGER-SNAPS text (BS-verified: drawing 'A' at x=4.0..4.9
+                            // gives one identical raster) → the sub-pixel position class is ALWAYS 0;
+                            // the blit at floor(penX) realizes the integer snap. (The thirds pos_class
+                            // is for the whole-string text-run atlas, not the per-glyph canvas serve.)
+                            (void)yBinN;
+                            uint8_t pcN = 0;
                             auto hitN = pglyphAtlasN.lookup(fontId, ptSizeQ4N,
                                 static_cast<uint32_t>(bN), static_cast<uint32_t>(pcN));
                             if (!hitN) { allHit = false; break; }
