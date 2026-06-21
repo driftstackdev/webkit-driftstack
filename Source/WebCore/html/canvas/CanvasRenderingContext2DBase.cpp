@@ -389,6 +389,15 @@ static DriftstackRecomposeParse driftstackParseRecomposeOps(const Vector<uint8_t
             if (2u + sl + 16u > argLen)
                 { simple = false; break; }
             auto strSpan = b.span().subspan(argStart + 2, sl);
+            // #79: the recompose serves per-glyph atlas masks tinted with the SINGLE
+            // fillColor via rt2 — correct ONLY for monochrome ASCII text. Any non-ASCII
+            // byte (UTF-8 multibyte → CJK / combining marks / COLOR EMOJI) must BAIL to
+            // native: rt2-from-fill corrupts multi-color emoji (regressed text_emoji_mix).
+            for (auto byte : strSpan) {
+                if (byte >= 0x80) { simple = false; break; }
+            }
+            if (!simple)
+                break;
             String t = String::fromUTF8(byteCast<char8_t>(strSpan));
             double x = rdF64(argStart + 2 + sl);
             double y = rdF64(argStart + 2 + sl + 8);
