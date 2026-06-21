@@ -248,6 +248,16 @@
     bar.state = NSVisualEffectStateActive;
     bar.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;   // stretch width, pin to bottom
     [content addSubview:bar positioned:NSWindowAbove relativeTo:nil];
+    // W2718 (founder directive via A2 — the GUI Browser-mode URL bar replaces the rendered iOS bar):
+    // when DRIFTSTACK_SAFARI_CHROME_HIDDEN is set, HIDE this rendered bar (+ all its re-homed controls,
+    // which are subviews of `bar` → a hidden parent hides them too) WITHOUT touching the web-view inset.
+    // The web-view stays pinned to the 714 layout viewport (set in windowDidLoad's size logic), so the
+    // SITE still measures innerHeight == 714 (iPhone-exact) — the bar is merely invisible. Default OFF →
+    // zero behavior change. The GUI overlays/crops the now-empty bar band on its side (A2).
+    const char *driftChromeHiddenRaw = getenv("DRIFTSTACK_SAFARI_CHROME_HIDDEN");
+    if (driftChromeHiddenRaw && (driftChromeHiddenRaw[0] == '1' || driftChromeHiddenRaw[0] == 't'
+            || driftChromeHiddenRaw[0] == 'T' || driftChromeHiddenRaw[0] == 'y' || driftChromeHiddenRaw[0] == 'Y'))
+        bar.hidden = YES;
     // W1385: a subtle top hairline separating the bar from the page (iOS toolbars have one).
     NSView *hairline = [[NSView alloc] initWithFrame:NSMakeRect(0, barH - 0.5, cb.size.width, 0.5)];
     hairline.wantsLayer = YES;
