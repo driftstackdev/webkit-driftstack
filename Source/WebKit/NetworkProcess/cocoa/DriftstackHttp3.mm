@@ -43,6 +43,10 @@
 #import <zlib.h>  // Wave 29-499.329 — gzip/deflate decode for h3 responses
 #import <mutex>  // Wave 29-499.291 — std::once_flag for RFC 9001 §A.1 self-test
 #import <sys/socket.h>
+#import <fcntl.h>   // W2748: O_NONBLOCK for the EINTR-safe bounded proxy connect (mirrors W2747)
+#import <poll.h>    // W2748: poll() connect deadline
+#import <time.h>    // W2748: clock_gettime(CLOCK_MONOTONIC) for the connect deadline
+#import <errno.h>   // W2748: EINTR/EINPROGRESS for the EINTR-safe syscall helpers
 #import <Security/Security.h>   // W2202 — cert-validation Landing 2: server cert chain/hostname SecTrust eval (h3)
 #import <wtf/Assertions.h>
 #import <wtf/RetainPtr.h>       // W2202 — RetainPtr/adoptCF for the SecTrust eval (mirrors DriftstackTLS13Client.mm)
@@ -2871,6 +2875,83 @@ static int s_quicSocks5CtrlFd = -1;
 // UDP_ASSOCIATE (the reply mismatch or the 4s recv timeout at the areq recv below) — NOT for a
 // TCP-connect/auth/parse error. The caller latches s_udpRelayDown only on a genuine UDP refusal,
 // so a transient TCP blip never permanently disables QUIC on a UDP-capable proxy.
+// W2748 (egress-syscall-robustness audit, sibling of the W2744/W2747 prod-down): EINTR-safe SOCKS5 control I/O
+// for the QUIC UDP_ASSOCIATE / DNS-over-proxy path. The WebKit Network process is signal-heavy (libdispatch
+// timers) — a raw ::send/::recv whose -1/EINTR is treated as fatal is the exact W2744 class that took prod down.
+// These mirror DriftstackSocks5Client.mm sendAll/recvAll: retry on EINTR, loop to the full length, and let the
+// caller's SO_*TIMEO bound a genuine stall via EAGAIN/EWOULDBLOCK (NOT retried → the W2646 fast-fail + the W2648
+// outUdpRefused no-UDP signal are preserved exactly; only a benign signal interrupt is now retried, not latched).
+static bool dsHttp3SendAll(int fd, const uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = ::send(fd, buf + off, len - off, 0);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        if (n == 0)
+            return false;
+        off += static_cast<size_t>(n);
+    }
+    return true;
+}
+static bool dsHttp3RecvAll(int fd, uint8_t* buf, size_t len)
+{
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = ::recv(fd, buf + off, len - off, 0);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return false;   // EAGAIN/EWOULDBLOCK (SO_RCVTIMEO 4s) or hard error → fast-fail (preserves W2646/W2648)
+        }
+        if (n == 0)
+            return false;   // peer closed
+        off += static_cast<size_t>(n);
+    }
+    return true;
+}
+// W2748: EINTR-safe bounded connect (mirrors the W2747 fix). A blocking ::connect to a dead/black-holed proxy IP
+// hangs the kernel default (~75s); on the DNS-RR path this runs under g_dnsLock, so it would wedge every
+// concurrent load. Non-blocking connect + poll(POLLOUT) on a 5s monotonic deadline, EINTR-safe re-poll; restores
+// blocking on success so the SO_*TIMEO-bounded handshake recvs below behave unchanged. Returns false on a genuine
+// timeout / SO_ERROR (caller fast-fails → h2/TCP fallback); an unexpected poll error falls back to blocking.
+static bool dsHttp3ConnectBounded(int fd, const struct sockaddr* addr, socklen_t addrLen)
+{
+    int connFlags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, connFlags | O_NONBLOCK);
+    int rc = ::connect(fd, addr, addrLen);
+    bool ok = true;
+    if (rc < 0 && errno == EINPROGRESS) {
+        struct timespec ts;
+        ::clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t deadlineMs = int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000 + 5000;
+        for (;;) {
+            ::clock_gettime(CLOCK_MONOTONIC, &ts);
+            int remainingMs = int(deadlineMs - (int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000));
+            if (remainingMs <= 0) { ok = false; break; }
+            struct pollfd pfd { fd, POLLOUT, 0 };
+            int pr = ::poll(&pfd, 1, remainingMs);
+            if (pr > 0) {
+                int soErr = 0; socklen_t soLen = sizeof(soErr);
+                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
+                if (soErr)
+                    ok = false;
+                break;
+            }
+            if (pr == 0) { ok = false; break; }   // 5s deadline → dead exit, fast-fail
+            if (errno == EINTR)
+                continue;   // signal interrupted poll — re-poll the remaining deadline (the W2744 bug)
+            break;   // unexpected non-EINTR poll error → fall back to blocking completion (don't hard-fail)
+        }
+    } else if (rc < 0)
+        ok = false;
+    ::fcntl(fd, F_SETFL, connFlags);   // restore blocking for the SO_*TIMEO-bounded handshake recvs
+    return ok;
+}
+
 static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr, bool* outUdpRefused = nullptr)
 {
     const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
@@ -2904,8 +2985,8 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
     pa.sin_family = AF_INET;
     pa.sin_port = htons(static_cast<uint16_t>(proxyPort));
     if (inet_pton(AF_INET, hostBuf.span().data(), &pa.sin_addr) != 1) { ::close(fd); return false; }
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&pa), sizeof(pa)) < 0) {
-        WTFLogAlways("[Wave29-499.311] raw associate: TCP connect failed errno=%d", errno);
+    if (!dsHttp3ConnectBounded(fd, reinterpret_cast<struct sockaddr*>(&pa), sizeof(pa))) {
+        WTFLogAlways("[Wave29-499.311/W2748] raw associate: bounded TCP connect failed/timed out errno=%d", errno);
         ::close(fd); return false;
     }
 
@@ -2922,9 +3003,9 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
 
     // Method negotiation — offer user/pass (0x02).
     uint8_t greet[3] = { 0x05, 0x01, 0x02 };
-    if (::send(fd, greet, 3, 0) != 3) { ::close(fd); return false; }
-    uint8_t mr[2];
-    if (::recv(fd, mr, 2, MSG_WAITALL) != 2 || mr[0] != 0x05) { ::close(fd); return false; }
+    if (!dsHttp3SendAll(fd, greet, 3)) { ::close(fd); return false; }   // W2748: EINTR-safe
+    uint8_t mr[2] = {};
+    if (!dsHttp3RecvAll(fd, mr, 2) || mr[0] != 0x05) { ::close(fd); return false; }   // W2748: EINTR-safe fill-to-len
     if (mr[1] == 0x02) {
         // RFC 1929 user/pass auth.
         size_t ul = userEnv ? strlen(userEnv) : 0, pl = passEnv ? strlen(passEnv) : 0;
@@ -2934,9 +3015,9 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
         for (size_t i = 0; i < ul; i++) aReq.append(static_cast<uint8_t>(userEnv[i]));
         aReq.append(static_cast<uint8_t>(pl));
         for (size_t i = 0; i < pl; i++) aReq.append(static_cast<uint8_t>(passEnv[i]));
-        if (::send(fd, aReq.span().data(), aReq.size(), 0) != static_cast<ssize_t>(aReq.size())) { ::close(fd); return false; }
-        uint8_t ar[2];
-        if (::recv(fd, ar, 2, MSG_WAITALL) != 2 || ar[1] != 0x00) {
+        if (!dsHttp3SendAll(fd, aReq.span().data(), aReq.size())) { ::close(fd); return false; }   // W2748: EINTR-safe + partial-write loop
+        uint8_t ar[2] = {};
+        if (!dsHttp3RecvAll(fd, ar, 2) || ar[1] != 0x00) {   // W2748: EINTR-safe; transport-complete vs auth-status decoupled
             WTFLogAlways("[Wave29-499.311] raw associate: auth rejected");
             ::close(fd); return false;
         }
@@ -2945,9 +3026,12 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
     // UDP_ASSOCIATE with 0.0.0.0:0 (accept UDP from any local socket → binds to
     // first sender, which will be the QUIC udpFd).
     uint8_t areq[10] = { 0x05, 0x03, 0x00, 0x01, 0,0,0,0, 0,0 };
-    if (::send(fd, areq, 10, 0) != 10) { ::close(fd); return false; }
-    uint8_t arep[10];
-    if (::recv(fd, arep, 10, MSG_WAITALL) != 10 || arep[0] != 0x05 || arep[1] != 0x00) {
+    if (!dsHttp3SendAll(fd, areq, 10)) { ::close(fd); return false; }   // W2748: EINTR-safe
+    uint8_t arep[10] = {};   // W2748: zero-init so the failure-path log never reads uninitialized bytes
+    // W2748: a benign EINTR is now RETRIED inside dsHttp3RecvAll (no longer mis-latches s_udpRelayDown). A genuine
+    // no-UDP signal still surfaces as recvAll==false: the 4s SO_RCVTIMEO → EAGAIN (not retried) OR a refusal reply
+    // → still latches outUdpRefused below, preserving the W2648 no-UDP fast-fall-to-h2/TCP behavior exactly.
+    if (!dsHttp3RecvAll(fd, arep, 10) || arep[0] != 0x05 || arep[1] != 0x00) {
         WTFLogAlways("[Wave29-499.311] raw associate: UDP_ASSOCIATE rejected rep0=%02x rep1=%02x", arep[0], arep[1]);
         if (outUdpRefused) *outUdpRefused = true; // W2648: the genuine no-UDP signal (refusal or 4s recv timeout)
         ::close(fd); return false;

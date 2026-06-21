@@ -12,6 +12,7 @@
 #import "DriftstackTLS13Client.h"
 #import <stdlib.h>
 #import <sys/socket.h>
+#import <errno.h>   // W2748: EINTR-safe plaintext ws:// recv/send
 #import <wtf/Assertions.h>
 #import <wtf/StdLibExtras.h>
 #import <wtf/text/Base64.h>
@@ -60,7 +61,12 @@ int DriftstackWebSocket::tlsRead(uint8_t* buf, size_t n)
     int fd = m_socks5 ? m_socks5->socketFileDescriptor() : -1;
     if (fd < 0)
         return -1;
-    return static_cast<int>(::recv(fd, buf, n, 0));
+    // W2748 (egress-syscall audit, W2744 class): EINTR-safe. The Network process is signal-heavy (libdispatch
+    // timers); a bare ::recv whose -1/EINTR propagates as <=0 makes callers (wsReadExact / the handshake header
+    // loop) treat a benign signal as a fatal read → spurious 1006 close. Retry on EINTR; a genuine error/EOF returns <=0.
+    ssize_t r;
+    do { r = ::recv(fd, buf, n, 0); } while (r < 0 && errno == EINTR);
+    return static_cast<int>(r);
 }
 
 bool DriftstackWebSocket::tlsWriteAll(const uint8_t* buf, size_t n)
@@ -76,7 +82,11 @@ bool DriftstackWebSocket::tlsWriteAll(const uint8_t* buf, size_t n)
             int fd = m_socks5 ? m_socks5->socketFileDescriptor() : -1;
             if (fd < 0)
                 return false;
-            w = static_cast<int>(::send(fd, buf + off, n - off, 0));
+            // W2748: EINTR-safe send (W2744 class) — a signal-interrupted send (-1/EINTR) must NOT abort the
+            // WS handshake/frame write; retry it. A genuine error/EOF still falls through to the w<=0 check.
+            ssize_t sn;
+            do { sn = ::send(fd, buf + off, n - off, 0); } while (sn < 0 && errno == EINTR);
+            w = static_cast<int>(sn);
         }
         if (w <= 0)
             return false;
