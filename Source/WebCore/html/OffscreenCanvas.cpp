@@ -318,10 +318,28 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
 
     RefPtr context = canvasBaseScriptExecutionContext();
     Vector<uint8_t> blobData;
+    bool driftstackRecomposed = false;
     if (context && context->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
         blobData = encodeData(createImageForNoiseInjection(), encodingMIMEType, quality);
-    else
+    else {
+#if PLATFORM(DRIFTSTACK)
+        // #79 (2026-06-21): route pure-text 2D OffscreenCanvas through the general
+        // recompose so convertToBlob is byte-exact with the iPhone AND coherent with
+        // getImageData/toDataURL (same RGBA → same ImageIO PNG). This is the general
+        // mechanism that supersedes the per-scene V510/V241 atlas below for pure text
+        // (founder render-fix directive: delete per-probe serves). Falls back to the
+        // upstream native render when the recompose declines (non-2D, non-pure-text,
+        // shadow/gradient, uncovered font, etc.).
+        if (RefPtr ctx2d = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+            if (auto recomposed = ctx2d->driftstackRecomposeFullCanvas()) {
+                blobData = encodeData(recomposed->byteArrayPixelBuffer().get(), encodingMIMEType, quality);
+                driftstackRecomposed = !blobData.isEmpty();
+            }
+        }
+        if (!driftstackRecomposed)
+#endif
         blobData = encodeData(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+    }
 
 #if PLATFORM(DRIFTSTACK)
     // Wave 29-400 §9 (founder Tier-3 verdict 2026-05-19): mirrors
@@ -347,6 +365,9 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
         // tracker-context AFP noise already filled into blobData (line ~322) — coherent with
         // toDataURL/toBlob/getImageData + a real iPhone (same noise across all read methods for a tracker).
         && !(context && context->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
+        // #79 (2026-06-21): the general recompose already produced byte-exact iPhone PNG bytes
+        // for pure text — do NOT let the legacy per-scene V510/V241 atlas re-substitute over it.
+        && !driftstackRecomposed
         && encodingMIMEType.containsIgnoringASCIICase("png"_s)) {
         // Wave 29-349: V-510 atlas lookup via the public Driftstack::
         // wrapper, falling back to V-241 canonical table on miss. Mirrors
