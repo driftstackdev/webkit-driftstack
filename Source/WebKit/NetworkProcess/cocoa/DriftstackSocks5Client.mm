@@ -25,6 +25,8 @@
 #import <errno.h>
 #import <netinet/in.h>
 #import <sys/socket.h>
+#import <fcntl.h>   // W2744: O_NONBLOCK for the bounded non-blocking connect
+#import <poll.h>    // W2744: poll() connect deadline
 #import <sys/time.h>
 #import <wtf/Scope.h>
 #import <unistd.h>
@@ -134,12 +136,40 @@ static int connectToProxy(const Socks5Endpoint& proxy)
     struct timeval socks5HandshakeTimeout { 8, 0 };
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
-    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+    // W2744: SO_SNDTIMEO/SO_RCVTIMEO (set above) do NOT bound connect() on macOS/BSD — they govern
+    // send/recv, not the TCP-SYN wait. A dead/black-holed proxy exit made a BLOCKING connect() hang the
+    // kernel default (~75s) → the founder's "first page blank ~76s then renders" (the load finally lands
+    // after the hang). Bound it: non-blocking connect + poll(POLLOUT, 5s) + SO_ERROR check. A TCP connect
+    // to the proxy host is normally <1s; 5s is generous for a slow residential proxy; a dead exit fails in
+    // 5s → the loader retries a FRESH exit fast (W2700) instead of a ~75s stall. Restore blocking afterward
+    // so the SO_RCVTIMEO-bounded SOCKS5 handshake recvs behave exactly as before.
+    int connFlags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, connFlags | O_NONBLOCK);
+    int connRc = ::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    if (connRc < 0 && errno == EINPROGRESS) {
+        struct pollfd pfd { fd, POLLOUT, 0 };
+        int pr = ::poll(&pfd, 1, 5000);   // 5s connect deadline
+        if (pr <= 0) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8/W2744] connectToProxy: connect(%s:%u) %s within 5s — fast-failing for retry",
+                hostUtf8.data(), unsigned(proxy.port), pr == 0 ? "did not complete" : "poll error");
+            ::close(fd);
+            return -1;
+        }
+        int soErr = 0; socklen_t soLen = sizeof(soErr);
+        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
+        if (soErr) {
+            WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
+                hostUtf8.data(), unsigned(proxy.port), soErr);
+            ::close(fd);
+            return -1;
+        }
+    } else if (connRc < 0) {
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
             hostUtf8.data(), unsigned(proxy.port), errno);
         ::close(fd);
         return -1;
     }
+    ::fcntl(fd, F_SETFL, connFlags);   // restore blocking for the bounded SOCKS5 handshake recvs
     return fd;
 }
 
