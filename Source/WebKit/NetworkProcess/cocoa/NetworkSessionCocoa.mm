@@ -1184,33 +1184,47 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
         int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
         if (udpFd >= 0) {
             struct timeval utv = { };
-            utv.tv_sec = 2;
+            utv.tv_sec = 1;   // ~1s/attempt; the 3-attempt loop below bounds the total budget to ~3s
             setsockopt(udpFd, SOL_SOCKET, SO_RCVTIMEO, &utv, sizeof(utv));
 
-            uint8_t txid[2];
-            arc4random_buf(txid, 2);
-            // Minimal DNS A query for "example.com" (RFC 1035 §4.1): [txid][flags RD][QD=1]
-            // [labels][root][QTYPE=A][QCLASS=IN].
-            uint8_t dns[] = {
-                txid[0], txid[1], 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
-                0x00, 0x01, 0x00, 0x01
-            };
-            Socks5Framing::Endpoint resolverEp { String::fromUTF8("1.1.1.1"), 53 };
-            Vector<uint8_t> framed;
-            if (Socks5Framing::wrap(resolverEp, std::span<const uint8_t> { dns, sizeof(dns) }, framed)
-                && sendto(udpFd, framed.span().data(), framed.size(), 0,
-                    reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) > 0) {
+            // W2700-hardening (adversarial review watrr7rle): (1) require a genuine DNS RESPONSE relayed
+            // back — NOT a mere txid echo — so a "fake-UDP" proxy that REFLECTS our query (QR=0) is
+            // correctly rejected instead of false-POSITIVE-passing (which would re-introduce the ~1min/page
+            // QUIC stall this fix targets); (2) retry up to 3x (re-randomized txid) so a single transient
+            // UDP-datagram loss on a GENUINELY UDP-capable proxy doesn't permanently demote h3→TCP for the
+            // whole process (the result is call_once-cached + latches s_udpRelayDown).
+            for (int attempt = 0; attempt < 3 && !dataPathOk; ++attempt) {
+                uint8_t txid[2];
+                arc4random_buf(txid, 2);
+                // Minimal DNS A query for "example.com" (RFC 1035 §4.1): [txid][flags RD][QD=1]
+                // [labels][root][QTYPE=A][QCLASS=IN]. Note payload[2]=0x01 → QR=0 (a query), so a
+                // reflected copy fails the QR-bit check below.
+                uint8_t dns[] = {
+                    txid[0], txid[1], 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+                    0x00, 0x01, 0x00, 0x01
+                };
+                Socks5Framing::Endpoint resolverEp { String::fromUTF8("1.1.1.1"), 53 };
+                Vector<uint8_t> framed;
+                if (!Socks5Framing::wrap(resolverEp, std::span<const uint8_t> { dns, sizeof(dns) }, framed))
+                    break;
+                if (sendto(udpFd, framed.span().data(), framed.size(), 0,
+                        reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) <= 0)
+                    continue;
                 uint8_t inbound[1500];
                 ssize_t r = recv(udpFd, inbound, sizeof(inbound), 0);
-                if (r > 0) {
-                    Socks5Framing::Endpoint src;
-                    Vector<uint8_t> payload;
-                    // A framed reply with our txid proves the relay actually carried the datagram.
-                    if (Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload)
-                        && payload.size() >= 2 && payload[0] == txid[0] && payload[1] == txid[1])
-                        dataPathOk = true;
-                }
+                if (r <= 0)
+                    continue;
+                Socks5Framing::Endpoint src;
+                Vector<uint8_t> payload;
+                // Genuine DNS RESPONSE = >=12-byte header AND QR bit set (payload[2]&0x80 — a reflected
+                // QUERY has QR=0) AND our txid. That a real resolver reply came back THROUGH the relay
+                // proves the UDP data path works (orthogonal to ANCOUNT — a SERVFAIL still proves flow).
+                if (Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload)
+                    && payload.size() >= 12
+                    && (payload[2] & 0x80) != 0
+                    && payload[0] == txid[0] && payload[1] == txid[1])
+                    dataPathOk = true;
             }
             close(udpFd);
         }
