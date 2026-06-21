@@ -283,6 +283,7 @@ const WebDriverService::Command WebDriverService::s_commands[] = {
     { HTTPMethod::Post, "/session/$sessionId/element/$elementId/click", &WebDriverService::elementClick },
     { HTTPMethod::Post, "/session/$sessionId/element/$elementId/clear", &WebDriverService::elementClear },
     { HTTPMethod::Post, "/session/$sessionId/element/$elementId/value", &WebDriverService::elementSendKeys },
+    { HTTPMethod::Post, "/session/$sessionId/element/$elementId/select", &WebDriverService::selectOptionElement },
 
     { HTTPMethod::Get, "/session/$sessionId/source", &WebDriverService::getPageSource },
     { HTTPMethod::Post, "/session/$sessionId/execute/sync", &WebDriverService::executeScript },
@@ -2008,6 +2009,25 @@ void WebDriverService::elementSendKeys(RefPtr<JSON::Object>&& parameters, Functi
     }
 
     m_session->elementSendKeys(elementID.value(), text, WTF::move(completionHandler));
+}
+
+void WebDriverService::selectOptionElement(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
+{
+    // Driftstack extension (TELL6): native <option> selection that bypasses the
+    // W3C §14.1 element-click layout gates. A closed menulist's <option> has no
+    // render box, so elementClick fails at computeElementLayout (!rect) before it
+    // can reach the selectOptionElement fallback. This route drives
+    // Session::selectOptionElement directly → optionSelectedByUser (UserDriven =>
+    // isTrusted=true), so the resulting input/change events are genuine and there
+    // is zero JS-level fingerprint modification (no el.value= / dispatchEvent).
+    if (!findSessionOrCompleteWithError(*parameters, completionHandler))
+        return;
+
+    auto elementID = findElementOrCompleteWithError(*parameters, completionHandler);
+    if (!elementID)
+        return;
+
+    m_session->selectOptionElement(elementID.value(), WTF::move(completionHandler));
 }
 
 void WebDriverService::getPageSource(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)

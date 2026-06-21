@@ -131,6 +131,7 @@ private:
     void elementClick(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void elementClear(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void elementSendKeys(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
+    void selectOptionElement(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack TELL6: native <option> select
     void getPageSource(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void executeScript(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void executeAsyncScript(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
