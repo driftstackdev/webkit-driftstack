@@ -510,8 +510,7 @@ static void driftstackEnsureProductionFingerprintHooks()
         "DRIFTSTACK_VIDEOFRAME_ATLAS", "DRIFTSTACK_GLYPHHASH_GEOM_SERVE",
         "DRIFTSTACK_INLINE_OFFSET_SNAP", "DRIFTSTACK_INT_INLINE_LAYOUT",
         "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", "DRIFTSTACK_ORPHAN_MARK_SPACING",
-        "DRIFTSTACK_POSCLASS_THIRDS", "DRIFTSTACK_RAF_DELTA_CLAMP",
-        "DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", "DRIFTSTACK_SF_PRO_PLUS_ONE",
+        "DRIFTSTACK_POSCLASS_THIRDS", "DRIFTSTACK_SF_PRO_PLUS_ONE",
         "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", "DRIFTSTACK_V790L_N1_SUB",
         // PROBE_SIGNATURE_EMIT: infra-emission (op-signatures on atlas-miss → the ProbeSig→BS-replay
         // priority-atlas learning crawl). In launch-env-v1.sh but was missing here — a worker omitting it
@@ -527,6 +526,15 @@ static void driftstackEnsureProductionFingerprintHooks()
     // AFP noise OFF by default for bit-identity (production sets =0); a tracker context can still
     // re-enable via an explicit env value because overwrite=0 leaves any pre-set value intact.
     setenv("DRIFTSTACK_AFP_FALLBACK_ENABLED", "0", 0);
+    // rAF clamps OFF in production (gold-truth #102 / W2643): the first-frame + per-frame delta
+    // clamps shift the rAF timebase off performance.now() — an always-present coherence tell; a
+    // real iPhone's rAF is coherent with performance.now()/wall-clock. launch-env-v1.sh sets these
+    // =0, but that env does NOT reliably reach the sandboxed WebContent (DELTA_CLAMP is absent from
+    // the ProcessLauncher dsEnv[] allowlist + the __XPC_ shadow path doesn't forward to WebContent),
+    // so they were being force-set to "1" by the kOnFlags loop above → clamp ON in production,
+    // contradicting #102. FORCE them off here (overwrite=0 still lets a test opt in with an explicit "1").
+    setenv("DRIFTSTACK_RAF_DELTA_CLAMP", "0", 0);
+    setenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", "0", 0);
 }
 #endif
 
