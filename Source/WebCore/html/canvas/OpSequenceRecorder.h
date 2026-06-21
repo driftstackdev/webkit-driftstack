@@ -120,6 +120,13 @@ public:
     size_t opByteLength() const { return m_buffer.size(); }
     bool isEmpty() const { return m_buffer.isEmpty(); }
 
+    // #79 readback-recompose (2026-06-21): expose the raw op-record bytes (NO
+    // canvas-dim header — just the per-op [u16 op_id][u16 arg_len][args] stream)
+    // so the getImageData/toDataURL recompose can parse + replay the recorded
+    // fillText ops through the per-glyph atlas. Read-only; the buffer outlives
+    // the call (owned by the context).
+    const Vector<uint8_t>& driftstackOpBytes() const { return m_buffer; }
+
 private:
     // Internal serialization helpers — only the op-record bytes; canvas dims
     // are prepended at finalize time.
