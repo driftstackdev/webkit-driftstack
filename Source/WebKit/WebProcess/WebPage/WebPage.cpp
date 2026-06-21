@@ -4241,7 +4241,15 @@ void WebPage::touchEvent(const WebTouchEvent& touchEvent, CompletionHandler<void
 // completeSyntheticClick(OneFingerTap) — firing the mousedown/mouseup/click a real iPhone tap produces.
 void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEvent, bool touchWasHandled)
 {
-    constexpr double tapSlop = 10; // px; a tap that drifts more than this is a drag/scroll, not a click
+    // W2740: scroll-commit threshold — a touch drifting more than this from the START is a drag/scroll,
+    // not a tap. Raised 10→18: a GUI/trackpad "tap" relayed as touch events often wobbles ~10-15px
+    // (pointer acceleration, packet jitter, a mis-fired GUI momentum fling) which the old 10px slop
+    // mis-committed to an IRREVERSIBLE scroll (founder: "taps still scroll instead of tapping, often").
+    // 18 is a jitter dead-band: real scrolls are well past it (agent behavioralScroll deltas are 28px+),
+    // and sub-18px scrolls are the accepted tradeoff for robust taps. The PRIMARY tap/scroll fix is
+    // GUI-side gesture classification (A2 — send a clean tap [down+up, no moves] vs a scroll); this is
+    // the engine backstop so residual jitter can never spuriously scroll.
+    constexpr double tapSlop = 18; // px (was 10)
     auto pos = touchEvent.position();
     switch (touchEvent.type()) {
     case WebEventType::TouchStart:
