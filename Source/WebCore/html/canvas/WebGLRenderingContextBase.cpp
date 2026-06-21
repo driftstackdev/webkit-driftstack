@@ -2069,6 +2069,13 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_CUBE_MAP_TEXTURE_SIZE:
         return m_maxCubeMapTextureSize;
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_VECTORS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit (follow-up to W2522): real iPhone 17 / Safari 26.4 reports 1024
+        // (= MAX_FRAGMENT_UNIFORM_COMPONENTS/4 = 4096/4). Bare host passthrough leaks the Mac
+        // ANGLE/Metal backend's value (host-variable on the fleet axis; convergent-by-coincidence
+        // on the dev box but not guaranteed across M2/M3/M4). Uniform across all Apple A-series GPUs.
+        return 1024;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_RENDERBUFFER_SIZE:
         return m_maxRenderbufferSize;
@@ -2097,8 +2104,20 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_VERTEX_ATTRIBS:
         return static_cast<GCGLint>(maxVertexAttribs());
     case GraphicsContextGL::MAX_VERTEX_TEXTURE_IMAGE_UNITS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 reports 16 (GL ES 3.0 per-stage
+        // texture-unit floor; sibling of the MAX_TEXTURE_IMAGE_UNITS=16 override above). Pin
+        // host-independent. Uniform across Apple A-series GPUs.
+        return 16;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_VECTORS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 reports 1024
+        // (= MAX_VERTEX_UNIFORM_COMPONENTS/4 = 4096/4). Pin host-independent (sibling of the
+        // MAX_FRAGMENT_UNIFORM_VECTORS=1024 override above). Uniform across Apple A-series GPUs.
+        return 1024;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VIEWPORT_DIMS:
         return toWebGLAny(getWebGLIntArrayParameter(pname));

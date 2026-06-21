@@ -3240,6 +3240,13 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::FRAGMENT_SHADER_DERIVATIVE_HINT:
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_3D_TEXTURE_SIZE:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit (follow-up to W2522): real iPhone 17 / Safari 26.4 reports 2048
+        // (verified 5+ BS captures; uniform across all Apple A-series GPUs). Mirrors the adjacent
+        // MAX_ARRAY_TEXTURE_LAYERS=2048 override. Pin host-independent so the Mac Metal backend's
+        // value (host-variable on the fleet axis) cannot leak.
+        return 2048;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_ARRAY_TEXTURE_LAYERS:
 #if PLATFORM(DRIFTSTACK)
@@ -3297,10 +3304,23 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
     case GraphicsContextGL::MAX_DRAW_BUFFERS:
         return maxDrawBuffers();
     case GraphicsContextGL::MAX_ELEMENT_INDEX:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 4294967294 (2^32-2). Pin
+        // host-independent (int64). Uniform across Apple A-series GPUs.
+        return 4294967294LL;
+#endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_ELEMENTS_INDICES:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 2147483647 (driver hint; pin).
+        return 2147483647;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_ELEMENTS_VERTICES:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 2147483647 (driver hint; pin).
+        return 2147483647;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_INPUT_COMPONENTS:
 #if PLATFORM(DRIFTSTACK)
@@ -3313,8 +3333,18 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 4096 (same at 26.5 per the
+        // MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS comment above — COMBINED = BLOCKS×4096 + 4096).
+        // Pin host-independent; keeps the GL ES 3.0 COMBINED invariant coherent.
+        return 4096;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_PROGRAM_TEXEL_OFFSET:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 7 (GL ES 3.0 spec value). Pin.
+        return 7;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_SAMPLES:
 #if PLATFORM(DRIFTSTACK)
@@ -3348,16 +3378,41 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
 #endif
         return maxSamples();
     case GraphicsContextGL::MAX_SERVER_WAIT_TIMEOUT:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 0 (int64). Pin host-independent.
+        return 0LL;
+#endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_TEXTURE_LOD_BIAS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 15. Pin host-independent.
+        return 15;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 128. Pin host-independent.
+        return 128;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 4. Pin host-independent.
+        return 4;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 4. Pin host-independent.
+        return 4;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_UNIFORM_BLOCK_SIZE:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 16384 (int64; same at 26.5 per
+        // the COMBINED comment above — pass-through Mac==iPhone, but pin for fleet-axis safety).
+        return 16384LL;
+#endif
         return getInt64Parameter(pname);
     case GraphicsContextGL::MAX_UNIFORM_BUFFER_BINDINGS:
 #if PLATFORM(DRIFTSTACK)
@@ -3380,8 +3435,18 @@ WebGLAny WebGL2RenderingContext::getParameter(GCGLenum pname)
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_UNIFORM_COMPONENTS:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = 4096 (= COMBINED_VERTEX invariant
+        // 12×4096+4096 = 53248; same at 26.5). Pin host-independent.
+        return 4096;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::MIN_PROGRAM_TEXEL_OFFSET:
+#if PLATFORM(DRIFTSTACK)
+        // W2741 host-leak audit: real iPhone 17 / Safari 26.4 = -8 (GL ES 3.0 spec value;
+        // companion to MAX_PROGRAM_TEXEL_OFFSET=7). Pin host-independent.
+        return -8;
+#endif
         return getIntParameter(pname);
     case GraphicsContextGL::PACK_ROW_LENGTH:
         return m_packParameters.rowLength;
