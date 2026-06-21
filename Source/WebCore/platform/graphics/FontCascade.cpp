@@ -40,6 +40,7 @@
 #if PLATFORM(DRIFTSTACK)
 #include "cg/DriftstackSoftwareBlend.h"
 #include "cg/DriftstackTelemetry.h"
+#include "cg/DriftstackPerGlyphAtlas.h"
 #include "cg/DriftstackTextRunAtlas.h"
 #include "cocoa/DriftstackAsciiAtlas.h"
 #include "cocoa/DriftstackCompositeAtlas.h"
@@ -1850,6 +1851,85 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                     return;
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            // #79: per-glyph N>1 sub-pixel serve AT THE GB LAYER (only if the whole-string
+            // text-run atlas above missed). The platform drawGlyphs (below) is display-list-
+            // recorded + replayed after this stack frame returns, defeating the TLS source →
+            // its per-glyph N>1 serve sees EMPTY source for runs that route through the display
+            // list (e.g. fox/Arial) → skipped → native render. Here the source is LIVE (record
+            // time) so serve now; the per-glyph drawNativeImage blits replay correctly. Mirrors
+            // the platform serve EXACTLY (twelfths pos_class, iOS sidecar advances, floor blit) so
+            // runs already served direct stay byte-identical. Gated on the same DRIFTSTACK_V790L_N1_SUB.
+            {
+                static const bool s_n1subGB = std::getenv("DRIFTSTACK_V790L_N1_SUB")
+                    && std::getenv("DRIFTSTACK_V790L_N1_SUB")[0] == '1';
+                if (s_n1subGB && source.is8Bit() && source.length() == glyphBuffer.size()
+                    && glyphBuffer.size() > 1) {
+                    auto srcB = source.span8();
+                    bool allAscii = true;
+                    for (size_t i = 0; i < srcB.size(); ++i)
+                        if (srcB[i] >= 0x80) { allAscii = false; break; }
+                    if (allAscii) {
+                        auto& pgGB = DriftstackPerGlyphAtlas::singleton();
+                        uint16_t ptQ4 = static_cast<uint16_t>(ptSize * 16);
+                        uint16_t scSize = static_cast<uint16_t>(std::lround(static_cast<double>(ptSize)));
+                        double penYg = point.y();
+                        double yFracg = penYg - std::floor(penYg);
+                        uint8_t yBing = (yFracg > 1e-4) ? 1 : 0;
+                        auto advG = [&](size_t i, uint8_t b) -> double {
+                            if (auto sa = driftstackWesternAdvanceSidecar(fontId, scSize, static_cast<uint32_t>(b)))
+                                return *sa;
+                            return glyphBuffer.advanceAt(i).width;
+                        };
+                        Vector<DriftstackPerGlyphAtlasEntry, 64> entsG;
+                        Vector<double, 64> penXsG;
+                        double penXg = point.x();
+                        bool allHitG = true;
+                        for (size_t i = 0; i < glyphBuffer.size(); ++i) {
+                            uint8_t b = srcB[i];
+                            if (b == 0x20 || b == 0x09 || b == 0x0A) { penXg += advG(i, b); continue; }
+                            double xFracg = penXg - std::floor(penXg);
+                            uint8_t xBing = static_cast<uint8_t>(std::floor(std::min(xFracg, 0.999999) * 12.0));
+                            uint8_t pcg = (yBing << 4) | xBing;
+                            auto hit = pgGB.lookup(fontId, ptQ4, static_cast<uint32_t>(b), static_cast<uint32_t>(pcg));
+                            if (!hit) { allHitG = false; break; }
+                            entsG.append(*hit);
+                            penXsG.append(penXg);
+                            penXg += advG(i, b);
+                        }
+                        if (allHitG && !entsG.isEmpty()) {
+                            auto [fr, fg, fb, fa] = context.fillColor().toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                            for (size_t i = 0; i < entsG.size(); ++i) {
+                                std::array<uint8_t, 64 * 64 * 4> rgbaG;
+                                auto atlasPx = unsafeMakeSpan(entsG[i].pixels, 64 * 64);
+                                auto rgbaSpan = unsafeMakeSpan(rgbaG.data(), 64 * 64 * 4);
+                                for (size_t row = 0; row < 64; ++row) {
+                                    for (size_t col = 0; col < 64; ++col) {
+                                        size_t di = (row * 64 + col) * 4;
+                                        uint8_t ink = atlasPx[row * 64 + col];
+                                        float a = (ink / 255.0f) * fa;
+                                        rgbaSpan[di + 0] = static_cast<uint8_t>(roundf(fr * a * 255.0f));
+                                        rgbaSpan[di + 1] = static_cast<uint8_t>(roundf(fg * a * 255.0f));
+                                        rgbaSpan[di + 2] = static_cast<uint8_t>(roundf(fb * a * 255.0f));
+                                        rgbaSpan[di + 3] = static_cast<uint8_t>(roundf(a * 255.0f));
+                                    }
+                                }
+                                RetainPtr<CFDataRef> cfd = adoptCF(CFDataCreate(kCFAllocatorDefault, rgbaG.data(), 64 * 64 * 4));
+                                RetainPtr<CGDataProviderRef> dp = adoptCF(CGDataProviderCreateWithCFData(cfd.get()));
+                                RetainPtr<CGColorSpaceRef> cs = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+                                RetainPtr<CGImageRef> img = adoptCF(CGImageCreate(64, 64, 8, 32, 64 * 4, cs.get(),
+                                    kCGImageAlphaPremultipliedLast, dp.get(), nullptr, false, kCGRenderingIntentDefault));
+                                if (!img) continue;
+                                RefPtr ni = NativeImage::create(WTF::retainPtr(img.get()));
+                                if (!ni) continue;
+                                FloatRect dst(std::floor(penXsG[i]) - 8.0, std::floor(penYg) - 46.0, 64, 64);
+                                context.drawNativeImage(*ni, dst, FloatRect(0, 0, 64, 64), { CompositeOperator::SourceOver });
+                            }
+                            point.setX(penXg);
+                            return;
                         }
                     }
                 }
