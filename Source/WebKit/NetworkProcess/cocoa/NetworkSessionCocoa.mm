@@ -1165,8 +1165,8 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     // the BND.ADDR:BND.PORT relay (a DNS A query to 1.1.1.1:53, §7-wrapped) and require a
     // framed reply, reusing the technique proven in driftstackHostAdvertisesH3ViaDns(). The
     // control TCP socket MUST stay open for the test (RFC 1928 §6: the UDP association lives
-    // only while the TCP control connection is open). The 2s budget is paid ONCE
-    // (call_once-cached at session config), never per page.
+    // only while the TCP control connection is open). The ~3s budget (3 attempts x 1s) is
+    // paid ONCE (call_once-cached at session config), never per page.
     bool dataPathOk = false;
     if (udpResp[3] == 0x01) { // ATYP=IPv4 BND.ADDR (the universal ASSOCIATE-reply form)
         struct sockaddr_in relaySa = { };
@@ -1231,7 +1231,7 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     }
     close(sock);
     if (!dataPathOk)
-        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] ASSOCIATE control reply OK but UDP DATA-PATH FAILED (no relayed datagram reply in 2s) — proxy is fake-UDP/TCP-only → HTTP/3 DISABLED (prevents the ~1min/page native-QUIC stall)");
+        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] ASSOCIATE control reply OK but UDP DATA-PATH FAILED (no relayed datagram reply within ~3s, 3 attempts) — proxy is fake-UDP/TCP-only → HTTP/3 DISABLED (prevents the ~1min/page native-QUIC stall)");
     else
         WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] UDP DATA-PATH verified (relayed DNS round-trip OK) — proxy genuinely relays UDP → HTTP/3 stays enabled");
     return dataPathOk;
