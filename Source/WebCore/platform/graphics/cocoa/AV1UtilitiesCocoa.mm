@@ -66,8 +66,28 @@ static bool driftstackArchetypeHasAV1Decode()
     }();
     return hasAV1;
 }
+// True ONLY when an A17Pro+ archetype is EXPLICITLY set (env present + matches). Distinct from
+// driftstackArchetypeHasAV1Decode() which ALSO returns true for no-env (host passthrough). A real
+// iPhone 17 reports canPlayType('av01')='probably' + WebCodecs/MSE AV1 supported regardless of the
+// host Mac's AV1 HW (M2 fleet box LACKS hardware AV1 → host VTIsHardwareDecodeSupported('av01')=false
+// → would wrongly flip the whole AV1 surface to unsupported; M4 dev HAS it → true by luck). Pin
+// HW-decode-available TRUE for an explicit A17Pro+ archetype so M2==M3==M4==iPhone (host-independent).
+static bool driftstackArchetypeExplicitlyA17ProPlus()
+{
+    static const bool v = [] {
+        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!env || !env[0])
+            return false;
+        std::string_view sv { env };
+        return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
+    }();
+    return v;
+}
 #endif
 
+#if !PLATFORM(DRIFTSTACK)
+// Only referenced by the host-VideoToolbox validateAV1Parameters() path below, which is #else'd
+// out under PLATFORM(DRIFTSTACK) (decodingInfo(av1) is forced nullopt to match the iPhone split).
 static bool NODELETE isConfigurationRecordHDR(const AV1CodecConfigurationRecord& record)
 {
     if (record.bitDepth < 10)
@@ -89,14 +109,22 @@ static bool NODELETE isConfigurationRecordHDR(const AV1CodecConfigurationRecord&
 
     return true;
 }
+#endif // !PLATFORM(DRIFTSTACK)
 
 std::optional<PlatformMediaCapabilitiesInfo> validateAV1Parameters(const AV1CodecConfigurationRecord& record, const PlatformMediaCapabilitiesVideoConfiguration& configuration)
 {
 #if PLATFORM(DRIFTSTACK)
-    // W2561: A15/A16 archetypes have no AV1 hardware decoder (decodingInfo path).
-    if (!driftstackArchetypeHasAV1Decode())
-        return std::nullopt;
-#endif
+    // iPhone MediaCapabilities.decodingInfo(av1).supported = FALSE on EVERY archetype: A15/A16 have no
+    // AV1 HW; A17Pro+ have the documented "AV1 decodingInfo always false" SPLIT — canPlayType/MSE/
+    // WebCodecs report supported (via av1HardwareDecoderAvailable, pinned above), but decodingInfo does
+    // NOT (av1DecodingInfoAlwaysFalse=True + av1Pattern="A17Pro+ split (wc=true,decodingInfo=false)" in
+    // the iPhone 17 aio capture). The host VTCopyAV1DecoderCapabilitiesDictionary path below would
+    // return supported=true on M3/M4 (host AV1 HW) → breaking the split → return nullopt to match the
+    // real iPhone (decodingInfo=false) host-independently on every fleet box. (fp-divergence-sweep 2026-06-21.)
+    UNUSED_PARAM(record);
+    UNUSED_PARAM(configuration);
+    return std::nullopt;
+#else
 
     if (!validateAV1ConfigurationRecord(record))
         return std::nullopt;
@@ -205,6 +233,7 @@ std::optional<PlatformMediaCapabilitiesInfo> validateAV1Parameters(const AV1Code
     }
 
     return info;
+#endif
 }
 
 static std::optional<bool> s_av1HardwareDecoderAvailable = { };
@@ -225,6 +254,8 @@ bool av1HardwareDecoderAvailable()
     // canPlayType (supportsTypeAndCodecs) + MSE (SourceBufferParserWebM) paths.
     if (!driftstackArchetypeHasAV1Decode())
         return false;
+    if (driftstackArchetypeExplicitlyA17ProPlus())
+        return true; // A17Pro+: HW AV1 decode present on the real iPhone → pin TRUE host-independently (before the GPU-fed cache, which carries the M2/M3 host value)
 #endif
 
     ASSERT(isMainThread() || !!s_av1HardwareDecoderAvailable);
@@ -248,6 +279,8 @@ bool av1HardwareDecoderAvailableInProcess()
     // is forwarded to the GPU process, so this getenv-backed check is correct in-process there too.
     if (!driftstackArchetypeHasAV1Decode())
         return false;
+    if (driftstackArchetypeExplicitlyA17ProPlus())
+        return true; // A17Pro+: pin HW AV1 decode TRUE host-independently → WebCodecs/VideoDecoder AV1 supported (the iPhone 17 reports decodeHW/decodeSW supported); bypasses the host VTIsHardwareDecodeSupported below (false on M2 fleet)
 #endif
 
     ASSERT(isMainThread() || !!s_av1HardwareDecoderAvailableInProcess);
