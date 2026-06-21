@@ -1895,6 +1895,20 @@ void WebsiteDataStore::sendNetworkProcessDidResume()
 
 bool WebsiteDataStore::defaultTrackingPreventionEnabled() const
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2742 (#108): iOS Safari REGULAR browsing always has Tracking Prevention ON, which is what
+    // activates ScriptTrackingPrivacy — the master switch that makes WebProcessPool fetch Apple's
+    // tracker list (via WebPrivacy) + send it to WebContent, so known-tracker scripts (e.g.
+    // coveryourtracks.eff.org) get the per-eTLD+1 AFP noise ("randomized by first-party domain").
+    // The fork's harness datastore may leave doesAppHaveTrackingPreventionEnabled() false → tracker
+    // AFP never fires → CYT shows canonical "real hashes". Force it on to match iOS. GATED default-OFF
+    // (DRIFTSTACK_TRACKER_PRIVACY=1) because enabling Tracking Prevention also activates ITP/
+    // ResourceLoadStatistics (storage-partitioning) — must verify no automation/egress breakage +
+    // that CYT shows "randomized" on the FLEET BOX before default-on. AFP values are already
+    // iOS-correct by construction (per-domain createImageForNoiseInjection + W2742 screen quantization).
+    if (const char* e = getenv("DRIFTSTACK_TRACKER_PRIVACY"); e && e[0] == '1')
+        return true;
+#endif
 #if PLATFORM(COCOA)
     if (auto enabledOverride = m_configuration->defaultTrackingPreventionEnabledOverride())
         return *enabledOverride;
