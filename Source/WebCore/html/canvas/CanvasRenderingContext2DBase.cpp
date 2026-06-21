@@ -39,6 +39,7 @@
 // Source/WebCore/html/) avoid cross-directory header-search-path
 // issues; symbols are defined in
 // Source/WebCore/html/DriftstackCanvasFingerprint10xRGBA.mm.
+#include <bit>
 #include <cstdint>
 #include <span>
 #include <wtf/Logging.h>
@@ -343,6 +344,67 @@ String CanvasRenderingContext2DBase::driftstackOpSequenceBytesBase64(uint16_t ca
 OpSequenceRecorder* CanvasRenderingContext2DBase::driftstackOpRecorderForPath()
 {
     return &driftstackOpSequenceRecorder();
+}
+
+// #79 readback-recompose: parse the recorded op stream to decide whether this is a
+// "pure simple text" canvas (only font/fillStyle/textAlign/textBaseline state + fillText
+// draws — NO shapes/paths/transforms/alpha/composite/strokeText) and extract the fillText
+// draws. The recompose only fires for pure-simple-text so it never disturbs shape/mixed
+// canvases. Op format: per-op [u16 op_id BE][u16 arg_len BE][args]; fillText (0x0004) =
+// [u16 strlen BE][utf8][f64 x BE][f64 y BE].
+struct DriftstackRecomposeTextDraw { String text; double x; double y; };
+struct DriftstackRecomposeParse {
+    bool pureSimpleText { false };
+    Vector<DriftstackRecomposeTextDraw> draws;
+};
+static DriftstackRecomposeParse driftstackParseRecomposeOps(const Vector<uint8_t>& b)
+{
+    DriftstackRecomposeParse out;
+    auto rdU16 = [&](size_t p) -> unsigned { return (static_cast<unsigned>(b[p]) << 8) | b[p + 1]; };
+    auto rdF64 = [&](size_t p) -> double {
+        uint64_t bits = 0;
+        for (int k = 0; k < 8; ++k) bits = (bits << 8) | b[p + k];
+        return std::bit_cast<double>(bits);
+    };
+    size_t i = 0;
+    bool simple = true;
+    while (i + 4 <= b.size()) {
+        unsigned op = rdU16(i);
+        unsigned argLen = rdU16(i + 2);
+        size_t argStart = i + 4;
+        if (argStart + argLen > b.size())
+            break;
+        switch (op) {
+        case 0x0020: // fillStyle
+        case 0x0028: // font
+        case 0x0029: // textAlign
+        case 0x002A: // textBaseline
+            break; // allowed state-setters
+        case 0x0004: { // fillText (string + x + y)
+            if (argLen < 2)
+                { simple = false; break; }
+            unsigned sl = rdU16(argStart);
+            if (2u + sl + 16u > argLen)
+                { simple = false; break; }
+            auto strSpan = b.span().subspan(argStart + 2, sl);
+            String t = String::fromUTF8(byteCast<char8_t>(strSpan));
+            double x = rdF64(argStart + 2 + sl);
+            double y = rdF64(argStart + 2 + sl + 8);
+            out.draws.append({ t, x, y });
+            break;
+        }
+        default:
+            // Anything else (shapes/paths/strokeText/transforms/globalAlpha/composite/…)
+            // disqualifies the canvas from the recompose.
+            simple = false;
+            break;
+        }
+        if (!simple)
+            break;
+        i = argStart + argLen;
+    }
+    out.pureSimpleText = simple && !out.draws.isEmpty();
+    return out;
 }
 #endif
 
@@ -2923,6 +2985,60 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                             fullW, fullH, sx, sy, sw, sh, opSeqSha.left(12).utf8().data());
                         if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
                             return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
+                    }
+                }
+            }
+        }
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // #79 readback-recompose (2026-06-21): for a PURE-SIMPLE-TEXT canvas, re-render the recorded
+    // fillText draws into a fresh CPU ImageBuffer using the iOS-resolved FontCascade, then return
+    // its readback. Mac CoreGraphics is deterministic + cross-platform (== iOS, per the
+    // iOS-CPU==Mac-CPU proof), so re-rendering the iPhone font glyph in WebContent CPU is
+    // byte-identical to the real iPhone for ANY color/string/size — closing arbitrary canvas TEXT
+    // (whose GPU-process render bypasses WebContent's iPhone-glyph path). Gated
+    // DRIFTSTACK_CANVAS_TEXT_RECOMPOSE=1 default-OFF (production unaffected; glyphHash is DOM-based
+    // so this canvas readback can't touch it). Scope: full-canvas reads, alphabetic baseline +
+    // start/left align (LTR → zero textOffset), no shadow, solid-color fill, op-seq is pure text.
+    {
+        static bool s_canvasTextRecompose = []() {
+            const char* env = getenv("DRIFTSTACK_CANVAS_TEXT_RECOMPOSE");
+            return env && env[0] == '1';
+        }();
+        const auto fullW = canvasBase().width();
+        const auto fullH = canvasBase().height();
+        bool defaultBaseline = state().canvasTextBaseline() == CanvasTextBaseline::Alphabetic;
+        bool defaultAlign = state().canvasTextAlign() == CanvasTextAlign::Start
+            || state().canvasTextAlign() == CanvasTextAlign::Left;
+        bool noShadow = !state().shadowColor.isVisible() && !state().shadowBlur;
+        bool colorFill = !state().fillStyle.canvasGradient() && !state().fillStyle.canvasPattern();
+        if (s_canvasTextRecompose
+            && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
+            && sx == 0 && sy == 0
+            && static_cast<unsigned>(sw) == fullW && static_cast<unsigned>(sh) == fullH
+            && defaultBaseline && defaultAlign && noShadow && colorFill && scriptContext) {
+            auto parsed = driftstackParseRecomposeOps(driftstackOpSequenceRecorder().driftstackOpBytes());
+            auto* proxy = const_cast<CanvasRenderingContext2DBase*>(this)->fontProxy();
+            if (parsed.pureSimpleText && proxy && proxy->realized()) {
+                if (auto recomposeBuffer = ImageBuffer::create(canvasBase().size(),
+                        RenderingMode::Unaccelerated, RenderingPurpose::Canvas, 1,
+                        colorSpace(), pixelFormat(), scriptContext->graphicsClient())) {
+                    auto& rc = recomposeBuffer->context();
+                    Color fill = state().fillStyle.color();
+                    const auto& fontCascade = proxy->fontCascade();
+                    for (auto& d : parsed.draws) {
+                        rc.setFillColor(fill);
+                        TextRun run(d.text);
+                        rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
+                    }
+                    PixelBufferFormat rcFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
+                    if (RefPtr rcPixels = dynamicDowncast<ByteArrayPixelBuffer>(recomposeBuffer->getPixelBuffer(rcFormat, imageDataRect))) {
+                        WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
+                            fullW, fullH, parsed.draws.size(),
+                            fontCascade.primaryFont().platformData().familyName().utf8().data());
+                        return { { ImageData::create(rcPixels.releaseNonNull(), outputImageDataPixelFormat) } };
                     }
                 }
             }
