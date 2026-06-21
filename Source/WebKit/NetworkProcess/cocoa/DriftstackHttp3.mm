@@ -1069,6 +1069,66 @@ static int driftstackCtClientInitial(DriftstackQuicConn* qc)
     return rv;
 }
 
+// W2202/W2730: validate a TLS 1.3 Certificate message BODY for the h3 custom-TLS handshake — parse the
+// chain, SecTrust-evaluate vs qc->ctSni (network revocation fetch DISABLED — see the OCSP rationale), store
+// the leaf (qc->ctLeafCert) for the 0x0f key-possession check, and capture Transcript-Hash(CH..Certificate).
+// Shared by the plain Certificate (0x0b) arm AND the RFC 8879 CompressedCertificate (0x19) arm (which passes
+// the DECOMPRESSED body). `body` is exactly the message body (4-byte handshake header stripped) → bounds vs
+// body.size(). Returns false (logged) on any parse/trust failure (the caller returns -1).
+static bool ctValidateCertBody(DriftstackQuicConn* qc, std::span<const uint8_t> body)
+{
+    if (body.empty()) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert msg too short — rejecting"); return false; }
+    uint8_t ctxLen = body[0];
+    size_t cOff = 1 + static_cast<size_t>(ctxLen);
+    if (cOff + 3 > body.size()) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert ctx OOB — rejecting"); return false; }
+    uint32_t listLen = (uint32_t(body[cOff]) << 16) | (uint32_t(body[cOff + 1]) << 8) | body[cOff + 2];
+    cOff += 3;
+    size_t listEnd = cOff + listLen;
+    if (listEnd > body.size()) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert list OOB — rejecting"); return false; }
+    RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+    RetainPtr<SecCertificateRef> leaf;
+    while (cOff + 3 <= listEnd) {
+        uint32_t certLen = (uint32_t(body[cOff]) << 16) | (uint32_t(body[cOff + 1]) << 8) | body[cOff + 2];
+        cOff += 3;
+        if (cOff + certLen > listEnd) break;
+        RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, body.subspan(cOff, certLen).data(), certLen));
+        RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
+        if (cert) {
+            if (!leaf) leaf = cert;
+            CFArrayAppendValue(certArray.get(), cert.get());
+        }
+        cOff += certLen;
+        if (cOff + 2 > listEnd) break;
+        uint16_t extLen = (uint16_t(body[cOff]) << 8) | body[cOff + 1];
+        cOff += 2 + static_cast<size_t>(extLen);
+    }
+    if (!CFArrayGetCount(certArray.get())) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 no parseable server certs — rejecting"); return false; }
+    RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, qc->ctSni.createCFString().get()));
+    SecTrustRef trust = nullptr;
+    OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
+    RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
+    if (st != errSecSuccess || !trustRef) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 SecTrustCreateWithCertificates failed — rejecting"); return false; }
+    // Disable per-evaluation NETWORK revocation fetch so trustd cannot fetch OCSP/CRL DIRECT off the Mac IP
+    // (egress leak + non-iPhone traffic; iOS uses stapling + valid.apple.com aggregation). Stapled/cached
+    // revocation kept (soft-fail, same as iOS) → no validation regression.
+    SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
+    CFErrorRef evalErr = nullptr;
+    bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
+    if (evalErr)
+        CFRelease(evalErr);
+    if (!trusted) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CERT VALIDATION FAILED for %s — rejecting (MITM defense)", qc->ctSni.utf8().data());
+        return false;
+    }
+    qc->ctLeafCert = leaf; // retained for Landing 3 (CertificateVerify key-possession check)
+    // W2202 L3b: capture Transcript-Hash(CH..Certificate) NOW — the cert message (0x0b, or the 0x19
+    // CompressedCertificate per RFC 8879 §4) is the last one appended to ctTranscript at the loop top; the
+    // 0x0f arm verifies the server's signature over THIS hash.
+    qc->ctTranscriptHashThroughCert = ctTranscriptHash(qc);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server cert chain validated OK for %s", qc->ctSni.utf8().data());
+    return true;
+}
+
 // recv_crypto_data (custom): drive the TLS 1.3 handshake from server CRYPTO.
 static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level*/, const uint8_t* data, size_t len)
 {
@@ -1134,68 +1194,51 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
                     q += 4 + el;
                 }
             }
-        } else if (hsType == 0x0b) { // Certificate → validate server cert chain/hostname (cert-validation Landing 2, W2202; mirrors the proven h2 parser in DriftstackTLS13Client.mm)
+        } else if (hsType == 0x0b) { // Certificate → validate (W2202; cert parse shared with the 0x19 CompressedCertificate arm via ctValidateCertBody)
             static const bool s_validateCert = []() {
                 const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
                 return e && e[0] == '1';
             }();
             // SNI-empty = the relay/smoke handshake path (no hostname to bind) → skip, don't reject.
             if (s_validateCert && !qc->ctSni.isEmpty()) {
-                // TLS 1.3 Certificate body (cb, hsLen bytes), offsets RELATIVE to cb:
-                // 1B ctx_len + ctx + 3B list_len + [3B cert_len + DER + 2B ext_len + ext]* — byte-identical to the h2 layout.
-                const uint8_t* cb = b + off + 4;
-                if (hsLen < 1) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert msg too short — rejecting"); return -1; }
-                size_t cOff = 0;
-                uint8_t ctxLen = cb[cOff];
-                cOff += 1 + static_cast<size_t>(ctxLen);
-                if (cOff + 3 > hsLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert ctx OOB — rejecting"); return -1; }
-                uint32_t listLen = (uint32_t(cb[cOff]) << 16) | (uint32_t(cb[cOff + 1]) << 8) | cb[cOff + 2];
-                cOff += 3;
-                size_t listEnd = cOff + listLen;
-                if (listEnd > hsLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 cert list OOB — rejecting"); return -1; }
-                RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
-                RetainPtr<SecCertificateRef> leaf;
-                while (cOff + 3 <= listEnd) {
-                    uint32_t certLen = (uint32_t(cb[cOff]) << 16) | (uint32_t(cb[cOff + 1]) << 8) | cb[cOff + 2];
-                    cOff += 3;
-                    if (cOff + certLen > listEnd) break;
-                    RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, cb + cOff, certLen));
-                    RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
-                    if (cert) {
-                        if (!leaf) leaf = cert;
-                        CFArrayAppendValue(certArray.get(), cert.get());
-                    }
-                    cOff += certLen;
-                    if (cOff + 2 > listEnd) break;
-                    uint16_t extLen = (uint16_t(cb[cOff]) << 8) | cb[cOff + 1];
-                    cOff += 2 + static_cast<size_t>(extLen);
-                }
-                if (!CFArrayGetCount(certArray.get())) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 no parseable server certs — rejecting"); return -1; }
-                RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, qc->ctSni.createCFString().get()));
-                SecTrustRef trust = nullptr;
-                OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
-                RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
-                if (st != errSecSuccess || !trustRef) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 SecTrustCreateWithCertificates failed — rejecting"); return -1; }
-                // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
-                // revocation fetches so trustd cannot fetch OCSP/CRL DIRECT off the Mac IP (egress leak +
-                // non-iPhone traffic; iOS uses stapling + valid.apple.com aggregation, not live per-cert OCSP).
-                // Keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression.
-                SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
-                CFErrorRef evalErr = nullptr;
-                bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
-                if (evalErr)
-                    CFRelease(evalErr);
-                if (!trusted) {
-                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 CERT VALIDATION FAILED for %s — rejecting (MITM defense)", qc->ctSni.utf8().data());
+                if (!ctValidateCertBody(qc, qc->ctHsCryptoBuf.span().subspan(off + 4, hsLen)))
                     return -1;
-                }
-                qc->ctLeafCert = leaf; // retained for Landing 3 (CertificateVerify key-possession check)
-                // W2202 L3b: capture Transcript-Hash(CH..Certificate) HERE — Certificate is the last message
-                // appended to ctTranscript (CV/Finished arrive in later loop iterations), so the full transcript
-                // hash at this point is exactly what the server signs in CertificateVerify (no exclusion, unlike
-                // the 0x14 Finished window). Reused in the 0x0f arm below.
-                qc->ctTranscriptHashThroughCert = ctTranscriptHash(qc);
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] h3 server cert chain validated OK for %s", qc->ctSni.utf8().data());
+            }
+        } else if (hsType == 0x19) { // W2730: RFC 8879 CompressedCertificate → decompress (zlib) then validate as a Certificate
+            // We advertise compress_certificate(27)=zlib (iPhone fingerprint), so a server MAY send
+            // CompressedCertificate(25/0x19) instead of Certificate(0x0b). The 0x19 message is already in
+            // ctTranscript as-sent (RFC 8879 §4) → we only DECOMPRESS to recover the leaf for the 0x0f
+            // key-possession check (mirrors the h2 path in DriftstackTLS13Client.mm). §5 bomb-defense:
+            // uncompressed_length is bounded and the inflate output must equal it exactly.
+            static const bool s_validateCert19 = []() {
+                const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                return e && e[0] == '1';
+            }();
+            if (s_validateCert19 && !qc->ctSni.isEmpty()) {
+                auto cbody = qc->ctHsCryptoBuf.span().subspan(off + 4, hsLen);
+                if (cbody.size() < 8) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate too short — rejecting"); return -1; }
+                uint16_t algorithm = (uint16_t(cbody[0]) << 8) | cbody[1];
+                uint32_t uncompressedLen = (uint32_t(cbody[2]) << 16) | (uint32_t(cbody[3]) << 8) | cbody[4];
+                uint32_t compLen = (uint32_t(cbody[5]) << 16) | (uint32_t(cbody[6]) << 8) | cbody[7];
+                if (algorithm != 1) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate unsupported algorithm %u — rejecting", algorithm); return -1; }
+                static constexpr uint32_t kMaxCertChainBytes = 1u << 17; // 128 KiB — generous for a real chain, bounds a decompression bomb (RFC 8879 §5)
+                if (!uncompressedLen || uncompressedLen > kMaxCertChainBytes) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate uncompressed_length %u out of range — rejecting", uncompressedLen); return -1; }
+                if (static_cast<size_t>(8) + compLen != static_cast<size_t>(hsLen)) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate length mismatch — rejecting"); return -1; }
+                Vector<uint8_t> decompressed(uncompressedLen);
+                z_stream zs;
+                memset(&zs, 0, sizeof(zs));
+                if (inflateInit2(&zs, 15 + 32) != Z_OK) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate inflateInit failed — rejecting"); return -1; }
+                zs.next_in = const_cast<Bytef*>(cbody.subspan(8, compLen).data());
+                zs.avail_in = static_cast<uInt>(compLen);
+                zs.next_out = decompressed.mutableSpan().data();
+                zs.avail_out = static_cast<uInt>(uncompressedLen);
+                int zrv = inflate(&zs, Z_FINISH);
+                uLong produced = zs.total_out;
+                inflateEnd(&zs);
+                if (zrv != Z_STREAM_END || produced != uncompressedLen) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate inflate failed (rv=%d produced=%lu expected=%u) — rejecting", zrv, produced, uncompressedLen); return -1; }
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] h3 CompressedCertificate (RFC 8879 zlib) %u->%u bytes for %s", compLen, uncompressedLen, qc->ctSni.utf8().data());
+                if (!ctValidateCertBody(qc, decompressed.span()))
+                    return -1;
             }
         } else if (hsType == 0x0f) { // CertificateVerify → prove the peer holds the LEAF private key (W2202 L3b; mirrors the soak-proven h2 0x0f arm in DriftstackTLS13Client.mm)
             static const bool s_validateCV = []() {
