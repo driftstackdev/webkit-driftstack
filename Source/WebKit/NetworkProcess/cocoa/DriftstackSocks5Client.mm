@@ -27,6 +27,7 @@
 #import <sys/socket.h>
 #import <fcntl.h>   // W2744: O_NONBLOCK for the bounded non-blocking connect
 #import <poll.h>    // W2744: poll() connect deadline
+#import <time.h>    // W2747: clock_gettime(CLOCK_MONOTONIC) for the EINTR-safe connect deadline
 #import <sys/time.h>
 #import <wtf/Scope.h>
 #import <unistd.h>
@@ -147,22 +148,52 @@ static int connectToProxy(const Socks5Endpoint& proxy)
     ::fcntl(fd, F_SETFL, connFlags | O_NONBLOCK);
     int connRc = ::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
     if (connRc < 0 && errno == EINPROGRESS) {
-        struct pollfd pfd { fd, POLLOUT, 0 };
-        int pr = ::poll(&pfd, 1, 5000);   // 5s connect deadline
-        if (pr <= 0) {
-            WTFLogAlways("[Driftstack-EG-WK-1.8/W2744] connectToProxy: connect(%s:%u) %s within 5s — fast-failing for retry",
-                hostUtf8.data(), unsigned(proxy.port), pr == 0 ? "did not complete" : "poll error");
-            ::close(fd);
-            return -1;
+        // W2747 (PROD-DOWN regression fix): the W2744 poll was UNGUARDED — a SINGLE poll() whose `pr < 0`
+        // (errno==EINTR) was treated as a fatal connect failure. The WebKit Network process is signal-heavy
+        // (libdispatch timers etc.), so poll() on the proxy connect got interrupted (EINTR) and HARD-FAILED
+        // the connect → "[W2744] poll error within 5s" on every load → "socks5 handshake failed on all
+        // sites" (the proxy is a LOCAL relay 127.0.0.1:* that NEVER takes 75s, so the bounded connect must
+        // not be fragile). FIX: an EINTR-safe poll loop bounded by an absolute 5s monotonic deadline. Only a
+        // genuine timeout or a confirmed SO_ERROR fast-fails (→ fresh-exit retry, the W2744 intent). An
+        // UNEXPECTED (non-EINTR) poll error no longer hard-fails — it falls through to blocking-connect
+        // completion (bounded by the 8s SO_*TIMEO below) so a poll quirk can never break prod again.
+        struct timespec ts;
+        ::clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t deadlineMs = int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000 + 5000;
+        bool fastFailed = false;
+        for (;;) {
+            ::clock_gettime(CLOCK_MONOTONIC, &ts);
+            int remainingMs = int(deadlineMs - (int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000));
+            if (remainingMs <= 0) {
+                WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) did not complete within 5s — fast-failing for retry",
+                    hostUtf8.data(), unsigned(proxy.port));
+                ::close(fd); fastFailed = true; break;
+            }
+            struct pollfd pfd { fd, POLLOUT, 0 };
+            int pr = ::poll(&pfd, 1, remainingMs);
+            if (pr > 0) {
+                int soErr = 0; socklen_t soLen = sizeof(soErr);
+                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
+                if (soErr) {
+                    WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) failed errno=%d",
+                        hostUtf8.data(), unsigned(proxy.port), soErr);
+                    ::close(fd); fastFailed = true;
+                }
+                break;   // connected (soErr==0) → proceed below; or fast-failed
+            }
+            if (pr == 0) {
+                WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) did not complete within 5s — fast-failing for retry",
+                    hostUtf8.data(), unsigned(proxy.port));
+                ::close(fd); fastFailed = true; break;
+            }
+            if (errno == EINTR)
+                continue;   // ← THE W2744 BUG: poll interrupted by a signal — re-poll the remaining deadline, do NOT fail
+            WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) poll errno=%d — falling back to blocking completion",
+                hostUtf8.data(), unsigned(proxy.port), errno);
+            break;   // unexpected non-EINTR poll error → fall through to blocking completion (don't hard-fail prod)
         }
-        int soErr = 0; socklen_t soLen = sizeof(soErr);
-        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
-        if (soErr) {
-            WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
-                hostUtf8.data(), unsigned(proxy.port), soErr);
-            ::close(fd);
+        if (fastFailed)
             return -1;
-        }
     } else if (connRc < 0) {
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
             hostUtf8.data(), unsigned(proxy.port), errno);
