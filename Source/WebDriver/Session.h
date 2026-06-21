@@ -143,6 +143,7 @@ public:
     void elementClick(const String& elementID, Function<void(CommandResult&&)>&&);
     void elementClear(const String& elementID, Function<void(CommandResult&&)>&&);
     void elementSendKeys(const String& elementID, const String& text, Function<void(CommandResult&&)>&&);
+    void selectOptionElement(const String& elementID, Function<void(CommandResult&&)>&&); // Driftstack TELL6: public — the /element/:id/select route drives native <option> selection (was a private elementClick fallback helper)
     void getPageSource(Function<void(CommandResult&&)>&&);
     void executeScript(const String& script, RefPtr<JSON::Array>&& arguments, ExecuteScriptMode, Function<void(CommandResult&&)>&&);
     void getAllCookies(Function<void(CommandResult&&)>&&);
@@ -222,7 +223,6 @@ private:
     enum class FileUploadType { Single,
         Multiple };
     std::optional<FileUploadType> parseElementIsFileUploadResult(const RefPtr<JSON::Value>&);
-    void selectOptionElement(const String& elementID, Function<void(CommandResult&&)>&&);
     void setInputFileUploadFiles(const String& elementID, const String& text, bool multiple, Function<void(CommandResult&&)>&&);
     void didSetInputFileUploadFiles(bool wasCancelled);
 
