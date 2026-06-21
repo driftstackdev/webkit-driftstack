@@ -543,6 +543,13 @@ public:
     String driftstackOpSequenceBytesBase64(uint16_t canvasW, uint16_t canvasH) const;
     // V-581 Phase C-3.B-2: CanvasPath override — returns this context's recorder.
     OpSequenceRecorder* driftstackOpRecorderForPath() override;
+    // #79 readback-recompose, extracted so ALL canvas read/encode methods (getImageData +
+    // HTMLCanvasElement toDataURL/toBlob via HTMLCanvasElement::getImageData) share ONE source
+    // → cross-method byte-coherent. Returns the rt2-corrected full-canvas ImageData for a
+    // NON-tracker, pure-simple-text, fully-atlas-served canvas; nullptr otherwise (caller falls
+    // back to its normal path, leaving the tracker/V-510/AFP paths untouched). Gated
+    // DRIFTSTACK_CANVAS_TEXT_RECOMPOSE.
+    RefPtr<ImageData> driftstackRecomposeFullCanvas() const;
 private:
     mutable std::unique_ptr<OpSequenceRecorder> m_driftstackOpSequenceRecorder;
 #endif

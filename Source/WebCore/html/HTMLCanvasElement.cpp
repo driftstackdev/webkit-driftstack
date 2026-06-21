@@ -1701,6 +1701,17 @@ ExceptionOr<Ref<OffscreenCanvas>> HTMLCanvasElement::transferControlToOffscreen(
 
 RefPtr<ImageData> HTMLCanvasElement::getImageData()
 {
+#if PLATFORM(DRIFTSTACK)
+    // #79: toDataURL (line ~1297) + toBlob call this FIRST and encode the returned ImageData.
+    // For a 2D canvas, route through the SAME byte-exact readback-recompose as the 2D
+    // getImageData → toDataURL/toBlob become cross-method byte-coherent with getImageData for
+    // pure-simple-text. Returns nullptr (→ caller's existing makeRenderingResultsAvailable/V-510
+    // path, untouched) unless the recompose fully applies (gated, non-tracker, fully-served).
+    if (RefPtr ctx2d = dynamicDowncast<CanvasRenderingContext2DBase>(m_context.get())) {
+        if (auto recomposed = ctx2d->driftstackRecomposeFullCanvas())
+            return recomposed;
+    }
+#endif
 #if ENABLE(WEBGL)
     RefPtr context = dynamicDowncast<WebGLRenderingContextBase>(m_context.get());
     if (!context)

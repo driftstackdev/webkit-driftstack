@@ -2809,6 +2809,97 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::makeImageDataIfContentsCached(co
     return ImageData::create(size, WTF::move(data), m_settings.colorSpace);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// #79 readback-recompose, EXTRACTED (2026-06-21) so getImageData + HTMLCanvasElement
+// toDataURL/toBlob (via HTMLCanvasElement::getImageData) share ONE byte-exact source →
+// cross-method coherent. For a NON-tracker, pure-simple-text, fully-atlas-served canvas:
+// re-render the recorded fillText draws into a fresh CPU ImageBuffer via the iOS-resolved
+// FontCascade (the per-glyph atlas serve gives iPhone-exact coverage), then recompute color
+// from the EXACT alpha + fill via iOS's premult/unpremult (rt2) → byte-identical to real
+// iPhone for ANY color/string/size. Returns nullptr (caller uses its normal path, untouched)
+// when: gate off / tracker context (canvas must be noised) / not pure-simple-text / any glyph
+// fell to native (not fully atlas-served — rt2 would corrupt Mac coverage). glyphHash is DOM,
+// unaffected. Gated DRIFTSTACK_CANVAS_TEXT_RECOMPOSE default-OFF.
+RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() const
+{
+    static bool s_canvasTextRecompose = []() {
+        const char* env = getenv("DRIFTSTACK_CANVAS_TEXT_RECOMPOSE");
+        return env && env[0] == '1';
+    }();
+    if (!s_canvasTextRecompose)
+        return nullptr;
+    RefPtr scriptContext = canvasBase().scriptExecutionContext();
+    if (!scriptContext)
+        return nullptr;
+    // Tracker context: real iPhone Safari noises canvas (ScriptTrackingPrivacy) → must NOT serve
+    // deterministic iOS-exact pixels here (getImageData's line-2837 early-return handles trackers;
+    // this guard keeps the helper safe when called from toDataURL/toBlob too).
+    if (scriptContext->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas))
+        return nullptr;
+    const auto fullW = canvasBase().width();
+    const auto fullH = canvasBase().height();
+    if (!fullW || !fullH)
+        return nullptr;
+    bool defaultBaseline = state().canvasTextBaseline() == CanvasTextBaseline::Alphabetic;
+    bool defaultAlign = state().canvasTextAlign() == CanvasTextAlign::Start
+        || state().canvasTextAlign() == CanvasTextAlign::Left;
+    bool noShadow = !state().shadowColor.isVisible() && !state().shadowBlur;
+    bool colorFill = !state().fillStyle.canvasGradient() && !state().fillStyle.canvasPattern();
+    if (!(defaultBaseline && defaultAlign && noShadow && colorFill))
+        return nullptr;
+    auto parsed = driftstackParseRecomposeOps(driftstackOpSequenceRecorder().driftstackOpBytes());
+    auto* proxy = const_cast<CanvasRenderingContext2DBase*>(this)->fontProxy();
+    if (!(parsed.pureSimpleText && proxy && proxy->realized()))
+        return nullptr;
+    auto recomposeBuffer = ImageBuffer::create(canvasBase().size(),
+        RenderingMode::Unaccelerated, RenderingPurpose::Canvas, 1,
+        colorSpace(), pixelFormat(), scriptContext->graphicsClient());
+    if (!recomposeBuffer)
+        return nullptr;
+    auto& rc = recomposeBuffer->context();
+    Color fill = state().fillStyle.color();
+    const auto& fontCascade = proxy->fontCascade();
+    driftstackResetCanvasTextNativeFallback();
+    driftstackPushCanvasTextDraw();
+    for (auto& d : parsed.draws) {
+        rc.setFillColor(fill);
+        TextRun run(d.text);
+        rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
+    }
+    driftstackPopCanvasTextDraw();
+    if (driftstackCanvasTextNativeFallbackOccurred()) {
+        WTFLogAlways("[Driftstack-#79-recompose] BAIL (native fallback — not fully atlas-served; %zu draws, font='%s')",
+            parsed.draws.size(), fontCascade.primaryFont().platformData().familyName().utf8().data());
+        return nullptr;
+    }
+    auto [cfr, cfg, cfb, cfa] = fill.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+    unsigned fillR = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfr * 255.0f)));
+    unsigned fillG = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfg * 255.0f)));
+    unsigned fillB = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfb * 255.0f)));
+    IntRect imageDataRect { 0, 0, static_cast<int>(fullW), static_cast<int>(fullH) };
+    auto computedColorSpace = ImageData::computeColorSpace(std::nullopt, m_settings.colorSpace);
+    auto outputPixelFormat = toPixelFormat(ImageDataPixelFormat::RgbaUnorm8);
+    PixelBufferFormat rcFormat { AlphaPremultiplication::Premultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
+    RefPtr rcPixels = dynamicDowncast<ByteArrayPixelBuffer>(recomposeBuffer->getPixelBuffer(rcFormat, imageDataRect));
+    if (!rcPixels)
+        return nullptr;
+    auto px = rcPixels->bytes();
+    auto rt2 = [](unsigned C, unsigned a) -> uint8_t {
+        unsigned p = (C * a + 127) / 255;            // premult, round-half-up
+        return static_cast<uint8_t>(std::min<unsigned>(255, (p * 255 + a / 2) / a)); // unpremult
+    };
+    for (size_t i = 0; i + 3 < px.size(); i += 4) {
+        unsigned a = px[i + 3];
+        if (!a) { px[i] = px[i + 1] = px[i + 2] = 0; continue; }
+        px[i] = rt2(fillR, a); px[i + 1] = rt2(fillG, a); px[i + 2] = rt2(fillB, a);
+    }
+    WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
+        fullW, fullH, parsed.draws.size(),
+        fontCascade.primaryFont().platformData().familyName().utf8().data());
+    return ImageData::create(rcPixels.releaseNonNull(), ImageDataPixelFormat::RgbaUnorm8);
+}
+#endif
+
 ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, int sy, int sw, int sh, std::optional<ImageDataSettings> settings) const
 {
     if (!sw || !sh)
@@ -2995,96 +3086,15 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
 #endif
 
 #if PLATFORM(DRIFTSTACK)
-    // #79 readback-recompose (2026-06-21): for a PURE-SIMPLE-TEXT canvas, re-render the recorded
-    // fillText draws into a fresh CPU ImageBuffer using the iOS-resolved FontCascade, then return
-    // its readback. Mac CoreGraphics is deterministic + cross-platform (== iOS, per the
-    // iOS-CPU==Mac-CPU proof), so re-rendering the iPhone font glyph in WebContent CPU is
-    // byte-identical to the real iPhone for ANY color/string/size — closing arbitrary canvas TEXT
-    // (whose GPU-process render bypasses WebContent's iPhone-glyph path). Gated
-    // DRIFTSTACK_CANVAS_TEXT_RECOMPOSE=1 default-OFF (production unaffected; glyphHash is DOM-based
-    // so this canvas readback can't touch it). Scope: full-canvas reads, alphabetic baseline +
-    // start/left align (LTR → zero textOffset), no shadow, solid-color fill, op-seq is pure text.
-    {
-        static bool s_canvasTextRecompose = []() {
-            const char* env = getenv("DRIFTSTACK_CANVAS_TEXT_RECOMPOSE");
-            return env && env[0] == '1';
-        }();
-        const auto fullW = canvasBase().width();
-        const auto fullH = canvasBase().height();
-        bool defaultBaseline = state().canvasTextBaseline() == CanvasTextBaseline::Alphabetic;
-        bool defaultAlign = state().canvasTextAlign() == CanvasTextAlign::Start
-            || state().canvasTextAlign() == CanvasTextAlign::Left;
-        bool noShadow = !state().shadowColor.isVisible() && !state().shadowBlur;
-        bool colorFill = !state().fillStyle.canvasGradient() && !state().fillStyle.canvasPattern();
-        if (s_canvasTextRecompose
-            && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
-            && sx == 0 && sy == 0
-            && static_cast<unsigned>(sw) == fullW && static_cast<unsigned>(sh) == fullH
-            && defaultBaseline && defaultAlign && noShadow && colorFill && scriptContext) {
-            auto parsed = driftstackParseRecomposeOps(driftstackOpSequenceRecorder().driftstackOpBytes());
-            auto* proxy = const_cast<CanvasRenderingContext2DBase*>(this)->fontProxy();
-            if (parsed.pureSimpleText && proxy && proxy->realized()) {
-                if (auto recomposeBuffer = ImageBuffer::create(canvasBase().size(),
-                        RenderingMode::Unaccelerated, RenderingPurpose::Canvas, 1,
-                        colorSpace(), pixelFormat(), scriptContext->graphicsClient())) {
-                    auto& rc = recomposeBuffer->context();
-                    Color fill = state().fillStyle.color();
-                    const auto& fontCascade = proxy->fontCascade();
-                    // ⭐ Mark this as a canvas-text draw so FontCascadeCoreText::drawGlyphs engages
-                    // the per-glyph ATLAS serve (V-790.L N>1 composition) — the SAME captured-iPhone-
-                    // pixel mechanism that makes glyphHash byte-exact. WITHOUT this guard the replay
-                    // falls through to native CTFontDrawGlyphs (the macOS-CT≠iOS-CT ±-edge path); WITH
-                    // it, drawGlyphs blits the iOS-exact atlas coverage at FontCascade's iOS-exact
-                    // advances → byte-exact (verified: atlas coverage + premult/unpremult == iOS).
-                    driftstackResetCanvasTextNativeFallback();
-                    driftstackPushCanvasTextDraw();
-                    for (auto& d : parsed.draws) {
-                        rc.setFillColor(fill);
-                        TextRun run(d.text);
-                        rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
-                    }
-                    driftstackPopCanvasTextDraw();
-                    // #79 SAFETY GUARD: rt2 is byte-exact ONLY when every glyph was served from the
-                    // per-glyph atlas (iPhone-canonical coverage). If ANY glyph fell to the native Mac
-                    // CT raster (uncovered font/size/cp — e.g. a font not in the atlas), its coverage is
-                    // Mac's, and rt2-recoloring it would CORRUPT the canvas vs both iPhone and the
-                    // un-recomposed buffer. Bail → fall through to the normal getImageData path (the
-                    // GB-layer-served buffer, which stays coherent with toDataURL). Safe-by-construction.
-                    if (driftstackCanvasTextNativeFallbackOccurred()) {
-                        WTFLogAlways("[Driftstack-#79-recompose] BAIL (native fallback — not fully atlas-served; %zu draws, font='%s')",
-                            parsed.draws.size(), fontCascade.primaryFont().platformData().familyName().utf8().data());
-                    } else {
-                    // The atlas serve blits the iPhone-exact COVERAGE (the buffer's ALPHA channel is
-                    // byte-exact), but the serve tints + composites the RGB via drawNativeImage (CG),
-                    // which rounds the premult RGB ±1 vs iOS. So IGNORE the serve's RGB and recompute
-                    // the color from the EXACT alpha + the real fill color via iOS's exact premult/
-                    // unpremult: Cp = round(C*A/255); C_out = (Cp*255 + A/2)/A. (rt2, verified 100% on
-                    // all 4 scenes' real iOS pixels.) Byte-exact for ANY fill color.
-                    auto [cfr, cfg, cfb, cfa] = fill.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
-                    unsigned fillR = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfr * 255.0f)));
-                    unsigned fillG = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfg * 255.0f)));
-                    unsigned fillB = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfb * 255.0f)));
-                    PixelBufferFormat rcFormat { AlphaPremultiplication::Premultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
-                    if (RefPtr rcPixels = dynamicDowncast<ByteArrayPixelBuffer>(recomposeBuffer->getPixelBuffer(rcFormat, imageDataRect))) {
-                        auto px = rcPixels->bytes();
-                        auto rt2 = [](unsigned C, unsigned a) -> uint8_t {
-                            unsigned p = (C * a + 127) / 255;            // premult, round-half-up
-                            return static_cast<uint8_t>(std::min<unsigned>(255, (p * 255 + a / 2) / a)); // unpremult
-                        };
-                        for (size_t i = 0; i + 3 < px.size(); i += 4) {
-                            unsigned a = px[i + 3];
-                            if (!a) { px[i] = px[i + 1] = px[i + 2] = 0; continue; }
-                            px[i] = rt2(fillR, a); px[i + 1] = rt2(fillG, a); px[i + 2] = rt2(fillB, a);
-                        }
-                        WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
-                            fullW, fullH, parsed.draws.size(),
-                            fontCascade.primaryFont().platformData().familyName().utf8().data());
-                        return { { ImageData::create(rcPixels.releaseNonNull(), outputImageDataPixelFormat) } };
-                    }
-                    } // else (fully atlas-served)
-                }
-            }
-        }
+    // #79: byte-exact readback-recompose for a pure-simple-text canvas (full-canvas RGBA8 read).
+    // Extracted to driftstackRecomposeFullCanvas() so toDataURL/toBlob share it (cross-method
+    // coherent). Returns nullptr (→ normal path below) unless it fully applies.
+    if (outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
+        && sx == 0 && sy == 0
+        && static_cast<unsigned>(sw) == canvasBase().width()
+        && static_cast<unsigned>(sh) == canvasBase().height()) {
+        if (auto recomposed = driftstackRecomposeFullCanvas())
+            return recomposed.releaseNonNull();
     }
 #endif
 
