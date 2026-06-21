@@ -1203,7 +1203,17 @@ void DriftstackNetworkLoader::resume()
     // (capped) gives the proxy time to rotate; ~3.9s worst case before giving up.
     const int currentAttempt = ++m_attempt;
     const int kMaxAttempts = 8;
-    const bool canRetry = currentAttempt < kMaxAttempts;
+    // W2750 (#20 first-load latency, founder "unrealistically slow ~76s — can't be proxy-only"): bound the TOTAL
+    // retry wall-clock, not just the count. The 150-600ms backoff (~3.9s) was the only prior bound, but it ignored
+    // each attempt's connect+TLS-handshake cost — a slow/flaky exit burns up to the 6s TLS / 8s SOCKS5 recv timeout
+    // PER attempt, so 8 attempts compounded to ~50-76s (matching the report). Budget the chain to 20s: a FAST proxy
+    // still gets all 8 attempts (8 quick ClientHello-reject fails fit easily in 20s, preserving the ~99.6% flaky
+    // success), but a consistently-SLOW exit gives up at ~20s (page errors) instead of ~76s. Slow ORIGINS are NOT
+    // retries (a single attempt awaiting the response), so they are unaffected. Deadline set once, on attempt 1.
+    if (currentAttempt == 1)
+        m_retryDeadline = MonotonicTime::now() + Seconds(20);
+    const bool withinRetryBudget = MonotonicTime::now() < m_retryDeadline;
+    const bool canRetry = (currentAttempt < kMaxAttempts) && withinRetryBudget;
     int64_t retryDelayMs = static_cast<int64_t>(150) << (currentAttempt - 1);
     if (retryDelayMs > 600) retryDelayMs = 600;
 

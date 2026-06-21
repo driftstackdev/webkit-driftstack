@@ -47,6 +47,7 @@
 #include <atomic>
 #include <wtf/CompletionHandler.h>
 #include <wtf/Forward.h>
+#include <wtf/MonotonicTime.h>   // W2750 (#20): wall-clock retry budget
 #include <wtf/RefCounted.h>
 #include <wtf/ThreadSafeWeakPtr.h>
 #include <wtf/text/WTFString.h>
@@ -91,6 +92,7 @@ private:
     std::atomic<bool> m_cancelled { false };
     int m_fd { -1 };  // BSD socket fd to gost
     int m_attempt { 0 };  // Wave 29-499.271 — retry counter for transient TLS/H2 failures
+    MonotonicTime m_retryDeadline;  // W2750 (#20): wall-clock cap on the whole retry chain (set on attempt 1)
     int m_redirectCount { 0 };  // Wave 29-499.344 — 3xx redirect-follow chain guard
 
     // Wave 29-499.344 — HTTP redirect following (Phase 4, previously unimplemented).
