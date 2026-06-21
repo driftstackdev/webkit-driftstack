@@ -1244,6 +1244,71 @@ static void NODELETE replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(Contain
 }
 
 // https://tc39.es/ecma402/#sec-formatdatetime
+#if PLATFORM(DRIFTSTACK)
+// The 26 IANA zones whose en-US LONG (specific non-location, "zzzz") display name differs between
+// iOS ICU (real iPhone) and the fork's host macOS ICU. All have std==dst (none currently observe
+// DST), so a single name per zone. Built from the iOS-26.5 simulator (== real iPhone) vs the fork's
+// macOS ICU across all 448 IANA zones (alltz + tzresolve probes, fp-divergence-sweep 2026-06-21).
+// Keyed on the resolved-options identifier: resolvedOptions().timeZone preserves the *input* id, so
+// "GMT" stays "GMT" — distinct from "UTC", which is NOT divergent on Safari 26.x. Mirrors the
+// JSDateMath.cpp Date.prototype.toString() table; kept separate because the Intl path needs no
+// version gating here (only the LONG style and only these canonical ids are touched).
+static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
+{
+    struct Entry { ASCIILiteral zone; const char* name; };
+    static constexpr Entry entries[] = {
+        { "Africa/Bangui"_s,             "West Africa Time" },
+        { "Africa/Brazzaville"_s,        "West Africa Time" },
+        { "Africa/Douala"_s,             "West Africa Time" },
+        { "Africa/Kinshasa"_s,           "West Africa Time" },
+        { "Africa/Lagos"_s,              "West Africa Time" },
+        { "Africa/Libreville"_s,         "West Africa Time" },
+        { "Africa/Luanda"_s,             "West Africa Time" },
+        { "Africa/Malabo"_s,             "West Africa Time" },
+        { "Africa/Ndjamena"_s,           "West Africa Time" },
+        { "Africa/Niamey"_s,             "West Africa Time" },
+        { "Africa/Porto-Novo"_s,         "West Africa Time" },
+        { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time" }, // U+2019 (macOS uses a hyphen)
+        { "Asia/Anadyr"_s,               "Kamchatka Standard Time" },
+        { "Asia/Brunei"_s,               "Brunei Time" },
+        { "Asia/Dili"_s,                 "Timor-Leste Time" },
+        { "Asia/Hovd"_s,                 "Khovd Standard Time" },
+        { "Asia/Kamchatka"_s,            "Kamchatka Standard Time" },
+        { "Asia/Taipei"_s,               "Taiwan Standard Time" },
+        { "Pacific/Apia"_s,              "Samoa Standard Time" },
+        { "Pacific/Honolulu"_s,          "Hawaii-Aleutian Standard Time" }, // macOS: "GMT-10:00"
+        { "Pacific/Midway"_s,            "American Samoa Standard Time" },
+        { "Pacific/Pago_Pago"_s,         "American Samoa Standard Time" },
+        { "Pacific/Ponape"_s,            "Pohnpei Time" },
+        { "Europe/Istanbul"_s,           "T\xC3\xBCrkiye Standard Time" }, // macOS: bare "GMT+03:00"
+        { "GMT"_s,                       "Greenwich Mean Time" }, // macOS: "Coordinated Universal Time"
+        { "Etc/GMT"_s,                   "Greenwich Mean Time" },
+    };
+    for (auto& entry : entries) {
+        if (resolvedTimeZone == entry.zone)
+            return entry.name;
+    }
+    return nullptr;
+}
+
+// True for the UDateFormatField values that partTypeString() maps to "timeZoneName".
+static bool driftstackIsTimeZoneField(UDateFormatField field)
+{
+    switch (field) {
+    case UDAT_TIMEZONE_FIELD:
+    case UDAT_TIMEZONE_RFC_FIELD:
+    case UDAT_TIMEZONE_GENERIC_FIELD:
+    case UDAT_TIMEZONE_SPECIAL_FIELD:
+    case UDAT_TIMEZONE_LOCALIZED_GMT_OFFSET_FIELD:
+    case UDAT_TIMEZONE_ISO_FIELD:
+    case UDAT_TIMEZONE_ISO_LOCAL_FIELD:
+        return true;
+    default:
+        return false;
+    }
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) const
 {
     ASSERT(m_dateFormat);
@@ -1253,6 +1318,36 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
 
     if (!std::isfinite(value))
         return throwRangeError(globalObject, scope, "date value is not finite in DateTimeFormat format()"_s);
+
+#if PLATFORM(DRIFTSTACK)
+    // For the LONG zone style on one of the 26 iOS/macOS-divergent zones, locate the time-zone field
+    // via the field-position iterator and splice in the iPhone-correct display name. Zero overhead for
+    // every other format() call (common case): the udat_format path below is unchanged.
+    if (m_timeZoneName == TimeZoneName::Long) {
+        if (const char* iosName = driftstackIPhoneLongZoneName(m_timeZoneForResolvedOptions)) {
+            UErrorCode fstatus = U_ZERO_ERROR;
+            auto fields = std::unique_ptr<UFieldPositionIterator, UFieldPositionIteratorDeleter>(ufieldpositer_open(&fstatus));
+            if (U_SUCCESS(fstatus)) {
+                Vector<char16_t, 32> fresult;
+                fstatus = callBufferProducingFunction(udat_formatForFields, m_dateFormat.get(), value, fresult, fields.get());
+                if (U_SUCCESS(fstatus)) {
+                    replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(fresult); // length-preserving; field indices stay valid
+                    int32_t b = 0, e = 0;
+                    for (;;) {
+                        auto ft = ufieldpositer_next(fields.get(), &b, &e);
+                        if (ft < 0)
+                            break;
+                        if (driftstackIsTimeZoneField(UDateFormatField(ft))) {
+                            auto head = String(fresult.span().first(static_cast<size_t>(b)));
+                            auto tail = String(fresult.span().subspan(static_cast<size_t>(e)));
+                            return jsString(vm, makeString(head, String::fromUTF8(iosName), tail));
+                        }
+                    }
+                }
+            }
+        }
+    }
+#endif
 
     Vector<char16_t, 32> result;
     auto status = callBufferProducingFunction(udat_format, m_dateFormat.get(), value, result, nullptr);
@@ -1376,7 +1471,17 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
 
         if (fieldType >= 0) {
             auto type = jsNontrivialString(vm, partTypeString(UDateFormatField(fieldType)));
+#if PLATFORM(DRIFTSTACK)
+            // Override the LONG zone-name part for the 26 iOS/macOS-divergent zones (see format()).
+            const char* iosZoneName = nullptr;
+            if (m_timeZoneName == TimeZoneName::Long && driftstackIsTimeZoneField(UDateFormatField(fieldType)))
+                iosZoneName = driftstackIPhoneLongZoneName(m_timeZoneForResolvedOptions);
+            auto value = iosZoneName
+                ? jsString(vm, String::fromUTF8(iosZoneName))
+                : jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
+#else
             auto value = jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
+#endif
             JSObject* part = sourceType
                 ? createIntlPartObjectWithSource(globalObject, type, value, sourceType)
                 : createIntlPartObject(globalObject, type, value);

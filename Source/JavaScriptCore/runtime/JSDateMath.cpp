@@ -454,23 +454,72 @@ String DateCache::timeZoneDisplayName(bool isDST)
         // Display-name entries can contain non-ASCII (e.g. "Türkiye"); use
         // UTF-8 char* and convert via String::fromUTF8 at lookup time so
         // multi-byte sequences land as Unicode rather than Latin1-mojibake.
-        struct TZDisplayName { ASCIILiteral canonical; const char* standard; const char* dst; };
+        // maxSafariMajorExclusive: 0 = apply on all archetypes; N = apply ONLY when the archetype's
+        // Safari major < N (a version-specific row).
+        struct TZDisplayName { ASCIILiteral canonical; const char* standard; const char* dst; uint8_t maxSafariMajorExclusive; };
+        // COMPLETE iOS-vs-macOS ICU timezone-display-name divergence table (prod-ready: ALL zones, not
+        // a hardcoded few). Built from the iOS-26.5 simulator (== real iPhone) vs the fork's macOS ICU
+        // across all 448 IANA zones (alltz probe, fp-divergence-sweep 2026-06-21): exactly 26 zones'
+        // en-US LONG display name differs. macOS ICU returns a different metazone name (or a bare
+        // GMT±HH:MM offset) for these; iOS returns the names below. Zones NOT listed already match
+        // macOS ICU → handled by the ucal fallback below, so ANY process timezone is iPhone-correct.
         static constexpr TZDisplayName iPhoneTZDisplayNames[] = {
-            { "Europe/Istanbul"_s,           "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
-            { "Asia/Istanbul"_s,             "T\xC3\xBCrkiye Standard Time",      "T\xC3\xBCrkiye Standard Time" },
-            // Wave 29-499 §91.L (2026-05-20): iOS Safari renders UTC TZ as
-            // "Greenwich Mean Time" via ICU; macOS bundled ICU returns
-            // "Coordinated Universal Time" instead. FA REF date.behavior.toString
-            // confirms "GMT+0000 (Greenwich Mean Time)" for TZ=UTC.
-            { "UTC"_s,                       "Greenwich Mean Time",               "Greenwich Mean Time" },
-            { "Etc/UTC"_s,                   "Greenwich Mean Time",               "Greenwich Mean Time" },
-            { "Etc/GMT"_s,                   "Greenwich Mean Time",               "Greenwich Mean Time" },
-            { "GMT"_s,                       "Greenwich Mean Time",               "Greenwich Mean Time" },
-            // Additional TZ entries land here as iPhone reference captures cover them.
+            // West Africa (macOS "West Africa Standard Time" → iOS "West Africa Time")
+            { "Africa/Bangui"_s,        "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Brazzaville"_s,   "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Douala"_s,        "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Kinshasa"_s,      "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Lagos"_s,         "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Libreville"_s,    "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Luanda"_s,        "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Malabo"_s,        "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Ndjamena"_s,      "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Niamey"_s,        "West Africa Time", "West Africa Time", 0 },
+            { "Africa/Porto-Novo"_s,    "West Africa Time", "West Africa Time", 0 },
+            { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time", "Dumont d\xE2\x80\x99Urville Time", 0 }, // U+2019 apostrophe (macOS uses a hyphen)
+            { "Asia/Anadyr"_s,          "Kamchatka Standard Time", "Kamchatka Standard Time", 0 },
+            { "Asia/Brunei"_s,          "Brunei Time", "Brunei Time", 0 },
+            { "Asia/Dili"_s,            "Timor-Leste Time", "Timor-Leste Time", 0 },
+            { "Asia/Hovd"_s,            "Khovd Standard Time", "Khovd Standard Time", 0 },
+            { "Asia/Kamchatka"_s,       "Kamchatka Standard Time", "Kamchatka Standard Time", 0 },
+            { "Asia/Taipei"_s,          "Taiwan Standard Time", "Taiwan Standard Time", 0 },
+            { "Pacific/Apia"_s,         "Samoa Standard Time", "Samoa Standard Time", 0 },
+            { "Pacific/Honolulu"_s,     "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time", 0 }, // macOS: "GMT-10:00"
+            { "Pacific/Midway"_s,       "American Samoa Standard Time", "American Samoa Standard Time", 0 },
+            { "Pacific/Pago_Pago"_s,    "American Samoa Standard Time", "American Samoa Standard Time", 0 },
+            { "Pacific/Ponape"_s,       "Pohnpei Time", "Pohnpei Time", 0 },
+            // Türkiye (macOS: bare "GMT+03:00" → iOS: named). Asia/Istanbul = alias of Europe/Istanbul.
+            { "Europe/Istanbul"_s,      "T\xC3\xBCrkiye Standard Time", "T\xC3\xBCrkiye Standard Time", 0 },
+            { "Asia/Istanbul"_s,        "T\xC3\xBCrkiye Standard Time", "T\xC3\xBCrkiye Standard Time", 0 },
+            // GMT / Etc/GMT: iOS = "Greenwich Mean Time" on ALL Safari versions (incl 26.x — verified
+            // iOS-26.5 sim); macOS ICU = "Coordinated Universal Time". NOT version-gated.
+            { "GMT"_s,                  "Greenwich Mean Time", "Greenwich Mean Time", 0 },
+            { "Etc/GMT"_s,              "Greenwich Mean Time", "Greenwich Mean Time", 0 },
+            // UTC / Etc/UTC: VERSION-DEPENDENT — Family-A (Safari 18.x) = "Greenwich Mean Time" (FA ref);
+            // Safari 26.x = "Coordinated Universal Time" (== macOS ICU, verified iOS-26.5 sim + aio
+            // capture). So gate these to Safari<26; on 26.x they skip the table → ICU → correct.
+            { "UTC"_s,                  "Greenwich Mean Time", "Greenwich Mean Time", 26 },
+            { "Etc/UTC"_s,              "Greenwich Mean Time", "Greenwich Mean Time", 26 },
         };
+        // Archetype Safari major (from DRIFTSTACK_ARCHETYPE "safariNN" token); 0 if unset → all rows.
+        int dsSafariMajor = 0;
+        if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE")) {
+            std::string_view sv { dsArch };
+            auto pos = sv.find("safari");
+            if (pos != std::string_view::npos) {
+                sv.remove_prefix(pos + 6);
+                for (char c : sv) {
+                    if (c < '0' || c > '9')
+                        break;
+                    dsSafariMajor = dsSafariMajor * 10 + (c - '0');
+                }
+            }
+        }
         String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
         StringView canonicalView(canonicalString);
         for (const auto& entry : iPhoneTZDisplayNames) {
+            if (entry.maxSafariMajorExclusive && dsSafariMajor >= entry.maxSafariMajorExclusive)
+                continue;
             if (canonicalView == StringView(entry.canonical)) {
                 m_timeZoneStandardDisplayNameCache = String::fromUTF8(entry.standard);
                 m_timeZoneDSTDisplayNameCache = String::fromUTF8(entry.dst);
