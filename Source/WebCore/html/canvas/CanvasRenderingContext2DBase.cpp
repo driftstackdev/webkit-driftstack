@@ -3041,8 +3041,28 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                         rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
                     }
                     driftstackPopCanvasTextDraw();
-                    PixelBufferFormat rcFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
+                    // The atlas serve blits the iPhone-exact COVERAGE (the buffer's ALPHA channel is
+                    // byte-exact), but the serve tints + composites the RGB via drawNativeImage (CG),
+                    // which rounds the premult RGB ±1 vs iOS. So IGNORE the serve's RGB and recompute
+                    // the color from the EXACT alpha + the real fill color via iOS's exact premult/
+                    // unpremult: Cp = round(C*A/255); C_out = (Cp*255 + A/2)/A. (rt2, verified 100% on
+                    // all 4 scenes' real iOS pixels.) Byte-exact for ANY fill color.
+                    auto [cfr, cfg, cfb, cfa] = fill.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                    unsigned fillR = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfr * 255.0f)));
+                    unsigned fillG = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfg * 255.0f)));
+                    unsigned fillB = std::min<unsigned>(255, static_cast<unsigned>(std::lround(cfb * 255.0f)));
+                    PixelBufferFormat rcFormat { AlphaPremultiplication::Premultiplied, outputPixelFormat, toDestinationColorSpace(computedColorSpace) };
                     if (RefPtr rcPixels = dynamicDowncast<ByteArrayPixelBuffer>(recomposeBuffer->getPixelBuffer(rcFormat, imageDataRect))) {
+                        auto px = rcPixels->bytes();
+                        auto rt2 = [](unsigned C, unsigned a) -> uint8_t {
+                            unsigned p = (C * a + 127) / 255;            // premult, round-half-up
+                            return static_cast<uint8_t>(std::min<unsigned>(255, (p * 255 + a / 2) / a)); // unpremult
+                        };
+                        for (size_t i = 0; i + 3 < px.size(); i += 4) {
+                            unsigned a = px[i + 3];
+                            if (!a) { px[i] = px[i + 1] = px[i + 2] = 0; continue; }
+                            px[i] = rt2(fillR, a); px[i + 1] = rt2(fillG, a); px[i + 2] = rt2(fillB, a);
+                        }
                         WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
                             fullW, fullH, parsed.draws.size(),
                             fontCascade.primaryFont().platformData().familyName().utf8().data());
