@@ -138,6 +138,11 @@ private:
     bool sendClientHello();
     bool receiveServerHello();
     bool readEncryptedHandshakeMessages();
+    // W2730: validate a TLS 1.3 Certificate message BODY (1B ctx_len + ctx + 3B list_len + cert_list) —
+    // parse chain, store m_leafCert, SecTrust-evaluate vs m_sniHostname, capture m_transcriptHashThroughCert.
+    // Shared by the plain Certificate (0x0b) arm AND the RFC 8879 CompressedCertificate (0x19) arm (which
+    // calls it on the decompressed body). Returns false (with m_errorMessage set) on any parse/trust failure.
+    bool validateCertificateBody(std::span<const uint8_t> body);
     bool sendClientFinished();
     int writeApplicationRecord(const uint8_t* data, size_t len);
     Vector<uint8_t> readApplicationRecord(int depth = 0);   // W2209: depth bounds the post-handshake (inner-0x16) recursion

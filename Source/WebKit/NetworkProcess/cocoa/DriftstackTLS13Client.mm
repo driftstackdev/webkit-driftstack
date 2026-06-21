@@ -18,6 +18,7 @@
 #import <wtf/RetainPtr.h>
 #import <wtf/text/MakeString.h>
 #import <wtf/HexNumber.h>
+#import <zlib.h>   // W2730: system libz — RFC 8879 CompressedCertificate (zlib) decode
 
 #if PLATFORM(DRIFTSTACK)
 
@@ -584,6 +585,73 @@ void DriftstackTLS13Client::shutdown()
         ::shutdown(m_fd, SHUT_RDWR);
 }
 
+// W2191 (#43) / W2730: validate a TLS 1.3 Certificate message BODY (RFC 8446 §4.4.2):
+//   1B certificate_request_context_len + ctx + 3B certificate_list_len + [3B cert_len + DER + 2B ext_len + ext]*
+// Parses the chain, stores the leaf (m_leafCert, first cert — for the 0x0f key-possession check), SecTrust-
+// evaluates against m_sniHostname (network revocation fetch DISABLED — see the OCSP rationale below), and
+// captures Transcript-Hash(CH..Certificate). Shared by the plain Certificate (0x0b) arm and the RFC 8879
+// CompressedCertificate (0x19) arm (which passes the DECOMPRESSED body). Returns false (with m_errorMessage
+// set) on any parse/trust failure. `body` is exactly the message body (the 4-byte handshake header already
+// stripped), so all bounds are vs body.size().
+bool DriftstackTLS13Client::validateCertificateBody(std::span<const uint8_t> body)
+{
+    if (body.empty()) { m_errorMessage = "cert msg too short"_s; return false; }
+    uint8_t ctxLen = body[0];
+    size_t cOff = 1 + static_cast<size_t>(ctxLen);
+    if (cOff + 3 > body.size()) { m_errorMessage = "cert msg ctx OOB"_s; return false; }
+    uint32_t listLen = (static_cast<uint32_t>(body[cOff]) << 16) | (static_cast<uint32_t>(body[cOff + 1]) << 8) | body[cOff + 2];
+    cOff += 3;
+    size_t listEnd = cOff + listLen;
+    if (listEnd > body.size()) { m_errorMessage = "cert list OOB"_s; return false; }
+    RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
+    while (cOff + 3 <= listEnd) {
+        uint32_t certLen = (static_cast<uint32_t>(body[cOff]) << 16) | (static_cast<uint32_t>(body[cOff + 1]) << 8) | body[cOff + 2];
+        cOff += 3;
+        if (cOff + certLen > listEnd) break;
+        RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, body.subspan(cOff, certLen).data(), certLen));
+        RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
+        if (cert) {
+            if (!m_leafCert) m_leafCert = cert;   // W2202 L3: the leaf (first cert) — for CertificateVerify key-possession
+            CFArrayAppendValue(certArray.get(), cert.get());
+        }
+        cOff += certLen;
+        if (cOff + 2 > listEnd) break;
+        uint16_t extLen = (static_cast<uint16_t>(body[cOff]) << 8) | body[cOff + 1];
+        cOff += 2 + static_cast<size_t>(extLen);
+    }
+    if (!CFArrayGetCount(certArray.get())) { m_errorMessage = "no parseable server certs"_s; return false; }
+    RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, m_sniHostname.createCFString().get()));
+    SecTrustRef trust = nullptr;
+    OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
+    RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
+    if (st != errSecSuccess || !trustRef) { m_errorMessage = "SecTrustCreateWithCertificates failed"_s; return false; }
+    // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
+    // revocation fetches. Without this, SecTrustEvaluateWithError lets `trustd` (a separate system
+    // daemon that does NOT honor our SOCKS5 proxy) fetch OCSP/CRL DIRECT off the Mac IP = a
+    // customer-egress leak (the CA + on-path observers see the fleet IP + the browsing pattern). It
+    // is ALSO an iPhone divergence: modern Apple platforms use OCSP stapling + the aggregated
+    // valid.apple.com revocation cache, NOT live per-cert OCSP from the device. Disabling network
+    // fetch keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression,
+    // matches iPhone, and the trustd OCSP/CRL traffic can never leave the host.
+    SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
+    CFErrorRef evalErr = nullptr;
+    bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
+    if (evalErr)
+        CFRelease(evalErr);
+    if (!trusted) {
+        m_errorMessage = makeString("server cert validation FAILED for "_s, m_sniHostname);
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] CERT VALIDATION FAILED for %s — rejecting (MITM defense)", m_sniHostname.utf8().data());
+        return false;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] server cert chain validated OK for %s", m_sniHostname.utf8().data());
+    // W2202 L3: capture Transcript-Hash(CH..Certificate) NOW — m_transcriptBytes ends exactly at the cert
+    // message just appended at the loop top (Certificate 0x0b, or the CompressedCertificate 0x19 — RFC 8879 §4
+    // puts the COMPRESSED message in the transcript). The 0x0f arm verifies the server's signature over THIS
+    // hash (RFC 8446 §4.4.3).
+    m_transcriptHashThroughCert = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+    return true;
+}
+
 bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
 {
     // Wave 29-499.178 — after handshake secrets derived, server sends:
@@ -739,67 +807,69 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
             // (1B ctx_len + ctx + 3B list_len + [3B cert_len + DER + 2B ext_len + ext]*)
             // and rejects the connection unless SecTrust evaluates the chain clean
             // for m_sniHostname.
-            if (hsType == 0x0b) {
-                static const bool s_validateCert = []() {
-                    const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
-                    return e && e[0] == '1';
-                }();
-                if (s_validateCert) {
-                    size_t cOff = off + 4;
-                    if (cOff >= plaintext.size()) { m_errorMessage = "cert msg too short"_s; return false; }
-                    uint8_t ctxLen = plaintext[cOff];
-                    cOff += 1 + static_cast<size_t>(ctxLen);
-                    if (cOff + 3 > plaintext.size()) { m_errorMessage = "cert msg ctx OOB"_s; return false; }
-                    uint32_t listLen = (static_cast<uint32_t>(plaintext[cOff]) << 16) | (static_cast<uint32_t>(plaintext[cOff + 1]) << 8) | plaintext[cOff + 2];
-                    cOff += 3;
-                    size_t listEnd = cOff + listLen;
-                    if (listEnd > plaintext.size()) { m_errorMessage = "cert list OOB"_s; return false; }
-                    RetainPtr<CFMutableArrayRef> certArray = adoptCF(CFArrayCreateMutable(nullptr, 0, &kCFTypeArrayCallBacks));
-                    while (cOff + 3 <= listEnd) {
-                        uint32_t certLen = (static_cast<uint32_t>(plaintext[cOff]) << 16) | (static_cast<uint32_t>(plaintext[cOff + 1]) << 8) | plaintext[cOff + 2];
-                        cOff += 3;
-                        if (cOff + certLen > listEnd) break;
-                        RetainPtr<CFDataRef> cfData = adoptCF(CFDataCreate(nullptr, plaintext.span().data() + cOff, certLen));
-                        RetainPtr<SecCertificateRef> cert = adoptCF(SecCertificateCreateWithData(nullptr, cfData.get()));
-                        if (cert) {
-                            if (!m_leafCert) m_leafCert = cert;   // W2202 L3: the leaf (first cert) — for CertificateVerify key-possession
-                            CFArrayAppendValue(certArray.get(), cert.get());
-                        }
-                        cOff += certLen;
-                        if (cOff + 2 > listEnd) break;
-                        uint16_t extLen = (static_cast<uint16_t>(plaintext[cOff]) << 8) | plaintext[cOff + 1];
-                        cOff += 2 + static_cast<size_t>(extLen);
-                    }
-                    if (!CFArrayGetCount(certArray.get())) { m_errorMessage = "no parseable server certs"_s; return false; }
-                    RetainPtr<SecPolicyRef> policy = adoptCF(SecPolicyCreateSSL(true, m_sniHostname.createCFString().get()));
-                    SecTrustRef trust = nullptr;
-                    OSStatus st = SecTrustCreateWithCertificates(certArray.get(), policy.get(), &trust);
-                    RetainPtr<SecTrustRef> trustRef = adoptCF(trust);
-                    if (st != errSecSuccess || !trustRef) { m_errorMessage = "SecTrustCreateWithCertificates failed"_s; return false; }
-                    // Driftstack (egress channel-4 + iPhone-fidelity, 2026-06-19): disable per-evaluation NETWORK
-                    // revocation fetches. Without this, SecTrustEvaluateWithError lets `trustd` (a separate system
-                    // daemon that does NOT honor our SOCKS5 proxy) fetch OCSP/CRL DIRECT off the Mac IP = a
-                    // customer-egress leak (the CA + on-path observers see the fleet IP + the browsing pattern). It
-                    // is ALSO an iPhone divergence: modern Apple platforms use OCSP stapling + the aggregated
-                    // valid.apple.com revocation cache, NOT live per-cert OCSP from the device. Disabling network
-                    // fetch keeps stapled/cached revocation (soft-fail, same as iOS) → no validation regression,
-                    // matches iPhone, and the trustd OCSP/CRL traffic can never leave the host.
-                    SecTrustSetNetworkFetchAllowed(trustRef.get(), false);
-                    CFErrorRef evalErr = nullptr;
-                    bool trusted = SecTrustEvaluateWithError(trustRef.get(), &evalErr);
-                    if (evalErr)
-                        CFRelease(evalErr);
-                    if (!trusted) {
-                        m_errorMessage = makeString("server cert validation FAILED for "_s, m_sniHostname);
-                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] CERT VALIDATION FAILED for %s — rejecting (MITM defense)", m_sniHostname.utf8().data());
-                        return false;
-                    }
-                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2191] server cert chain validated OK for %s", m_sniHostname.utf8().data());
-                    // W2202 L3: capture Transcript-Hash(CH..Certificate) NOW — m_transcriptBytes ends exactly at the
-                    // Certificate (0x0b appended at the loop top; CertificateVerify 0x0f arrives next iteration). The
-                    // 0x0f arm verifies the server's signature over THIS hash (RFC 8446 §4.4.3).
-                    m_transcriptHashThroughCert = transcriptHash(m_negotiatedCipher, m_transcriptBytes);
+            // W2191 (#43) / W2730: server-cert chain validation, factored into validateCertificateBody() so the
+            // plain Certificate (0x0b) AND the RFC 8879 CompressedCertificate (0x19) arms share ONE audited path
+            // (parse chain → SecTrust vs m_sniHostname → store leaf → capture Transcript-Hash(CH..Certificate)).
+            // Gated DRIFTSTACK_PATHB_TLS_CERT_VALIDATE=1 (default-off for safe rollout; flip on after egress
+            // verifies legit certs pass).
+            static const bool s_validateCert = []() {
+                const char* e = getenv("DRIFTSTACK_PATHB_TLS_CERT_VALIDATE");
+                return e && e[0] == '1';
+            }();
+            if (hsType == 0x0b && s_validateCert) {
+                if (!validateCertificateBody(plaintext.span().subspan(off + 4, hsLen)))
+                    return false;
+            }
+
+            // W2730 (#43, founder "boringssl tls handshake failed"): RFC 8879 Compressed Certificate. We advertise
+            // compress_certificate(27)=zlib in the ClientHello to match the iPhone fingerprint, so a server MAY
+            // reply with CompressedCertificate(25/0x19) INSTEAD of Certificate(0x0b). Before this, 0x19 fell through
+            // as "unknown" → m_leafCert stayed null → the 0x0f arm failed "no leaf certificate" → handshake failed →
+            // slow/failed loads on cert-compressing servers (Cloudflare/Google/most sites). RFC 8879 §4 body:
+            // algorithm(2) + uncompressed_length(u24) + CompressedCertificateMessage(u24 len + bytes). The TRANSCRIPT
+            // correctly uses the 0x19 message AS SENT (appended at the loop top); we only DECOMPRESS to recover the
+            // leaf for the 0x0f key-possession check. §5 bomb-defense: uncompressed_length is bounded and the inflate
+            // output MUST equal it exactly.
+            if (hsType == 0x19 && s_validateCert) {
+                auto cbody = plaintext.span().subspan(off + 4, hsLen);
+                if (cbody.size() < 8) { m_errorMessage = "CompressedCertificate too short"_s; return false; }
+                uint16_t algorithm = (static_cast<uint16_t>(cbody[0]) << 8) | cbody[1];
+                uint32_t uncompressedLen = (static_cast<uint32_t>(cbody[2]) << 16) | (static_cast<uint32_t>(cbody[3]) << 8) | cbody[4];
+                uint32_t compLen = (static_cast<uint32_t>(cbody[5]) << 16) | (static_cast<uint32_t>(cbody[6]) << 8) | cbody[7];
+                if (algorithm != 1) {   // zlib — the only algorithm we advertise (DriftstackCustomTLS makeExtCompressCertificate)
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] CompressedCertificate unsupported algorithm %u for %s — rejecting", algorithm, m_sniHostname.utf8().data());
+                    m_errorMessage = "CompressedCertificate unsupported compression algorithm"_s;
+                    return false;
                 }
+                static constexpr uint32_t kMaxCertChainBytes = 1u << 17;   // 128 KiB — generous for a real chain, bounds a decompression bomb (RFC 8879 §5)
+                if (!uncompressedLen || uncompressedLen > kMaxCertChainBytes) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] CompressedCertificate uncompressed_length %u out of range — rejecting", uncompressedLen);
+                    m_errorMessage = "CompressedCertificate uncompressed_length out of range"_s;
+                    return false;
+                }
+                if (static_cast<size_t>(8) + compLen != static_cast<size_t>(hsLen)) {
+                    m_errorMessage = "CompressedCertificate length mismatch"_s;
+                    return false;
+                }
+                Vector<uint8_t> decompressed(uncompressedLen);
+                z_stream zs;
+                memset(&zs, 0, sizeof(zs));
+                if (inflateInit2(&zs, 15 + 32) != Z_OK) { m_errorMessage = "CompressedCertificate inflateInit failed"_s; return false; }
+                zs.next_in = const_cast<Bytef*>(cbody.subspan(8, compLen).data());
+                zs.avail_in = static_cast<uInt>(compLen);
+                zs.next_out = decompressed.mutableSpan().data();
+                zs.avail_out = static_cast<uInt>(uncompressedLen);
+                int rv = inflate(&zs, Z_FINISH);
+                uLong produced = zs.total_out;
+                inflateEnd(&zs);
+                if (rv != Z_STREAM_END || produced != uncompressedLen) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] CompressedCertificate inflate failed (rv=%d produced=%lu expected=%u) for %s", rv, produced, uncompressedLen, m_sniHostname.utf8().data());
+                    m_errorMessage = "CompressedCertificate decompression failed"_s;
+                    return false;
+                }
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2730] CompressedCertificate (RFC 8879 zlib) %u->%u bytes for %s", compLen, uncompressedLen, m_sniHostname.utf8().data());
+                if (!validateCertificateBody(decompressed.span()))
+                    return false;
             }
 
             if (hsType == 0x0f) {  // CertificateVerify — W2202 L3: verify the server's signature over Transcript-Hash(CH..Certificate)
