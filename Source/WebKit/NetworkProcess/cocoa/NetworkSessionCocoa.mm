@@ -29,6 +29,7 @@
 #if PLATFORM(DRIFTSTACK)
 #import "DriftstackSocks5URLProtocol.h"
 #import "DriftstackHttp3.h" // W2651 (udp-4): driftstackMarkUdpRelayDown() — pre-seed the custom-h3 latch from the config-time UDP probe
+#import "DriftstackSocks5Framing.h" // W2700: §7 wrap/unwrap for the UDP_ASSOCIATE data-path verification (fake-UDP-proxy fix)
 #endif
 
 #import "AppStoreDaemonSPI.h"
@@ -1147,11 +1148,79 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
     if (send(sock, udpReq, sizeof(udpReq), 0) != sizeof(udpReq)) { close(sock); return false; }
     uint8_t udpResp[10];
     int n = recv(sock, udpResp, 10, MSG_WAITALL);
-    close(sock);
-    if (n < 4 || udpResp[0] != 0x05)
+    if (n < 10 || udpResp[0] != 0x05 || udpResp[1] != 0x00) {
+        // Control-channel ASSOCIATE refused (REP != 0x00, e.g. 0x07 command-not-supported)
+        // or a short reply → definitively no UDP.
+        close(sock);
         return false;
-    // REP=0x00 → success; anything else (0x07 = command not supported) → no UDP
-    return udpResp[1] == 0x00;
+    }
+
+    // W2700 — DATA-PATH verification (the founder's "non-UDP proxy keeps loading then stops"
+    // bug). The ASSOCIATE control reply (REP=0x00) is necessary but NOT sufficient:
+    // "fake-UDP" proxies (gost et al.) answer the control reply OK yet silently black-hole
+    // the relayed datagrams. Trusting the control reply alone false-positives →
+    // _allowsHTTP3 is force-enabled → CFNetwork's NATIVE QUIC sends Initial packets over a
+    // black-holed UDP relay and stalls on its 30s idle-timeout per connection (~1 min/page,
+    // then a TCP fallback) — exactly the reported symptom. So send a REAL datagram through
+    // the BND.ADDR:BND.PORT relay (a DNS A query to 1.1.1.1:53, §7-wrapped) and require a
+    // framed reply, reusing the technique proven in driftstackHostAdvertisesH3ViaDns(). The
+    // control TCP socket MUST stay open for the test (RFC 1928 §6: the UDP association lives
+    // only while the TCP control connection is open). The 2s budget is paid ONCE
+    // (call_once-cached at session config), never per page.
+    bool dataPathOk = false;
+    if (udpResp[3] == 0x01) { // ATYP=IPv4 BND.ADDR (the universal ASSOCIATE-reply form)
+        struct sockaddr_in relaySa = { };
+        relaySa.sin_family = AF_INET;
+        relaySa.sin_port = htons(static_cast<uint16_t>((udpResp[8] << 8) | udpResp[9]));
+        // BND.ADDR 0.0.0.0 → the relay is reachable at the proxy host IP just connected to
+        // (common for proxies behind NAT); otherwise build the in_addr from the network-order
+        // BND.ADDR bytes via shifts (no memcpy → satisfies -Wunsafe-buffer-usage-in-libc-call).
+        if (!udpResp[4] && !udpResp[5] && !udpResp[6] && !udpResp[7])
+            relaySa.sin_addr = addr.sin_addr;
+        else
+            relaySa.sin_addr.s_addr = static_cast<uint32_t>(udpResp[4]) | (static_cast<uint32_t>(udpResp[5]) << 8)
+                | (static_cast<uint32_t>(udpResp[6]) << 16) | (static_cast<uint32_t>(udpResp[7]) << 24);
+
+        int udpFd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udpFd >= 0) {
+            struct timeval utv = { };
+            utv.tv_sec = 2;
+            setsockopt(udpFd, SOL_SOCKET, SO_RCVTIMEO, &utv, sizeof(utv));
+
+            uint8_t txid[2];
+            arc4random_buf(txid, 2);
+            // Minimal DNS A query for "example.com" (RFC 1035 §4.1): [txid][flags RD][QD=1]
+            // [labels][root][QTYPE=A][QCLASS=IN].
+            uint8_t dns[] = {
+                txid[0], txid[1], 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+                0x00, 0x01, 0x00, 0x01
+            };
+            Socks5Framing::Endpoint resolverEp { String::fromUTF8("1.1.1.1"), 53 };
+            Vector<uint8_t> framed;
+            if (Socks5Framing::wrap(resolverEp, std::span<const uint8_t> { dns, sizeof(dns) }, framed)
+                && sendto(udpFd, framed.span().data(), framed.size(), 0,
+                    reinterpret_cast<const struct sockaddr*>(&relaySa), sizeof(relaySa)) > 0) {
+                uint8_t inbound[1500];
+                ssize_t r = recv(udpFd, inbound, sizeof(inbound), 0);
+                if (r > 0) {
+                    Socks5Framing::Endpoint src;
+                    Vector<uint8_t> payload;
+                    // A framed reply with our txid proves the relay actually carried the datagram.
+                    if (Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload)
+                        && payload.size() >= 2 && payload[0] == txid[0] && payload[1] == txid[1])
+                        dataPathOk = true;
+                }
+            }
+            close(udpFd);
+        }
+    }
+    close(sock);
+    if (!dataPathOk)
+        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] ASSOCIATE control reply OK but UDP DATA-PATH FAILED (no relayed datagram reply in 2s) — proxy is fake-UDP/TCP-only → HTTP/3 DISABLED (prevents the ~1min/page native-QUIC stall)");
+    else
+        WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] UDP DATA-PATH verified (relayed DNS round-trip OK) — proxy genuinely relays UDP → HTTP/3 stays enabled");
+    return dataPathOk;
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
