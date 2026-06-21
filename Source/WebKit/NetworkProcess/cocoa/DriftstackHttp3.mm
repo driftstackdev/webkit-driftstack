@@ -1355,8 +1355,16 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
 [[maybe_unused]] static int driftstackNgtcp2RecvRetry(ngtcp2_conn* /*conn*/,
     const void* /*hd*/, void* /*user_data*/)
 {
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.252] recv_retry fired — server requested Retry; production scaffold would re-key + retransmit. Returning 0 (drop).");
-    return 0;
+    // W2741 (audit wyfuablc3): the stub returned 0 (no-op) → ngtcp2 retransmits the Initial with STALE
+    // keys (no re-key with the Retry's new DCID) → the server can't decrypt → the handshake never
+    // completes → ~30s idle-timeout before the loader falls back to TCP/h2. ~5-10% of QUIC servers
+    // (Google, Cloudflare-under-load, AWS-ALB) issue a Retry. INTERIM: fail FAST → ngtcp2 aborts the
+    // connection immediately → instant h2 fallback (30s stall → 0). FULL FIX (task #18, for 100% iPhone —
+    // a real iPhone completes h3 on Retry): re-derive Initial keys from hd->scid + conn_install_initial_key,
+    // then ngtcp2 retransmits. h3 is currently disabled for non-UDP proxies, so this affects UDP-capable-
+    // proxy customers (and the founder only if they switch to a UDP proxy).
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2741] recv_retry — server requested QUIC Retry; re-key not yet implemented → failing fast for instant h2 fallback (was: ~30s idle-timeout stall)");
+    return -1; // NGTCP2_ERR_CALLBACK_FAILURE → abort h3 → fast TCP/h2 fallback (no 30s stall)
 }
 
 // Wave 29-499.253 — remaining mandatory client callbacks. ngtcp2 asserts
