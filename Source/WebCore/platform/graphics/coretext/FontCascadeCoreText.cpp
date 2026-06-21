@@ -696,12 +696,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                 penXN += advances[i].width;
                                 continue;
                             }
-                            // iOS canvas INTEGER-SNAPS text (BS-verified: drawing 'A' at x=4.0..4.9
-                            // gives one identical raster) → the sub-pixel position class is ALWAYS 0;
-                            // the blit at floor(penX) realizes the integer snap. (The thirds pos_class
-                            // is for the whole-string text-run atlas, not the per-glyph canvas serve.)
-                            (void)yBinN;
-                            uint8_t pcN = 0;
+                            // iOS canvas quantizes a MID-STRING glyph's sub-pixel pen-x to a
+                            // font/size grid (Menlo16=thirds, Arial20/Times18=halves, Helv40=1) — the
+                            // earlier "integer-snap, pos_class 0" was a single-glyph-START artifact;
+                            // mid-string fractional pens DO raster per-sub-pixel at small sizes
+                            // (verified: hash 1012→0 with twelfths). The atlas captures each glyph at
+                            // pen 8+k/12 keyed pos_class=k; pos_class=floor(frac(penX)*12) hits the
+                            // exact iOS raster for any frac (iOS's own quantization is baked into the
+                            // captured cell); blit at floor(penX) preserves it. yBin=0 for integer y.
+                            double xFracN = penXN - std::floor(penXN);
+                            uint8_t xBinN = static_cast<uint8_t>(std::floor(std::min(xFracN, 0.999999) * 12.0));
+                            uint8_t pcN = (yBinN << 4) | xBinN;
                             auto hitN = pglyphAtlasN.lookup(fontId, ptSizeQ4N,
                                 static_cast<uint32_t>(bN), static_cast<uint32_t>(pcN));
                             if (!hitN) { allHit = false; break; }
