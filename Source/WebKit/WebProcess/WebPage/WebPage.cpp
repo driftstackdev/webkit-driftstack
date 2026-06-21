@@ -4341,8 +4341,17 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     // wrapper is iOS-only). EventHandler hit-tests at the point and dispatches the click on the target,
     // so a button/link finally activates. SyntheticClickType::OneFingerTap + ForceAtClick + UserDriven
     // mirror a genuine tap's click (UserDriven, not Automation — no detection tell).
+    // W2743: fire the click at the gesture's START point, NOT the current `pos` (= the TouchEnd lift-off).
+    // `pos` drifts up to tapSlop (18px) from the touch-down within a single tap (finger settlement / trackpad
+    // jitter), so using it landed the click offset from where the user touched — and hit the wrong element near
+    // boundaries (worsened by raising tapSlop 10→18, W2740). Real iOS commitPotentialTap activates the element
+    // under the recognized START point, not the lift-off. m_driftstackTapStartPoint is window-space (W2448) and
+    // handleMousePress/Release do their own windowToContents — same as the old path; it is also coherent with the
+    // scroll-lock hit-test, which already keys off m_driftstackTapStartPoint (line 4298). Clean taps (start==end)
+    // are unaffected.
+    auto tapPoint = WebCore::flooredIntPoint(m_driftstackTapStartPoint);
     auto synthMouseEvent = [&](WebCore::PlatformEvent::Type type) {
-        return WebCore::PlatformMouseEvent { pos, pos, WebCore::MouseButton::Left, type, 1, { },
+        return WebCore::PlatformMouseEvent { tapPoint, tapPoint, WebCore::MouseButton::Left, type, 1, { },
             WTF::MonotonicTime::now(), WebCore::ForceAtClick, WebCore::SyntheticClickType::OneFingerTap,
             WebCore::MouseEventInputSource::UserDriven };
     };
