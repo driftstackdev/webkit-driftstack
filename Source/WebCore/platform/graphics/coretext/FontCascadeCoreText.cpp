@@ -291,6 +291,13 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
 
     const FontPlatformData& platformData = font.platformData();
 #if PLATFORM(DRIFTSTACK)
+    // #79: this is the native Mac CoreText raster — the fallback when the per-glyph atlas
+    // serves bailed. In a canvas-text-draw scope it means the run was NOT fully atlas-served,
+    // so the readback-recompose must NOT apply its rt2 (which assumes iPhone-canonical coverage).
+    if (driftstackInCanvasTextDraw())
+        driftstackMarkCanvasTextNativeFallback();
+#endif
+#if PLATFORM(DRIFTSTACK)
     // V-602 LAYER-4 DIAG (env-gated DRIFTSTACK_V602_DIAG=1): log the CTFont
     // family name + first 5 glyph IDs + notdef count to characterize the
     // empty-pixel rasterization gap for CJK / Arabic / Devanagari clusters.

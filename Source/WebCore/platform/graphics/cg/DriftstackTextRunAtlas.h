@@ -268,6 +268,16 @@ void driftstackPopCanvasTextDraw();
 // surface). The drawGlyphs hook gates glyph pixel substitution on this.
 bool driftstackInCanvasTextDraw();
 
+// #79 fully-served guard: the readback-recompose re-renders pure-simple-text + applies the
+// rt2 unpremult, which is byte-exact ONLY for glyphs the per-glyph atlas served. If ANY glyph
+// falls through to the native Mac CT raster (uncovered font/size/cp), rt2 on that native
+// coverage is WRONG. showGlyphsWithAdvances (the native draw) marks fallback when in a
+// canvas-text scope; the recompose resets before its draw + bails (returns the unmodified
+// readback) if any fallback occurred → safe-by-construction for uncovered text.
+void driftstackResetCanvasTextNativeFallback();
+void driftstackMarkCanvasTextNativeFallback();
+bool driftstackCanvasTextNativeFallbackOccurred();
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

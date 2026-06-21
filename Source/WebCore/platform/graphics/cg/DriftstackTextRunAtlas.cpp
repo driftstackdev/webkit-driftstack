@@ -649,6 +649,7 @@ namespace {
 // drawing (the fingerprint surface), so glyph pixel substitution applies.
 struct CanvasTextDepthSlot {
     unsigned depth { 0 };
+    bool nativeFallback { false };   // #79: set when a canvas-text glyph fell to native CT raster
 };
 ThreadSpecific<CanvasTextDepthSlot>& canvasTextDepthSlot()
 {
@@ -672,6 +673,21 @@ void driftstackPopCanvasTextDraw()
 bool driftstackInCanvasTextDraw()
 {
     return canvasTextDepthSlot()->depth > 0;
+}
+
+void driftstackResetCanvasTextNativeFallback()
+{
+    canvasTextDepthSlot()->nativeFallback = false;
+}
+
+void driftstackMarkCanvasTextNativeFallback()
+{
+    canvasTextDepthSlot()->nativeFallback = true;
+}
+
+bool driftstackCanvasTextNativeFallbackOccurred()
+{
+    return canvasTextDepthSlot()->nativeFallback;
 }
 
 } // namespace WebCore

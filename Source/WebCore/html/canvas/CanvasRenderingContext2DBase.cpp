@@ -122,6 +122,8 @@ bool getV510AtlasRGBAForOpSeq(const WTF::String& opSequenceSHA256Hex, int width,
 namespace WebCore {
 void driftstackPushCanvasTextDraw();
 void driftstackPopCanvasTextDraw();
+void driftstackResetCanvasTextNativeFallback();
+bool driftstackCanvasTextNativeFallbackOccurred();
 }
 #endif
 #include "TextUtil.h"
@@ -3034,6 +3036,7 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                     // falls through to native CTFontDrawGlyphs (the macOS-CT≠iOS-CT ±-edge path); WITH
                     // it, drawGlyphs blits the iOS-exact atlas coverage at FontCascade's iOS-exact
                     // advances → byte-exact (verified: atlas coverage + premult/unpremult == iOS).
+                    driftstackResetCanvasTextNativeFallback();
                     driftstackPushCanvasTextDraw();
                     for (auto& d : parsed.draws) {
                         rc.setFillColor(fill);
@@ -3041,6 +3044,16 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                         rc.drawText(fontCascade, run, FloatPoint(d.x, d.y));
                     }
                     driftstackPopCanvasTextDraw();
+                    // #79 SAFETY GUARD: rt2 is byte-exact ONLY when every glyph was served from the
+                    // per-glyph atlas (iPhone-canonical coverage). If ANY glyph fell to the native Mac
+                    // CT raster (uncovered font/size/cp — e.g. a font not in the atlas), its coverage is
+                    // Mac's, and rt2-recoloring it would CORRUPT the canvas vs both iPhone and the
+                    // un-recomposed buffer. Bail → fall through to the normal getImageData path (the
+                    // GB-layer-served buffer, which stays coherent with toDataURL). Safe-by-construction.
+                    if (driftstackCanvasTextNativeFallbackOccurred()) {
+                        WTFLogAlways("[Driftstack-#79-recompose] BAIL (native fallback — not fully atlas-served; %zu draws, font='%s')",
+                            parsed.draws.size(), fontCascade.primaryFont().platformData().familyName().utf8().data());
+                    } else {
                     // The atlas serve blits the iPhone-exact COVERAGE (the buffer's ALPHA channel is
                     // byte-exact), but the serve tints + composites the RGB via drawNativeImage (CG),
                     // which rounds the premult RGB ±1 vs iOS. So IGNORE the serve's RGB and recompute
@@ -3068,6 +3081,7 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                             fontCascade.primaryFont().platformData().familyName().utf8().data());
                         return { { ImageData::create(rcPixels.releaseNonNull(), outputImageDataPixelFormat) } };
                     }
+                    } // else (fully atlas-served)
                 }
             }
         }
