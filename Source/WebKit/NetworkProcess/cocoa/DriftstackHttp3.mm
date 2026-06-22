@@ -1357,18 +1357,76 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
 // continue. Stub returns 0 (no retry handling in scaffold; production
 // path adds retry-token retransmit logic).
 [[maybe_unused]] static int driftstackNgtcp2RecvRetry(ngtcp2_conn* /*conn*/,
-    const void* /*hd*/, void* /*user_data*/)
+    const ngtcp2_pkt_hd* hd, void* user_data)
 {
-    // W2741 (audit wyfuablc3): the stub returned 0 (no-op) → ngtcp2 retransmits the Initial with STALE
-    // keys (no re-key with the Retry's new DCID) → the server can't decrypt → the handshake never
-    // completes → ~30s idle-timeout before the loader falls back to TCP/h2. ~5-10% of QUIC servers
-    // (Google, Cloudflare-under-load, AWS-ALB) issue a Retry. INTERIM: fail FAST → ngtcp2 aborts the
-    // connection immediately → instant h2 fallback (30s stall → 0). FULL FIX (task #18, for 100% iPhone —
-    // a real iPhone completes h3 on Retry): re-derive Initial keys from hd->scid + conn_install_initial_key,
-    // then ngtcp2 retransmits. h3 is currently disabled for non-UDP proxies, so this affects UDP-capable-
-    // proxy customers (and the founder only if they switch to a UDP proxy).
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2741] recv_retry — server requested QUIC Retry; re-key not yet implemented → failing fast for instant h2 fallback (was: ~30s idle-timeout stall)");
-    return -1; // NGTCP2_ERR_CALLBACK_FAILURE → abort h3 → fast TCP/h2 fallback (no 30s stall)
+    // W2741→#18 (audit wyfuablc3): COMPLETE h3 on a QUIC Retry (a real iPhone does; ~5-10% of QUIC servers —
+    // Google / Cloudflare-under-load / AWS-ALB — issue one). ngtcp2 1.22 contract (ngtcp2.h:2702): regenerate
+    // the Initial key/IV/hp using hd->scid as the NEW DCID + install via conn_install_initial_key, then return 0;
+    // ngtcp2 then retransmits the SAME buffered Initial CRYPTO (our iPhone-exact ClientHello) with the Retry
+    // token + new DCID AUTOMATICALLY — token carriage + retransmit are ngtcp2's job, NOT ours (do NOT re-submit
+    // the CH or touch qc->ctTranscript). FINGERPRINT MOAT preserved: the CH bytes are unchanged (JA4_QUIC
+    // bit-identical) — only the long-header DCID + token differ, exactly as a real iPhone changes on Retry
+    // (RFC 9000 §17.2.5). Runs ONLY when a Retry packet arrives → the verified common (non-Retry) handshake is
+    // untouched (zero regression). Was W2741 (-1 fast-fail to h2, the interim stall fix); this is the full
+    // parity fix. h3 is gated off for non-UDP proxies, so this is fingerprint-parity for UDP-proxy customers
+    // (inert until a Retry actually arrives on a UDP-proxy h3 conn).
+    DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
+    auto& nf = ngtcp2Fns();
+    if (!qc || !qc->conn || !nf.ready || !nf.conn_install_initial_key || !hd) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: missing state — failing fast to h2");
+        return -1;
+    }
+    if (hd->scid.datalen < NGTCP2_MIN_INITIAL_DCIDLEN || hd->scid.datalen > NGTCP2_MAX_CIDLEN) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: bad scid.datalen=%zu — failing fast", hd->scid.datalen);
+        return -1;
+    }
+    // RFC 9001 §5.2 Initial keys from the NEW DCID (hd->scid). Same QUIC-v1 salt + AES-128-GCM-SHA256 as the
+    // connectQuic install (the .234 block, DriftstackHttp3.mm:2337) — only the DCID input differs. The salt is
+    // defined locally here because connectQuic's kQuicV1InitialSalt is function-local + declared AFTER this fn.
+    static const uint8_t kQuicV1InitialSalt[20] = {
+        0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
+        0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a
+    };
+    Vector<uint8_t> saltVec(20);
+    memcpy(saltVec.mutableSpan().data(), kQuicV1InitialSalt, 20);
+    Vector<uint8_t> dcidVec(hd->scid.datalen);
+    memcpy(dcidVec.mutableSpan().data(), hd->scid.data, hd->scid.datalen);
+
+    Vector<uint8_t> initialSecret = WebKit::driftstackHkdfExtractSha256(saltVec, dcidVec);
+    Vector<uint8_t> emptyCtx;
+    Vector<uint8_t> clientInitialSecret = WebKit::driftstackHkdfExpandLabelSha256(initialSecret, "client in", emptyCtx, 32);
+    Vector<uint8_t> serverInitialSecret = WebKit::driftstackHkdfExpandLabelSha256(initialSecret, "server in", emptyCtx, 32);
+    if (initialSecret.size() != 32 || clientInitialSecret.size() != 32 || serverInitialSecret.size() != 32) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: re-key HKDF FAILED — failing fast");
+        return -1;
+    }
+    Vector<uint8_t> txKey, txIV, txHp, rxKey, rxIV, rxHp;
+    if (!deriveQuicKeyMaterial(clientInitialSecret.span().data(), 32, /*cipher=*/nullptr, txKey, txIV, txHp)
+        || !deriveQuicKeyMaterial(serverInitialSecret.span().data(), 32, /*cipher=*/nullptr, rxKey, rxIV, rxHp)) {
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: re-key material FAILED — failing fast");
+        return -1;
+    }
+    // ngtcp2 takes ownership; the prior Initial ctxs leak via the no-op delete_crypto_* callbacks (acceptable,
+    // once per Retry — matches the connectQuic pattern). On install FAILURE the caller owns them → delete.
+    auto* tx_aead = new DriftstackQuicAeadCtx { txKey, false, false };
+    auto* rx_aead = new DriftstackQuicAeadCtx { rxKey, false, false };
+    auto* tx_hp_inner = new DriftstackQuicHpCtx { txHp, false, false };
+    auto* rx_hp_inner = new DriftstackQuicHpCtx { rxHp, false, false };
+    ngtcp2_crypto_aead_ctx tx_aead_ctx { tx_aead };
+    ngtcp2_crypto_aead_ctx rx_aead_ctx { rx_aead };
+    ngtcp2_crypto_cipher_ctx tx_hp_ctx { tx_hp_inner };
+    ngtcp2_crypto_cipher_ctx rx_hp_ctx { rx_hp_inner };
+    int kv = nf.conn_install_initial_key(qc->conn,
+        &rx_aead_ctx, rxIV.span().data(), &rx_hp_ctx,
+        &tx_aead_ctx, txIV.span().data(), &tx_hp_ctx,
+        12);  // ivlen
+    if (kv != 0) {
+        delete tx_aead; delete rx_aead; delete tx_hp_inner; delete rx_hp_inner;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: conn_install_initial_key FAILED rv=%d — failing fast", kv);
+        return -1;
+    }
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/#18] recv_retry: re-keyed Initial from Retry scid (datalen=%zu) — ngtcp2 will retransmit ClientHello+token", hd->scid.datalen);
+    return 0;   // proceed: ngtcp2 retransmits the buffered (iPhone-exact) Initial with the new DCID + token
 }
 
 // Wave 29-499.253 — remaining mandatory client callbacks. ngtcp2 asserts
