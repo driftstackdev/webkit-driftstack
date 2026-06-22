@@ -4047,8 +4047,30 @@ std::optional<uint64_t> Page::noiseInjectionHashSaltForDomain(const RegistrableD
     if (!m_noiseInjectionHashSalts.isValidKey(domain))
         return std::nullopt;
 
-    return m_noiseInjectionHashSalts.ensure(domain, [] {
+    return m_noiseInjectionHashSalts.ensure(domain, [&domain]() -> uint64_t {
+#if PLATFORM(DRIFTSTACK)
+        // W2760 (#108): match real Safari's per-first-party-domain AFP. Upstream uses a per-Page random salt
+        // (regenerated every page-load) → a tracker would see the canvas/webgl/hardwareConcurrency CHANGE on
+        // every reload of the SAME site = generic flicker, which CoverYourTracks reports as plain "random", NOT
+        // "randomized by first party domain". Real iPhone 17/Safari 26 (measured, bs-cyt-5metric-probe.js) keeps
+        // these STABLE within a first-party domain but DIFFERENT across domains (canvas 55185647 vs 73429a19,
+        // hwConc 28 vs 56), which is what earns the verdict. So derive a DETERMINISTIC salt = f(session seed,
+        // registrable domain): stable across page-loads/reads within a session for a given domain, different per
+        // domain, and different per session/device (so our sessions don't cross-correlate). The session seed is a
+        // per-process random generated once (one WebProcess == one Driftstack session). INERT unless an
+        // AdvancedPrivacyProtection actually injects noise (tracker context); the default-off path is unchanged
+        // (glyphHash/cumrig preserved). (A per-session harness-supplied seed could later replace this for
+        // cross-process session stability; per-process is correct for same-page + per-domain within a session.)
+        static const uint64_t sessionSeed = cryptographicallyRandomNumber<uint64_t>();
+        // FNV-1a 64 over the session seed bytes followed by the registrable-domain UTF-8.
+        uint64_t h = 0xcbf29ce484222325ULL;
+        for (unsigned i = 0; i < 8; ++i) { h ^= static_cast<uint8_t>((sessionSeed >> (i * 8)) & 0xff); h *= 0x100000001b3ULL; }
+        auto utf8 = domain.string().utf8();
+        for (auto byte : utf8.span()) { h ^= static_cast<uint8_t>(byte); h *= 0x100000001b3ULL; }
+        return h ? h : 1;
+#else
         return cryptographicallyRandomNumber<uint64_t>();
+#endif
     }).iterator->value;
 }
 
