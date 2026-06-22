@@ -4250,13 +4250,24 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     // GUI-side gesture classification (A2 — send a clean tap [down+up, no moves] vs a scroll); this is
     // the engine backstop so residual jitter can never spuriously scroll.
     constexpr double tapSlop = 18; // px (was 10)
+    // W2780 (audit wf4v2iohk finding #5): re-anchor window. A genuine continuous touch-drag samples at
+    // ~16ms (trackpad/converter cadence) — and even a slow human drag that PAUSES mid-gesture resumes with
+    // the finger essentially where it stopped, so re-anchoring on resume scrolls the small genuine
+    // post-pause delta (no fling, no suppressed scroll). An inter-gesture orphan TouchMove (after a DROPPED
+    // touchEnd) only arrives once the human starts a NEW gesture, which is far more than this window later.
+    // 250ms cleanly separates the two: well above the ~16ms intra-drag cadence (with huge margin for jitter,
+    // GC pauses, or a momentarily-stalled finger), and well below any plausible inter-gesture interval. The
+    // re-anchor is a no-op for normal scrolling (gap is always <250ms) and only neutralizes a stale fling.
+    constexpr WTF::Seconds reanchorWindow = 250_ms;
     auto pos = touchEvent.position();
+    auto now = WTF::MonotonicTime::now();
     switch (touchEvent.type()) {
     case WebEventType::TouchStart:
         m_driftstackPotentialTap = true;
         m_driftstackTouchActive = true;   // W2770: a finger is now down — TouchMoves may scroll.
         m_driftstackTapStartPoint = pos;
         m_driftstackLastTouchPoint = pos;
+        m_driftstackLastTouchTime = now;  // W2780: anchor the drag clock at press.
         // W2761 (A2 W2754/W2760 Step A): start each drag with a clean sub-pixel remainder so a prior
         // drag's leftover fraction can't seed a phantom first-move scroll.
         m_driftstackScrollRemainderX = 0;
@@ -4269,6 +4280,23 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // backward. Proven by operations/scripts/scroll-test (a down-less move scrolled 650 -> 0).
         if (!m_driftstackTouchActive)
             return;
+        // W2780 (audit finding #5): if a touchEnd was DROPPED, m_driftstackTouchActive is stuck true and this
+        // could be the FIRST move of a NEW gesture — scrolling by (stale last-point − pos) would fling the
+        // page by the inter-gesture jump. If the gap since the last touch exceeds the re-anchor window, treat
+        // this move as a fresh anchor: adopt pos as the new reference + reset the sub-pixel remainders (a
+        // stale fraction must not seed a phantom scroll), and skip scrolling THIS move. The very next move
+        // then scrolls by its own small (pos_next − pos) delta. A legit >250ms mid-drag pause-then-continue
+        // hits this path too, but the paused finger barely moved, so the skipped delta is ~0 and scrolling
+        // resumes seamlessly. (The clean-tap / W2740 slop math below keys off m_driftstackTapStartPoint, which
+        // is unchanged, so re-anchoring never converts a held drag back into a tap.)
+        if (now - m_driftstackLastTouchTime > reanchorWindow) {
+            m_driftstackLastTouchPoint = pos;
+            m_driftstackLastTouchTime = now;
+            m_driftstackScrollRemainderX = 0;
+            m_driftstackScrollRemainderY = 0;
+            return;
+        }
+        m_driftstackLastTouchTime = now;
         auto dx = pos.x() - m_driftstackTapStartPoint.x();
         auto dy = pos.y() - m_driftstackTapStartPoint.y();
         if (m_driftstackPotentialTap && (dx * dx + dy * dy) > tapSlop * tapSlop)

@@ -1608,6 +1608,16 @@ public:
     // accumulates instead of rounding each move to 0 then lurching. Reset per drag in TouchStart.
     double m_driftstackScrollRemainderX { 0 };
     double m_driftstackScrollRemainderY { 0 };
+    // W2780 (audit wf4v2iohk finding #5): the wall-clock of the last TouchStart/TouchMove that updated
+    // m_driftstackLastTouchPoint. If a touchEnd is DROPPED (harness/converter glitch, finding #6/#8),
+    // m_driftstackTouchActive stays true and the FIRST TouchMove of the NEXT real gesture passes the W2770
+    // gate and scrolls by (stale last-point − new pos) — an orphaned-drag fling / back-up that W2770 was
+    // meant to block. A genuine continuous drag samples at ~16ms; an inter-gesture orphan arrives only after
+    // a fresh human gesture (>>250ms later). So a TouchMove whose gap from the last touch exceeds the
+    // re-anchor window is treated as a re-anchor (last-point := pos, no scroll this move), not a fling. A
+    // legitimate >250ms mid-drag PAUSE-then-continue is also safe: a paused finger barely moves, so the
+    // re-anchored delta it "skips" is ~0, and the resumed move scrolls the small genuine post-pause delta.
+    WTF::MonotonicTime m_driftstackLastTouchTime;
 #endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);
