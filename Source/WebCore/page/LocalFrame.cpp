@@ -1214,17 +1214,20 @@ FloatSize LocalFrame::screenSize() const
         // screen dims so a tracker on the fork sees the SAME quantized size a real iPhone returns.
         // First-party (non-tracker) never reaches here (shouldApply* is false) → the canonical pins
         // in Screen.cpp stand (BS-verified: real iPhone 17 first-party screen.width == 402).
+        // W2756 (#108): real iPhone 26 under AFP returns its NATIVE screen, NOT the old
+        // {320,375,390,414} quantization. EMPIRICAL: the real iPhone 17 / Safari 26 regular-browsing aio
+        // (AFP-ON — canvas randomized per CoverYourTracks) reports screen 402x874, NOT a quantized
+        // 414x896. iOS 26's screenSizeForFingerprintingProtections returns the device's own size (modern
+        // iPhone resolutions are all "common" sizes). The stale fixedSizes table mapped 402->414, which
+        // was harmless while shouldApplyScreenFingerprintingProtections only fired for TRACKER scripts, but
+        // W2755 (FingerprintingProtections for first-party AFP) makes it fire for first-party too — and
+        // 414 would be a NEW screen tell vs the real 402. FIX: return the ARCHETYPE's own screen dims
+        // (each supported archetype IS a real iPhone size = its own quantization fixed-point). Verified:
+        // envwide ON screen.width 414->402 (== real iPhone 26). First-party canvas still randomizes (W2755).
         float w = DriftstackArchetypeConfig::singleton().screenWidth();
-        if (w <= 0)
-            w = 402; // iPhone 17 fallback
-        static constexpr std::array fixedSizes {
-            FloatSize { 320, 568 }, FloatSize { 375, 667 }, FloatSize { 390, 844 }, FloatSize { 414, 896 },
-        };
-        for (auto fixedSize : fixedSizes) {
-            if (w <= fixedSize.width())
-                return fixedSize;
-        }
-        return fixedSizes[fixedSizes.size() - 1];
+        float h = DriftstackArchetypeConfig::singleton().screenHeight();
+        if (w <= 0 || h <= 0) { w = 402; h = 874; } // iPhone 17 fallback
+        return FloatSize { w, h };
 #else
         return page->chrome().client().screenSizeForFingerprintingProtections(*this, defaultSize);
 #endif

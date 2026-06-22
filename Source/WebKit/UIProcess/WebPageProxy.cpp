@@ -9220,9 +9220,15 @@ void WebPageProxy::adjustAdvancedPrivacyProtectionsIfNeeded(API::WebsitePolicies
     // propagating to every UIProcess data store. Safari-18.x archetypes don't set the env -> no
     // FingerprintingProtections -> not randomized (matches real iPhone 16 Pro/18.6 = unique). Default-off.
     if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
+        // W2755 v2: FingerprintingProtections ONLY (the real-Safari-26 FIRST-PARTY AFP set). FingerprintingProtections
+        // -> NoiseInjectionPolicy::Minimal -> first-party canvas noised per-domain (CYT "randomized"), screen
+        // quantized (W2756 -> archetype 402). Do NOT add ScriptTrackingPrivacy here: that maps to
+        // NoiseInjectionPolicy::Enhanced, which AnalyserNode noises for ALL audio reads WITHOUT a taint check
+        // (AnalyserNode.cpp:231) -> first-party audio would vary PER-READ, but real iPhone 26 first-party audio is
+        // per-read STABLE (BS randomization-detect: audio identical across 5 reads). ScriptTrackingPrivacy is the
+        // 3rd-party-tracker-script path (left to the upstream trackingPreventionEnabled block for actual trackers).
         policies.setAdvancedPrivacyProtections(policies.advancedPrivacyProtections()
-            | AdvancedPrivacyProtections::FingerprintingProtections
-            | AdvancedPrivacyProtections::ScriptTrackingPrivacy);
+            | AdvancedPrivacyProtections::FingerprintingProtections);
         return;
     }
 #endif
