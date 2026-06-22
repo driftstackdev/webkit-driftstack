@@ -9206,32 +9206,16 @@ void WebPageProxy::decidePolicyForNavigationAction(Ref<WebProcessProxy>&& proces
 
 void WebPageProxy::adjustAdvancedPrivacyProtectionsIfNeeded(API::WebsitePolicies& policies)
 {
-#if PLATFORM(DRIFTSTACK)
-    // W2755 (#108): real iOS Safari 26 STANDARD browsing applies Advanced Fingerprinting Protection —
-    // per-first-party-domain canvas/audio NOISE + screen quantization (CoverYourTracks: "randomized by
-    // first-party domain"). The canvas noise is gated on AdvancedPrivacyProtections::FingerprintingProtections
-    // -> Document::noiseInjectionPolicies() adds NoiseInjectionPolicy::Minimal (Document.cpp:11743) ->
-    // CanvasBase noises the FIRST-PARTY canvas UNCONDITIONALLY via the per-RegistrableDomain salt
-    // (CanvasBase.cpp:62, Page::noiseInjectionHashSaltForDomain). The earlier enabler added ONLY
-    // ScriptTrackingPrivacy (-> Enhanced), which noises ONLY tainted tracker scripts -> first-party CYT was
-    // NEVER randomized (fleet test 2026-06-22: enabler on == off, byte-identical canvas FP). FIX: add
-    // FingerprintingProtections too. Env-gated by DRIFTSTACK_TRACKER_PRIVACY (launch-env-gated to Safari>=26
-    // behind FLEET_VERIFIED) so it does NOT depend on the trackingPreventionEnabled data-store chain
-    // propagating to every UIProcess data store. Safari-18.x archetypes don't set the env -> no
-    // FingerprintingProtections -> not randomized (matches real iPhone 16 Pro/18.6 = unique). Default-off.
-    if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
-        // W2755 v2: FingerprintingProtections ONLY (the real-Safari-26 FIRST-PARTY AFP set). FingerprintingProtections
-        // -> NoiseInjectionPolicy::Minimal -> first-party canvas noised per-domain (CYT "randomized"), screen
-        // quantized (W2756 -> archetype 402). Do NOT add ScriptTrackingPrivacy here: that maps to
-        // NoiseInjectionPolicy::Enhanced, which AnalyserNode noises for ALL audio reads WITHOUT a taint check
-        // (AnalyserNode.cpp:231) -> first-party audio would vary PER-READ, but real iPhone 26 first-party audio is
-        // per-read STABLE (BS randomization-detect: audio identical across 5 reads). ScriptTrackingPrivacy is the
-        // 3rd-party-tracker-script path (left to the upstream trackingPreventionEnabled block for actual trackers).
-        policies.setAdvancedPrivacyProtections(policies.advancedPrivacyProtections()
-            | AdvancedPrivacyProtections::FingerprintingProtections);
-        return;
-    }
-#endif
+    // W2755 REVERTED (#108, 2026-06-22): an earlier attempt added AdvancedPrivacyProtections::FingerprintingProtections
+    // here to randomize the first-party canvas (thinking CoverYourTracks "randomized by first-party domain" meant
+    // the first-party canvas randomizes). REAL-DEVICE EXPERIMENT (bs-canvas-scope-probe.js) DISPROVED that: real
+    // iPhone 26 first-party canvas is FULLY DETERMINISTIC — an identical drawing hashes to 51703416 on example.com,
+    // wikipedia, browserleaks AND amiunique, stable across reloads. So real iPhone does NOT randomize the first-party
+    // canvas; FingerprintingProtections would randomize it (a regression — a tracker would see our canvas change
+    // across loads where a real iPhone's is constant). The fork's CYT gap is that its ARBITRARY-content canvas isn't
+    // byte-identical to a real iPhone (fork 8402d962 vs real 51703416 for the same drawing) = the #79 arbitrary-canvas
+    // work, NOT randomization. The genuine 3rd-party/cross-site tracker randomization CYT measures is the upstream
+    // ScriptTrackingPrivacy path below (gated on the tracker classification) — left intact, NOT first-party noise.
     if (!protect(websiteDataStore())->trackingPreventionEnabled())
         return;
 
