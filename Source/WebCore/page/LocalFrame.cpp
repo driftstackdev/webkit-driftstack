@@ -1214,20 +1214,30 @@ FloatSize LocalFrame::screenSize() const
         // screen dims so a tracker on the fork sees the SAME quantized size a real iPhone returns.
         // First-party (non-tracker) never reaches here (shouldApply* is false) → the canonical pins
         // in Screen.cpp stand (BS-verified: real iPhone 17 first-party screen.width == 402).
-        // W2756 (#108): real iPhone 26 under AFP returns its NATIVE screen, NOT the old
-        // {320,375,390,414} quantization. EMPIRICAL: the real iPhone 17 / Safari 26 regular-browsing aio
-        // (AFP-ON — canvas randomized per CoverYourTracks) reports screen 402x874, NOT a quantized
-        // 414x896. iOS 26's screenSizeForFingerprintingProtections returns the device's own size (modern
-        // iPhone resolutions are all "common" sizes). The stale fixedSizes table mapped 402->414, which
-        // was harmless while shouldApplyScreenFingerprintingProtections only fired for TRACKER scripts, but
-        // W2755 (FingerprintingProtections for first-party AFP) makes it fire for first-party too — and
-        // 414 would be a NEW screen tell vs the real 402. FIX: return the ARCHETYPE's own screen dims
-        // (each supported archetype IS a real iPhone size = its own quantization fixed-point). Verified:
-        // envwide ON screen.width 414->402 (== real iPhone 26). First-party canvas still randomizes (W2755).
-        float w = DriftstackArchetypeConfig::singleton().screenWidth();
-        float h = DriftstackArchetypeConfig::singleton().screenHeight();
-        if (w <= 0 || h <= 0) { w = 402; h = 874; } // iPhone 17 fallback
-        return FloatSize { w, h };
+        // W2762 (#108, CORRECTS W2756): this branch is reached ONLY in a TRACKER context (W2755 v3 added
+        // ScriptTrackingPrivacy only, NOT FingerprintingProtections, so shouldApplyScreenFingerprintingProtections
+        // fires for tracker-classified scripts only — first-party never reaches here and keeps 402x874 via the
+        // Screen.cpp pins). EMPIRICAL GROUND TRUTH (real iPhone 17 / Safari 26 on CoverYourTracks, tracker
+        // context, reference/realdevice-bs/cyt-verdict-iPhone_17-os26-*.json): "SCREEN SIZE AND COLOR DEPTH:
+        // 414x896x24" — a tracker sees the AFP-QUANTIZED size, NOT the native 402x874 (that 402 is the FIRST-PARTY
+        // value, from the aio capture — different context). W2756 conflated the two and returned 402 to trackers
+        // = a screen tell. FIX: replicate iOS's exact quantization (WebPageIOS.mm:4844 screenSizeForFingerprinting
+        // Protections — snap the width up to the first of {320x568,375x667,390x844,414x896}) applied to the
+        // ARCHETYPE's first-party width (NOT the Mac defaultSize). iPhone 17 (402) -> 414x896, matching real iPhone.
+        float archetypeWidth = DriftstackArchetypeConfig::singleton().screenWidth();
+        if (archetypeWidth <= 0)
+            archetypeWidth = 402; // iPhone 17 fallback
+        static constexpr std::array fixedSizes {
+            FloatSize { 320, 568 },
+            FloatSize { 375, 667 },
+            FloatSize { 390, 844 },
+            FloatSize { 414, 896 },
+        };
+        for (auto fixedSize : fixedSizes) {
+            if (archetypeWidth <= fixedSize.width())
+                return fixedSize;
+        }
+        return FloatSize { 414, 896 };
 #else
         return page->chrome().client().screenSizeForFingerprintingProtections(*this, defaultSize);
 #endif
