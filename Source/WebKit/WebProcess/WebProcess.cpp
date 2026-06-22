@@ -2547,8 +2547,14 @@ void WebProcess::updateScriptTrackingPrivacyFilter(ScriptTrackingPrivacyRules&& 
 {
 #if PLATFORM(DRIFTSTACK)
     if (rules.isEmpty()) {
-        if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1')
+        if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
             rules = driftstackFingerprinterScriptTrackingRules();
+            // #108 audit (W2761): one-line confirmation that the env reached the sandboxed WebContent
+            // process AND the fallback ruleset populated. If this line is ABSENT from a fleet-box
+            // WebContent log under DRIFTSTACK_TRACKER_PRIVACY=1, the dsEnv[] allowlist propagation is
+            // broken (the silent-half-on bug) — grep for it as the box go-live check, not TEST_FORCE.
+            WTFLogAlways("[Driftstack-#108-W2761] tracker-AFP filter injected (%zu hosts, OS list empty)", rules.thirdPartyHosts.size());
+        }
     }
 #endif
     if (rules.isEmpty())

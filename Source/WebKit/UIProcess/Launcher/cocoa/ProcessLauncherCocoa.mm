@@ -503,6 +503,15 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // W2742 tracker-protection test seam (default-off; forces ScriptTrackingPrivacy on for ALL
             // scripts so the protection behavior can be measured on dev — NOT a production path):
             { "DRIFTSTACK_TEST_FORCE_TRACKER", getenv("DRIFTSTACK_TEST_FORCE_TRACKER") },
+            // #108 (W2761) PRODUCTION tracker-AFP gate. WebProcess::updateScriptTrackingPrivacyFilter reads
+            // this getenv INSIDE the sandboxed WebContent process to inject the fingerprinter script-tracking
+            // ruleset when macOS WebPrivacy ships none. WebContent does NOT inherit the parent env (the __XPC_
+            // shadow does not reach the child — see this file's header note + the DELTA_CLAMP/PATHB_TLS_CERT/
+            // WS_PATHB siblings), so WITHOUT this allowlist entry the getenv returns null in prod and the AFP
+            // noise NEVER fires — the feature is silently half-on (UIProcess pays the ITP cost via
+            // WebsiteDataStore which DOES read it, WebContent applies no noise). The TEST_FORCE seam above
+            // masked this gap because it IS allowlisted; the real launch-env gate was not. (W2761 audit fix.)
+            { "DRIFTSTACK_TRACKER_PRIVACY", getenv("DRIFTSTACK_TRACKER_PRIVACY") },
             // Layer B ML:
             { "DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER", getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER") },
             { "DRIFTSTACK_LAYER_B_SUBSTITUTE", getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE") },
