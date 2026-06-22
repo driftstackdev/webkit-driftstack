@@ -3204,6 +3204,10 @@ static std::atomic<bool> s_udpRelayDown { false };
 // request-path associates call driftstackMarkUdpRelayDown() on a genuine UDP_ASSOCIATE refusal.
 bool driftstackUdpRelayKnownDown() { return s_udpRelayDown.load(std::memory_order_relaxed); }
 void driftstackMarkUdpRelayDown() { s_udpRelayDown.store(true, std::memory_order_relaxed); }
+// W2752: cleared by the async UDP_ASSOCIATE probe ONLY after a genuine relayed-datagram round-trip confirms
+// the proxy really relays UDP — re-enables the custom h3 path for subsequent connections (never set from a
+// bare/declared claim, so a wrong clear is structurally impossible). Safe: only RELAXES to the verified-good state.
+void driftstackClearUdpRelayDown() { s_udpRelayDown.store(false, std::memory_order_relaxed); }
 
 bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host)
 {

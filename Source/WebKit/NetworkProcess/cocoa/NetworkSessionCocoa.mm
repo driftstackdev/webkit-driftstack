@@ -1204,7 +1204,11 @@ static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const 
                     0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
                     0x00, 0x01, 0x00, 0x01
                 };
-                Socks5Framing::Endpoint resolverEp { String::fromUTF8("1.1.1.1"), 53 };
+                // W2752 DS-2 (bias-to-preserve-h3): ALTERNATE the resolver so a genuinely UDP-capable exit that
+                // blocks/rate-limits UDP/53 to ONE resolver isn't false-negatived → which would WRONGLY disable
+                // h3 on a good proxy (a non-iPhone "no-h3" fingerprint, the catastrophic-inaccuracy class).
+                // attempt 0,2 → 1.1.1.1; attempt 1 → 8.8.8.8. Any framed DNS response through the relay proves UDP flows.
+                Socks5Framing::Endpoint resolverEp { String::fromUTF8(attempt == 1 ? "8.8.8.8" : "1.1.1.1"), 53 };
                 Vector<uint8_t> framed;
                 if (!Socks5Framing::wrap(resolverEp, std::span<const uint8_t> { dns, sizeof(dns) }, framed))
                     break;
@@ -1241,47 +1245,75 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 static bool driftstackSocks5UdpSupported()
 {
-    static bool s_supported = false;
+    static std::atomic<bool> s_supported { false };   // W2752: async-written by the bg probe; read on the config thread
     static std::once_flag s_probeOnce;
     std::call_once(s_probeOnce, []() {
-        const char* host = getenv("DRIFTSTACK_SOCKS5_PROXY");
-        const char* user = getenv("DRIFTSTACK_SOCKS5_USER");
-        const char* pass = getenv("DRIFTSTACK_SOCKS5_PASS");
-        if (!host || !host[0]) {
-            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no DRIFTSTACK_SOCKS5_PROXY set — defaulting to UDP=unsupported (HTTP/3 stays disabled)");
-            return;
+        // W2752 (b) — PRE-KNOWN capability fast-path (founder: "check what the proxy can do BEFORE, save a lot
+        // of time"). The harness sets DRIFTSTACK_PROXY_UDP_CAPABLE from a VERIFIED per-proxy probe (the
+        // proxy-validation "Test" path / a cached prior verdict), so a KNOWN proxy skips the ~3s live probe
+        // entirely. =1 → UDP-capable (ONLY ever emitted from a PASSED data-path probe, NEVER a bare customer
+        // claim → no false-positive ~1min h3 stall). =0 → TCP-only (fail-safe → may be emitted freely).
+        if (const char* cap = getenv("DRIFTSTACK_PROXY_UDP_CAPABLE")) {
+            if (cap[0] == '1' && !cap[1]) {
+                s_supported.store(true, std::memory_order_relaxed);
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/W2752] DRIFTSTACK_PROXY_UDP_CAPABLE=1 (verified) — skipping the live UDP probe, h3 stays enabled");
+                return;
+            }
+            if (cap[0] == '0' && !cap[1]) {
+                s_supported.store(false, std::memory_order_relaxed);
+                driftstackMarkUdpRelayDown();
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/W2752] DRIFTSTACK_PROXY_UDP_CAPABLE=0 (verified/declared TCP-only) — skipping the live probe (~3s saved), h3 disabled");
+                return;
+            }
         }
-        // Wave 29-499.79 — manual scan to satisfy
-        // -Werror=-Wunsafe-buffer-usage-in-libc-call (no strchr/memcpy/atoi).
-        size_t colonIdx = 0;
-        while (host[colonIdx] && host[colonIdx] != ':')
-            ++colonIdx;
-        if (!host[colonIdx]) {
-            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] DRIFTSTACK_SOCKS5_PROXY missing ':' separator");
-            return;
-        }
-        char hostBuf[256];
-        if (colonIdx >= sizeof(hostBuf)) return;
-        for (size_t i = 0; i < colonIdx; ++i)
-            hostBuf[i] = host[i];
-        hostBuf[colonIdx] = 0;
-        // Parse port digit-by-digit (no atoi).
-        int port = 0;
-        for (size_t i = colonIdx + 1; host[i]; ++i) {
-            if (host[i] < '0' || host[i] > '9') { port = 0; break; }
-            port = port * 10 + (host[i] - '0');
-            if (port > 65535) { port = 0; break; }
-        }
-        if (port == 0) return;
-        bool result = driftstackProbeSocks5UdpAssociate(hostBuf, port, user, pass);
-        s_supported = result;
-        if (result) {
-            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] ✓ proxy %s:%d supports SOCKS5 UDP_ASSOCIATE — HTTP/3 + WebRTC UDP will route through Slice 16.7.b + WebRTC §7 relay (NOT disabling HTTP/3)", hostBuf, port);
-        } else {
-            WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] proxy %s:%d does NOT support SOCKS5 UDP_ASSOCIATE — falling back to HTTP/3-disable safety gate (TCP-only egress)", hostBuf, port);
-        }
+        // W2752 (a) — UNKNOWN proxy: do NOT block the first page on the ~3s probe (the founder's "took a long
+        // time till it realized it wasn't a UDP proxy"). Apply the CONSERVATIVE default NOW (h3 off — the caller
+        // also sets _allowsHTTP3=NO; this marks the custom-h3 latch), then run the data-path probe ASYNC on a bg
+        // queue. If it confirms a GENUINE relay, clear the latch so the custom h3 lights up for SUBSEQUENT
+        // connections. First page loads immediately on TCP; worst case (probe fails) = today's safe TCP-only,
+        // minus the 3s stall. No leak: h3 stays off until a positive data-path verdict.
+        driftstackMarkUdpRelayDown();
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            const char* host = getenv("DRIFTSTACK_SOCKS5_PROXY");
+            const char* user = getenv("DRIFTSTACK_SOCKS5_USER");
+            const char* pass = getenv("DRIFTSTACK_SOCKS5_PASS");
+            if (!host || !host[0]) {
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no DRIFTSTACK_SOCKS5_PROXY set — UDP=unsupported (HTTP/3 stays disabled)");
+                return;
+            }
+            // Wave 29-499.79 — manual scan to satisfy -Werror=-Wunsafe-buffer-usage-in-libc-call (no strchr/memcpy/atoi).
+            size_t colonIdx = 0;
+            while (host[colonIdx] && host[colonIdx] != ':')
+                ++colonIdx;
+            if (!host[colonIdx]) {
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] DRIFTSTACK_SOCKS5_PROXY missing ':' separator");
+                return;
+            }
+            char hostBuf[256];
+            if (colonIdx >= sizeof(hostBuf)) {
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] DRIFTSTACK_SOCKS5_PROXY host too long (>255) — UDP=unsupported (HTTP/3 stays disabled)");   // W2752 DS-3
+                return;
+            }
+            for (size_t i = 0; i < colonIdx; ++i)
+                hostBuf[i] = host[i];
+            hostBuf[colonIdx] = 0;
+            int port = 0;
+            for (size_t i = colonIdx + 1; host[i]; ++i) {
+                if (host[i] < '0' || host[i] > '9') { port = 0; break; }
+                port = port * 10 + (host[i] - '0');
+                if (port > 65535) { port = 0; break; }
+            }
+            if (port == 0) return;
+            bool result = driftstackProbeSocks5UdpAssociate(hostBuf, port, user, pass);
+            if (result) {
+                s_supported.store(true, std::memory_order_relaxed);
+                driftstackClearUdpRelayDown();   // genuine relay → re-enable custom h3 for subsequent connections
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/W2752] async UDP_ASSOCIATE probe CONFIRMED relay for %s:%d — custom h3 enabled for subsequent connections (first page already loaded on TCP, no ~3s stall)", hostBuf, port);
+            } else
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/W2752] async UDP_ASSOCIATE probe: %s:%d is TCP-only — h3 stays disabled (first page loaded with no probe wait)", hostBuf, port);
+        });
     });
-    return s_supported;
+    return s_supported.load(std::memory_order_relaxed);
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 #endif // PLATFORM(DRIFTSTACK)

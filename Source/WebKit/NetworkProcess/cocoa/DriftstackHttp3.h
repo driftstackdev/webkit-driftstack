@@ -103,6 +103,9 @@ bool driftstackHostAdvertisesH3ViaDns(const WTF::String& host);
 // gates in DriftstackNetworkLoader.mm + NetworkDataTaskCocoa.mm.
 bool driftstackUdpRelayKnownDown();
 void driftstackMarkUdpRelayDown();
+// W2752: an ASYNC UDP_ASSOCIATE probe that CONFIRMS a genuine relay clears the latch → the custom h3 path
+// lights up for SUBSEQUENT connections (the first page already loaded conservatively on TCP, no ~3s stall).
+void driftstackClearUdpRelayDown();
 
 // Wave 29-499.322 (Phase 3.5) — PERSISTENT HTTP/3 session for connection pooling.
 // Like real Safari, ONE QUIC connection per origin is established once (handshake
