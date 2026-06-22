@@ -472,8 +472,21 @@ static NSNumber *_currentBadge;
     NSString *url = sTargetURL;
     sTargetURL = nil;
 
-    if (!url || [url isEqualToString:@""])
+    if (!url || [url isEqualToString:@""]) {
         url = _settingsController.defaultURL;
+#if PLATFORM(DRIFTSTACK)
+        // W2763: the harness sets the per-session start URL via the DRIFTSTACK_INITIAL_URL ENV var. NOT a
+        // launch arg — a bare positional URL is ignored by _parseArguments (only `--url` is read), and the
+        // `--url` flag itself broke the WD-server startup (W2757 → reverted W2758); a post-load WD navigate
+        // (W2759) proved unreliable in the field (the fork stayed on the webkit.org default — verified via
+        // egress: zero requests to the dispatched URL). Load the dispatched URL DIRECTLY here, at startup,
+        // through this SAME proven defaultURL path that already loads any page — so it renders the customer's
+        // Start URL instead of webkit.org, with no flash, no navigate race, and no WD-startup interaction.
+        const char *driftstackInitialURL = getenv("DRIFTSTACK_INITIAL_URL");
+        if (driftstackInitialURL && driftstackInitialURL[0])
+            url = [NSString stringWithUTF8String:driftstackInitialURL];
+#endif
+    }
 
     return url;
 }
