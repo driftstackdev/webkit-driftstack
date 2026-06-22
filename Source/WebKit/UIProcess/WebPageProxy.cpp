@@ -9206,6 +9206,26 @@ void WebPageProxy::decidePolicyForNavigationAction(Ref<WebProcessProxy>&& proces
 
 void WebPageProxy::adjustAdvancedPrivacyProtectionsIfNeeded(API::WebsitePolicies& policies)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2755 (#108): real iOS Safari 26 STANDARD browsing applies Advanced Fingerprinting Protection —
+    // per-first-party-domain canvas/audio NOISE + screen quantization (CoverYourTracks: "randomized by
+    // first-party domain"). The canvas noise is gated on AdvancedPrivacyProtections::FingerprintingProtections
+    // -> Document::noiseInjectionPolicies() adds NoiseInjectionPolicy::Minimal (Document.cpp:11743) ->
+    // CanvasBase noises the FIRST-PARTY canvas UNCONDITIONALLY via the per-RegistrableDomain salt
+    // (CanvasBase.cpp:62, Page::noiseInjectionHashSaltForDomain). The earlier enabler added ONLY
+    // ScriptTrackingPrivacy (-> Enhanced), which noises ONLY tainted tracker scripts -> first-party CYT was
+    // NEVER randomized (fleet test 2026-06-22: enabler on == off, byte-identical canvas FP). FIX: add
+    // FingerprintingProtections too. Env-gated by DRIFTSTACK_TRACKER_PRIVACY (launch-env-gated to Safari>=26
+    // behind FLEET_VERIFIED) so it does NOT depend on the trackingPreventionEnabled data-store chain
+    // propagating to every UIProcess data store. Safari-18.x archetypes don't set the env -> no
+    // FingerprintingProtections -> not randomized (matches real iPhone 16 Pro/18.6 = unique). Default-off.
+    if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
+        policies.setAdvancedPrivacyProtections(policies.advancedPrivacyProtections()
+            | AdvancedPrivacyProtections::FingerprintingProtections
+            | AdvancedPrivacyProtections::ScriptTrackingPrivacy);
+        return;
+    }
+#endif
     if (!protect(websiteDataStore())->trackingPreventionEnabled())
         return;
 
