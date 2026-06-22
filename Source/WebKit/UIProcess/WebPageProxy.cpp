@@ -9206,16 +9206,23 @@ void WebPageProxy::decidePolicyForNavigationAction(Ref<WebProcessProxy>&& proces
 
 void WebPageProxy::adjustAdvancedPrivacyProtectionsIfNeeded(API::WebsitePolicies& policies)
 {
-    // W2755 REVERTED (#108, 2026-06-22): an earlier attempt added AdvancedPrivacyProtections::FingerprintingProtections
-    // here to randomize the first-party canvas (thinking CoverYourTracks "randomized by first-party domain" meant
-    // the first-party canvas randomizes). REAL-DEVICE EXPERIMENT (bs-canvas-scope-probe.js) DISPROVED that: real
-    // iPhone 26 first-party canvas is FULLY DETERMINISTIC — an identical drawing hashes to 51703416 on example.com,
-    // wikipedia, browserleaks AND amiunique, stable across reloads. So real iPhone does NOT randomize the first-party
-    // canvas; FingerprintingProtections would randomize it (a regression — a tracker would see our canvas change
-    // across loads where a real iPhone's is constant). The fork's CYT gap is that its ARBITRARY-content canvas isn't
-    // byte-identical to a real iPhone (fork 8402d962 vs real 51703416 for the same drawing) = the #79 arbitrary-canvas
-    // work, NOT randomization. The genuine 3rd-party/cross-site tracker randomization CYT measures is the upstream
-    // ScriptTrackingPrivacy path below (gated on the tracker classification) — left intact, NOT first-party noise.
+#if PLATFORM(DRIFTSTACK)
+    // W2755 RE-INSTATED (#108, 2026-06-22): real iPhone 26 randomizes the PAGE-SCRIPT fingerprint
+    // (canvas + WebGL + audio — ALL of them) per first-party domain. PROVEN with CoverYourTracks' OWN fp2
+    // code on a real iPhone 17/Safari 26 across two first-party domains: canvas 98438f05 vs a6419925, webgl
+    // f2efbfbf vs 2839d176, audio 124.309 vs 124.204 — all distinct per domain (bs-cyt-fp2-probe.js). This is
+    // AdvancedPrivacyProtections::FingerprintingProtections -> NoiseInjectionPolicy::Minimal -> per-eTLD+1
+    // crypto-salt noise (Page::noiseInjectionHashSaltForDomain, regenerated per Page/session). ⛔ LESSON: an
+    // earlier "first-party canvas is deterministic" experiment was FLAWED — it drew the canvas via WebDriver
+    // executeScript, which BYPASSES the AFP (as it does on a real iPhone too), giving a false "stable" result.
+    // Real page-script fingerprinting (what trackers + CYT do) IS randomized per-domain. Match it.
+    // Env-gated by DRIFTSTACK_TRACKER_PRIVACY (launch-env Safari>=26 behind FLEET_VERIFIED); default-off.
+    if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
+        policies.setAdvancedPrivacyProtections(policies.advancedPrivacyProtections()
+            | AdvancedPrivacyProtections::FingerprintingProtections);
+        return;
+    }
+#endif
     if (!protect(websiteDataStore())->trackingPreventionEnabled())
         return;
 
