@@ -444,6 +444,21 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_ARCHETYPE_UA_FULL", getenv("DRIFTSTACK_ARCHETYPE_UA_FULL") },
             { "DRIFTSTACK_APPLE_PAY_SET_UP", getenv("DRIFTSTACK_APPLE_PAY_SET_UP") },
             { "DRIFTSTACK_STORAGE_QUOTA_BYTES", getenv("DRIFTSTACK_STORAGE_QUOTA_BYTES") },
+            // W2823 (fp-delivery audit w7o4zay29): these fingerprint env vars were EXPORTED by launch-env-v1.sh
+            // but ABSENT from this allowlist → never reached the sandboxed WebContent → the renderer-side gate
+            // silently no-op'd (the W2640 / DRIFTSTACK_RAF_DELTA_CLAMP class). ⛔ CRITICAL: DRIFTSTACK_CANVAS_TEXT_
+            // RECOMPOSE has NO path-fallback (getenv null → s_canvasTextRecompose=false) → A1's #79 byte-exact
+            // canvas-color recompose was silently OFF in PRODUCTION (canvas text rendered Mac-CG-native: a ±1
+            // unpremult + getImageData≠decode(toDataURL) cross-read tell), even though dev/cumrig PASSED via the
+            // __XPC_ shadow (the "verify on the FLEET BOX not dev" lesson). The *_PATH ones have a DATA_ROOT-default
+            // fallback that coincides with the box ~/code/driftstack layout (proven inert by glyphHash byte-exact),
+            // but forwarding them makes path resolution explicit + layout-independent. (The kOnFlags force-on for
+            // CANVAS_TEXT_RECOMPOSE is A1's fingerprint mechanism — flagged separately, belt-and-suspenders.)
+            { "DRIFTSTACK_CANVAS_TEXT_RECOMPOSE", getenv("DRIFTSTACK_CANVAS_TEXT_RECOMPOSE") },
+            { "DRIFTSTACK_WESTERN_ADVANCE_SIDECAR_PATH", getenv("DRIFTSTACK_WESTERN_ADVANCE_SIDECAR_PATH") },
+            { "DRIFTSTACK_PERGLYPH_COLOR_ATLAS_PATH", getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_PATH") },
+            { "DRIFTSTACK_DATA_ROOT", getenv("DRIFTSTACK_DATA_ROOT") },
+            { "DRIFTSTACK_VOICES_LIST_PATH", getenv("DRIFTSTACK_VOICES_LIST_PATH") },
             // Wave 29-390.B comprehensive audit: 30+ DRIFTSTACK_ env vars
             // consumed in fork code but never forwarded. Cumrig didn't catch
             // because cumrig uses __XPC_DRIFTSTACK_* shadow vars; production
