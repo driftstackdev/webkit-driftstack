@@ -1597,6 +1597,13 @@ public:
     bool m_driftstackPotentialTap { false };
     WebCore::DoublePoint m_driftstackTapStartPoint;
     WebCore::DoublePoint m_driftstackLastTouchPoint;   // W1453: prev touch point for native touch-drag scroll deltas
+    // W2770 (founder "scrolls me back up", proven via the automated scroll test): a touch is "active" only
+    // between TouchStart and TouchEnd/Cancel. A TouchMove that arrives with NO finger down (a stray/orphan
+    // move — e.g. the GUI converter's edge-recenter / post-touchEnd momentum tail) MUST NOT scroll: without
+    // this gate it computed a delta from the STALE last-touch-point of the prior gesture and jerked the page
+    // backward. The engine backstop so a converter glitch can never bounce the page (independent of A2's
+    // wheel->touch converter being perfect).
+    bool m_driftstackTouchActive { false };
     // W2761 (A2 W2754/W2760 Step A): carried sub-pixel scroll-delta remainders so a slow/sub-pixel touch-drag
     // accumulates instead of rounding each move to 0 then lurching. Reset per drag in TouchStart.
     double m_driftstackScrollRemainderX { 0 };

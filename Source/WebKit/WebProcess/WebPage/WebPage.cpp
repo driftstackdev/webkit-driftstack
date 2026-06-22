@@ -4254,6 +4254,7 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     switch (touchEvent.type()) {
     case WebEventType::TouchStart:
         m_driftstackPotentialTap = true;
+        m_driftstackTouchActive = true;   // W2770: a finger is now down — TouchMoves may scroll.
         m_driftstackTapStartPoint = pos;
         m_driftstackLastTouchPoint = pos;
         // W2761 (A2 W2754/W2760 Step A): start each drag with a clean sub-pixel remainder so a prior
@@ -4262,6 +4263,12 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         m_driftstackScrollRemainderY = 0;
         return;
     case WebEventType::TouchMove: {
+        // W2770 (founder "scrolls me back up"): ignore a TouchMove with no finger down (a stray/orphan move
+        // with no preceding TouchStart — the GUI converter's post-touchEnd momentum tail / edge re-anchor).
+        // Without this it scrolled by the delta from the PRIOR gesture's stale last-point → the page jerked
+        // backward. Proven by operations/scripts/scroll-test (a down-less move scrolled 650 -> 0).
+        if (!m_driftstackTouchActive)
+            return;
         auto dx = pos.x() - m_driftstackTapStartPoint.x();
         auto dy = pos.y() - m_driftstackTapStartPoint.y();
         if (m_driftstackPotentialTap && (dx * dx + dy * dy) > tapSlop * tapSlop)
@@ -4337,12 +4344,14 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         return;
     }
     case WebEventType::TouchEnd:
+        m_driftstackTouchActive = false;   // W2770: finger lifted — later orphan moves must not scroll.
         break;
     case WebEventType::TouchCancel:
         // W1418: a cancelled touch (system gesture / scroll-takeover) is definitively NOT a tap —
         // clear the pending-tap state so a later touchEnd can't synthesize a spurious click on the
         // cancelled sequence. (Without this, TouchCancel fell through to `default` leaving the flag set.)
         m_driftstackPotentialTap = false;
+        m_driftstackTouchActive = false;   // W2770: cancelled sequence — no active finger.
         return;
     default:
         return;
