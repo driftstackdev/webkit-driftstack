@@ -500,6 +500,9 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Behavioral:
             { "DRIFTSTACK_BEHAVIORAL_MODEL_PATH", getenv("DRIFTSTACK_BEHAVIORAL_MODEL_PATH") },
             { "DRIFTSTACK_BEHAVIORAL_SYNTHESIS", getenv("DRIFTSTACK_BEHAVIORAL_SYNTHESIS") },
+            // W2742 tracker-protection test seam (default-off; forces ScriptTrackingPrivacy on for ALL
+            // scripts so the protection behavior can be measured on dev — NOT a production path):
+            { "DRIFTSTACK_TEST_FORCE_TRACKER", getenv("DRIFTSTACK_TEST_FORCE_TRACKER") },
             // Layer B ML:
             { "DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER", getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER") },
             { "DRIFTSTACK_LAYER_B_SUBSTITUTE", getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE") },

@@ -1042,6 +1042,17 @@ GuaranteedSerialFunctionDispatcher& ScriptExecutionContext::nativePromiseDispatc
 
 bool ScriptExecutionContext::requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory category, IncludeConsoleLog includeConsoleLog)
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2742 TEST SEAM (default-off): force the tracker-protection path on for ALL scripts so the
+    // protection BEHAVIOR (which surfaces randomize/clamp + the values) can be measured on dev and
+    // diffed against the target archetype's real-device tracker behavior — independent of the Apple
+    // tracking-list classification (which is the separate prod-enablement). NOT a production path.
+    {
+        static const bool s_forceTracker = [] { const char* e = getenv("DRIFTSTACK_TEST_FORCE_TRACKER"); return e && e[0] == '1'; }();
+        if (s_forceTracker)
+            return true;
+    }
+#endif
     RefPtr vm = vmIfExists();
     if (!vm)
         return false;
