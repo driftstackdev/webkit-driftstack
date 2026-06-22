@@ -137,70 +137,22 @@ static int connectToProxy(const Socks5Endpoint& proxy)
     struct timeval socks5HandshakeTimeout { 8, 0 };
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &socks5HandshakeTimeout, sizeof(socks5HandshakeTimeout));
-    // W2744: SO_SNDTIMEO/SO_RCVTIMEO (set above) do NOT bound connect() on macOS/BSD — they govern
-    // send/recv, not the TCP-SYN wait. A dead/black-holed proxy exit made a BLOCKING connect() hang the
-    // kernel default (~75s) → the founder's "first page blank ~76s then renders" (the load finally lands
-    // after the hang). Bound it: non-blocking connect + poll(POLLOUT, 5s) + SO_ERROR check. A TCP connect
-    // to the proxy host is normally <1s; 5s is generous for a slow residential proxy; a dead exit fails in
-    // 5s → the loader retries a FRESH exit fast (W2700) instead of a ~75s stall. Restore blocking afterward
-    // so the SO_RCVTIMEO-bounded SOCKS5 handshake recvs behave exactly as before.
-    int connFlags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, connFlags | O_NONBLOCK);
-    int connRc = ::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
-    if (connRc < 0 && errno == EINPROGRESS) {
-        // W2747 (PROD-DOWN regression fix): the W2744 poll was UNGUARDED — a SINGLE poll() whose `pr < 0`
-        // (errno==EINTR) was treated as a fatal connect failure. The WebKit Network process is signal-heavy
-        // (libdispatch timers etc.), so poll() on the proxy connect got interrupted (EINTR) and HARD-FAILED
-        // the connect → "[W2744] poll error within 5s" on every load → "socks5 handshake failed on all
-        // sites" (the proxy is a LOCAL relay 127.0.0.1:* that NEVER takes 75s, so the bounded connect must
-        // not be fragile). FIX: an EINTR-safe poll loop bounded by an absolute 5s monotonic deadline. Only a
-        // genuine timeout or a confirmed SO_ERROR fast-fails (→ fresh-exit retry, the W2744 intent). An
-        // UNEXPECTED (non-EINTR) poll error no longer hard-fails — it falls through to blocking-connect
-        // completion (bounded by the 8s SO_*TIMEO below) so a poll quirk can never break prod again.
-        struct timespec ts;
-        ::clock_gettime(CLOCK_MONOTONIC, &ts);
-        int64_t deadlineMs = int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000 + 5000;
-        bool fastFailed = false;
-        for (;;) {
-            ::clock_gettime(CLOCK_MONOTONIC, &ts);
-            int remainingMs = int(deadlineMs - (int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000));
-            if (remainingMs <= 0) {
-                WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) did not complete within 5s — fast-failing for retry",
-                    hostUtf8.data(), unsigned(proxy.port));
-                ::close(fd); fastFailed = true; break;
-            }
-            struct pollfd pfd { fd, POLLOUT, 0 };
-            int pr = ::poll(&pfd, 1, remainingMs);
-            if (pr > 0) {
-                int soErr = 0; socklen_t soLen = sizeof(soErr);
-                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
-                if (soErr) {
-                    WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) failed errno=%d",
-                        hostUtf8.data(), unsigned(proxy.port), soErr);
-                    ::close(fd); fastFailed = true;
-                }
-                break;   // connected (soErr==0) → proceed below; or fast-failed
-            }
-            if (pr == 0) {
-                WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) did not complete within 5s — fast-failing for retry",
-                    hostUtf8.data(), unsigned(proxy.port));
-                ::close(fd); fastFailed = true; break;
-            }
-            if (errno == EINTR)
-                continue;   // ← THE W2744 BUG: poll interrupted by a signal — re-poll the remaining deadline, do NOT fail
-            WTFLogAlways("[Driftstack-EG-WK-1.8/W2747] connectToProxy: connect(%s:%u) poll errno=%d — falling back to blocking completion",
-                hostUtf8.data(), unsigned(proxy.port), errno);
-            break;   // unexpected non-EINTR poll error → fall through to blocking completion (don't hard-fail prod)
-        }
-        if (fastFailed)
-            return -1;
-    } else if (connRc < 0) {
-        WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: connect(%s:%u) failed errno=%d",
+    // W2751 (FIX the W2744/W2747 first-page regression): connectToProxy ALWAYS targets the harness's LOCAL
+    // relay (127.0.0.1:<listenerPort>), never a remote host — so a plain BLOCKING ::connect() is instant (or
+    // ECONNREFUSED-instant if the relay isn't up yet) and CANNOT incur the ~75s remote-dead-exit hang W2744
+    // worried about (that hang was MISATTRIBUTED to this connect; the real first-load amplifier is the retry
+    // stack [W2750] + Spotlight CPU). W2744's non-blocking-connect + poll(POLLOUT) was unnecessary here AND
+    // BROKEN in the sandboxed WebKit Network process: poll() returns EPERM (errno 1) on the connecting socket,
+    // so W2747's "fall back to blocking" returned the fd with the connect still IN-FLIGHT → a cold first
+    // connect's blocking SOCKS5 greeting raced the unfinished connect → "SOCKS5 handshake failed" on the FIRST
+    // page (warm connects then worked — the founder's exact report). A plain blocking connect to localhost has
+    // no poll, no race, no EPERM, no hang; the SO_*TIMEO set above still bound the subsequent handshake recvs.
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        WTFLogAlways("[Driftstack-EG-WK-1.8/W2751] connectToProxy: connect(%s:%u) failed errno=%d (local relay — refused = relay not up yet → caller retries)",
             hostUtf8.data(), unsigned(proxy.port), errno);
         ::close(fd);
         return -1;
     }
-    ::fcntl(fd, F_SETFL, connFlags);   // restore blocking for the bounded SOCKS5 handshake recvs
     return fd;
 }
 

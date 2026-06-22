@@ -2913,45 +2913,12 @@ static bool dsHttp3RecvAll(int fd, uint8_t* buf, size_t len)
     }
     return true;
 }
-// W2748: EINTR-safe bounded connect (mirrors the W2747 fix). A blocking ::connect to a dead/black-holed proxy IP
-// hangs the kernel default (~75s); on the DNS-RR path this runs under g_dnsLock, so it would wedge every
-// concurrent load. Non-blocking connect + poll(POLLOUT) on a 5s monotonic deadline, EINTR-safe re-poll; restores
-// blocking on success so the SO_*TIMEO-bounded handshake recvs below behave unchanged. Returns false on a genuine
-// timeout / SO_ERROR (caller fast-fails → h2/TCP fallback); an unexpected poll error falls back to blocking.
-static bool dsHttp3ConnectBounded(int fd, const struct sockaddr* addr, socklen_t addrLen)
-{
-    int connFlags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, connFlags | O_NONBLOCK);
-    int rc = ::connect(fd, addr, addrLen);
-    bool ok = true;
-    if (rc < 0 && errno == EINPROGRESS) {
-        struct timespec ts;
-        ::clock_gettime(CLOCK_MONOTONIC, &ts);
-        int64_t deadlineMs = int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000 + 5000;
-        for (;;) {
-            ::clock_gettime(CLOCK_MONOTONIC, &ts);
-            int remainingMs = int(deadlineMs - (int64_t(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000));
-            if (remainingMs <= 0) { ok = false; break; }
-            struct pollfd pfd { fd, POLLOUT, 0 };
-            int pr = ::poll(&pfd, 1, remainingMs);
-            if (pr > 0) {
-                int soErr = 0; socklen_t soLen = sizeof(soErr);
-                ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &soLen);
-                if (soErr)
-                    ok = false;
-                break;
-            }
-            if (pr == 0) { ok = false; break; }   // 5s deadline → dead exit, fast-fail
-            if (errno == EINTR)
-                continue;   // signal interrupted poll — re-poll the remaining deadline (the W2744 bug)
-            break;   // unexpected non-EINTR poll error → fall back to blocking completion (don't hard-fail)
-        }
-    } else if (rc < 0)
-        ok = false;
-    ::fcntl(fd, F_SETFL, connFlags);   // restore blocking for the SO_*TIMEO-bounded handshake recvs
-    return ok;
-}
-
+// W2751: the QUIC SOCKS5 associate connects to the harness's LOCAL relay (127.0.0.1:<port>), so a plain blocking
+// ::connect is instant (or ECONNREFUSED-instant) — the W2748 non-blocking+poll "bounded connect" was unnecessary
+// here AND poll() returns EPERM in the sandboxed Network process (the same regression W2751 fixed in
+// DriftstackSocks5Client — its fallback raced an in-flight connect → first-connect handshake fail). Removed; the
+// call site below uses a plain blocking connect. (The EINTR-safe dsHttp3SendAll/dsHttp3RecvAll from W2748 stay —
+// they wrap send/recv, not poll, and correctly fix the real EINTR-on-handshake-IO class.)
 static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr, bool* outUdpRefused = nullptr)
 {
     const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
@@ -2985,8 +2952,8 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
     pa.sin_family = AF_INET;
     pa.sin_port = htons(static_cast<uint16_t>(proxyPort));
     if (inet_pton(AF_INET, hostBuf.span().data(), &pa.sin_addr) != 1) { ::close(fd); return false; }
-    if (!dsHttp3ConnectBounded(fd, reinterpret_cast<struct sockaddr*>(&pa), sizeof(pa))) {
-        WTFLogAlways("[Wave29-499.311/W2748] raw associate: bounded TCP connect failed/timed out errno=%d", errno);
+    if (::connect(fd, reinterpret_cast<struct sockaddr*>(&pa), sizeof(pa)) < 0) {
+        WTFLogAlways("[Wave29-499.311/W2751] raw associate: TCP connect to local relay failed errno=%d", errno);
         ::close(fd); return false;
     }
 
