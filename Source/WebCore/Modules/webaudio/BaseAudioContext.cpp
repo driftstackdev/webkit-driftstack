@@ -24,6 +24,9 @@
  */
 
 #include "config.h"
+#if PLATFORM(DRIFTSTACK)
+#include <string_view> // W2754: createScriptProcessor(0) per-Safari-version buffer gate
+#endif
 
 #if ENABLE(WEB_AUDIO)
 
@@ -367,13 +370,26 @@ ExceptionOr<Ref<ScriptProcessorNode>> BaseAudioContext::createScriptProcessor(si
     switch (bufferSize) {
     case 0:
 #if PLATFORM(DRIFTSTACK)
-        // W2557 (#83): createScriptProcessor(0) must report the real iPhone's AudioSession buffer
-        // (256), NOT the host Mac's (AudioSession::singleton().bufferSize() = 512 on the fleet) — the
-        // host value both LEAKS the fleet host (per-Mac variance) and is the wrong iPhone value.
-        // Verified: real iPhone 17 Safari 26.4 returns bufferSize=256 (BS audio-hostleak capture);
-        // iOS uses 256 across models, so this is a host-independent constant. baseLatency stays
-        // 128/sampleRate (render-quantum, already host-independent — W1943).
+        // W2557 (#83): createScriptProcessor(0) must report the real iPhone's AudioSession buffer,
+        // NOT the host Mac's (AudioSession::singleton().bufferSize() = 512 on the fleet) — the host
+        // value both LEAKS the fleet host (per-Mac variance) and is the wrong iPhone value. baseLatency
+        // stays 128/sampleRate (render-quantum, already host-independent — W1943).
+        // W2754 (archetype audit 2026-06-22): the buffer is iOS-VERSION-DEPENDENT, NOT a cross-model
+        // constant. Verified vs real-device aio: Safari 26.x (iPhone 17/26.4 BS audio-hostleak) = 256;
+        // Safari 18.x (iPhone 16 Pro/18.6 aio bufferSize_auto) = 1024. The prior "iOS uses 256 across
+        // models" held only for the 26.x launch band. Gate on the archetype Safari major (parsed from
+        // DRIFTSTACK_ARCHETYPE ..._safariNN_M via std::string_view — -Wunsafe-clean, no libc strstr/atoi).
         bufferSize = 256;
+        if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE"); dsArch && dsArch[0]) {
+            std::string_view dsv(dsArch);
+            if (auto dsPos = dsv.find("safari"); dsPos != std::string_view::npos) {
+                dsv.remove_prefix(dsPos + 6);
+                int dsMajor = 0; size_t dsi = 0;
+                while (dsi < dsv.size() && dsv[dsi] >= '0' && dsv[dsi] <= '9') { dsMajor = dsMajor * 10 + (dsv[dsi] - '0'); ++dsi; }
+                if (dsMajor && dsMajor < 26)
+                    bufferSize = 1024;
+            }
+        }
 #elif USE(AUDIO_SESSION)
         // Pick a value between 256 (2^8) and 16384 (2^14), based on the buffer size of the current AudioSession:
         bufferSize = 1 << std::max<size_t>(8, std::min<size_t>(14, std::log2(AudioSession::singleton().bufferSize())));
