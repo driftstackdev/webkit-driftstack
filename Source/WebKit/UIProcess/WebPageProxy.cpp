@@ -9207,21 +9207,21 @@ void WebPageProxy::decidePolicyForNavigationAction(Ref<WebProcessProxy>&& proces
 void WebPageProxy::adjustAdvancedPrivacyProtectionsIfNeeded(API::WebsitePolicies& policies)
 {
 #if PLATFORM(DRIFTSTACK)
-    // W2755 RE-INSTATED (#108, 2026-06-22): real iPhone 26 randomizes the PAGE-SCRIPT fingerprint
-    // (canvas + WebGL + audio — ALL of them) per first-party domain. PROVEN with CoverYourTracks' OWN fp2
-    // code on a real iPhone 17/Safari 26 across two first-party domains: canvas 98438f05 vs a6419925, webgl
-    // f2efbfbf vs 2839d176, audio 124.309 vs 124.204 — all distinct per domain (bs-cyt-fp2-probe.js). This is
-    // AdvancedPrivacyProtections::FingerprintingProtections -> NoiseInjectionPolicy::Minimal -> per-eTLD+1
-    // crypto-salt noise (Page::noiseInjectionHashSaltForDomain, regenerated per Page/session). ⛔ LESSON: an
-    // earlier "first-party canvas is deterministic" experiment was FLAWED — it drew the canvas via WebDriver
-    // executeScript, which BYPASSES the AFP (as it does on a real iPhone too), giving a false "stable" result.
-    // Real page-script fingerprinting (what trackers + CYT do) IS randomized per-domain. Match it.
-    // Env-gated by DRIFTSTACK_TRACKER_PRIVACY (launch-env Safari>=26 behind FLEET_VERIFIED); default-off.
-    if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1') {
-        policies.setAdvancedPrivacyProtections(policies.advancedPrivacyProtections()
-            | AdvancedPrivacyProtections::FingerprintingProtections);
-        return;
-    }
+    // W2755 v3 (#108, 2026-06-22): NO override here — the correct match is the UPSTREAM ScriptTrackingPrivacy
+    // path below. iOS 26 AFP is SCRIPT-SCOPED, proven by a controlled real-device experiment
+    // (captures/v1/bs-script-scope-probe.js on iPhone 17/Safari 26, same domain x3 reloads): a 1st-party inline
+    // canvas AND a generic 3rd-party cross-origin canvas hash IDENTICALLY (791c0fc8, fully deterministic); ONLY a
+    // tracker-classified fingerprinting script (CoverYourTracks' fp2) is noised (8cfc51cd). So the fork must noise
+    // ONLY tracker-classified scripts — which is exactly AdvancedPrivacyProtections::ScriptTrackingPrivacy
+    // (NoiseInjectionPolicy::Enhanced → CanvasBase noises only requiresScriptTrackingPrivacyProtection scripts),
+    // activated below because WebsiteDataStore::defaultTrackingPreventionEnabled() returns true under
+    // DRIFTSTACK_TRACKER_PRIVACY (which ALSO triggers WebProcessPool's WebPrivacy script-tracking-privacy filter
+    // fetch → the tracker classification). An earlier W2755 added AdvancedPrivacyProtections::FingerprintingProtections
+    // (NoiseInjectionPolicy::Minimal), which noises the 1ST-PARTY canvas/audio UNIVERSALLY — that is the OPPOSITE
+    // tell (a real iPhone keeps 1st-party deterministic). REMOVED. ⛔ LESSON: never measure FP randomization via
+    // WebDriver executeScript (it bypasses AFP, as on a real iPhone); inject a real <script> element. Verify on the
+    // fleet box that the WebPrivacy filter populates → tracker scripts noised → CYT shows "randomized", 1st-party
+    // byte-identical. Env-gated via the WebsiteDataStore enabler (launch-env Safari>=26 behind FLEET_VERIFIED); default-off.
 #endif
     if (!protect(websiteDataStore())->trackingPreventionEnabled())
         return;
