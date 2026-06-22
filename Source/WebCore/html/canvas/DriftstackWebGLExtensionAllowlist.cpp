@@ -11,6 +11,8 @@
 
 #include "DriftstackWebGLExtensionAllowlist.h"
 
+#include <cstdlib>
+#include <string_view>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/HashSet.h>
 
@@ -92,10 +94,61 @@ bool isWebGLExtensionInIphoneCanonical(const String& name)
     return iphoneCanonicalSet().contains(name);
 }
 
+// Per-chip-tier WebGL extension delta (2026-06-22, capture-grounded). The canonical set above is
+// the A17 Pro+ (newer-GPU) baseline (derived from iPhone 17 / 16 Pro). Apple's A17 Pro introduced
+// desktop-class texture-compression (S3TC/BPTC/RGTC) + float-blend/float-linear; A16 and earlier
+// GPUs do NOT expose them. Confirmed via BS /aio: iPhone 14 (A15) / 14 Pro (A16) / 15 (A16) each
+// expose 33 webgl1 extensions while iPhone 16 Pro/16 Plus/17/17 Pro Max (A18/A19) expose 39 —
+// the delta is exactly these 6 (identical for webgl1 + webgl2, version-independent). So an A16/A15
+// archetype must additionally drop these from the canonical set or it over-exposes vs the real chip.
+static const HashSet<String>& newerGpuOnlyExtensions()
+{
+    static NeverDestroyed<HashSet<String>> set = HashSet<String> {
+        "EXT_float_blend"_s,
+        "EXT_texture_compression_bptc"_s,
+        "EXT_texture_compression_rgtc"_s,
+        "OES_texture_float_linear"_s,
+        "WEBGL_compressed_texture_s3tc"_s,
+        "WEBGL_compressed_texture_s3tc_srgb"_s,
+    };
+    return set.get();
+}
+
+// True for archetypes whose GPU is A16 or earlier (no desktop-class GPU extensions): the iPhone 13
+// family (A15) + iPhone 14 family (A15/A16, incl 14 Pro/Pro Max) + iPhone 15 / 15 Plus base (A16).
+// A17 Pro and later (iphone15pro/15promax, all iphone16/iphone17) keep the full canonical set.
+// The confirmed-old set (iphone14/14pro/15) is capture-grounded; iphone13*/14plus/14promax/15plus
+// share those exact A15/A16 chips. The launch archetype (iphone17, A19) is new-tier → this is a
+// no-op for it; A17 Pro stays at the full set (Apple-spec + = current behavior → no unverified change).
+static bool archetypeIsOlderGpuExtensionTier()
+{
+    static const bool s_older = []() -> bool {
+        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!archetype)
+            return false; // no archetype env = launch default iPhone 17 (A19) = newer-GPU tier
+        std::string_view a(archetype);
+        if (a.find("iphone13") != std::string_view::npos)
+            return true; // A15
+        if (a.find("iphone14") != std::string_view::npos)
+            return true; // A15 (14/14 Plus) / A16 (14 Pro/Pro Max)
+        if (a.find("iphone15pro") != std::string_view::npos)
+            return false; // iPhone 15 Pro / 15 Pro Max = A17 Pro = newer-GPU tier
+        if (a.find("iphone15") != std::string_view::npos)
+            return true; // iPhone 15 / 15 Plus = A16
+        return false; // iphone16* / iphone17* = A18 / A19 = newer-GPU tier
+    }();
+    return s_older;
+}
+
 void filterWebGLExtensionsToIphoneCanonical(Vector<String>& extensions)
 {
-    extensions.removeAllMatching([](const String& name) {
-        return !iphoneCanonicalSet().contains(name);
+    const bool olderTier = archetypeIsOlderGpuExtensionTier();
+    extensions.removeAllMatching([olderTier](const String& name) {
+        if (!iphoneCanonicalSet().contains(name))
+            return true;
+        if (olderTier && newerGpuOnlyExtensions().contains(name))
+            return true;
+        return false;
     });
 }
 
