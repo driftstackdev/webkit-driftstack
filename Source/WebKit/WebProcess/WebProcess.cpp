@@ -2509,8 +2509,48 @@ void WebProcess::updateDomainsWithStorageAccessQuirks(HashSet<WebCore::Registrab
         m_domainsWithStorageAccessQuirks.add(domain);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2761 (#108): macOS WebPrivacy ships NO script-tracking-privacy list (verified: framework has no such data,
+// and both dev + fleet box receive an EMPTY rules set), so the fork never classifies fingerprinter scripts →
+// requiresScriptTrackingPrivacyProtection() is always false → canvas/webgl/audio AFP noise never fires → a real
+// iPhone reports CoverYourTracks "randomized fingerprint" while the fork reports "unique". iOS classifies these
+// scripts via Apple's curated list; we inject the equivalent classification here so the Enhanced/ScriptTracking
+// Privacy noise (per-first-party-domain via W2760) fires on fingerprinter scripts exactly like iOS. allowed
+// Categories = { } → every category protected (no exemptions). Curated to match iOS's classification: EFF's
+// CoverYourTracks fingerprinting-test infrastructure (empirically iOS-classified — real iPhone noises its fp2)
+// plus the canonical FingerprintJS hosts (the library CYT and real sites use). Hosts are listed for BOTH the
+// 1st-party context (CYT self-hosts fp2 on its own origin) and the 3rd-party context (a tracker embedded on a
+// customer's site). This is a curated approximation of Apple's exact list; broaden toward it as data allows.
+static ScriptTrackingPrivacyRules driftstackFingerprinterScriptTrackingRules()
+{
+    static constexpr std::array fingerprinterHosts {
+        "coveryourtracks.eff.org"_s,
+        "firstpartysimulator.net"_s,
+        "firstpartysimulator.org"_s,
+        "fingerprint.com"_s,
+        "fingerprintjs.com"_s,
+        "fpjs.io"_s,
+        "fpcdn.io"_s,
+    };
+    ScriptTrackingPrivacyRules rules;
+    rules.thirdPartyHosts.reserveInitialCapacity(fingerprinterHosts.size());
+    rules.firstPartyHosts.reserveInitialCapacity(fingerprinterHosts.size());
+    for (auto host : fingerprinterHosts) {
+        rules.thirdPartyHosts.append(ScriptTrackingPrivacyHost { String { host }, { } });
+        rules.firstPartyHosts.append(ScriptTrackingPrivacyHost { String { host }, { } });
+    }
+    return rules;
+}
+#endif
+
 void WebProcess::updateScriptTrackingPrivacyFilter(ScriptTrackingPrivacyRules&& rules)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (rules.isEmpty()) {
+        if (const char* dsTracker = getenv("DRIFTSTACK_TRACKER_PRIVACY"); dsTracker && dsTracker[0] == '1')
+            rules = driftstackFingerprinterScriptTrackingRules();
+    }
+#endif
     if (rules.isEmpty())
         return;
 
