@@ -1597,6 +1597,10 @@ public:
     bool m_driftstackPotentialTap { false };
     WebCore::DoublePoint m_driftstackTapStartPoint;
     WebCore::DoublePoint m_driftstackLastTouchPoint;   // W1453: prev touch point for native touch-drag scroll deltas
+    // W2761 (A2 W2754/W2760 Step A): carried sub-pixel scroll-delta remainders so a slow/sub-pixel touch-drag
+    // accumulates instead of rounding each move to 0 then lurching. Reset per drag in TouchStart.
+    double m_driftstackScrollRemainderX { 0 };
+    double m_driftstackScrollRemainderY { 0 };
 #endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);

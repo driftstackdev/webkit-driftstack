@@ -4256,6 +4256,10 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         m_driftstackPotentialTap = true;
         m_driftstackTapStartPoint = pos;
         m_driftstackLastTouchPoint = pos;
+        // W2761 (A2 W2754/W2760 Step A): start each drag with a clean sub-pixel remainder so a prior
+        // drag's leftover fraction can't seed a phantom first-move scroll.
+        m_driftstackScrollRemainderX = 0;
+        m_driftstackScrollRemainderY = 0;
         return;
     case WebEventType::TouchMove: {
         auto dx = pos.x() - m_driftstackTapStartPoint.x();
@@ -4275,8 +4279,22 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         if (!m_driftstackPotentialTap) {
             if (RefPtr localMainFrame = this->localMainFrame()) {
                 if (auto* view = localMainFrame->view()) {
-                    int sdx = static_cast<int>(std::lround(m_driftstackLastTouchPoint.x() - pos.x()));
-                    int sdy = static_cast<int>(std::lround(m_driftstackLastTouchPoint.y() - pos.y()));
+                    // W2761 (A2 W2754/W2760 Step A — sub-pixel delta accumulation): the per-move delta was
+                    // std::lround'd to an int and dropped when zero (the `if (sdx||sdy)` gate), so a slow or
+                    // sub-pixel drag rounded each move to 0 → nothing moved, then a later move crossing the
+                    // 0.5px rounding boundary LURCHED by the accumulated amount = the founder's "scroll barely
+                    // moves then jerks / wrong-way" every session. Carry the fractional remainder across moves
+                    // (doubles, reset per drag in TouchStart): apply the integer part, keep the fraction for the
+                    // next move. static_cast<int> TRUNCATES TOWARD ZERO, so the carried fraction keeps the
+                    // delta's sign and a sub-pixel move can never flip scroll direction. (Step B — routing
+                    // injected touches through the native ScrollAnimator + capture-grounded momentum on TouchEnd
+                    // — is the A1-paired follow-up; this is the cheap dead-zone/lurch/wrong-way kill.)
+                    double rawDx = static_cast<double>(m_driftstackLastTouchPoint.x() - pos.x()) + m_driftstackScrollRemainderX;
+                    double rawDy = static_cast<double>(m_driftstackLastTouchPoint.y() - pos.y()) + m_driftstackScrollRemainderY;
+                    int sdx = static_cast<int>(rawDx);
+                    int sdy = static_cast<int>(rawDy);
+                    m_driftstackScrollRemainderX = rawDx - sdx;
+                    m_driftstackScrollRemainderY = rawDy - sdy;
                     if (sdx || sdy) {
                         // W2402 (A1, per A3's W1453b hand-off — the scrolling engine is A1's domain):
                         // native touch-drag scroll targets the LOCKED enclosing scrollable area of the
