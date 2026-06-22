@@ -4360,9 +4360,26 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                             { WebCore::HitTestRequest::Type::ReadOnly, WebCore::HitTestRequest::Type::Active, WebCore::HitTestRequest::Type::DisallowUserAgentShadowContent });
                         if (RefPtr node = htr.innerNode())
                             area = localMainFrame->eventHandler().enclosingScrollableArea(node.get());
-                        if (area && area != static_cast<WebCore::ScrollableArea*>(view))
-                            area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(area->scrollPosition().x() + sdx, area->scrollPosition().y() + sdy));
-                        else
+                        if (area && area != static_cast<WebCore::ScrollableArea*>(view)) {
+                            // W2790 (audit #19 / wp0viuubh — over-scroll CHAINING inner→page): clamp the delta to
+                            // the inner area's REMAINING scroll range and pass the leftover (the over-scroll) to the
+                            // main frame, like a real iPhone (inner scroller bottoms out → the page continues). Use the
+                            // scroll RANGE (min/max) BEFORE applying — NOT the post-scroll position, which
+                            // scrollToPositionWithoutAnimation does NOT update synchronously (the W2402 caveat: a
+                            // post-delta "consumed" check leaves remaining==full → it over-scrolled the page). Within
+                            // range → leftover is 0 (no chain, inner scrolls only); at the limit → all of the delta
+                            // chains to the page. Per-axis so a vertical over-scroll doesn't drag the page horizontally.
+                            auto cur = area->scrollPosition();
+                            auto minP = area->minimumScrollPosition();
+                            auto maxP = area->maximumScrollPosition();
+                            int wantX = cur.x() + sdx, wantY = cur.y() + sdy;
+                            int clampX = std::max(minP.x(), std::min(maxP.x(), wantX));
+                            int clampY = std::max(minP.y(), std::min(maxP.y(), wantY));
+                            area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(clampX, clampY));
+                            int leftX = wantX - clampX, leftY = wantY - clampY;
+                            if (leftX || leftY)
+                                view->scrollBy(WebCore::IntSize(leftX, leftY));   // chain the over-scroll to the page
+                        } else
                             view->scrollBy(WebCore::IntSize(sdx, sdy));   // W1453: native MAIN-frame scroll (A3's behavior — no inner scroller under the locked start point)
                     }
                 }
