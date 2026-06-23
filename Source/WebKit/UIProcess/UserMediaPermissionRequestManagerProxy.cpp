@@ -576,6 +576,16 @@ void UserMediaPermissionRequestManagerProxy::requestUserMediaPermissionForFrame(
     ALWAYS_LOG(LOGIDENTIFIER, userMediaID.toUInt64());
 
     Ref request = UserMediaPermissionRequestProxy::create(*this, userMediaID, page->mainFrame()->frameID(), WTF::move(frameInfo), WTF::move(userMediaDocumentOrigin), WTF::move(topLevelDocumentOrigin), { }, { }, WTF::move(userRequest));
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY (isolation audit wi8z2sdot / planning 146; A3 fork non-fingerprint lane): a customer
+    // session must NEVER reach the SHARED Mac worker's camera/microphone. getUserMedia is gated to the
+    // iPhone-faithful "user denied permission" (PermissionDenied → NotAllowedError) — the request never reaches
+    // startProcessingUserMediaPermissionRequest → grantRequest → RealtimeMediaSourceCenter (host AVFoundation
+    // capture). Device PRESENCE via enumerateDevices stays iPhone-correct elsewhere; only the live-capture grant
+    // is denied here (a real iPhone user routinely declines camera/mic, so deny is a faithful, non-tell outcome).
+    request->deny(UserMediaPermissionRequestProxy::UserMediaAccessDenialReason::PermissionDenied);
+    return;
+#endif
     if (m_currentUserMediaRequest) {
         if (m_currentUserMediaRequest->requiresDisplayCapture() && request->requiresDisplayCapture()) {
             ALWAYS_LOG(LOGIDENTIFIER, "Cancelling pending getDisplayMedia request");
