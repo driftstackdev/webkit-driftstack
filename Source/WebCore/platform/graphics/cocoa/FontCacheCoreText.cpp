@@ -3228,6 +3228,16 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
         // (exact-family, not "Hiragino Kaku") separates them. The heavy Hiragino Sans W6-W8 already weight-match.
         if (driftstackBaseWeight < 0.35 && driftstackBaseFamily.startsWith("Hiragino Sans"_s))
             driftstackBaseWeight = 0.5;
+        // W2828 (#96, cracked via captures/v3/ct-cascade-probe.m sim-vs-Mac diff + the STABLE kCTFontWeightTrait):
+        // "SignPainter" is the HouseScript-SEMIBOLD display script — its weight trait reads 0.30 (< the 0.35 heavy
+        // threshold), so the fork served ₹/ॿ via the REGULAR fallback (Helvetica 67 / Kohinoor 73). But iOS
+        // weight-matches SignPainter's ₹/ॿ to a BOLD fallback (Helvetica-Bold 71 / Kohinoor-Devanagari-Semibold 75 —
+        // verified on the iOS-26.5 sim cascade), same as the heavy Hiragino Sans above. Force the heavy path so the
+        // fork routes to iOS's bold-matched fallback (a render-fix — correct FONT, not answer-injection). glyphHash-
+        // SAFE: SignPainter is a NAMED font, never one of the 6 glyphHash generics (Times/Helvetica/Snell/Papyrus/SF/
+        // Menlo). (Impact at 0.62 already trips the threshold → W2608 fixed it; Futura at 0.00 wants regular → unchanged.)
+        if (driftstackBaseWeight < 0.35 && driftstackBaseFamily.startsWith("SignPainter"_s))
+            driftstackBaseWeight = 0.5;
     }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
             characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight, driftstackBaseIsSerif)) {
