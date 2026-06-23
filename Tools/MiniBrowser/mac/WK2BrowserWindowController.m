@@ -1605,6 +1605,12 @@ static BOOL isJavaScriptURL(NSURL *url)
 
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView
 {
+    // W2825 (A3 fork-lifecycle audit #1 / A1-A3 bus #25): emit a deterministic stderr marker the
+    // harness greps in BrowserProcess.drainPipe to reap a dead-renderer session WITHOUT polling or
+    // false-positives — WebKit tells us exactly when WebContent dies. Symmetric with the paint-ready
+    // marker. PID is best-effort (the process is already gone, so it may read 0). Stderr-only ⇒ zero
+    // fingerprint surface. Keep this BEFORE the reload so the marker fires even if reload throws.
+    NSLog(@"[Driftstack-WebContentTerminated] pid=%d", (int)webView._webProcessIdentifier);
     NSLog(@"WebContent process crashed; reloading");
     [self reload:nil];
 }
