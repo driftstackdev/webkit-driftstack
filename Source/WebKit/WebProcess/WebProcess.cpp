@@ -512,6 +512,14 @@ static void driftstackEnsureProductionFingerprintHooks()
         "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", "DRIFTSTACK_ORPHAN_MARK_SPACING",
         "DRIFTSTACK_POSCLASS_THIRDS", "DRIFTSTACK_SF_PRO_PLUS_ONE",
         "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", "DRIFTSTACK_V790L_N1_SUB",
+        // #79 canvas-text readback-recompose (W2824, the W2823 dsEnv-delivery follow-up): the byte-exact
+        // getImageData/toDataURL/toBlob/convertToBlob recompose for simple-text canvases. launch-env-v1.sh
+        // sets it =1 AND W2823 added it to the ProcessLauncher dsEnv[] forward — but force it ON here too
+        // (belt-and-suspenders, like DISPATCH_PER_GLYPH/V790L_N1_SUB) so a worker whose launcher env path is
+        // bypassed can't silently render arbitrary canvas text Mac-CG-native (the exact gap A3 audit
+        // w7o4zay29 #28 caught: it was dark in prod). Canvas-read-path only → glyphHash (DOM-geometry)
+        // unaffected; cumrig 0-critical verified with it on (catch-up #79 / 1688 match).
+        "DRIFTSTACK_CANVAS_TEXT_RECOMPOSE",
         // PROBE_SIGNATURE_EMIT: infra-emission (op-signatures on atlas-miss → the ProbeSig→BS-replay
         // priority-atlas learning crawl). In launch-env-v1.sh but was missing here — a worker omitting it
         // silently stops feeding the learning pipeline. Does NOT alter rendered output → safe to force on.
