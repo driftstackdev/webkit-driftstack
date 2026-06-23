@@ -41,6 +41,7 @@
 #import <WebKit/_WKNotificationData.h>
 #import <WebKit/_WKProcessPoolConfiguration.h>
 #import <WebKit/_WKWebsiteDataStoreConfiguration.h>
+#import <dispatch/dispatch.h>
 #import <notify.h>
 #import <objc/runtime.h>
 #import <wtf/Platform.h> // for PLATFORM(DRIFTSTACK) below (preprocessor-only, .m-safe)
@@ -125,6 +126,142 @@ static BOOL enabledForFeature(_WKFeature *feature)
     return [feature defaultValue];
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2827 (A3 #30 — profile-persistence launch blocker): the profile cookie SEED/DUMP sidecar, the fork half
+// of the agreed contract (A3 W352/W353/W356; the harness ProfileSeedSidecar.swift reads/writes the JSON +
+// ProfileSession.finalize seals it). COOKIES ONLY — W356: localStorage/IndexedDB/CacheStorage/SW ride the
+// harness opaque Origins/ dir-snapshot; only cookies need structured handling (httpOnly via WKHTTPCookieStore
+// — the only restore path JS document.cookie can't reach — + the harness's load-time expiry purge). Schema
+// ProfileSeedSidecar v1 (A3 W353, byte-pinned in testProfileSeedSidecarWireFormatPin):
+//   { "version":1, "cookies":[ {domain,path,name,value, secure,httpOnly (bool),
+//     sameSite:"lax"|"strict"|"none", expiresUnixMs? (absent=session cookie), partitionKey?} ] }
+// Same schema both directions: .driftstack-seed.json (harness->fork, load) / .driftstack-dump.json
+// (fork->harness, save). Gated on the harness DRIFTSTACK_DATA_DIR env (only fleet/profile sessions);
+// zero fingerprint surface (it persists cookies — no JS-observable getter changes).
+static NSString *driftstackProfileDataDir(void)
+{
+    const char *d = getenv("DRIFTSTACK_DATA_DIR");
+    if (!d || !d[0])
+        return nil;
+    return [NSString stringWithUTF8String:d];
+}
+
+static void driftstackSeedCookiesFromSidecar(WKWebsiteDataStore *dataStore)
+{
+    NSString *dir = driftstackProfileDataDir();
+    if (!dir)
+        return;
+    NSString *seedPath = [dir stringByAppendingPathComponent:@".driftstack-seed.json"];
+    NSData *data = [NSData dataWithContentsOfFile:seedPath];
+    if (!data)
+        return; // no seed = fresh profile, normal
+    id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![root isKindOfClass:[NSDictionary class]])
+        return;
+    id ver = root[@"version"];
+    if (![ver isKindOfClass:[NSNumber class]] || [ver intValue] != 1) {
+        NSLog(@"[Driftstack-Profile] seed version %@ unsupported (expect 1) — skipping (no best-effort on a newer shape)", ver);
+        return;
+    }
+    id cookies = root[@"cookies"];
+    if (![cookies isKindOfClass:[NSArray class]])
+        return;
+    WKHTTPCookieStore *store = dataStore.httpCookieStore;
+    NSUInteger seeded = 0;
+    for (id obj in (NSArray *)cookies) {
+        if (![obj isKindOfClass:[NSDictionary class]])
+            continue;
+        NSDictionary *c = (NSDictionary *)obj;
+        id domain = c[@"domain"], path = c[@"path"], name = c[@"name"], value = c[@"value"];
+        if (![domain isKindOfClass:[NSString class]] || ![path isKindOfClass:[NSString class]]
+            || ![name isKindOfClass:[NSString class]] || ![value isKindOfClass:[NSString class]])
+            continue;
+        NSMutableDictionary *props = [NSMutableDictionary dictionary];
+        props[NSHTTPCookieDomain] = domain;
+        props[NSHTTPCookiePath] = path;
+        props[NSHTTPCookieName] = name;
+        props[NSHTTPCookieValue] = value;
+        if ([c[@"secure"] boolValue])
+            props[NSHTTPCookieSecure] = @"TRUE";
+        if ([c[@"httpOnly"] boolValue])
+            props[@"HttpOnly"] = @YES; // the key NSHTTPCookie honors for httpOnly (no public cookieWithProperties key)
+        NSString *ss = [c[@"sameSite"] isKindOfClass:[NSString class]] ? c[@"sameSite"] : nil;
+        if ([ss isEqualToString:@"lax"])
+            props[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteLax;
+        else if ([ss isEqualToString:@"strict"])
+            props[NSHTTPCookieSameSitePolicy] = NSHTTPCookieSameSiteStrict;
+        // "none" (or absent) -> omit the policy (unrestricted)
+        id expMs = c[@"expiresUnixMs"];
+        if ([expMs isKindOfClass:[NSNumber class]])
+            props[NSHTTPCookieExpires] = [NSDate dateWithTimeIntervalSince1970:[expMs doubleValue] / 1000.0];
+        // partitionKey (CHIPS top-level site) intentionally dropped on inject — non-fatal per A3 W353.
+        NSHTTPCookie *cookie = [NSHTTPCookie cookieWithProperties:props];
+        if (cookie) {
+            [store setCookie:cookie completionHandler:nil];
+            ++seeded;
+        }
+    }
+    NSLog(@"[Driftstack-Profile] seeded %lu cookie(s) from %@", (unsigned long)seeded, seedPath);
+}
+
+static void driftstackDumpCookiesToSidecar(WKWebsiteDataStore *dataStore)
+{
+    NSString *dir = driftstackProfileDataDir();
+    if (!dir)
+        return;
+    __block BOOL done = NO;
+    __block NSArray<NSHTTPCookie *> *all = nil;
+    [dataStore.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+        all = cookies;
+        done = YES;
+    }];
+    // getAllCookies: completes on the main queue and we're on the main queue (the SIGTERM dispatch source),
+    // so spin the runloop (bounded) to let the completion fire before we _exit (the agreed W1419c pattern).
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3.0];
+    while (!done && [deadline timeIntervalSinceNow] > 0)
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSHTTPCookie *c in all) {
+        NSMutableDictionary *d = [NSMutableDictionary dictionary];
+        d[@"domain"] = c.domain ?: @"";
+        d[@"path"] = c.path ?: @"/";
+        d[@"name"] = c.name ?: @"";
+        d[@"value"] = c.value ?: @"";
+        d[@"secure"] = @(c.isSecure);
+        d[@"httpOnly"] = @(c.isHTTPOnly);
+        NSString *ss = @"none";
+        if ([c.sameSitePolicy isEqualToString:NSHTTPCookieSameSiteLax])
+            ss = @"lax";
+        else if ([c.sameSitePolicy isEqualToString:NSHTTPCookieSameSiteStrict])
+            ss = @"strict";
+        d[@"sameSite"] = ss;
+        if (c.expiresDate) // ABSENT key = session cookie (per the contract — omit, don't null)
+            d[@"expiresUnixMs"] = @((long long)([c.expiresDate timeIntervalSince1970] * 1000.0));
+        [out addObject:d];
+    }
+    NSData *json = [NSJSONSerialization dataWithJSONObject:@{ @"version": @1, @"cookies": out } options:0 error:nil];
+    if (json) {
+        NSString *dumpPath = [dir stringByAppendingPathComponent:@".driftstack-dump.json"];
+        [json writeToFile:dumpPath atomically:YES];
+        NSLog(@"[Driftstack-Profile] dumped %lu cookie(s) to %@", (unsigned long)out.count, dumpPath);
+    }
+}
+
+static void driftstackInstallProfileDumpHandler(WKWebsiteDataStore *dataStore)
+{
+    static dispatch_source_t source;
+    if (source || !driftstackProfileDataDir())
+        return;
+    signal(SIGTERM, SIG_IGN); // let the dispatch source own SIGTERM (runs in normal GCD ctx -> ObjC-safe, unlike a raw handler)
+    source = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM, 0, dispatch_get_main_queue());
+    dispatch_source_set_event_handler(source, ^{
+        driftstackDumpCookiesToSidecar(dataStore);
+        _exit(0);
+    });
+    dispatch_resume(source);
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 - (WKWebsiteDataStore *)persistentDataStore
 {
     static WKWebsiteDataStore *dataStore;
@@ -165,6 +302,14 @@ static BOOL enabledForFeature(_WKFeature *feature)
 
         dataStore = [[WKWebsiteDataStore alloc] _initWithConfiguration:configuration];
         dataStore._delegate = self;
+
+#if PLATFORM(DRIFTSTACK)
+        // W2827 (A3 #30): inject the profile's saved cookies BEFORE first navigation (the data store is built
+        // here, before applicationDidFinishLaunching creates the webView), and arm the SIGTERM teardown dump so
+        // ProfileSession.finalize can seal the profile. Both no-op unless DRIFTSTACK_DATA_DIR is set (harness).
+        driftstackSeedCookiesFromSidecar(dataStore);
+        driftstackInstallProfileDumpHandler(dataStore);
+#endif
 
         int token;
         notify_register_dispatch("org.webkit.MiniBrowser.clearAllData", &token, dispatch_get_main_queue(), ^(int unusedToken) {
