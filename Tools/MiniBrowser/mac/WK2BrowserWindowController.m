@@ -1268,6 +1268,51 @@ static BOOL areEssentiallyEqual(double a, double b)
 
 - (void)webView:(WKWebView *)webView runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSArray<NSURL *> * URLs))completionHandler
 {
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY (isolation audit wi8z2sdot / planning 146, founder file-control; W2849/W2850): a customer
+    // session's <input type=file> must NEVER browse the SHARED Mac worker's /Users. Instead of an NSOpenPanel
+    // rooted at the worker filesystem (or the arbitrary-path DRIFTSTACK_AUTO_FILE_PICK — both gone from prod),
+    // answer the chooser with files from the per-session 0o700 upload JAIL (DRIFTSTACK_UPLOAD_DIR) — the customer
+    // pushed them there via the file-control API. Each path is realpath-canonicalized + prefix-checked against the
+    // canonical jail so a symlink/.. inside the jail can't escape it. No jail / no files → iPhone-faithful "user
+    // cancelled" (nil). Precise per-file selection is the WD upload-drive (handle.id→jailed path); this chooser
+    // funnel is the jail-confined fallback for pages that open the picker directly.
+    NSMutableArray<NSURL *> *jailURLs = [NSMutableArray array];
+    const char* jailEnv = getenv("DRIFTSTACK_UPLOAD_DIR");
+    if (jailEnv && jailEnv[0]) {
+        char jailReal[PATH_MAX];
+        if (realpath(jailEnv, jailReal)) {
+            NSString *jailPrefix = [[NSString stringWithUTF8String:jailReal] stringByAppendingString:@"/"];
+            NSDirectoryEnumerator<NSURL *> *en = [[NSFileManager defaultManager]
+                enumeratorAtURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:jailReal]]
+                includingPropertiesForKeys:@[NSURLIsRegularFileKey, NSURLContentModificationDateKey]
+                options:0 errorHandler:nil];
+            for (NSURL *url in en) {
+                NSNumber *isRegular = nil;
+                if (![url getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:nil] || !isRegular.boolValue)
+                    continue;
+                char fileReal[PATH_MAX];
+                if (!realpath(url.path.fileSystemRepresentation, fileReal))
+                    continue;
+                NSString *fileCanon = [NSString stringWithUTF8String:fileReal];
+                if (![fileCanon hasPrefix:jailPrefix])
+                    continue;   // realpath landed outside the jail (symlink/.. escape) — refuse
+                [jailURLs addObject:[NSURL fileURLWithPath:fileCanon]];
+            }
+            // most-recent upload first → deterministic choice for a single-file <input>
+            [jailURLs sortUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) {
+                NSDate *da = nil, *db = nil;
+                [a getResourceValue:&da forKey:NSURLContentModificationDateKey error:nil];
+                [b getResourceValue:&db forKey:NSURLContentModificationDateKey error:nil];
+                return [db compare:da];
+            }];
+        }
+    }
+    if (!parameters.allowsMultipleSelection && jailURLs.count > 1)
+        jailURLs = [NSMutableArray arrayWithObject:jailURLs[0]];
+    completionHandler(jailURLs.count ? jailURLs : nil);
+    return;
+#else
     // Wave 29-499.348 — headless file-pick for the PathB v2 upload functional
     // test. DRIFTSTACK_AUTO_FILE_PICK=<path> answers any <input type=file>
     // open-panel with that file, no dialog — lets the automated harness drive a
@@ -1297,6 +1342,7 @@ static BOOL areEssentiallyEqual(double a, double b)
         else
             completionHandler(nil);
     }];
+#endif
 }
 
 - (void)_webView:(WebView *)sender runBeforeUnloadConfirmPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL result))completionHandler
