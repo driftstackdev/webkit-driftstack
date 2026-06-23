@@ -69,6 +69,19 @@
     // Enable tabbing - group regular windows together
     self.window.tabbingIdentifier = @"MiniBrowserMainWindow";
 
+    // W2837 (founder white-band, A2-A3 W2824/W2825): the WHOLE window is captured into the session stream
+    // (SCContentFilter desktopIndependentWindow). Where no WEB content covers it — the hidden-chrome-bar
+    // reserve band (DRIFTSTACK_SAFARI_CHROME_HIDDEN hides the bar but leaves the web-view inset by barH) +
+    // any title/letterbox edge — the bare window background shows. macOS defaults that to a LIGHT
+    // (windowBackgroundColor) fill → a WHITE band baked into the published frame (the founder's recurring
+    // "white space"; the GUI masks most of it but a geometry-dependent sliver peeks past the fixed mask).
+    // Paint the window BLACK so every non-web band reads as the device bezel — GEOMETRY-INDEPENDENTLY, so no
+    // px-perfect mask-matching is needed. Capture-appearance ONLY: the page never sees the window chrome
+    // color, and this is NOT a dark NSAppearance (so it does NOT flip prefers-color-scheme) → zero
+    // fingerprint surface. (Only backgroundColor — NOT `opaque`, to avoid the W2229 opaque-KVO interaction
+    // with the iOS-26 bottom-bar NSHostingView's `opaque` observer.)
+    self.window.backgroundColor = NSColor.blackColor;
+
     // Driftstack iOS-Safari chrome (W1369) — ENV-GATED `DRIFTSTACK_SAFARI_CHROME`, default OFF so the
     // production session host stays byte-identical until the custom chrome is fully built + verified.
     // The whole window is captured into the session stream (SCContentFilter desktopIndependentWindow),
