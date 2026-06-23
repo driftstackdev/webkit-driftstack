@@ -136,6 +136,7 @@ private:
     void executeScript(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void executeAsyncScript(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void getAllCookies(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
+    void driftstackGetAllCookiesAllDomains(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack #48: whole-jar (all domains)
     void getNamedCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void addCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void deleteCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);

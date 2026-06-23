@@ -797,6 +797,17 @@
             "async": true
         },
         {
+            "name": "getAllCookiesAllDomains",
+            "description": "Driftstack extension (founder #48 live-cookies GUI): returns the ENTIRE session cookie jar across ALL domains (not just the current browsing context), read from the UIProcess WKWebsiteDataStore HTTP cookie store. Includes httpOnly cookies.",
+            "parameters": [
+                { "name": "browsingContextHandle", "$ref": "BrowsingContextHandle", "description": "Any handle in the session; used only to resolve the WKWebsiteDataStore." }
+            ],
+            "returns": [
+                { "name": "cookies", "type": "array", "items": { "$ref": "Cookie" }, "description": "Array of every cookie in the session data store, all domains." }
+            ],
+            "async": true
+        },
+        {
             "name": "deleteSingleCookie",
             "description": "Deletes a cookie with the given name if visible to the specified browsing context.",
             "parameters": [

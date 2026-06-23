@@ -147,6 +147,7 @@ public:
     void getPageSource(Function<void(CommandResult&&)>&&);
     void executeScript(const String& script, RefPtr<JSON::Array>&& arguments, ExecuteScriptMode, Function<void(CommandResult&&)>&&);
     void getAllCookies(Function<void(CommandResult&&)>&&);
+    void driftstackGetAllCookiesAllDomains(Function<void(CommandResult&&)>&&); // Driftstack #48: whole-jar (all domains)
     void getNamedCookie(const String& name, Function<void(CommandResult&&)>&&);
     void addCookie(const Cookie&, Function<void(CommandResult&&)>&&);
     void deleteCookie(const String& name, Function<void(CommandResult&&)>&&);

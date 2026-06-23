@@ -290,6 +290,7 @@ const WebDriverService::Command WebDriverService::s_commands[] = {
     { HTTPMethod::Post, "/session/$sessionId/execute/async", &WebDriverService::executeAsyncScript },
 
     { HTTPMethod::Get, "/session/$sessionId/cookie", &WebDriverService::getAllCookies },
+    { HTTPMethod::Get, "/session/$sessionId/driftstack/cookies/all", &WebDriverService::driftstackGetAllCookiesAllDomains }, // Driftstack #48: whole-jar (all domains, httpOnly)
     { HTTPMethod::Get, "/session/$sessionId/cookie/$name", &WebDriverService::getNamedCookie },
     { HTTPMethod::Post, "/session/$sessionId/cookie", &WebDriverService::addCookie },
     { HTTPMethod::Delete, "/session/$sessionId/cookie/$name", &WebDriverService::deleteCookie },
@@ -2111,6 +2112,18 @@ void WebDriverService::getAllCookies(RefPtr<JSON::Object>&& parameters, Function
         }
         m_session->getAllCookies(WTF::move(completionHandler));
     });
+}
+
+void WebDriverService::driftstackGetAllCookiesAllDomains(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
+{
+    // Driftstack extension (founder #48 live-cookies GUI): the WHOLE session cookie jar across ALL domains
+    // (UIProcess WKWebsiteDataStore), distinct from the W3C §16.1 getAllCookies which is current-page scoped.
+    // No waitForNavigationToComplete: the cookie store is readable regardless of in-flight navigation, and a
+    // live ~2-3s poll must not stall behind it.
+    if (!findSessionOrCompleteWithError(*parameters, completionHandler))
+        return;
+
+    m_session->driftstackGetAllCookiesAllDomains(WTF::move(completionHandler));
 }
 
 void WebDriverService::getNamedCookie(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)

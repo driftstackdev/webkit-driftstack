@@ -1869,6 +1869,23 @@ void WebAutomationSession::getAllCookies(const Inspector::Protocol::Automation::
     protect(page->legacyMainFrameProcess())->sendWithAsyncReply(Messages::WebAutomationSessionProxy::GetCookiesForFrame(page->webPageIDInMainFrameProcess(), std::nullopt), WTF::move(completionHandler));
 }
 
+void WebAutomationSession::getAllCookiesAllDomains(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, CommandCallback<Ref<JSON::ArrayOf<Inspector::Protocol::Automation::Cookie>>>&& callback)
+{
+    // Driftstack extension (founder #48 "see ALL cookies for EVERY website, live"): unlike the W3C getAllCookies
+    // above — which is scoped to the current document's URL via WebAutomationSessionProxy::GetCookiesForFrame —
+    // this returns the ENTIRE session cookie jar across ALL domains, read from the UIProcess WKWebsiteDataStore
+    // HTTP cookie store directly (the same all-domains source the AppDelegate W2827 profile dump uses). The store
+    // returns httpOnly cookies (httpOnly is hidden only from document.cookie JS, not the raw store). buildArray-
+    // ForCookies serializes the SAME Automation::Cookie shape as getAllCookies, so the harness mapping is identical.
+    RefPtr page = webPageProxyForHandle(browsingContextHandle);
+    ASYNC_FAIL_WITH_PREDEFINED_ERROR_IF(!page, WindowNotFound);
+
+    Ref cookieStore = protect(page->websiteDataStore())->cookieStore();
+    cookieStore->cookies([cookieStore, callback = WTF::move(callback)](Vector<WebCore::Cookie>&& cookies) mutable {
+        callback(buildArrayForCookies(cookies));
+    });
+}
+
 void WebAutomationSession::deleteSingleCookie(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, const String& cookieName, CommandCallback<void>&& callback)
 {
     auto page = webPageProxyForHandle(browsingContextHandle);

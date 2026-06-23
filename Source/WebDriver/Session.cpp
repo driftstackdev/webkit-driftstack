@@ -2795,6 +2795,50 @@ void Session::getAllCookies(Function<void(CommandResult&&)>&& completionHandler)
     });
 }
 
+void Session::driftstackGetAllCookiesAllDomains(Function<void(CommandResult&&)>&& completionHandler)
+{
+    // Driftstack extension (founder #48 live-cookies GUI): the WHOLE session cookie jar across ALL domains, read
+    // from the UIProcess WKWebsiteDataStore — distinct from the W3C getAllCookies above, which is current-page
+    // scoped. The backend returns the SAME Automation::Cookie shape, so the parse is identical. No handleUserPrompts
+    // wrapper here: reading the store does not depend on a settled page, and a live poll must not dismiss a dialog.
+    if (!m_currentBrowsingContext) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::NoSuchWindow));
+        return;
+    }
+
+    auto parameters = JSON::Object::create();
+    parameters->setString("browsingContextHandle"_s, uncheckedTopLevelBrowsingContext());
+    m_host->sendCommandToBackend("getAllCookiesAllDomains"_s, WTF::move(parameters), [protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)](SessionHost::CommandResponse&& response) mutable {
+        if (response.isError || !response.responseObject) {
+            completionHandler(CommandResult::fail(WTF::move(response.responseObject)));
+            return;
+        }
+
+        auto cookiesArray = response.responseObject->getArray("cookies"_s);
+        if (!cookiesArray) {
+            completionHandler(CommandResult::fail(CommandResult::ErrorCode::UnknownError, "Could not retrieve cookies from data store"_s));
+            return;
+        }
+
+        auto cookies = JSON::Array::create();
+        for (unsigned i = 0; i < cookiesArray->length(); ++i) {
+            auto cookieObject = cookiesArray->get(i)->asObject();
+            if (!cookieObject) {
+                completionHandler(CommandResult::fail(CommandResult::ErrorCode::UnknownError, "Invalid cookie object in data store"_s));
+                return;
+            }
+
+            auto cookie = parseAutomationCookie(*cookieObject);
+            if (!cookie) {
+                completionHandler(CommandResult::fail(CommandResult::ErrorCode::UnknownError, "Invalid cookie data in data store"_s));
+                return;
+            }
+            cookies->pushObject(serializeCookie(cookie.value()));
+        }
+        completionHandler(CommandResult::success(WTF::move(cookies)));
+    });
+}
+
 void Session::getNamedCookie(const String& name, Function<void(CommandResult&&)>&& completionHandler)
 {
     getAllCookies([name, completionHandler = WTF::move(completionHandler)](CommandResult&& result) mutable {
