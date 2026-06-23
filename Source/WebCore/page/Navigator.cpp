@@ -278,6 +278,20 @@ void Navigator::showShareData(ExceptionOr<ShareDataWithParsedURL&> readData, Ref
     if (!frame || !frame->page())
         return;
 
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY (isolation audit wi8z2sdot / planning 146): a customer session must NEVER reach the SHARED
+    // WORKER's NSSharingService (the macOS share sheet — a Mac-app/UI reach + a tell a real iPhone never shows).
+    // navigator.share / navigator.canShare stay PRESENT + iPhone-correct (the API surface + canShare() above are
+    // untouched); only the INVOCATION is gated: resolve as the iPhone-faithful "user dismissed the share sheet"
+    // (AbortError) — NEVER chrome().showShareSheet(). Covers BOTH the direct and the file-share (ShareDataReader)
+    // funnels since both reach here. AbortError = a real cancel outcome, not a silent fake-success (which is a tell).
+    m_hasPendingShare = true;
+    RunLoop::mainSingleton().dispatch([promise = WTF::move(promise), weakThis = WeakPtr { *this }] {
+        if (weakThis)
+            weakThis->m_hasPendingShare = false;
+        promise->reject(Exception { ExceptionCode::AbortError, "Abort due to cancellation of share."_s });
+    });
+#else
     m_hasPendingShare = true;
 
     if (frame->page()->isControlledByAutomation()) {
@@ -300,6 +314,7 @@ void Navigator::showShareData(ExceptionOr<ShareDataWithParsedURL&> readData, Ref
         }
         promise->reject(Exception { ExceptionCode::AbortError, "Abort due to cancellation of share."_s });
     });
+#endif
 }
 
 // https://html.spec.whatwg.org/multipage/system-state.html#pdf-viewing-support
