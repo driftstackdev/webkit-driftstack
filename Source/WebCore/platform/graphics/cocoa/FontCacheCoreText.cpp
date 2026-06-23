@@ -2641,7 +2641,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForDevanagariCluster(String
 // SF Pro font (.SF UI family from driftstackIOSFontMap). Universal —
 // closes ~7000 of 7347 (95%) of Phase 2 diff measurements without
 // per-page tuning.
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false, double baseWeight = 0, bool baseIsSerif = false)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(StringView cluster, const FontDescription& description, float size, bool baseFontIsMonospace = false, bool baseIsCursive = false, bool baseIsFantasy = false, bool baseIsSansSerif = false, double baseWeight = 0, bool baseIsSerif = false, StringView baseFamily = { })
 {
     constexpr double kDriftstackHeavyBaseWeight = 0.35; // W2608: ≥ this -> weight-matched bold Latin/Indic fallback
     if (cluster.isEmpty())
@@ -2723,6 +2723,18 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
             if (RetainPtr<CTFontRef> helveticaBold = adoptCF(CTFontCreateWithName(CFSTR("Helvetica-Bold"), size, nullptr)))
                 return helveticaBold;
         }
+        // W2829 (#96, cracked via the captures/v3/ct-cascade-probe.m iOS-26.5-sim cascade): the "AppleGothic" and
+        // "Savoye LET" primaries route ₹ to KohinoorDevanagari-LIGHT on iOS (ctadv 59.008@128 = 46.10@100, byte-exact
+        // vs the sim), NOT Helvetica (66.5 → fork served +8/+7 too WIDE — blfgcps AppleGothic Δ+8 / Savoye Δ+7). These
+        // two primaries' iOS cascade lists prefer the narrow Indic ₹; the macOS-host natural cascade does not. Per-
+        // primary render-fix (correct FONT). Other primaries keep Helvetica (already matched). glyphHash-SAFE (named
+        // fonts, not one of the 6 generics). Light variant by exact PS name (driftstackLookupIOSFontByCandidates
+        // weight-normalizes to CSS 400 so it can't select the Light cut).
+        if (baseWeight < kDriftstackHeavyBaseWeight
+            && (baseFamily.startsWith("AppleGothic"_s) || baseFamily.startsWith("Savoye"_s))) {
+            if (RetainPtr<CTFontRef> kohLight = adoptCF(CTFontCreateWithName(CFSTR("KohinoorDevanagari-Light"), size, nullptr)))
+                return kohLight;
+        }
         static const std::array<ASCIILiteral, 5> candidates {
             "helvetica"_s, "carlito"_s, "chalkboard se"_s, ".sf ui"_s, "apple symbols"_s,
         };
@@ -2734,6 +2746,20 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         if (baseWeight >= kDriftstackHeavyBaseWeight) {
             if (RetainPtr<CTFontRef> kohinoorSemibold = adoptCF(CTFontCreateWithName(CFSTR("KohinoorDevanagari-Semibold"), size, nullptr)))
                 return kohinoorSemibold;
+        }
+        // W2829 (#96, cracked via captures/v3/ct-cascade-probe.m + the in-fork [DS-097F-NAT] diagnostic): the
+        // "AppleGothic" primary's NATURAL macOS cascade already resolves ॿ to Kohinoor-Devanagari-LIGHT (ctadv
+        // 71.808@128 = 56.10@100, byte-exact vs the iOS-26.5 sim), but the Track10 Devanagari dispatcher below
+        // (driftstackLookupIOSFontByCandidates is weight-normalized to CSS 400) was OVERRIDING that with Kohinoor-
+        // REGULAR (72.576 → blfgcps AppleGothic ॿ +1). Pre-empt the dispatcher here so AppleGothic keeps its iOS-
+        // correct LIGHT cut. (The other low-weight primaries — Chalkboard SE/Chalkduster/Noteworthy/Helvetica/Futura —
+        // natural-resolve to Kohinoor-REGULAR which equals the dispatcher's Regular, so they need no route; their
+        // remaining blfgcps Δ-16/-16/-10 is NOT a fallback-identity gap [the fork already picks the same Kohinoor-
+        // Regular the sim's NATIVE CoreText cascade does] but a sim-Safari-WebKit-vs-native-cascade width residual —
+        // needs the sim-Safari fallback identity to crack, parked.) glyphHash-SAFE (named font, not one of the 6 generics).
+        if (baseFamily.startsWith("AppleGothic"_s)) {
+            if (RetainPtr<CTFontRef> kohLight = adoptCF(CTFontCreateWithName(CFSTR("KohinoorDevanagari-Light"), size, nullptr)))
+                return kohLight;
         }
         return nullptr;
     }
@@ -3240,7 +3266,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             driftstackBaseWeight = 0.5;
     }
     if (auto driftstackUniversalFont = driftstackIOSFallbackFontForUniversalSymbolCluster(
-            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight, driftstackBaseIsSerif)) {
+            characterCluster, description, platformData.size(), driftstackBaseFontIsMonospace, driftstackBaseIsCursive, driftstackBaseIsFantasy, driftstackBaseIsSansSerif, driftstackBaseWeight, driftstackBaseIsSerif, driftstackBaseFamily)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-V433Z-UniversalSymbol] Universal-symbol fallback override fired (%u so far); cluster first cp = U+%04X",
