@@ -87,6 +87,33 @@ static bool driftstackLookupOrphanMarkAdvance(char32_t cp, int generic, int size
     outAdvance = it->value;
     return true;
 }
+
+// #96 blfonts /fonts metricsHash: Mac CoreText applies a per-primary metric-compatible transform to the
+// GCPS-char (₹▁₺₸ẞॿ) fallback advance that diverges from iOS for specific NAMED primary fonts (the bulk of
+// the fork-vs-iPhone blfonts divergence). The correction is keyed by (CSS-requested primary family,
+// codepoint) -> the iOS advance @128px (captured fork-vs-sim, gcps-allfonts-float probe), scaled to the run
+// size. Only the verified divergent (primary, cp) pairs are listed, so the 135 already-matching fonts and
+// every non-listed codepoint are untouched. (▁/U+2581 is handled separately by the DOM-geom/orphan path and
+// is intentionally NOT here yet.)
+static bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCascade, char16_t cp, float sizePx, float& outAdvance)
+{
+    if (cp != 0x1E9E) // ẞ (U+1E9E) — Latin, non-shaping: isolated advance == shaped advance, so the captured
+        return false; // value is correct in the blfonts string context. (Devanagari ॿ/U+097F SHAPES → the
+                      // isolated capture != the shaped advance → those corrections were wrong and are removed;
+                      // the ॿ-script + the rest of the metricsHash tail need SHAPED-context captures — residual.)
+    struct Entry { ASCIILiteral family; char16_t cp; float adv128; };
+    static constexpr std::array<Entry, 1> kGcpsNamed { {
+        { "Futura"_s, 0x1E9E, 86.9375f },  // ẞ — closes THE uniqueMetrics off-by-one (Futura↔Kailasa collision)
+    } };
+    String fam = fontCascade.fontDescription().firstFamily().name.string();
+    for (auto& e : kGcpsNamed) {
+        if (e.cp == cp && fam == e.family) {
+            outAdvance = e.adv128 * sizePx / 128.0f;
+            return true;
+        }
+    }
+    return false;
+}
 #endif
 
 class TextLayout {
@@ -782,6 +809,17 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             bool treatAsSpace = FontCascade::treatAsSpace(character);
             CGGlyph glyph = glyphs[glyphIndex];
             FloatSize advance = treatAsSpace ? FloatSize(spaceWidth, advances[glyphIndex].height()) : advances[glyphIndex];
+
+#if PLATFORM(DRIFTSTACK)
+            // #96 blfonts /fonts metricsHash: correct the per-primary GCPS-char (₹ ॿ ẞ) fallback advance to
+            // the iOS value where Mac CoreText's metric-transform diverges (e.g. ẞ-in-Futura 88.375→86.9375,
+            // the uniqueMetrics off-by-one). Keyed by (CSS primary family, codepoint); scaled to run size.
+            // Scale by the PRIMARY's computed size (the requested font-size), NOT the fallback run font's
+            // size: Mac CTLine metric-sizes the Devanagari fallback (e.g. Kohinoor for ॿ) at ~0.73x the
+            // primary, so font->size() would over-shrink the captured @128px iOS advance.
+            if (float gcpsAdvance; driftstackLookupGcpsFallbackAdvance(m_fontCascade.get(), character, m_fontCascade->fontDescription().computedSize(), gcpsAdvance))
+                advance.setWidth(gcpsAdvance);
+#endif
 
             // W554b (2026-06-03): emoji measureText. Multi-codepoint / ZWJ / VS emoji take THIS
             // complex-text path and use CoreText's native base advance (e.g. 32.67 @32px), NOT the
