@@ -243,7 +243,12 @@ static void driftstackDumpCookiesToSidecar(WKWebsiteDataStore *dataStore)
     if (json) {
         NSString *dumpPath = [dir stringByAppendingPathComponent:@".driftstack-dump.json"];
         [json writeToFile:dumpPath atomically:YES];
-        NSLog(@"[Driftstack-Profile] dumped %lu cookie(s) to %@", (unsigned long)out.count, dumpPath);
+        // W2835 (security, defense-in-depth): the dump holds the FULL cookie jar incl httpOnly session/auth tokens.
+        // writeToFile: creates the file with the process umask (typically 0644 = group/world-readable); a file of
+        // live auth cookies must not be readable by other uids on the fleet box (the per-session DRIFTSTACK_DATA_DIR
+        // may be 0755). Restrict to owner-only (0600) on the final inode, after the atomic rename.
+        [[NSFileManager defaultManager] setAttributes:@{ NSFilePosixPermissions: @(0600) } ofItemAtPath:dumpPath error:nil];
+        NSLog(@"[Driftstack-Profile] dumped %lu cookie(s) to %@ (0600)", (unsigned long)out.count, dumpPath);
     }
 }
 
