@@ -47,6 +47,7 @@
 #endif
 
 #if PLATFORM(DRIFTSTACK)
+#include "DriftstackGcpsFallback.h"
 #include "DriftstackOrphanMarkTable.h"
 #include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
@@ -86,33 +87,6 @@ static bool driftstackLookupOrphanMarkAdvance(char32_t cp, int generic, int size
         return false;
     outAdvance = it->value;
     return true;
-}
-
-// #96 blfonts /fonts metricsHash: Mac CoreText applies a per-primary metric-compatible transform to the
-// GCPS-char (₹▁₺₸ẞॿ) fallback advance that diverges from iOS for specific NAMED primary fonts (the bulk of
-// the fork-vs-iPhone blfonts divergence). The correction is keyed by (CSS-requested primary family,
-// codepoint) -> the iOS advance @128px (captured fork-vs-sim, gcps-allfonts-float probe), scaled to the run
-// size. Only the verified divergent (primary, cp) pairs are listed, so the 135 already-matching fonts and
-// every non-listed codepoint are untouched. (▁/U+2581 is handled separately by the DOM-geom/orphan path and
-// is intentionally NOT here yet.)
-static bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCascade, char16_t cp, float sizePx, float& outAdvance)
-{
-    if (cp != 0x1E9E) // ẞ (U+1E9E) — Latin, non-shaping: isolated advance == shaped advance, so the captured
-        return false; // value is correct in the blfonts string context. (Devanagari ॿ/U+097F SHAPES → the
-                      // isolated capture != the shaped advance → those corrections were wrong and are removed;
-                      // the ॿ-script + the rest of the metricsHash tail need SHAPED-context captures — residual.)
-    struct Entry { ASCIILiteral family; char16_t cp; float adv128; };
-    static constexpr std::array<Entry, 1> kGcpsNamed { {
-        { "Futura"_s, 0x1E9E, 86.9375f },  // ẞ — closes THE uniqueMetrics off-by-one (Futura↔Kailasa collision)
-    } };
-    String fam = fontCascade.fontDescription().firstFamily().name.string();
-    for (auto& e : kGcpsNamed) {
-        if (e.cp == cp && fam == e.family) {
-            outAdvance = e.adv128 * sizePx / 128.0f;
-            return true;
-        }
-    }
-    return false;
 }
 #endif
 

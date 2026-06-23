@@ -23,6 +23,7 @@
 #include "WidthIterator.h"
 
 #include "ComposedCharacterClusterTextIterator.h"
+#include "DriftstackGcpsFallback.h"
 #include "Font.h"
 #include "FontCascade.h"
 #include "FontCascadeInlines.h"
@@ -468,6 +469,12 @@ inline void WidthIterator::advanceInternal(TextIterator& textIterator, GlyphBuff
         }
 
         width = Ref { * advanceInternalState.nextRangeFont }->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude); // We apply synthetic bold after shaping, in applyCSSVisibilityRules().
+#if PLATFORM(DRIFTSTACK)
+        // #96: keep the simple-path GCPS-char fallback advance (e.g. ẞ-in-Futura) COHERENT with the complex
+        // path (ComplexTextController::adjustGlyphsAndAdvances) so canvas measureText agrees with offsetWidth.
+        if (float gcpsAdvance; driftstackLookupGcpsFallbackAdvance(m_fontCascade.get(), character, fontDescription.computedSize(), gcpsAdvance))
+            width = gcpsAdvance;
+#endif
         advanceInternalState.widthOfCurrentFontRange += width;
 
         if (FontCascade::treatAsSpace(characterToWrite))
