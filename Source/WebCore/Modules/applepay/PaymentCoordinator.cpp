@@ -143,6 +143,20 @@ bool PaymentCoordinator::beginPaymentSession(Document& document, PaymentSession&
 {
     ASSERT(!m_activeSession);
 
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY guard #2 (A3 #50): a customer session must NEVER reach the SHARED WORKER's PassKit.
+    // canMakePayments() stays config-driven (apple_pay.set_up) so the object/version/canMakePayments tells
+    // remain iPhone-correct — but beginPaymentSession() must NOT call m_client->showPaymentUI →
+    // WebPaymentCoordinatorProxyMac → real PKPaymentAuthorizationViewController bound to the worker's
+    // iCloud/Wallet (a cross-account leak AND a macOS-sheet UI tell a real iPhone never shows). Returning
+    // false = the iPhone-faithful "user dismissed the sheet / no payment completed" outcome. (A faithful
+    // mock onpaymentauthorized is a future enhancement; deny is the safe launch behavior.)
+    UNUSED_PARAM(document);
+    UNUSED_PARAM(paymentSession);
+    UNUSED_PARAM(paymentRequest);
+    PAYMENT_COORDINATOR_RELEASE_LOG("beginPaymentSession() driftstack-gated -> false (never reaches PassKit)");
+    return false;
+#else
     RefPtr page = document.page();
     if (!page)
         return false;
@@ -162,6 +176,7 @@ bool PaymentCoordinator::beginPaymentSession(Document& document, PaymentSession&
 
     m_activeSession = paymentSession;
     return true;
+#endif // PLATFORM(DRIFTSTACK)
 }
 
 void PaymentCoordinator::completeMerchantValidation(const PaymentMerchantSession& paymentMerchantSession)

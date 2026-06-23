@@ -27,6 +27,7 @@
 
 #import "AppDelegate.h"
 #import "SettingsController.h"
+#import <wtf/Platform.h> // for PLATFORM(DRIFTSTACK) launch-security guard (preprocessor-only, .m-safe)
 #import <PDFKit/PDFDocument.h>
 #import <QuartzCore/CATextLayer.h>
 #import <QuartzCore/CAAnimation.h>
@@ -1430,6 +1431,9 @@ static NSSet *dataTypes(void)
     [[_webView printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]] runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
 }
 
+// __attribute__((unused)): under PLATFORM(DRIFTSTACK) the sole caller (the NSWorkspace openURL branch in
+// decidePolicyForNavigationAction) is gated out by launch-security guard #1, leaving this static unused.
+static BOOL isJavaScriptURL(NSURL *url) __attribute__((unused));
 static BOOL isJavaScriptURL(NSURL *url)
 {
     return [url.scheme isEqualToString:@"javascript"];
@@ -1460,10 +1464,20 @@ static BOOL isJavaScriptURL(NSURL *url)
 
     NSURL *url = navigationAction.request.URL;
     
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY guard #1 (A3 #50, founder's exact ask): a customer session must NEVER launch a
+    // Mac app on the SHARED WORKER. The upstream branch hands any non-WebKit-handleable scheme
+    // (mailto:/facetime:///messages:///instagram:///fb:///itms-apps:///maps:// …) to NSWorkspace openURL →
+    // which LAUNCHES the worker's Mail/Messages/FaceTime/App Store/etc., binding a third-party scheme to
+    // the worker's real accounts. On a real iPhone an unhandleable scheme with no installed app is a SILENT
+    // no-op — the navigation simply cancels. So: cancel, never openURL.
+    (void)url;
+#else
     if (!isJavaScriptURL(url) && navigationAction._userInitiatedAction && !navigationAction._userInitiatedAction.isConsumed) {
         [navigationAction._userInitiatedAction consume];
         [[NSWorkspace sharedWorkspace] openURL:url];
     }
+#endif
 
     decisionHandler(WKNavigationActionPolicyCancel, preferences);
     [self validateToolbar];

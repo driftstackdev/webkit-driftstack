@@ -98,6 +98,15 @@ void WebAuthenticatorCoordinatorProxy::getAssertion(FrameIdentifier frameId, Fra
 
 void WebAuthenticatorCoordinatorProxy::handleRequest(WebAuthenticationRequestData&& data, RequestCompletionHandler&& handler)
 {
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY guard #3 (A3 #50): navigator.credentials.create()/get() must NEVER reach the SHARED
+    // WORKER's LAContext / Touch ID / iCloud-Keychain passkeys. ENABLE_WEB_AUTHN stays on so the API surface
+    // (navigator.credentials present, isUVPAA=true) remains iPhone-correct (#67) — but the INTERACTIVE
+    // make/get path here resolves through Cocoa LocalAuthentication to the worker's real authenticator.
+    // Return NotAllowedError = the iPhone-faithful "user dismissed / operation not allowed" outcome; this
+    // is the funnel for BOTH makeCredential + getAssertion, so neither reaches the Mac authenticator.
+    return handler({ }, AuthenticatorAttachment::Platform, ExceptionData { ExceptionCode::NotAllowedError, "The operation either timed out or was not allowed."_s });
+#endif
     if (!data.frameInfo)
         return handler({ }, AuthenticatorAttachment::Platform, ExceptionData { ExceptionCode::InvalidStateError });
 
