@@ -36,7 +36,7 @@ static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCa
     struct Entry { ASCIILiteral family; char32_t cp; float adv128; };
     static constexpr std::array<Entry, 8> kGcpsNamed { {
         { "Futura"_s, 0x1E9E, 86.9375f },  // ẞ -- closes the blfonts uniqueMetrics off-by-one (Futura↔Kailasa)
-        { "Savoye LET"_s, 0x097F, 71.576f },  // ॿ -- fork serves fixed 72.576; iOS Savoye ॿ ~72 (sim per-char 72 + group 3021 both constrain)
+        { "Savoye LET"_s, 0x097F, 71.808f },  // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (71.80799865722656 == float 71.808f); prior 71.576f was Mac-native-tuned-to-group, not the real iOS per-char float (the founder's "actually-correct not tune-to-pass" — iOS's own group is computed WITH 71.808 so it satisfies both)
         // -apple-system / system-ui: ONLY ▁ (U+2581) diverges (sim measureText: fork 118.19 vs iOS 119.738);
         // the exact iOS float makes the fork's Σ == iOS's Σ -> group 4186->4187 == sim. ₹/₺/₸/ẞ/ॿ already match.
         { "-apple-system"_s, 0x2581, 119.738f },  // ▁
@@ -46,7 +46,7 @@ static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCa
         { "Impact"_s, 0x20B9, 70.812f },   // ₹
         { "Impact"_s, 0x20B8, 71.188f },   // ₸
         { "Impact"_s, 0x1E9E, 88.375f },   // ẞ
-        { "Impact"_s, 0x097F, 74.648f },   // ॿ -- sim per-char 75 + sim full 3985 both constrain; native-cascade 75.648 sizes ~1px wider than iOS here
+        { "Impact"_s, 0x097F, 74.496f },   // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (74.49600219726562 == float 74.496f); prior 74.648f was native-cascade-tuned-to-group, not the real iOS per-char (offsetWidth 75 unchanged; iOS's group uses 74.496 so metricsHash holds)
     } };
     // Scale by the PRIMARY's computed size (the requested font-size), NOT the fallback run font's size:
     // Mac CTLine metric-shrinks some fallbacks relative to the primary, which would mis-scale the @128px value.
