@@ -46,6 +46,13 @@ namespace WebKit {
 
 namespace DriftstackRTC {
 
+// W2876 — UDP_ASSOCIATE relay TARGET endpoint. gost 3.2.6 can't relay
+// UDP-over-SOCKS5 (it EOFs), but a DIRECT UDP_ASSOCIATE to the upstream
+// customer proxy works. Route ONLY the UDP relay target to a dedicated env
+// (DRIFTSTACK_SOCKS5_UDP_PROXY), falling back to DRIFTSTACK_SOCKS5_PROXY when
+// unset. The TCP CONNECT path stays on gost; presence check stays on SOCKS5_PROXY.
+static const char* driftstackUdpProxyEndpointEnv() { const char* u = getenv("DRIFTSTACK_SOCKS5_UDP_PROXY"); return (u && *u) ? u : getenv("DRIFTSTACK_SOCKS5_PROXY"); }
+
 bool isCustomSocks5Active()
 {
     const char* customSocks5 = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
@@ -330,8 +337,8 @@ BridgeResult establishDedicatedQuicRelay(RelayChannel& out)
     }
 
     Socks5Endpoint proxy;
-    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
-        WTFLogAlways("[Wave29-499.310] establishDedicatedQuicRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
+    if (!parseProxyEndpoint(driftstackUdpProxyEndpointEnv(), proxy)) { // W2876 — UDP_ASSOCIATE target
+        WTFLogAlways("[Wave29-499.310] establishDedicatedQuicRelay: DRIFTSTACK_SOCKS5_UDP_PROXY/DRIFTSTACK_SOCKS5_PROXY malformed");
         return BridgeResult::ProtocolError;
     }
     Socks5Credentials creds;
@@ -386,8 +393,8 @@ static BridgeResult establishOneRelay(RelayChannel& out)
         return BridgeResult::Socks5Disabled;
 
     Socks5Endpoint proxy;
-    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
-        WTFLogAlways("[Wave29-499.332] establishOneRelay: DRIFTSTACK_SOCKS5_PROXY malformed");
+    if (!parseProxyEndpoint(driftstackUdpProxyEndpointEnv(), proxy)) { // W2876 — UDP_ASSOCIATE target
+        WTFLogAlways("[Wave29-499.332] establishOneRelay: DRIFTSTACK_SOCKS5_UDP_PROXY/DRIFTSTACK_SOCKS5_PROXY malformed");
         return BridgeResult::ProtocolError;
     }
     Socks5Credentials creds;
@@ -484,8 +491,8 @@ BridgeResult establishRelayChannel(RelayChannel& out)
     }
 
     Socks5Endpoint proxy;
-    if (!parseProxyEndpoint(getenv("DRIFTSTACK_SOCKS5_PROXY"), proxy)) {
-        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: DRIFTSTACK_SOCKS5_PROXY malformed (expected host:port)");
+    if (!parseProxyEndpoint(driftstackUdpProxyEndpointEnv(), proxy)) {   // W2876 (#39): UDP_ASSOCIATE direct to the upstream — gost 3.2.6 can't chain UDP-over-SOCKS5 (it EOFs). establishRelayChannel is the PRIMARY WebRTC relay (NetworkRTCProvider.cpp:326); the 4 workflow sites missed it.
+        WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15] establishRelayChannel: UDP proxy endpoint malformed (expected host:port)");
         return BridgeResult::ProtocolError;
     }
 

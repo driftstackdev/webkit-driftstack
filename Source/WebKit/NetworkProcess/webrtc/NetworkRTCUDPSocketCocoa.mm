@@ -61,6 +61,15 @@ namespace WebKit {
 
 using namespace WebCore;
 
+#if PLATFORM(DRIFTSTACK)
+// W2876 — UDP_ASSOCIATE / WebRTC-QUIC relay TARGET endpoint. gost 3.2.6 can't
+// relay UDP-over-SOCKS5 (it EOFs), but a DIRECT UDP_ASSOCIATE to the upstream
+// customer proxy works. Route ONLY the UDP relay target to a dedicated env
+// (DRIFTSTACK_SOCKS5_UDP_PROXY), falling back to DRIFTSTACK_SOCKS5_PROXY when
+// unset. The TCP CONNECT path stays on gost.
+static const char* driftstackUdpProxyEndpointEnv() { const char* u = getenv("DRIFTSTACK_SOCKS5_UDP_PROXY"); return (u && *u) ? u : getenv("DRIFTSTACK_SOCKS5_PROXY"); }
+#endif
+
 WTF_MAKE_TZONE_ALLOCATED_IMPL(NetworkRTCUDPSocketCocoa);
 
 class NetworkRTCUDPSocketCocoaConnections : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPtr<NetworkRTCUDPSocketCocoaConnections> {
@@ -690,7 +699,7 @@ bool NetworkRTCUDPSocketCocoaConnections::ensureRelayConnection() WTF_REQUIRES_L
         // Real STUN responses come from real STUN servers, not gost.
         // Use WTF::String operations to avoid raw-pointer unsafe-buffer warnings.
         {
-            String proxyEnvStr = String::fromLatin1(getenv("DRIFTSTACK_SOCKS5_PROXY"));
+            String proxyEnvStr = String::fromLatin1(driftstackUdpProxyEndpointEnv()); // W2876 — match UDP relay target
             size_t colonIdx = proxyEnvStr.find(':');
             if (colonIdx != notFound && colonIdx > 0) {
                 String proxyIp = proxyEnvStr.substring(0, colonIdx);
@@ -963,7 +972,7 @@ void NetworkRTCUDPSocketCocoaConnections::sendTo(std::span<const uint8_t> data, 
             auto hostStr = remoteAddress.HostAsURIString();
             bool socks5Active = DriftstackRTC::isCustomSocks5Active();
             const char* customSocks5Env = getenv("DRIFTSTACK_CUSTOM_SOCKS5");
-            const char* socks5ProxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+            const char* socks5ProxyEnv = driftstackUdpProxyEndpointEnv(); // W2876 — UDP relay target
             WTFLogAlways("[Driftstack-EG-WK-1.8/Task#15/Wave29-499.86] sendTo: FIRST entry — dest=%s:%u, payload=%zu bytes, isCustomSocks5Active=%d (CUSTOM_SOCKS5='%s', SOCKS5_PROXY='%s')",
                 hostStr.c_str(), remoteAddress.port(), data.size(),
                 socks5Active ? 1 : 0,
