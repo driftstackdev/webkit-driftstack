@@ -165,10 +165,17 @@ JSC_DEFINE_HOST_FUNCTION(dateParse, (JSGlobalObject* globalObject, CallFrame* ca
     RELEASE_AND_RETURN(scope, JSValue::encode(jsNumber(timeClip(vm.dateCache.parseDate(globalObject, vm, dateStr)))));
 }
 
+#if PLATFORM(DRIFTSTACK)
+// M5 (timing audit): Date "now" readers must stay INTEGER ms (real iOS Date.now()%1===0) after adding the
+// fractional virtual skew. int64 truncation == floor for the always-large-positive epoch ms (the sum ~1.7e12
+// dwarfs any skew, so never negative -> trunc-toward-zero == floor).
+static double driftstackSkewedNowMs() { return static_cast<double>(static_cast<int64_t>(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds())); }
+#endif
+
 JSValue dateNowImpl()
 {
 #if PLATFORM(DRIFTSTACK)
-    return jsNumber(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds()); // timing-fidelity virtual-clock skew (INERT until op-charging)
+    return jsNumber(driftstackSkewedNowMs()); // timing-fidelity virtual-clock skew (INERT until op-charging)
 #else
     return jsNumber(jsCurrentTime());
 #endif
@@ -177,7 +184,7 @@ JSValue dateNowImpl()
 JSC_DEFINE_HOST_FUNCTION(dateNow, (JSGlobalObject*, CallFrame*))
 {
 #if PLATFORM(DRIFTSTACK)
-    return JSValue::encode(jsNumber(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds()));
+    return JSValue::encode(jsNumber(driftstackSkewedNowMs()));
 #else
     return JSValue::encode(jsNumber(jsCurrentTime()));
 #endif
