@@ -2839,6 +2839,32 @@ void Session::driftstackGetAllCookiesAllDomains(Function<void(CommandResult&&)>&
     });
 }
 
+void Session::driftstackSetCookiesAllDomains(Ref<JSON::Array>&& cookies, Function<void(CommandResult&&)>&& completionHandler)
+{
+    // Driftstack extension (founder #40 / A2 W2867 cookie-import): the inverse of driftstackGetAllCookiesAllDomains —
+    // imports a BATCH of cookies for ARBITRARY domains into the per-session WKWebsiteDataStore HTTP cookie store, the
+    // same all-domains store the read ext drains. Distinct from the W3C addCookie above, which is current-page scoped
+    // and writes one cookie at a time. No handleUserPrompts wrapper: writing the store does not depend on a settled
+    // page, and a profile-restore import must not dismiss a dialog. Each cookie object carries the harness-side shape
+    // { domain, name, value, path?, expires?(unix-ms), httpOnly?, secure?, sameSite? }; the backend constructs a
+    // WebCore::Cookie per entry and calls WKHTTPCookieStore.setCookie on the session store.
+    if (!m_currentBrowsingContext) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::NoSuchWindow));
+        return;
+    }
+
+    auto parameters = JSON::Object::create();
+    parameters->setString("browsingContextHandle"_s, uncheckedTopLevelBrowsingContext());
+    parameters->setArray("cookies"_s, WTF::move(cookies));
+    m_host->sendCommandToBackend("setCookiesAllDomains"_s, WTF::move(parameters), [protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)](SessionHost::CommandResponse&& response) mutable {
+        if (response.isError) {
+            completionHandler(CommandResult::fail(WTF::move(response.responseObject)));
+            return;
+        }
+        completionHandler(CommandResult::success());
+    });
+}
+
 void Session::getNamedCookie(const String& name, Function<void(CommandResult&&)>&& completionHandler)
 {
     getAllCookies([name, completionHandler = WTF::move(completionHandler)](CommandResult&& result) mutable {

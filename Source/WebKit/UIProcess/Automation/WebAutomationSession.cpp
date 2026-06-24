@@ -1855,6 +1855,8 @@ static Ref<JSON::ArrayOf<Inspector::Protocol::Automation::Cookie>> buildArrayFor
     return cookies;
 }
 
+static String domainByAddingDotPrefixIfNeeded(String domain); // Driftstack #40: forward decl — setCookiesAllDomains (below) uses it before its definition.
+
 void WebAutomationSession::getAllCookies(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, CommandCallback<Ref<JSON::ArrayOf<Inspector::Protocol::Automation::Cookie>>>&& callback)
 {
     auto page = webPageProxyForHandle(browsingContextHandle);
@@ -1883,6 +1885,67 @@ void WebAutomationSession::getAllCookiesAllDomains(const Inspector::Protocol::Au
     Ref cookieStore = protect(page->websiteDataStore())->cookieStore();
     cookieStore->cookies([cookieStore, callback = WTF::move(callback)](Vector<WebCore::Cookie>&& cookies) mutable {
         callback(buildArrayForCookies(cookies));
+    });
+}
+
+void WebAutomationSession::setCookiesAllDomains(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, Ref<JSON::Array>&& cookiesArray, CommandCallback<void>&& callback)
+{
+    // Driftstack extension (founder #40 cookie-import): the inverse of getAllCookiesAllDomains above — writes a BATCH
+    // of cookies for ARBITRARY domains into the per-session UIProcess WKWebsiteDataStore HTTP cookie store (the same
+    // all-domains store the read ext drains), distinct from the W3C addSingleCookie which inherits the current frame's
+    // host. Each entry carries name/value/domain (required) and optional path/expires/httpOnly/secure/sameSite. Unlike
+    // addSingleCookie — which receives W3C-shaped cookies whose 'expires' is in SECONDS and multiplies by 1000 — the
+    // harness here sends 'expires' already in UNIX-MILLISECONDS (matching WebCore::Cookie's internal unit and the read
+    // ext's /1000 serialization), so it is stored verbatim. A cookie with no 'expires' is a session cookie.
+    RefPtr page = webPageProxyForHandle(browsingContextHandle);
+    ASYNC_FAIL_WITH_PREDEFINED_ERROR_IF(!page, WindowNotFound);
+
+    Vector<WebCore::Cookie> cookies;
+    cookies.reserveInitialCapacity(cookiesArray->length());
+
+    for (unsigned i = 0; i < cookiesArray->length(); ++i) {
+        auto cookieObject = cookiesArray->get(i)->asObject();
+        ASYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!cookieObject, InvalidParameter, "An entry in 'cookies' was not an object."_s);
+
+        WebCore::Cookie cookie;
+
+        cookie.name = cookieObject->getString("name"_s);
+        ASYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!cookie.name, MissingParameter, "A cookie was missing the required 'name' parameter."_s);
+        cookie.value = cookieObject->getString("value"_s);
+        ASYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!cookie.value, MissingParameter, "A cookie was missing the required 'value' parameter."_s);
+
+        auto domain = cookieObject->getString("domain"_s);
+        ASYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!domain || domain.isEmpty(), MissingParameter, "A cookie was missing the required 'domain' parameter (multi-domain import has no current-frame fallback)."_s);
+        cookie.domain = domainByAddingDotPrefixIfNeeded(domain);
+
+        // Optional fields — default to the conventional cookie semantics when omitted.
+        auto path = cookieObject->getString("path"_s);
+        cookie.path = (!path || path.isEmpty()) ? "/"_s : path;
+
+        // 'expires' is UNIX-MILLISECONDS (see header note). Absent ⇒ session cookie.
+        if (auto expires = cookieObject->getDouble("expires"_s)) {
+            cookie.expires = *expires;
+            cookie.session = false;
+        } else
+            cookie.session = true;
+
+        cookie.httpOnly = cookieObject->getBoolean("httpOnly"_s).value_or(false);
+        cookie.secure = cookieObject->getBoolean("secure"_s).value_or(false);
+
+        auto sameSite = cookieObject->getString("sameSite"_s);
+        if (!!sameSite && !sameSite.isEmpty()) {
+            auto parsedSameSite = Inspector::Protocol::AutomationHelpers::parseEnumValueFromString<Inspector::Protocol::Automation::CookieSameSitePolicy>(sameSite);
+            ASYNC_FAIL_WITH_PREDEFINED_ERROR_AND_DETAILS_IF(!parsedSameSite, InvalidParameter, "A cookie's 'sameSite' parameter has an unknown value."_s);
+            cookie.sameSite = toWebCoreSameSitePolicy(*parsedSameSite);
+        } else
+            cookie.sameSite = WebCore::Cookie::SameSitePolicy::None;
+
+        cookies.append(WTF::move(cookie));
+    }
+
+    Ref cookieStore = protect(page->websiteDataStore())->cookieStore();
+    cookieStore->setCookies(WTF::move(cookies), [callback = WTF::move(callback)]() {
+        callback({ });
     });
 }
 

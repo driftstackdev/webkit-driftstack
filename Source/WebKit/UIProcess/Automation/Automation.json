@@ -808,6 +808,15 @@
             "async": true
         },
         {
+            "name": "setCookiesAllDomains",
+            "description": "Driftstack extension (founder #40 cookie-import): writes a BATCH of cookies for ARBITRARY domains into the UIProcess WKWebsiteDataStore HTTP cookie store (not scoped to the current browsing context). The inverse of getAllCookiesAllDomains. Each cookie object carries name/value/domain and optional path/expires(unix-ms)/httpOnly/secure/sameSite.",
+            "parameters": [
+                { "name": "browsingContextHandle", "$ref": "BrowsingContextHandle", "description": "Any handle in the session; used only to resolve the WKWebsiteDataStore." },
+                { "name": "cookies", "type": "array", "items": { "type": "object" }, "description": "Array of cookie objects to import across all domains." }
+            ],
+            "async": true
+        },
+        {
             "name": "deleteSingleCookie",
             "description": "Deletes a cookie with the given name if visible to the specified browsing context.",
             "parameters": [

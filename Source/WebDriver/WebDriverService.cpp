@@ -291,6 +291,7 @@ const WebDriverService::Command WebDriverService::s_commands[] = {
 
     { HTTPMethod::Get, "/session/$sessionId/cookie", &WebDriverService::getAllCookies },
     { HTTPMethod::Get, "/session/$sessionId/driftstack/cookies/all", &WebDriverService::driftstackGetAllCookiesAllDomains }, // Driftstack #48: whole-jar (all domains, httpOnly)
+    { HTTPMethod::Post, "/session/$sessionId/driftstack/cookies/set", &WebDriverService::driftstackSetCookiesAllDomains }, // Driftstack #40 (A2 W2867): cookie-import — batch multi-domain WKHTTPCookieStore.setCookie, inverse of /all
     { HTTPMethod::Get, "/session/$sessionId/cookie/$name", &WebDriverService::getNamedCookie },
     { HTTPMethod::Post, "/session/$sessionId/cookie", &WebDriverService::addCookie },
     { HTTPMethod::Delete, "/session/$sessionId/cookie/$name", &WebDriverService::deleteCookie },
@@ -2124,6 +2125,26 @@ void WebDriverService::driftstackGetAllCookiesAllDomains(RefPtr<JSON::Object>&& 
         return;
 
     m_session->driftstackGetAllCookiesAllDomains(WTF::move(completionHandler));
+}
+
+void WebDriverService::driftstackSetCookiesAllDomains(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
+{
+    // Driftstack extension (founder #40 / A2 W2867 cookie-import): the inverse of driftstackGetAllCookiesAllDomains —
+    // writes a BATCH of cookies for ARBITRARY domains into the per-session WKHTTPCookieStore (UIProcess WKWebsiteData-
+    // Store), distinct from the W3C §16.3 addCookie which is scoped to the current document's URL. Body shape:
+    //   { "cookies": [ { domain, name, value, path?, expires?(unix-ms), httpOnly?, secure?, sameSite? }, ... ] }
+    // No waitForNavigationToComplete (mirrors the read ext): the cookie store is writable regardless of in-flight
+    // navigation, and a profile-restore import must not stall behind a settling page.
+    if (!findSessionOrCompleteWithError(*parameters, completionHandler))
+        return;
+
+    auto cookiesArray = parameters->getArray("cookies"_s);
+    if (!cookiesArray) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::InvalidArgument, "Missing or invalid 'cookies' array parameter"_s));
+        return;
+    }
+
+    m_session->driftstackSetCookiesAllDomains(cookiesArray.releaseNonNull(), WTF::move(completionHandler));
 }
 
 void WebDriverService::getNamedCookie(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
