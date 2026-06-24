@@ -31,7 +31,7 @@
 
 namespace WebCore {
 
-class EmptyGamepadProvider final : public GamepadProvider {
+class WEBCORE_EXPORT EmptyGamepadProvider final : public GamepadProvider {
 public:
     ~EmptyGamepadProvider() final { }
 
