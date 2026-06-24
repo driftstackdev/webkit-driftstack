@@ -44,6 +44,11 @@
 #include <wtf/text/EscapedFormsForJSON.h>
 #include <wtf/text/MakeString.h>
 #include <wtf/text/ParsingUtilities.h>
+#if PLATFORM(DRIFTSTACK)
+#include <wtf/MonotonicTime.h> // timing-fidelity virtual-clock op-charging (Phase 5c)
+#include <wtf/Scope.h>
+#include <wtf/WallTime.h>
+#endif
 #include <wtf/text/StringBuilder.h>
 #include <wtf/text/StringBuilderJSON.h>
 #include <wtf/text/StringCommon.h>
@@ -1898,6 +1903,11 @@ static NEVER_INLINE JSValue jsonParseSlow(JSGlobalObject* globalObject, JSString
 }
 
 // ECMA-262 v5 15.12.2
+#if PLATFORM(DRIFTSTACK)
+// Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
+static bool driftstackVirtualClockEnabled() { static bool e = getenv("DRIFTSTACK_VIRTUAL_CLOCK") != nullptr; return e; }
+#endif
+
 JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, CallFrame* callFrame))
 {
     VM& vm = globalObject->vm();
@@ -1906,6 +1916,19 @@ JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, Call
     RETURN_IF_EXCEPTION(scope, { });
     auto view = string->view(globalObject);
     RETURN_IF_EXCEPTION(scope, { });
+#if PLATFORM(DRIFTSTACK)
+    // Phase-5c: charge the iPhone-modeled JSON.parse cost (size-scaled by the input length) minus the Mac's
+    // actual elapsed, so a fingerprinter's MEASURED JSON.parse duration == the iPhone's. Gated off.
+    MonotonicTime dsOpStart = MonotonicTime::now();
+    double dsLen = static_cast<double>(view->length());
+    auto dsCharge = makeScopeExit([&] {
+        if (driftstackVirtualClockEnabled()) {
+            // PLACEHOLDER iPhone-17 cost (per-iteration ~1.15ms @ ~150k chars); refine to isolated from BS.
+            double modeledMs = 1.15 * (dsLen / 150000.0);
+            WTF::advanceDriftstackVirtualSkew(Seconds::fromMilliseconds(modeledMs) - (MonotonicTime::now() - dsOpStart));
+        }
+    });
+#endif
 
     if (callFrame->argumentCount() >= 2) {
         JSValue function = callFrame->uncheckedArgument(1);
