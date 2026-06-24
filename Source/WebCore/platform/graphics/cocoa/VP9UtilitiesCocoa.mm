@@ -211,22 +211,12 @@ static bool isVP9HardwareDecoderAvailabilityKnown()
 
 bool isVP9DecoderAvailable()
 {
-#if PLATFORM(DRIFTSTACK)
-    // W2880 (wfr386ip3 adversarial audit + verify-first sim probe): VP9 decodingInfo/canPlayType HOST-LEAK. A real
-    // iPhone returns NO VP9 support — VERIFIED iOS-26.5 sim: decodingInfo(vp09.*)=supported:false/powerEfficient:false/
-    // smooth:false + canPlayType(vp09)="" for ALL configs. On iOS the path is isVP9DecoderAvailable()==vp9HardwareDecoderAvailable()
-    // and NO iPhone has a VP9 hardware decoder → false. The fork builds PLATFORM(MAC) so it took the #else (Mac SW+HW)
-    // branch → claimed VP9 support that varies by host (M3 has VP9-HW → SPM, Mac-mini SW, etc.) AND that the iPhone lacks.
-    // Pin to the iPhone value (no <video>/MSE/decodingInfo VP9). WebRTC VP9 (WebKitVP9Decoder.cpp, a SEPARATE path) is unaffected.
-    return false;
-#else
     if (isSWDecodersAlwaysEnabled())
         return true;
 #if PLATFORM(IOS) || PLATFORM(VISION)
     return vp9HardwareDecoderAvailable();
 #else
     return (shouldEnableSWVP9Decoder() && VideoDecoder::isVPXSupported()) || vp9HardwareDecoderAvailable();
-#endif
 #endif
 }
 
@@ -381,18 +371,6 @@ std::optional<PlatformMediaCapabilitiesInfo> computeVPParameters(const PlatformM
 {
     PlatformMediaCapabilitiesInfo info;
 
-#if PLATFORM(DRIFTSTACK)
-    // W2880: defensive — a real iPhone has no <video>/MSE/decodingInfo VP9 (verified iOS-26.5 sim). Never read the host
-    // vp9HardwareDecoderAvailable arg / systemHasBattery / systemHasAC / getScreenProperties. Return the iPhone value
-    // (this path is normally short-circuited by isVP9DecoderAvailable()==false above; guarded here so the host reads
-    // are removed from the DRIFTSTACK code path entirely).
-    UNUSED_PARAM(videoConfiguration);
-    UNUSED_PARAM(vp9HardwareDecoderAvailable);
-    info.supported = false;
-    info.powerEfficient = false;
-    info.smooth = false;
-    return info;
-#else
     if (vp9HardwareDecoderAvailable) {
         // HW VP9 Decoder does not support alpha channel:
         if (videoConfiguration.alphaChannel && *videoConfiguration.alphaChannel)
@@ -459,7 +437,6 @@ std::optional<PlatformMediaCapabilitiesInfo> computeVPParameters(const PlatformM
 
     info.supported = true;
     return info;
-#endif
 }
 
 static uint8_t NODELETE convertToColorPrimaries(const Primaries& coefficients)
