@@ -31,12 +31,16 @@ namespace WebCore {
 
 static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCascade, char32_t cp, float sizePx, float& outAdvance)
 {
-    if (cp != 0x1E9E && cp != 0x20B9 && cp != 0x20B8 && cp != 0x097F) // ẞ ₹ ₸ ॿ -- listed GCPS codepoints
+    if (cp != 0x1E9E && cp != 0x20B9 && cp != 0x20B8 && cp != 0x097F && cp != 0x2581) // ẞ ₹ ₸ ॿ ▁ -- listed GCPS codepoints
         return false;
     struct Entry { ASCIILiteral family; char32_t cp; float adv128; };
-    static constexpr std::array<Entry, 6> kGcpsNamed { {
+    static constexpr std::array<Entry, 8> kGcpsNamed { {
         { "Futura"_s, 0x1E9E, 86.9375f },  // ẞ -- closes the blfonts uniqueMetrics off-by-one (Futura↔Kailasa)
         { "Savoye LET"_s, 0x097F, 71.576f },  // ॿ -- fork serves fixed 72.576; iOS Savoye ॿ ~72 (sim per-char 72 + group 3021 both constrain)
+        // -apple-system / system-ui: ONLY ▁ (U+2581) diverges (sim measureText: fork 118.19 vs iOS 119.738);
+        // the exact iOS float makes the fork's Σ == iOS's Σ -> group 4186->4187 == sim. ₹/₺/₸/ẞ/ॿ already match.
+        { "-apple-system"_s, 0x2581, 119.738f },  // ▁
+        { "system-ui"_s, 0x2581, 119.738f },      // ▁
         // Impact: the fork's cascade sizes the GCPS fallback fonts narrower than iOS per-primary. Inject
         // the iOS @128px advances (native ctprobe == iOS for these) to close the Impact blfonts -8 group.
         { "Impact"_s, 0x20B9, 70.812f },   // ₹
