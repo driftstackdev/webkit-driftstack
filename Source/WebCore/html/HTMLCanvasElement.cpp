@@ -41,6 +41,9 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackCanvasFingerprint10xOverride.h"
 #include "DriftstackCanvasFingerprint10xRGBA.h"
+#include <wtf/MonotonicTime.h>
+#include <wtf/Scope.h>
+#include <wtf/WallTime.h> // timing-fidelity virtual-clock skew accessors (Phase 5 op-charging)
 // V-581 Phase C-3.A: forward declaration to avoid cross-dir header visibility
 // (OpSequenceRecorder.h lives in html/canvas/ and isn't currently registered
 // in WebCore.xcodeproj's Headers build phase that flat-namespaces .h files).
@@ -1183,8 +1186,24 @@ static std::optional<double> NODELETE qualityFromJSValue(JSC::JSValue qualityVal
 }
 
 #if PLATFORM(DRIFTSTACK)
+// Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
+static bool driftstackVirtualClockEnabled() { static bool e = getenv("DRIFTSTACK_VIRTUAL_CLOCK") != nullptr; return e; }
+
 ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType, JSC::JSValue qualityValue)
 {
+    // Phase-5: charge the iPhone-modeled toDataURL cost minus the Mac's actual elapsed, so a fingerprinter's
+    // MEASURED toDataURL duration == the iPhone's. The scope-exit guard fires on ANY return (cache-hit or
+    // miss); the skew delta absorbs the macActual difference either way. Gated off by default.
+    MonotonicTime dsOpStart = MonotonicTime::now();
+    auto dsCharge = makeScopeExit([&] {
+        if (driftstackVirtualClockEnabled()) {
+            double px = static_cast<double>(width()) * static_cast<double>(height());
+            // PLACEHOLDER iPhone-17 cost (per-iteration ~1.82ms @ 240x60=14400px); refine to isolated +
+            // fitted c0+c1*px from the BS iso/size-sweep capture before flipping DRIFTSTACK_VIRTUAL_CLOCK on.
+            double modeledMs = 1.82 * (px / 14400.0);
+            WTF::advanceDriftstackVirtualSkew(Seconds::fromMilliseconds(modeledMs) - (MonotonicTime::now() - dsOpStart));
+        }
+    });
     // W2882 timing-fidelity memo: cache the encoded dataURL per-canvas (2D contexts only; tracker-excluded)
     // so a fingerprinter timing toDataURL repeatedly on an UNCHANGED canvas doesn't re-pay the full byte-exact
     // PNG encode (+redundant opSeqSha/SHA256/logging) every call. Cached value is BIT-IDENTICAL to a fresh
