@@ -1905,7 +1905,7 @@ static NEVER_INLINE JSValue jsonParseSlow(JSGlobalObject* globalObject, JSString
 // ECMA-262 v5 15.12.2
 #if PLATFORM(DRIFTSTACK)
 // Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
-static bool driftstackVirtualClockEnabled() { static bool e = getenv("DRIFTSTACK_VIRTUAL_CLOCK") != nullptr; return e; }
+static bool driftstackVirtualClockEnabled() { static bool e = []{ const char* v = getenv("DRIFTSTACK_VIRTUAL_CLOCK"); return v && v[0] == '1'; }(); return e; } // M4: truthiness, not presence (=0/""/false must DISABLE)
 #endif
 
 JSC_DEFINE_HOST_FUNCTION(jsonProtoFuncParse, (JSGlobalObject* globalObject, CallFrame* callFrame))

@@ -2914,7 +2914,7 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() 
 
 #if PLATFORM(DRIFTSTACK)
 // Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
-static bool driftstackVirtualClockEnabled() { static bool e = getenv("DRIFTSTACK_VIRTUAL_CLOCK") != nullptr; return e; }
+static bool driftstackVirtualClockEnabled() { static bool e = []{ const char* v = getenv("DRIFTSTACK_VIRTUAL_CLOCK"); return v && v[0] == '1'; }(); return e; } // M4: truthiness, not presence (=0/""/false must DISABLE)
 #endif
 
 ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, int sy, int sw, int sh, std::optional<ImageDataSettings> settings) const

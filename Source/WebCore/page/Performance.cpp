@@ -136,7 +136,15 @@ Seconds Performance::timeResolution()
 
 Seconds Performance::relativeTimeFromTimeOriginInReducedResolutionSeconds(MonotonicTime timestamp) const
 {
-    return reduceTimeResolution(timestamp - m_timeOrigin);
+    Seconds rel = timestamp - m_timeOrigin;
+#if PLATFORM(DRIFTSTACK)
+    // M1 (timing audit): Event.timeStamp + every PerformanceEntry (EventTiming/rVFC/IdleDeadline/LCP/...) flow
+    // through here. They must share performance.now()'s skewed clock — else a fingerprinter reads the true
+    // (faster) Mac time off these and cross-checks it against the skewed performance.now(). Mirror
+    // nowInReducedResolutionSeconds: add the current skew; the constant offset cancels in any delta.
+    rel += WTF::driftstackVirtualSkew();
+#endif
+    return reduceTimeResolution(rel);
 }
 
 DOMHighResTimeStamp Performance::relativeTimeFromTimeOriginInReducedResolution(MonotonicTime timestamp) const
