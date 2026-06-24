@@ -915,8 +915,9 @@ void WebAutomationSession::platformSimulateWheelInteraction(WebPageProxy& page, 
 // touch IPC — the same path iOS reaches via its UIKit gesture recognizer. The harness's W3C
 // WebDriver pointerType:"touch" Actions arrive here as TouchDown/MoveTo/LiftUp (SimulatedInputDispatcher
 // → simulateTouchInteraction → here); position+timing come from the Actions, the iPhone-17 contact
-// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY/rotationAngle/force 0 —
-// Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
+// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY == radiusX because iOS sets
+// BOTH from UITouch.majorRadius — NativeWebTouchEventIOS.mm:110-111 setRadiusX(radius)+setRadiusY(radius);
+// rotationAngle/force 0 — Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
 // fork instead of the mouse-alias (see operations/touch-capture/NATIVE-TOUCH-IMPL-PLAN.md).
 // VALUE CAVEAT: 24.278 is from a Safari 26.5 capture; confirm the exact 26.4 quantum before launch-pinning.
 void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, TouchInteraction interaction, const WebCore::IntPoint& locationInViewport, std::optional<Seconds> duration, AutomationCompletionHandler&& completionHandler)
@@ -955,7 +956,7 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
     WebCore::DoublePoint location(locationInViewport.x() + dsInsets.left(), locationInViewport.y() + dsInsets.top());
     Vector<WebPlatformTouchPoint> touchPoints;
     touchPoints.append(WebPlatformTouchPoint(1u, location, location, location, phase,
-        24.278 /* radiusX */, 0.0 /* radiusY */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
+        24.278 /* radiusX */, 24.278 /* radiusY == radiusX: iOS sets both to UITouch.majorRadius, NativeWebTouchEventIOS.mm:110-111 */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
         piOverTwoDouble /* altitudeAngle */, 0.0 /* azimuthAngle */, WebPlatformTouchPoint::TouchType::Direct));
 
     NativeWebTouchEvent touchEvent(WebEvent { type, OptionSet<WebEventModifier> { }, MonotonicTime::now() },
