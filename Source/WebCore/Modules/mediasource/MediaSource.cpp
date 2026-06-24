@@ -1165,6 +1165,26 @@ bool MediaSource::isTypeSupported(ScriptExecutionContext& context, const String&
 
     String codecs = contentType.parameter("codecs"_s);
 
+#if PLATFORM(DRIFTSTACK)
+    // Per-version codec gate: ManagedMediaSource.isTypeSupported(vp09) is FALSE on Safari 18.6 (Family A) but
+    // TRUE on 26.4 (launch) — verified real iPhone 16 Pro/18.6 = False vs iPhone 17/26.4 = True (VP9-in-MMS was
+    // added after 18.6). The fleet Mac decodes VP9, so MediaPlayer::supportsType returns True for BOTH archetypes;
+    // gate it off for Family A so the archetype matches the real device. iOS exposes only ManagedMediaSource (not
+    // MediaSource), so this is exactly the MMS surface the fingerprint probes read. (Family-A archetype = pre-26
+    // Safari; matches the s_isFamilyAArchetype convention used in CSSParserContext/LibWebRTCProvider.)
+    static const bool s_isFamilyAArchetypeMSE = [] {
+        const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!a)
+            return false;
+        auto arch = String::fromLatin1(a);
+        return arch.contains("safari17_"_s) || arch.contains("safari18_"_s) || arch.contains("safari19_"_s)
+            || arch.contains("safari20_"_s) || arch.contains("safari21_"_s) || arch.contains("safari22_"_s)
+            || arch.contains("safari23_"_s) || arch.contains("safari24_"_s) || arch.contains("safari25_"_s);
+    }();
+    if (s_isFamilyAArchetypeMSE && codecs.contains("vp09"_s))
+        return false;
+#endif
+
     // 2. If type does not contain a valid MIME type string, then return false.
     if (contentType.containerType().isEmpty())
         return false;
