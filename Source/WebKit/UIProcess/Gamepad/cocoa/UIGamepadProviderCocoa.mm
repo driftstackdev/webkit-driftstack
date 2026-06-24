@@ -33,8 +33,36 @@
 #import <WebCore/MockGamepadProvider.h>
 #import <WebCore/MultiGamepadProvider.h>
 
+#if PLATFORM(DRIFTSTACK)
+#import <wtf/CompletionHandler.h>
+#import <wtf/NeverDestroyed.h>
+#import <wtf/Vector.h>
+#endif
+
 namespace WebKit {
 using namespace WebCore;
+
+#if PLATFORM(DRIFTSTACK)
+// W2875 (#35 isolation, audit wd32aqm12 — the one confirmed per-session leak): a LOCAL empty gamepad provider.
+// WebCore's purpose-built EmptyGamepadProvider is neither header- nor symbol-exported to WebKit, so define an
+// identical one here (mirrors WebCore::EmptyGamepadProvider): zero gamepads, never opens IOHIDManager /
+// GCController. The fleet worker is macOS, so the default cocoa providers (GameController/Multi/HID) would
+// enumerate the HOST Mac's HID/GameController devices — a controller plugged into the SHARED worker would be
+// visible to EVERY customer session + reveal the host. This keeps navigator.getGamepads() PRESENT (returns []
+// — A1's fingerprint surface, NOT removed), matching a controller-less iPhone.
+class DriftstackEmptyGamepadProvider final : public GamepadProvider {
+public:
+    void startMonitoringGamepads(GamepadProviderClient&) final { }
+    void stopMonitoringGamepads(GamepadProviderClient&) final { }
+    const Vector<WeakPtr<PlatformGamepad>>& platformGamepads() final
+    {
+        static NeverDestroyed<Vector<WeakPtr<PlatformGamepad>>> emptyGamepads;
+        return emptyGamepads;
+    }
+    void playEffect(unsigned, const String&, GamepadHapticEffectType, const GamepadEffectParameters&, CompletionHandler<void(bool)>&& completionHandler) final { completionHandler(false); }
+    void stopEffects(unsigned, const String&, CompletionHandler<void()>&& completionHandler) final { completionHandler(); }
+};
+#endif
 
 #if HAVE(WIDE_GAMECONTROLLER_SUPPORT)
 static bool useGameControllerFramework = true;
@@ -51,6 +79,12 @@ void UIGamepadProvider::platformSetDefaultGamepadProvider()
 {
     if (GamepadProvider::singleton().isMockGamepadProvider())
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    static NeverDestroyed<DriftstackEmptyGamepadProvider> driftstackEmptyGamepadProvider;
+    GamepadProvider::setSharedProvider(driftstackEmptyGamepadProvider.get());
+    return;
+#endif
 
 #if PLATFORM(IOS_FAMILY)
     GamepadProvider::setSharedProvider(GameControllerGamepadProvider::singleton());
