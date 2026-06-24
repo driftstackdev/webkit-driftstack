@@ -4290,6 +4290,22 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // resumes seamlessly. (The clean-tap / W2740 slop math below keys off m_driftstackTapStartPoint, which
         // is unchanged, so re-anchoring never converts a held drag back into a tap.)
         if (now - m_driftstackLastTouchTime > reanchorWindow) {
+            // W2780b (audit wf4v2iohk follow-up): the clock is anchored at TouchStart (line ~4270), so the
+            // FIRST move of a deliberately SLOW gesture (long-press-then-drag, or a first sample landing
+            // >250ms after touch-down) hits this same re-anchor path as an inter-gesture orphan would. We
+            // must NOT scroll the stale/large delta here (that is the whole point of the re-anchor), but we
+            // MUST still classify tap-vs-scroll: m_driftstackTapStartPoint is the original press point and is
+            // NOT touched by the re-anchor, so evaluate the slop against it before returning. Without this a
+            // slow far first-move that is the ONLY move of the gesture left m_driftstackPotentialTap set →
+            // TouchEnd synthesized a spurious tap-click at the press point for what was really a drag. A
+            // paused-then-resumed finger barely moved (still within slop) so this is a no-op for that case
+            // (R2 regression test), and an actual inter-gesture orphan is far from the OLD start point so
+            // clearing the flag is harmless (that gesture's tap already fired). Still skip scrolling THIS
+            // move and re-anchor the point/remainders exactly as before.
+            auto rdx = pos.x() - m_driftstackTapStartPoint.x();
+            auto rdy = pos.y() - m_driftstackTapStartPoint.y();
+            if (m_driftstackPotentialTap && (rdx * rdx + rdy * rdy) > tapSlop * tapSlop)
+                m_driftstackPotentialTap = false;
             m_driftstackLastTouchPoint = pos;
             m_driftstackLastTouchTime = now;
             m_driftstackScrollRemainderX = 0;
