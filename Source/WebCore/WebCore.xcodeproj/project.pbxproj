@@ -2137,7 +2137,7 @@
 		51547FE52C9296BD00CD402D /* MediaSourceInit.h in Headers */ = {isa = PBXBuildFile; fileRef = 51547FE02C9296BD00CD402D /* MediaSourceInit.h */; };
 		5154F6EC2B01FC7000B857D9 /* PlatformMediaError.h in Headers */ = {isa = PBXBuildFile; fileRef = 5154F6EB2B01FC7000B857D9 /* PlatformMediaError.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		5154F6EF2B02340900B857D9 /* MediaPromiseTypes.h in Headers */ = {isa = PBXBuildFile; fileRef = 5154F6EE2B02340900B857D9 /* MediaPromiseTypes.h */; settings = {ATTRIBUTES = (Private, ); }; };
-		515BE1901D54F5FB00DD7C68 /* EmptyGamepadProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 515BE1891D54F5F600DD7C68 /* EmptyGamepadProvider.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		515BE1901D54F5FB00DD7C68 /* EmptyGamepadProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 515BE1891D54F5F600DD7C68 /* EmptyGamepadProvider.h */; };
 		515BE1921D54F5FB00DD7C68 /* GamepadProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 515BE18B1D54F5F600DD7C68 /* GamepadProvider.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		515BE1931D54F5FB00DD7C68 /* GamepadProviderClient.h in Headers */ = {isa = PBXBuildFile; fileRef = 515BE18C1D54F5F600DD7C68 /* GamepadProviderClient.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		515BE1951D54F5FB00DD7C68 /* PlatformGamepad.h in Headers */ = {isa = PBXBuildFile; fileRef = 515BE18E1D54F5F600DD7C68 /* PlatformGamepad.h */; settings = {ATTRIBUTES = (Private, ); }; };
