@@ -41,6 +41,9 @@
 // Source/WebCore/html/DriftstackCanvasFingerprint10xRGBA.mm.
 #include <bit>
 #include <cstdint>
+#include <wtf/MonotonicTime.h>
+#include <wtf/Scope.h>
+#include <wtf/WallTime.h> // timing-fidelity virtual-clock skew accessors (Phase 5 op-charging)
 #include <span>
 #include <wtf/Logging.h>
 #include <wtf/Vector.h>
@@ -2909,10 +2912,29 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() 
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
+static bool driftstackVirtualClockEnabled() { static bool e = getenv("DRIFTSTACK_VIRTUAL_CLOCK") != nullptr; return e; }
+#endif
+
 ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, int sy, int sw, int sh, std::optional<ImageDataSettings> settings) const
 {
     if (!sw || !sh)
         return Exception { ExceptionCode::IndexSizeError };
+#if PLATFORM(DRIFTSTACK)
+    // Phase-5: charge the iPhone-modeled getImageData cost (size-scaled by the read rect) minus the Mac's
+    // actual elapsed, so a fingerprinter's MEASURED getImageData duration == the iPhone's. Gated off.
+    MonotonicTime dsOpStart = MonotonicTime::now();
+    auto dsCharge = makeScopeExit([&] {
+        if (driftstackVirtualClockEnabled()) {
+            double px = static_cast<double>(sw) * static_cast<double>(sh);
+            if (px < 0) px = -px;
+            // PLACEHOLDER iPhone-17 cost (per-iteration ~0.83ms @ 240x60=14400px); refine to isolated from BS.
+            double modeledMs = 0.83 * (px / 14400.0);
+            WTF::advanceDriftstackVirtualSkew(Seconds::fromMilliseconds(modeledMs) - (MonotonicTime::now() - dsOpStart));
+        }
+    });
+#endif
 
     RefPtr scriptContext = canvasBase().scriptExecutionContext();
     if (!canvasBase().originClean()) {
