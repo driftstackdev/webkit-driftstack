@@ -80,9 +80,11 @@ WTF_EXPORT_PRIVATE Int128 currentTimeInNanoseconds();
 // (Performance::now) read this. The accumulated offset CANCELS in deltas (a fingerprinter measures t1-t0);
 // only the per-op charge applied between two reads survives -> measured delta == the op's iPhone cost.
 // INERT until Phase-5 op-charging wires advanceDriftstackVirtualSkew() into the timed ops (skew stays 0).
-inline Seconds& driftstackVirtualSkewStorage() { static thread_local Seconds skew { }; return skew; }
-inline Seconds driftstackVirtualSkew() { return driftstackVirtualSkewStorage(); }
-inline void advanceDriftstackVirtualSkew(Seconds delta) { driftstackVirtualSkewStorage() += delta; }
+// Defined in WallTime.cpp as a SINGLE exported symbol (NOT header-inline) so all of WTF/JavaScriptCore/
+// WebCore share ONE thread-local across the dylib boundary; a header-inline static gives each dylib its own
+// copy and cross-dylib charges (e.g. JSON.parse in JSC) become invisible to perf.now (WebCore).
+WTF_EXPORT_PRIVATE Seconds driftstackVirtualSkew();
+WTF_EXPORT_PRIVATE void advanceDriftstackVirtualSkew(Seconds delta);
 #endif
 
 } // namespace WTF

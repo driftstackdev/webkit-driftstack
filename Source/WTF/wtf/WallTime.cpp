@@ -36,6 +36,15 @@ void WallTime::dump(PrintStream& out) const
     out.print("Wall(", m_value, " sec)");
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Single shared thread-local skew (one instance in the WTF dylib; declared in WallTime.h). All of
+// WTF/JavaScriptCore/WebCore link to these exported accessors so cross-dylib op-charges (JSON.parse in JSC,
+// toDataURL in WebCore) all land on the SAME skew that performance.now()/Date.now() read.
+static thread_local Seconds g_driftstackVirtualSkew { };
+Seconds driftstackVirtualSkew() { return g_driftstackVirtualSkew; }
+void advanceDriftstackVirtualSkew(Seconds delta) { g_driftstackVirtualSkew += delta; }
+#endif
+
 } // namespace WTF
 
 
