@@ -301,6 +301,21 @@ void Font::platformInit()
 #else
     lineGap = ceilf(lineGap);
 #endif
+#if PLATFORM(DRIFTSTACK)
+    // Noto Sans Masaram Gondi + Siddham (the host macOS Noto these fall back to) carry the same CoreText
+    // fp-noise-above-integer in the ASCENT that W2587 snaps out of the leading: the raw ascent is a hair
+    // above iOS's exact integer, so std::ceil below inflates the line-box +1px (blfonts offsetHeight 155/261
+    // vs iOS 154/260; descent + Noto Cham match exactly). Snap the ascent to its nearest integer within the
+    // metric fp epsilon for these 2 faces only (targeted per the V-493 lesson — not a blanket ascent change).
+    if (familyName) {
+        String dsNotoFn = String(familyName.get()).convertToASCIILowercase();
+        if (dsNotoFn == "noto sans masaram gondi"_s || dsNotoFn == "noto sans siddham"_s) {
+            float dsRoundedAscent = std::round(ascent);
+            if (std::abs(ascent - dsRoundedAscent) < 0.01f)
+                ascent = dsRoundedAscent;
+        }
+    }
+#endif
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
     ascent = ceilf(ascent + adjustment);
     descent = ceilf(descent);
