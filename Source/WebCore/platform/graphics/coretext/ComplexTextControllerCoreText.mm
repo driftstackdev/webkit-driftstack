@@ -123,13 +123,27 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
     if (m_glyphCount && m_baseAdvances.size() == m_glyphCount) {
         BaseAdvancesVector overrideAdvances;
         overrideAdvances.reserveInitialCapacity(m_glyphCount);
+        // V-583.F.2 (#96 kerning fix): current.width is the IN-CONTEXT native CTRun advance — it
+        // includes inter-glyph KERNING. iphoneWidth (Font::widthForGlyph) is the ISOLATED advance. A
+        // plain replacement STRIPS the kerning, which is the mixed-script complex-path bug: any
+        // non-Latin char forces the following Latin out of the simple path (which keeps kerning, == iOS)
+        // into this complex path, and the bare override drops every interior glyph's kern (~4px/m).
+        // Apply the override as a DELTA off the Mac ISOLATED advance so kerning is preserved:
+        //   corrected = iphoneWidth + (current.width - macIsolated)
+        // For identical Mac==iPhone glyphs (no real override, macIsolated == iphoneWidth) this yields
+        // `current` (kerned, kept); for genuinely-overridden glyphs (emoji, no kerning) it yields
+        // iphoneWidth; for the canary/isolated-glyph glyphHash (no kern) it is unchanged.
+        CTFontRef macCTFont = m_font->platformData().ctFont();
         for (unsigned i = 0; i < m_glyphCount; ++i) {
             float iphoneWidth = m_font->widthForGlyph(m_glyphs[i], Font::SyntheticBoldInclusion::Exclude);
             CGSize current = m_baseAdvances[i];
-            if (std::abs(iphoneWidth - static_cast<float>(current.width)) > 0.001f)
-                overrideAdvances.append(CGSizeMake(iphoneWidth, current.height));
-            else
-                overrideAdvances.append(current);
+            CGSize macIsolated = current;
+            if (macCTFont) {
+                CGGlyph glyph = m_glyphs[i];
+                CTFontGetAdvancesForGlyphs(macCTFont, kCTFontOrientationHorizontal, &glyph, &macIsolated, 1);
+            }
+            float kern = static_cast<float>(current.width) - static_cast<float>(macIsolated.width);
+            overrideAdvances.append(CGSizeMake(iphoneWidth + kern, current.height));
         }
         m_baseAdvances = std::move(overrideAdvances);
     }
