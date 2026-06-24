@@ -317,6 +317,7 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
     NSView *_driftTabOverlay;             // the iOS-style tab-overview overlay (nil when closed)
     BOOL _zoomTextOnly;
     BOOL _isPrivateBrowsingWindow;
+    NSTimer *_driftstackNavWatchdog;      // W2857 (founder 2026-06-24): page-load STALL watchdog (no-commit timeout)
 
     BOOL _useShrinkToFit;
 
@@ -1539,6 +1540,27 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation
 {
     LOG(@"didStartProvisionalNavigation: %@", navigation);
+#if PLATFORM(DRIFTSTACK)
+    // W2857 (founder 2026-06-24, page-load STALL reporting): a navigation that never COMMITS (the request
+    // hangs — no response + no error: a blocked site, an unreachable/half-open proxy, an h3/QUIC stall)
+    // otherwise shows an endless blank spinner ("loading then nothing"). Arm a watchdog; if no didCommit /
+    // didFinish / didFailProvisional fires within the window, surface a timeout error page (W2649) so the
+    // stall is VISIBLE in the stream + stop the hung load. Disarmed the moment the load commits/finishes/fails.
+    [_driftstackNavWatchdog invalidate];
+    double watchdogSecs = 45.0;
+    const char *watchdogEnv = getenv("DRIFTSTACK_NAV_WATCHDOG_SEC");
+    if (watchdogEnv && watchdogEnv[0]) { double v = atof(watchdogEnv); if (v > 0) watchdogSecs = v; }
+    __weak WK2BrowserWindowController *weakSelf = self;
+    _driftstackNavWatchdog = [NSTimer scheduledTimerWithTimeInterval:watchdogSecs repeats:NO block:^(NSTimer *timer) {
+        WK2BrowserWindowController *strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_webView)
+            return;
+        NSError *timeoutError = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorTimedOut userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"The page took too long to respond (no response within %.0f seconds). It may be blocked, or the proxy / network is unreachable.", watchdogSecs] }];
+        [strongSelf->_webView stopLoading];
+        driftstackShowLoadFailurePage(strongSelf->_webView, timeoutError);
+    }];
+#endif
     [self validateToolbar];
 }
 
@@ -1550,6 +1572,9 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error
 {
     LOG(@"didFailProvisionalNavigation: %@navigation, error: %@", navigation, error);
+#if PLATFORM(DRIFTSTACK)
+    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: real failure fired — disarm the stall watchdog (W2649 handles it)
+#endif
     // Driftstack (W2649): show an on-screen error page so a failed customer load is VISIBLE in the
     // stream (not a blank white page). Skips the -999/cancelled supersede inside the helper.
     driftstackShowLoadFailurePage(webView, error);
@@ -1558,12 +1583,18 @@ static BOOL isJavaScriptURL(NSURL *url)
 - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation
 {
     LOG(@"didCommitNavigation: %@", navigation);
+#if PLATFORM(DRIFTSTACK)
+    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: response committed (page rendering) — disarm stall watchdog
+#endif
     [self updateTitle:nil];
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 {
     LOG(@"didFinishNavigation: %@", navigation);
+#if PLATFORM(DRIFTSTACK)
+    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: load finished — disarm stall watchdog
+#endif
     // Fork-test: DRIFTSTACK_AUTOTAP=1 → after load, tap the probe's tapZone center (read live from the
     // page via window.__dsTapZoneCenter, robust to layout) so it fires a native touchstart into A3's oracle.
     // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard
