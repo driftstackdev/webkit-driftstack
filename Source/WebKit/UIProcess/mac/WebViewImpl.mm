@@ -5012,11 +5012,35 @@ NSArray *WebViewImpl::namesOfPromisedFilesDroppedAtDestination(NSURL *dropDestin
     return @[[path lastPathComponent]];
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2858 (isolation audit wi8z2sdot, clipboard cross-session leak): the per-session pasteboard NAME
+// (DRIFTSTACK_PASTEBOARD_NAME, harness-set per session) — so a customer session's DOM clipboard uses a UNIQUE
+// named NSPasteboard, NEVER the shared Mac-worker general board (readable by every co-tenant session + the
+// operator; writes persist post-teardown). Both the access-grant NAME (pasteboardNameForAccessCategory) and the
+// access OBJECT (pasteboardForAccessCategory) use it, so the grant matches the board the clipboard data lives on.
+static NSString *driftstackPasteboardName()
+{
+    const char *name = getenv("DRIFTSTACK_PASTEBOARD_NAME");
+    if (!name || !name[0])
+        name = getenv("__XPC_DRIFTSTACK_PASTEBOARD_NAME");
+    if (name && name[0]) {
+        NSString *s = [NSString stringWithUTF8String:name];
+        if (s.length)
+            return s;
+    }
+    return @"driftstack-pb-default";
+}
+#endif
+
 static NSPasteboardName NODELETE pasteboardNameForAccessCategory(WebCore::DOMPasteAccessCategory pasteAccessCategory)
 {
     switch (pasteAccessCategory) {
     case WebCore::DOMPasteAccessCategory::General:
+#if PLATFORM(DRIFTSTACK)
+        return driftstackPasteboardName();
+#else
         return NSPasteboardNameGeneral;
+#endif
 
     case WebCore::DOMPasteAccessCategory::Fonts:
         return NSPasteboardNameFont;
@@ -5027,7 +5051,11 @@ static RetainPtr<NSPasteboard> pasteboardForAccessCategory(WebCore::DOMPasteAcce
 {
     switch (pasteAccessCategory) {
     case WebCore::DOMPasteAccessCategory::General:
+#if PLATFORM(DRIFTSTACK)
+        return [NSPasteboard pasteboardWithName:driftstackPasteboardName()];
+#else
         return NSPasteboard.generalPasteboard;
+#endif
 
     case WebCore::DOMPasteAccessCategory::Fonts:
         return [NSPasteboard pasteboardWithName:NSPasteboardNameFont];

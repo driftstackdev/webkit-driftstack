@@ -104,9 +104,32 @@ Pasteboard::Pasteboard(std::unique_ptr<PasteboardContext>&& context, const Strin
     ASSERT(pasteboardName);
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2858 (isolation audit wi8z2sdot, clipboard cross-session leak): the WebContent's copy-paste Pasteboard must
+// use the per-session named board (DRIFTSTACK_PASTEBOARD_NAME, harness-set), NEVER the shared Mac-worker general
+// clipboard. The name flows to the UIProcess WebPasteboardProxy, which accesses that uniquely-named board — so
+// navigator.clipboard / copy-paste are isolated per session (no cross-tenant read + no operator leak).
+static NSString *driftstackPasteboardName()
+{
+    const char *name = getenv("DRIFTSTACK_PASTEBOARD_NAME");
+    if (!name || !name[0])
+        name = getenv("__XPC_DRIFTSTACK_PASTEBOARD_NAME");
+    if (name && name[0]) {
+        NSString *s = [NSString stringWithUTF8String:name];
+        if (s.length)
+            return s;
+    }
+    return @"driftstack-pb-default";
+}
+#endif
+
 std::unique_ptr<Pasteboard> Pasteboard::createForCopyAndPaste(std::unique_ptr<PasteboardContext>&& context)
 {
+#if PLATFORM(DRIFTSTACK)
+    return makeUnique<Pasteboard>(WTF::move(context), driftstackPasteboardName());
+#else
     return makeUnique<Pasteboard>(WTF::move(context), NSPasteboardNameGeneral);
+#endif
 }
 
 #if ENABLE(DRAG_SUPPORT)
