@@ -35,6 +35,12 @@
 #include "WebGeolocationPosition.h"
 #include "WebPageProxy.h"
 #include "WebProcessPool.h"
+#if PLATFORM(DRIFTSTACK)
+#include <wtf/WallTime.h>
+#include <wtf/dtoa.h>
+#include <wtf/text/StringView.h>
+#include <wtf/text/WTFString.h>
+#endif
 
 #define MESSAGE_CHECK(connection, assertion) MESSAGE_CHECK_BASE(assertion, (connection))
 
@@ -241,8 +247,62 @@ bool WebGeolocationManagerProxy::isHighAccuracyEnabled(const PerDomainData& perD
     return false;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// #41 (per-session isolation): navigator.geolocation must return the PROXY exit location, never the Mac
+// worker / datacenter CoreLocation fix. The harness (UIProcess parent) sets DRIFTSTACK_GEO_LAT/LON/ACCURACY
+// per session; cumrig sets __XPC_ shadow vars (mirror the driftstackPasteboardName idiom in WebViewImpl.mm).
+static bool driftstackGeoEnv(const char* primary, const char* xpc, double& out)
+{
+    const char* v = getenv(primary);
+    if (!v || !v[0])
+        v = getenv(xpc);
+    if (!v || !v[0])
+        return false;
+    // WTF::parseDouble (safe, no unsafe-libc strtod): parsedLength == 0 means no number was consumed.
+    auto string = String::fromUTF8(v);
+    size_t parsedLength = 0;
+    double d = WTF::parseDouble(string, parsedLength);
+    if (!parsedLength)
+        return false;
+    out = d;
+    return true;
+}
+#endif
+
 void WebGeolocationManagerProxy::providerStartUpdating(PerDomainData& perDomainData, const WebCore::RegistrableDomain& registrableDomain)
 {
+#if PLATFORM(DRIFTSTACK)
+    {
+        double lat, lon, acc;
+        bool haveLat = driftstackGeoEnv("DRIFTSTACK_GEO_LAT", "__XPC_DRIFTSTACK_GEO_LAT", lat);
+        bool haveLon = driftstackGeoEnv("DRIFTSTACK_GEO_LON", "__XPC_DRIFTSTACK_GEO_LON", lon);
+        if (haveLat && haveLon) {
+            // accuracy optional → iPhone-faithful default (35.0 m horizontal, CoreLocation hundred-meters-class
+            // fix); also accept an env override.
+            if (!driftstackGeoEnv("DRIFTSTACK_GEO_ACCURACY", "__XPC_DRIFTSTACK_GEO_ACCURACY", acc))
+                acc = 35.0;
+            // GeolocationPositionData.timestamp is SECONDS since epoch (matches the real Cocoa path
+            // GeolocationPositionDataCocoa.mm = NSDate timeIntervalSince1970); WebCore Geolocation.cpp's
+            // convertSecondsToEpochTimeStamp(*1000) turns it into the JS ms-epoch. Emitting ms here would
+            // 1000x the JS position.timestamp (a ~year-52000 date) — a hard detectable tell.
+            double timestamp = WallTime::now().secondsSinceEpoch().value();
+            // 4-arg ctor leaves altitude/altitudeAccuracy/heading/speed/floorLevel as std::nullopt — byte-identical
+            // in shape to a stationary iPhone GPS fix without barometer/motion (matches GeolocationPositionDataCocoa).
+            WebCore::GeolocationPositionData synthetic(timestamp, lat, lon, acc);
+            perDomainData.lastPosition = synthetic;
+            for (Ref process : perDomainData.watchers)
+                process->send(Messages::WebGeolocationManager::DidChangePosition(registrableDomain, synthetic), 0);
+            return; // NEVER touch CoreLocation or m_clientProvider.
+        }
+        // UNSET fallback — iPhone-faithful: surface POSITION_UNAVAILABLE rather than fall through to
+        // CoreLocation / m_clientProvider (that would leak the Mac / datacenter location, incoherent with the
+        // proxy egress). Matches an iPhone with no fix (kCLErrorLocationUnknown → POSITION_UNAVAILABLE / code 2).
+        for (Ref process : perDomainData.watchers)
+            process->send(Messages::WebGeolocationManager::DidFailToDeterminePosition(registrableDomain, "Position unavailable"_s), 0);
+        return;
+    }
+#endif
+
 #if PLATFORM(IOS_FAMILY)
     if (!m_clientProvider) {
         ASSERT(!perDomainData.provider);
