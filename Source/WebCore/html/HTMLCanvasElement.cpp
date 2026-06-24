@@ -613,6 +613,9 @@ std::optional<FloatRect> HTMLCanvasElement::computeDirtyRectangleIfNeeded(const 
 void HTMLCanvasElement::didDraw(const std::optional<FloatRect>& rect, ShouldApplyPostProcessingToDirtyRect shouldApplyPostProcessingToDirtyRect)
 {
     clearCopiedImage();
+#if PLATFORM(DRIFTSTACK)
+    m_dsDataURLCacheValid = false; // W2882: any draw invalidates the toDataURL memo
+#endif
     if (CheckedPtr renderer = renderBox()) {
         const std::optional<FloatRect> dirtyRect = computeDirtyRectangleIfNeeded(rect);
         if (usesContentsAsLayerContents())
@@ -636,6 +639,9 @@ void HTMLCanvasElement::didUpdateSizeProperties()
     bool sizeChanged = oldSize != newSize;
     CanvasBase::setSize(newSize);
     clearCopiedImage();
+#if PLATFORM(DRIFTSTACK)
+    m_dsDataURLCacheValid = false; // W2882: resize clears the canvas → invalidate the toDataURL memo
+#endif
     if (m_context)
         m_context->didUpdateCanvasSizeProperties(sizeChanged);
     if (CheckedPtr canvasRenderer = dynamicDowncast<RenderHTMLCanvas>(renderer())) {
@@ -1176,8 +1182,39 @@ static std::optional<double> NODELETE qualityFromJSValue(JSC::JSValue qualityVal
     return qualityNumber;
 }
 
+#if PLATFORM(DRIFTSTACK)
 ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType, JSC::JSValue qualityValue)
 {
+    // W2882 timing-fidelity memo: cache the encoded dataURL per-canvas (2D contexts only; tracker-excluded)
+    // so a fingerprinter timing toDataURL repeatedly on an UNCHANGED canvas doesn't re-pay the full byte-exact
+    // PNG encode (+redundant opSeqSha/SHA256/logging) every call. Cached value is BIT-IDENTICAL to a fresh
+    // encode; invalidated on ANY canvas modification (didDraw + resize), so it can never go stale.
+    if (is<CanvasRenderingContext2DBase>(m_context.get())) {
+        auto encMimeMemo = toEncodingMimeType(mimeType);
+        double qMemo = qualityFromJSValue(qualityValue).value_or(-2.0); // -2 sentinel for "no quality" (never a valid 0..1 quality)
+        Ref docMemo = document();
+        bool trackerMemo = docMemo->requiresScriptTrackingPrivacyProtection(ScriptTrackingPrivacyCategory::Canvas);
+        if (!trackerMemo && m_dsDataURLCacheValid && !m_dsCachedDataURL.isNull()
+            && m_dsCachedDataURLMime == encMimeMemo && m_dsCachedDataURLQuality == qMemo)
+            return UncachedString { m_dsCachedDataURL };
+        auto resultMemo = toDataURLInternal(mimeType, qualityValue);
+        if (!trackerMemo && !resultMemo.hasException()) {
+            m_dsCachedDataURL = resultMemo.returnValue().string;
+            m_dsCachedDataURLMime = encMimeMemo;
+            m_dsCachedDataURLQuality = qMemo;
+            m_dsDataURLCacheValid = true;
+        }
+        return resultMemo;
+    }
+    return toDataURLInternal(mimeType, qualityValue);
+}
+
+ExceptionOr<UncachedString> HTMLCanvasElement::toDataURLInternal(const String& mimeType, JSC::JSValue qualityValue)
+{
+#else
+ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType, JSC::JSValue qualityValue)
+{
+#endif
     if (!originClean())
         return Exception { ExceptionCode::SecurityError };
 

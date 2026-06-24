@@ -103,6 +103,12 @@ public:
 
     WEBCORE_EXPORT ExceptionOr<UncachedString> toDataURL(const String& mimeType, JSC::JSValue quality);
     WEBCORE_EXPORT ExceptionOr<UncachedString> toDataURL(const String& mimeType);
+#if PLATFORM(DRIFTSTACK)
+    // W2882 timing-fidelity: toDataURL() wrapper memoizes the encoded result per-canvas (the real body
+    // is toDataURLInternal). A fingerprinter that times toDataURL on an UNCHANGED canvas otherwise pays
+    // the full byte-exact PNG encode (+redundant opSeqSha/SHA256/logging) every call (~20ms vs iPhone ~2ms).
+    ExceptionOr<UncachedString> toDataURLInternal(const String& mimeType, JSC::JSValue quality);
+#endif
     ExceptionOr<void> toBlob(Ref<BlobCallback>&&, const String& mimeType, JSC::JSValue quality);
 #if ENABLE(OFFSCREEN_CANVAS)
     ExceptionOr<Ref<OffscreenCanvas>> transferControlToOffscreen();
@@ -189,6 +195,14 @@ private:
     std::unique_ptr<CanvasRenderingContext> m_context;
     PlatformDynamicRangeLimit m_dynamicRangeLimit { PlatformDynamicRangeLimit::initialValue() };
     mutable RefPtr<Image> m_copiedImage; // FIXME: This is temporary for platforms that have to copy the image buffer to render (and for CSSCanvasValue).
+#if PLATFORM(DRIFTSTACK)
+    // W2882 timing-fidelity: per-canvas toDataURL result memo (2D contexts only; tracker-excluded).
+    // Invalidated on ANY modification: didDraw (every draw) + resize (setWidth/setHeight/setSizeForControllingContext).
+    mutable String m_dsCachedDataURL;
+    mutable String m_dsCachedDataURLMime;
+    mutable double m_dsCachedDataURLQuality { -2 };
+    mutable bool m_dsDataURLCacheValid { false };
+#endif
 };
 
 WebCoreOpaqueRoot root(HTMLCanvasElement*);
