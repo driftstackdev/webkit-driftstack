@@ -39,12 +39,12 @@ static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCa
         { "Savoye LET"_s, 0x097F, 71.808f },  // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (71.80799865722656 == float 71.808f); prior 71.576f was Mac-native-tuned-to-group, not the real iOS per-char float (the founder's "actually-correct not tune-to-pass" — iOS's own group is computed WITH 71.808 so it satisfies both)
         // -apple-system / system-ui: ONLY ▁ (U+2581) diverges (sim measureText: fork 118.19 vs iOS 119.738);
         // the exact iOS float makes the fork's Σ == iOS's Σ -> group 4186->4187 == sim. ₹/₺/₸/ẞ/ॿ already match.
-        { "-apple-system"_s, 0x2581, 119.738f },  // ▁
-        { "system-ui"_s, 0x2581, 119.738f },      // ▁
+        { "-apple-system"_s, 0x2581, 119.73807525634766f },  // ▁ W2879: exact iOS-sim measureText float (was 119.738f=119.73799896, off at 7th digit)
+        { "system-ui"_s, 0x2581, 119.73807525634766f },      // ▁ W2879: exact iOS-sim measureText float
         // Impact: the fork's cascade sizes the GCPS fallback fonts narrower than iOS per-primary. Inject
         // the iOS @128px advances (native ctprobe == iOS for these) to close the Impact blfonts -8 group.
-        { "Impact"_s, 0x20B9, 70.812f },   // ₹
-        { "Impact"_s, 0x20B8, 71.188f },   // ₸
+        { "Impact"_s, 0x20B9, 70.8125f },   // ₹ W2879: exact iOS float (iOS=70.8125=1133/16; was 70.812f=70.81199646)
+        { "Impact"_s, 0x20B8, 71.1875f },   // ₸ W2879: exact iOS float (iOS=71.1875=1139/16; was 71.188f=71.18800354)
         { "Impact"_s, 0x1E9E, 88.375f },   // ẞ
         { "Impact"_s, 0x097F, 74.496f },   // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (74.49600219726562 == float 74.496f); prior 74.648f was native-cascade-tuned-to-group, not the real iOS per-char (offsetWidth 75 unchanged; iOS's group uses 74.496 so metricsHash holds)
     } };
