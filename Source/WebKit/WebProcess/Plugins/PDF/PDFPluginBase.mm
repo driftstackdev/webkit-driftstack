@@ -1258,11 +1258,42 @@ void PDFPluginBase::writeItemsToGeneralPasteboard(Vector<PasteboardItem>&& paste
 }
 
 #if PLATFORM(MAC)
+
+#if PLATFORM(DRIFTSTACK)
+// Per-session-isolation audit wi8z2sdot (sibling of the W2858 clipboard fix): the PDF plugin's
+// takeFindStringFromSelection writes the user's find string to NSPasteboardNameFind — the shared
+// system Find board, readable by EVERY co-tenant session on the Mac worker + the operator, and the
+// write persists past session teardown. Same shared-Find-board class as GlobalFindInPageState /
+// Editor::takeFindStringFromSelection, just in the PDF code path. Route the write to the per-session
+// named board (DRIFTSTACK_PASTEBOARD_NAME, harness-set per session; __XPC_ mirror for the WebContent
+// sandbox), identical to driftstackPasteboardName() used for the general clipboard board — so the PDF
+// find string lands on a session-unique NSPasteboard, never the cross-tenant/operator-visible system
+// Find board. The Driftstack rig has no native Find bar to consume the system board, so isolating the
+// destination is behavior-neutral for the customer while closing the leak.
+static String driftstackFindPasteboardName()
+{
+    const char *name = getenv("DRIFTSTACK_PASTEBOARD_NAME");
+    if (!name || !name[0])
+        name = getenv("__XPC_DRIFTSTACK_PASTEBOARD_NAME");
+    if (name && name[0]) {
+        String s = String::fromUTF8(name);
+        if (!s.isEmpty())
+            return s;
+    }
+    return "driftstack-pb-default"_s;
+}
+#endif
+
 void PDFPluginBase::writeStringToFindPasteboard(const String& string) const
 {
     auto context = PagePasteboardContext::create(pageIdentifier());
-    platformStrategies()->pasteboardStrategy()->setTypes({ NSPasteboardTypeString }, NSPasteboardNameFind, context.get());
-    platformStrategies()->pasteboardStrategy()->setStringForType(string, NSPasteboardTypeString, NSPasteboardNameFind, context.get());
+#if PLATFORM(DRIFTSTACK)
+    auto findPasteboardName = driftstackFindPasteboardName();
+#else
+    String findPasteboardName { NSPasteboardNameFind };
+#endif
+    platformStrategies()->pasteboardStrategy()->setTypes({ NSPasteboardTypeString }, findPasteboardName, context.get());
+    platformStrategies()->pasteboardStrategy()->setStringForType(string, NSPasteboardTypeString, findPasteboardName, context.get());
 }
 #endif
 

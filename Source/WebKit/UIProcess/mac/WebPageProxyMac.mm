@@ -797,6 +797,28 @@ _WKRemoteObjectRegistry *WebPageProxy::remoteObjectRegistry()
     return pageClient ? pageClient->remoteObjectRegistry() : nullptr;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2858 follow-up (isolation audit wi8z2sdot): the execCommand('paste') / context-menu-Paste grant path must key
+// the access grant by the SAME per-session board name the WebProcess actually reads (Pasteboard::createForCopyAndPaste
+// → driftstackPasteboardName(), PasteboardMac.mm). Naming the shared NSPasteboardNameGeneral here both (a) mismatches
+// the grant key vs the read key (grant→general, read→driftstack-pb-<id>) and (b) harvests pathsForFileUpload off the
+// SHARED Mac-worker general board (WebPasteboardProxyCocoa.mm grantAccessToCurrentData → AllowFilesAccessFromWebProcess),
+// granting a customer WebProcess filesystem access to paths a co-tenant session or the host operator placed on the
+// shared clipboard. Mirror the WebViewImpl.mm/PasteboardMac.mm helper so the grant board == the per-session read board.
+static NSString *driftstackPasteboardName()
+{
+    const char *name = getenv("DRIFTSTACK_PASTEBOARD_NAME");
+    if (!name || !name[0])
+        name = getenv("__XPC_DRIFTSTACK_PASTEBOARD_NAME");
+    if (name && name[0]) {
+        NSString *s = [NSString stringWithUTF8String:name];
+        if (s.length)
+            return s;
+    }
+    return @"driftstack-pb-default";
+}
+#endif
+
 #if ENABLE(CONTEXT_MENUS)
 
 NSMenu *WebPageProxy::activeContextMenu() const
@@ -815,7 +837,11 @@ RetainPtr<NSEvent> WebPageProxy::createSyntheticEventForContextMenu(FloatPoint l
 void WebPageProxy::platformDidSelectItemFromActiveContextMenu(const WebContextMenuItemData& item, CompletionHandler<void()>&& completionHandler)
 {
     if (item.action() == ContextMenuItemTagPaste)
+#if PLATFORM(DRIFTSTACK)
+        grantAccessToCurrentPasteboardData(driftstackPasteboardName(), WTF::move(completionHandler));
+#else
         grantAccessToCurrentPasteboardData(NSPasteboardNameGeneral, WTF::move(completionHandler));
+#endif
     else
         completionHandler();
 }
@@ -826,7 +852,11 @@ std::optional<IPC::AsyncReplyID> WebPageProxy::willPerformPasteCommand(DOMPasteA
 {
     switch (pasteAccessCategory) {
     case DOMPasteAccessCategory::General:
+#if PLATFORM(DRIFTSTACK)
+        return grantAccessToCurrentPasteboardData(driftstackPasteboardName(), WTF::move(completionHandler), frameID);
+#else
         return grantAccessToCurrentPasteboardData(NSPasteboardNameGeneral, WTF::move(completionHandler), frameID);
+#endif
     case DOMPasteAccessCategory::Fonts:
         return grantAccessToCurrentPasteboardData(NSPasteboardNameFont, WTF::move(completionHandler), frameID);
     }

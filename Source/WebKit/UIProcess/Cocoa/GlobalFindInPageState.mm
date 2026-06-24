@@ -28,14 +28,23 @@
 
 #import <wtf/text/WTFString.h>
 
-#if PLATFORM(MAC)
+// W2870 (isolation audit, find-in-page cross-session leak): on the Mac-worker build PLATFORM(MAC) is true, so
+// upstream's findPasteboard() writes/reads the SYSTEM-WIDE, per-user shared board [NSPasteboard
+// pasteboardWithName:NSPasteboardNameFind]. Every session's find-in-page query string would land on that one
+// board — readable/overwritable by all co-tenant sessions on the host + the operator, and the value persists
+// after a session is torn down. Unlike the DOM general clipboard (W2858, which routes to a per-session NAMED
+// board), the find state is global UIProcess state and each Driftstack session is its OWN UIProcess, so the
+// simplest correct isolation is the per-process static (exactly the non-MAC code path): the find string lives
+// only in this process's memory, is unreachable by any other session, and is reclaimed when the process exits.
+// Gate the static for the Driftstack build; leave upstream's shared-board path untouched for plain Mac builds.
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
 #import <AppKit/NSPasteboard.h>
 #import <WebCore/LegacyNSPasteboardTypes.h>
 #endif
 
 namespace WebKit {
 
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
 
 static RetainPtr<NSPasteboard> findPasteboard()
 {
@@ -54,7 +63,7 @@ static String& globalStringForFind()
 
 void updateStringForFind(const String& string)
 {
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
     [findPasteboard() setString:string.createNSString().get() forType:WebCore::legacyStringPasteboardTypeSingleton()];
 #else
     globalStringForFind() = string;
@@ -63,7 +72,7 @@ void updateStringForFind(const String& string)
 
 String stringForFind()
 {
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
     return [findPasteboard() stringForType:WebCore::legacyStringPasteboardTypeSingleton()];
 #else
     return globalStringForFind();

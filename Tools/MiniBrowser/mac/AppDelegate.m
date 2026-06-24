@@ -316,6 +316,19 @@ static void driftstackInstallProfileDumpHandler(WKWebsiteDataStore *dataStore)
         driftstackInstallProfileDumpHandler(dataStore);
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+        // W2880 (A3 cross-session isolation, audit ww2x8kmih-sibling): these two MiniBrowser dev affordances
+        // register FIXED Darwin notification names ("org.webkit.MiniBrowser.clearAllData" /
+        // ".clearServiceWorkers"). Darwin notifications are delivered per-UID/system-wide to EVERY registered
+        // process, so a single notify_post of one of these names would fire the handler in ALL ~20 live session
+        // forks on the shared multi-tenant worker simultaneously — each wiping its own (per-session-isolated)
+        // data store. That is a cross-session affect/availability reach: any co-tenant fork (or anything able to
+        // notify_post as the same uid) could destroy every other live session's cookies/localStorage/IndexedDB/
+        // cache/service workers. The handlers are a dev-only debug affordance with NO production consumer (the
+        // harness never posts these names). Under the harness path (DRIFTSTACK_DATA_DIR set per session) simply
+        // do not register them; upstream/non-harness MiniBrowser behaviour is unchanged.
+        if (!(driftstackDataDir && driftstackDataDir[0])) {
+#endif
         int token;
         notify_register_dispatch("org.webkit.MiniBrowser.clearAllData", &token, dispatch_get_main_queue(), ^(int unusedToken) {
             [dataStore removeDataOfTypes:WKWebsiteDataStore.allWebsiteDataTypes modifiedSince:[NSDate distantPast] completionHandler:^{
@@ -328,6 +341,9 @@ static void driftstackInstallProfileDumpHandler(WKWebsiteDataStore *dataStore)
                 NSLog(@"Removed all service workers from default persistent data store.");
             }];
         });
+#if PLATFORM(DRIFTSTACK)
+        }
+#endif
     }
     
     return dataStore;
