@@ -242,6 +242,19 @@ PointerEvent::PointerEvent(
     , m_coalescedEvents(createCoalescedPointerEvents(type, button, mouseEvent, pointerId, pointerType))
     , m_predictedEvents(createPredictedPointerEvents(type, button, mouseEvent, pointerId, pointerType))
 {
+#if PLATFORM(DRIFTSTACK)
+    // Real iPhone touch pointerdown reports a finger-contact width/height (= 2 x Touch.radiusX, ~48-73 CSS px),
+    // NOT the 1x1 mouse default — a width/height==1 touch pointer is a synthetic-input tell. Captured from a real
+    // iPhone 17 / iOS 26.5 (2026-06-24 tap-pointer gold-truth): width==height in {48.5556, 72.8333}, varying per
+    // contact but constant within a single tap. Derive deterministically from pointerId so the value is identical
+    // across one tap's event sequence (over/enter/down/up/out/leave) yet varies across taps. (pressure is already
+    // clamp(force,0,1)==0 for a no-force tap; isPrimary already true.)
+    if (pointerType != mousePointerEventType()) {
+        double driftstackContact = (pointerId & 1) ? 72.83333550393581 : 48.555555917322636;
+        m_width = driftstackContact;
+        m_height = driftstackContact;
+    }
+#endif
 }
 
 PointerEvent::PointerEvent(const AtomString& type, PointerID pointerId, const String& pointerType, IsPrimary isPrimary)
