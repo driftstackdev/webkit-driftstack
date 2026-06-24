@@ -2647,6 +2647,15 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     if (cluster.isEmpty())
         return nullptr;
     char32_t cp = cluster[0];
+    // W2876b (2026-06-24): supplementary-plane cps (e.g. Enclosed Alphanumeric Supplement U+1F1xx emoji) arrive as
+    // a UTF-16 surrogate PAIR — cluster[0] is the LEAD surrogate (0xD83C..), NOT the codepoint, so a `case 0x1F17F`
+    // never matched (cp was 0xD83C). Decode the pair so the switch sees the real cp. Every prior case is BMP, so
+    // this is the first supplementary case; BMP cps (lead not in D800..DBFF) are unaffected.
+    if (cp >= 0xD800 && cp <= 0xDBFF && cluster.length() >= 2) {
+        char32_t lo = cluster[1];
+        if (lo >= 0xDC00 && lo <= 0xDFFF)
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+    }
     // P-#48 wave 29-314 diag trace: log entry + result for our 10 target cps.
     // Limited to first 30 fires per process to avoid log flood.
     static unsigned p48EntryCount = 0;
@@ -2809,6 +2818,17 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         // W2585 (Mac CTFontCreateWithName candidate test): "Apple Color Emoji" has the glyph with advance 21.0
         // @16px (offsetWidth 21) and asc+desc 26.25 -> line-box offsetHeight 27 — EXACT iOS-26.5-sim match. The fork
         // raw cascade instead rendered a narrow text glyph (w16). Apple Color Emoji is a SYSTEM font (loads by name).
+        static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x1F170: case 0x1F171: case 0x1F17E: case 0x1F17F: { // 🅰🅱🅾🅿 NEGATIVE SQUARED LATIN CAPITAL LETTERS (Enclosed Alphanumeric Supplement) — RGI emoji; all 4 sim-verified 21x27 @16px / 128x170 @128px
+        // W2876 (2026-06-24): browserleaks /fonts has a SECOND fingerprint — "Unicode Glyphs" — that hashes DOM
+        // offsetWidth/offsetHeight of special cps at LARGE size + default family (separate from the font-metrics
+        // hash, #96). The macOS CT cascade resolves U+1F17F to Hiragino Sans (narrow text glyph, offsetWidth 16
+        // @16px); a real iPhone renders it as Apple Color Emoji (advance 21 @16px -> offsetWidth 21, line-box 27).
+        // Verified BOTH refs agree: iOS-26.5 sim = 21x27, and the W554 iOS-18.7 emoji curve @16px = 21 (version-
+        // stable). U+1F17F is a standard RGI emoji (🅿 parking). The W2599 emoji-presentation sweep covered
+        // U+2100-2B4F but NOT the Enclosed Alphanumeric Supplement (U+1F100-1F1FF). Same mechanism as U+2B06/U+20E3.
         static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
