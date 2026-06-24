@@ -264,6 +264,12 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
     if (hdr[1] != Socks5::kReplySucceeded) {
         WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: SOCKS5 reply REP=0x%02x (non-success) for %s:%u",
             unsigned(hdr[1]), destUtf8.data(), unsigned(destination.port));
+        // W2868 (#39): REP=0x03 (network unreachable) / 0x04 (host unreachable) is PERMANENT for this proxy+dest
+        // (classically an IPv6-literal dest reached via an IPv4-only proxy — the founder's UDP-proxy page-load
+        // case). Surface it distinctly so the loader fails FAST instead of retry-storming a destination that can
+        // never connect (the 7× retry burned the 45s nav budget → -1001 page-load timeout).
+        if (hdr[1] == Socks5::kReplyNetworkUnreachable || hdr[1] == Socks5::kReplyHostUnreachable)
+            return Socks5Result::DestinationUnreachable;
         return Socks5Result::ConnectFailed;
     }
     uint8_t replyAtyp = hdr[3];

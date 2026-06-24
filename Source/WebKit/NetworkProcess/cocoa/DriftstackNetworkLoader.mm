@@ -1666,7 +1666,15 @@ void DriftstackNetworkLoader::resume()
         Socks5Endpoint bnd;
         auto connectResult = socks5Client->tcpConnect(dest, bnd);
         if (connectResult != Socks5Result::Success) {
-            if (canRetry) {
+            // W2868 (#39): a network/host-unreachable REP (0x03/0x04) is PERMANENT for this proxy+dest (e.g. an
+            // IPv6-literal dest via an IPv4-only proxy) — do NOT retry it. The 7× retry-storm burned the 45s nav
+            // budget → the founder's -1001 page-load hang on a UDP proxy. Fail FAST so the page proceeds without
+            // the dead resource (a domain/IPv4 dest still retries normally on transient ConnectFailed).
+            bool destUnreachable = (connectResult == Socks5Result::DestinationUnreachable);
+            if (destUnreachable)
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2868] SOCKS5 dest %s UNREACHABLE via proxy (network/host-unreachable) — fail fast, NO retry",
+                    url.host().toString().utf8().data());
+            if (canRetry && !destUnreachable) {
                 WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for SOCKS5 CONNECT to %s",
                     currentAttempt, url.host().toString().utf8().data());
                 Ref<DriftstackNetworkLoader> retryRef { *this };

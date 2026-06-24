@@ -81,6 +81,10 @@ enum class Socks5Result : uint8_t {
     NotImplemented,       // Phase A scaffold stub return
     NetworkError,
     ProtocolError,
+    DestinationUnreachable, // W2868 (#39): SOCKS5 REP=0x03 (network unreachable) / 0x04 (host unreachable) — a
+                            // PERMANENT condition for this proxy+dest (classically an IPv6-literal dest via an
+                            // IPv4-only proxy). The caller MUST fail fast, never retry (retrying burns the page
+                            // nav budget → the founder's 45s -1001 page-load hang).
 };
 
 struct Socks5Endpoint {
