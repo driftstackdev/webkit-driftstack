@@ -114,16 +114,33 @@ static bool NODELETE isConfigurationRecordHDR(const AV1CodecConfigurationRecord&
 std::optional<PlatformMediaCapabilitiesInfo> validateAV1Parameters(const AV1CodecConfigurationRecord& record, const PlatformMediaCapabilitiesVideoConfiguration& configuration)
 {
 #if PLATFORM(DRIFTSTACK)
-    // iPhone MediaCapabilities.decodingInfo(av1).supported = FALSE on EVERY archetype: A15/A16 have no
-    // AV1 HW; A17Pro+ have the documented "AV1 decodingInfo always false" SPLIT — canPlayType/MSE/
-    // WebCodecs report supported (via av1HardwareDecoderAvailable, pinned above), but decodingInfo does
-    // NOT (av1DecodingInfoAlwaysFalse=True + av1Pattern="A17Pro+ split (wc=true,decodingInfo=false)" in
-    // the iPhone 17 aio capture). The host VTCopyAV1DecoderCapabilitiesDictionary path below would
-    // return supported=true on M3/M4 (host AV1 HW) → breaking the split → return nullopt to match the
-    // real iPhone (decodingInfo=false) host-independently on every fleet box. (fp-divergence-sweep 2026-06-21.)
-    UNUSED_PARAM(record);
-    UNUSED_PARAM(configuration);
-    return std::nullopt;
+    // #115: AV1 MediaCapabilities.decodingInfo is CONFIG-DEPENDENT on A17Pro+ — NOT "always false".
+    // The earlier all-false override was based only on a BASIC config; the av1-decinfo-matrix capture
+    // (real iPhone 17 / Safari 26.4, aio-iPhone_17-1782256826126) shows the boundary is the STANDARD AV1
+    // record + per-level (resolution/framerate/bitrate/tier) validation, clamped to the iPhone AV1-HW
+    // max level 5.3. Reproduced points: 13M/15M@4K60=true, 12M-&-below & 16M(6.0)@4K60=false,
+    // 720..2160@13M=true, fps 24/30/60=true, bitrate 1M/5M=true / 50M=false, 10-bit=true. A15/A16 have
+    // no AV1 HW → false. Computed HOST-INDEPENDENTLY (no VTCopyAV1DecoderCapabilitiesDictionary read,
+    // which would track the fleet box's M3/M4 max level/bitrate, not the iPhone's) so every box matches
+    // the real iPhone. canPlayType/MSE/WebCodecs still report supported via the av1HardwareDecoder pins.
+    if (!driftstackArchetypeExplicitlyA17ProPlus()) {
+        UNUSED_PARAM(record);
+        UNUSED_PARAM(configuration);
+        return std::nullopt;
+    }
+    if (!validateAV1ConfigurationRecord(record))
+        return std::nullopt;
+    if (!validateAV1PerLevelConstraints(record, configuration))
+        return std::nullopt;
+    // iPhone AV1-HW max level = 5.3 (matrix: 15M/level-5.3=true, 16M/level-6.0=false). The host VT path
+    // would use the box's own maxDecodeLevel here; pin the iPhone's so M3/M4 don't over-support.
+    if (static_cast<uint8_t>(record.level) > static_cast<uint8_t>(AV1ConfigurationLevel::Level_5_3))
+        return std::nullopt;
+    PlatformMediaCapabilitiesInfo info;
+    info.supported = true;
+    info.smooth = true;
+    info.powerEfficient = true;
+    return info;
 #else
 
     if (!validateAV1ConfigurationRecord(record))
