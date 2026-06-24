@@ -3166,6 +3166,14 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     // advance@16) == the iOS-26.5-sim CURSIVE width for every cp. Fires ONLY on cursive (the other 6 generics are
     // already fork-natural-correct, so non-cursive returns nullptr → unchanged). glyphHash-SAFE (disjoint from the 5
     // GCPS cps). After build + sim-diff confirms cursive==iOS, DELETE the cursive GEOM_SERVE rows for these cps.
+    case 0x25CC: { // ◌ DOTTED CIRCLE — W2877: cursive base mis-cascades to Noto Nastaliq Urdu (Arabic, lineH 321 ->
+        // probe 101x321) vs iOS Hiragino Mincho ProN (128x193 @128px / 16x25 @16px, ctcascade-verified == iOS-26.5
+        // sim). Non-cursive already correct (default -> Hiragino Sans 149) so return nullptr to leave the cascade.
+        if (!baseIsCursive)
+            return nullptr;
+        static const std::array<ASCIILiteral, 1> candidates { "hiragino mincho pron"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
     case 0x2002: case 0x2003: case 0x2004: case 0x2005: case 0x2006: case 0x2007:
     case 0x2009: case 0x200A: case 0x2012: case 0x2015: case 0x2016: case 0x2017:
     case 0x201B: case 0x201F: case 0x2025: case 0x2027: case 0x202F: case 0x2032:
