@@ -167,12 +167,20 @@ JSC_DEFINE_HOST_FUNCTION(dateParse, (JSGlobalObject* globalObject, CallFrame* ca
 
 JSValue dateNowImpl()
 {
+#if PLATFORM(DRIFTSTACK)
+    return jsNumber(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds()); // timing-fidelity virtual-clock skew (INERT until op-charging)
+#else
     return jsNumber(jsCurrentTime());
+#endif
 }
 
 JSC_DEFINE_HOST_FUNCTION(dateNow, (JSGlobalObject*, CallFrame*))
 {
+#if PLATFORM(DRIFTSTACK)
+    return JSValue::encode(jsNumber(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds()));
+#else
     return JSValue::encode(jsNumber(jsCurrentTime()));
+#endif
 }
 
 JSC_DEFINE_HOST_FUNCTION(dateUTC, (JSGlobalObject* globalObject, CallFrame* callFrame))

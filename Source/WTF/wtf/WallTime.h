@@ -74,6 +74,17 @@ struct MarkableTraits<WallTime> {
 
 WTF_EXPORT_PRIVATE Int128 currentTimeInNanoseconds();
 
+#if PLATFORM(DRIFTSTACK)
+// W2882/#50 timing-fidelity virtual-clock skew: a thread-local Seconds offset added to performance.now()
+// and Date.now() so per-operation timing matches the iPhone archetype. Both JSC (Date.now) and WebCore
+// (Performance::now) read this. The accumulated offset CANCELS in deltas (a fingerprinter measures t1-t0);
+// only the per-op charge applied between two reads survives -> measured delta == the op's iPhone cost.
+// INERT until Phase-5 op-charging wires advanceDriftstackVirtualSkew() into the timed ops (skew stays 0).
+inline Seconds& driftstackVirtualSkewStorage() { static thread_local Seconds skew { }; return skew; }
+inline Seconds driftstackVirtualSkew() { return driftstackVirtualSkewStorage(); }
+inline void advanceDriftstackVirtualSkew(Seconds delta) { driftstackVirtualSkewStorage() += delta; }
+#endif
+
 } // namespace WTF
 
 using WTF::WallTime;

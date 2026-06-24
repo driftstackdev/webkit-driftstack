@@ -113,6 +113,9 @@ DOMHighResTimeStamp Performance::timeOrigin() const
 ReducedResolutionSeconds Performance::nowInReducedResolutionSeconds() const
 {
     Seconds now = MonotonicTime::now() - m_timeOrigin;
+#if PLATFORM(DRIFTSTACK)
+    now += WTF::driftstackVirtualSkew(); // timing-fidelity virtual-clock skew (INERT until Phase-5 op-charging)
+#endif
     return reduceTimeResolution(now);
 }
 
