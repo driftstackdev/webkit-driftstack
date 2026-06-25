@@ -105,13 +105,41 @@ inline void appendStringU16LenUTF8Buf(Vector<uint8_t>& buf, const String& s)
 
 } // anonymous namespace
 
-void OpSequenceRecorder::appendU16BE(uint16_t v)            { appendBigEndianU16(m_buffer, v); }
-void OpSequenceRecorder::appendF64BE(double v)              { appendBigEndianF64(m_buffer, v); }
-void OpSequenceRecorder::appendStringU16LenUTF8(const String& s) { appendStringU16LenUTF8Buf(m_buffer, s); }
+// P3 (canvas-op-timing-audit): the recorder appends op bytes on EVERY draw op,
+// but its output (opSeqSha / canonical bytes) is consumed ONLY at readback, and
+// then ONLY when one of these consuming gates is on:
+//   DRIFTSTACK_CANVAS_FP10X_OVERRIDE  (V-185 toDataURL/getImageData substitution)
+//   DRIFTSTACK_GETIMAGEDATA_ATLAS     (V-510 op-seq-keyed getImageData serve)
+//   DRIFTSTACK_PROBE_SIGNATURE_EMIT   (auto-learn ProbeSig harvester)
+// When ALL three are off, the recorded buffer is never read, so recording is pure
+// discarded work. Skip it: every record method writes exclusively through the
+// append primitives below, so gating them makes every recordX a complete no-op
+// (no partial/desync'd buffer is possible). In production at least one consuming
+// gate is on (DRIFTSTACK_CANVAS_FP10X_OVERRIDE per launch-env) → this is a no-op
+// there; the win is render-only / unsubstituted canvases. The recorder output is
+// never rendered, so skipping it cannot change a single pixel — byte-neutral.
+static bool dsOpRecordingEnabled()
+{
+    static const bool enabled = []() {
+        auto on = [](const char* name) { const char* v = getenv(name); return v && v[0] == '1'; };
+        return on("DRIFTSTACK_CANVAS_FP10X_OVERRIDE")
+            || on("DRIFTSTACK_GETIMAGEDATA_ATLAS")
+            || on("DRIFTSTACK_PROBE_SIGNATURE_EMIT")
+            // The canonical-serializer self-test (DRIFTSTACK_TEST_OPSEQ) records
+            // into a local recorder and asserts SHA vectors → it needs recording
+            // live regardless of the consuming gates.
+            || on("DRIFTSTACK_TEST_OPSEQ");
+    }();
+    return enabled;
+}
+
+void OpSequenceRecorder::appendU16BE(uint16_t v)            { if (!dsOpRecordingEnabled()) return; appendBigEndianU16(m_buffer, v); }
+void OpSequenceRecorder::appendF64BE(double v)              { if (!dsOpRecordingEnabled()) return; appendBigEndianF64(m_buffer, v); }
+void OpSequenceRecorder::appendStringU16LenUTF8(const String& s) { if (!dsOpRecordingEnabled()) return; appendStringU16LenUTF8Buf(m_buffer, s); }
 // P4 (canvas-op-timing-audit): the setters already compute v.utf8() for the length — pass it here so the
 // string is transcoded ONCE, not twice (the recorder analogue of the toDataURL double-encode). Byte-identical.
-void OpSequenceRecorder::appendStringU16LenUTF8(const CString& utf8) { appendU16LenBytesBuf(m_buffer, utf8.span()); }
-void OpSequenceRecorder::appendU8(uint8_t v)                { m_buffer.append(v); }
+void OpSequenceRecorder::appendStringU16LenUTF8(const CString& utf8) { if (!dsOpRecordingEnabled()) return; appendU16LenBytesBuf(m_buffer, utf8.span()); }
+void OpSequenceRecorder::appendU8(uint8_t v)                { if (!dsOpRecordingEnabled()) return; m_buffer.append(v); }
 
 void OpSequenceRecorder::appendOpHeader(uint16_t opId, uint16_t argByteLen)
 {
