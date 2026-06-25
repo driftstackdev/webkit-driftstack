@@ -525,6 +525,15 @@ bool defaultCaptionDisplaySettingsEnabled()
 #if ENABLE(MEDIA_STREAM)
 bool defaultShouldEnableScreenCapture()
 {
+#if PLATFORM(DRIFTSTACK)
+    // iOS Safari exposes NO getDisplayMedia (verified absent on the iPhone 16 Pro + iPhone 17 /aio:
+    // navigator.mediaDevices.getDisplayMedia === undefined). The stock PLATFORM(MAC) default below
+    // returns true, which would expose getDisplayMedia — a fingerprint divergence from iPhone AND a
+    // per-session isolation leak (a fleet worker holds screen-recording permission for LiveKit, so a
+    // page could capture the worker's screen across sessions). Force false on the fork: API absent,
+    // iPhone-correct, no screen leak.
+    return false;
+#endif
 #if USE(APPLE_INTERNAL_SDK)
     return defaultShouldEnableScreenCaptureFromAdditions();
 #endif
