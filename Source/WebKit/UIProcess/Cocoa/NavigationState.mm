@@ -604,7 +604,13 @@ void NavigationState::NavigationClient::decidePolicyForNavigationAction(WebPageP
 #if PLATFORM(MAC)
             // A file URL shouldn't fall through to here, but if it did,
             // it would be a security risk to open it.
-            if (![[nsURLRequest URL] isFileURL])
+            // DRIFTSTACK per-session isolation guard (shared Mac fleet): an external-scheme
+            // navigation (tel:/mailto:/custom app scheme) here would call NSWorkspace and launch
+            // the WORKER's Mac handler app — a cross-session leak + visible Mac-app launch on a
+            // shared host. On the fleet we suppress the launch (the navigation is still ignored
+            // below, matching "nothing happens"). Env-gated; gate-off = bit-identical stock.
+            static bool dsBlockExternalAppLaunch = []{ const char* v = getenv("DRIFTSTACK_BLOCK_EXTERNAL_APP_LAUNCH"); return v && v[0] == '1'; }();
+            if (![[nsURLRequest URL] isFileURL] && !dsBlockExternalAppLaunch)
                 [[NSWorkspace sharedWorkspace] openURL:retainPtr([nsURLRequest URL]).get()];
 #endif
 
