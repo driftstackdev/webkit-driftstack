@@ -1595,6 +1595,21 @@ static BOOL isJavaScriptURL(NSURL *url)
 #if PLATFORM(DRIFTSTACK)
     [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: load finished — disarm stall watchdog
 #endif
+    // Dev-only network-fingerprint capture: DRIFTSTACK_DUMP_BODY_TEXT=<file> → after load,
+    // write document.body.innerText to <file>. Used to extract the rendered JSON of a top-level
+    // navigation to tls.peet.ws/api/all (CORS-clean since it is a navigation, not a cross-origin
+    // fetch) so the fork's live on-the-wire JA3/JA4 + raw HTTP/2 frames can be diffed vs real iOS.
+    {
+        const char* _dumpPath = getenv("DRIFTSTACK_DUMP_BODY_TEXT");
+        if (_dumpPath && _dumpPath[0]) {
+            NSString *_dp = [NSString stringWithUTF8String:_dumpPath];
+            [webView evaluateJavaScript:@"(document.body?document.body.innerText:'')"
+                      completionHandler:^(id result, NSError *error) {
+                NSString *_txt = [result isKindOfClass:[NSString class]] ? (NSString*)result : @"";
+                [_txt writeToFile:_dp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            }];
+        }
+    }
     // Fork-test: DRIFTSTACK_AUTOTAP=1 → after load, tap the probe's tapZone center (read live from the
     // page via window.__dsTapZoneCenter, robust to layout) so it fires a native touchstart into A3's oracle.
     // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard

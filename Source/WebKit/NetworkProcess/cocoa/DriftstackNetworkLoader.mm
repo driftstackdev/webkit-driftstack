@@ -1076,35 +1076,39 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
         auto it = webkitHdrs.find(String(key));
         return it != webkitHdrs.end() ? it->value : String(fallback);
     };
-    h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
-    if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+    // TIER-4 wire H2 regular-header ORDER — matched to a real-iPhone-17 raw-wire tls.peet.ws
+    // capture (reference/realdevice-bs/tls-full-iPhone_17-2026-06-01...json, sent_frames HEADERS,
+    // NOT the Cloudflare-sorted reflection). Real-iOS navigation emits regular headers in this
+    // exact order: sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site, sec-fetch-mode,
+    // accept-language, priority, accept-encoding. The prior order (accept, sec-fetch-site,
+    // sec-fetch-dest, accept-encoding, sec-fetch-mode, user-agent, priority, accept-language) was a
+    // wire tell. Header order does NOT affect the Akamai H2 hash (pseudo-only) but IS a distinct
+    // JA4H / raw-frame fingerprint. Values are unchanged; only the emit order moved.
     if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
-    // W2338: FORCE the iPhone Accept-Encoding (NOT getOrDefault). Unlike user-agent (which the WebProcess
-    // already sets to the iPhone customUserAgent on the request, so getOrDefault returns it), the request's
-    // accept-encoding is the Mac WebKit default "gzip, deflate" (no br/zstd) — so getOrDefault would pass
-    // THAT through, not the iPhone fallback. Verified on the wire: a PathB fetch to httpbin.org/headers
-    // reflected "Accept-Encoding: gzip, deflate" (W2337/8). Real iPhone Safari 26.4 = "gzip, deflate, br,
-    // zstd" (W1512; Accept-Encoding is a forbidden fetch header → browser-set, JS can't override). The PathB
-    // loader decodes all of gzip/deflate/br/zstd before WebKit sees the body (W2326), so advertising them is
-    // safe. Hardcode the iPhone value so every PathB request (navigation + fetch/XHR) is byte-correct.
-    h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
-    if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+    h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
+    if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+    if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+    if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+    h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
     // P3/W2438 (#61): real iOS sends the RFC 9218 `priority` header on every request — `u=0, i` for
     // document/navigation, `u=3, i` for fetch/XHR (40 in-repo aio captures, 100% consistent). On iOS
     // it's injected by CFNetwork; PathB bypasses CFNetwork, so the WebProcess request has no `priority`
     // and omitting it is a wire tell. Pass WebKit's value through if present, else derive nav-vs-fetch
-    // urgency from sec-fetch-dest / accept. (Per-resource sub-urgencies image/script/style/font are the
-    // deferred #61 residual. Regular header → does NOT affect the Akamai H2 hash.)
+    // urgency from sec-fetch-dest / accept.
     h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
         : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
-    h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+    // W2338: FORCE the iPhone Accept-Encoding (NOT getOrDefault). The request's accept-encoding is the
+    // Mac WebKit default "gzip, deflate" (no br/zstd); real iPhone Safari = "gzip, deflate, br, zstd"
+    // (W1512). The PathB loader decodes gzip/deflate/br/zstd before WebKit sees the body (W2326). Real
+    // iOS emits accept-encoding LAST of the regular headers (raw-wire reference).
+    h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
     for (auto& header : httpHeaders) {
         String lower = header.key.convertToASCIILowercase();
         if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s || lower.startsWith(':')
             || lower == "accept"_s || lower == "accept-encoding"_s || lower == "accept-language"_s
             || lower == "sec-fetch-site"_s || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
-            || lower == "user-agent"_s || lower == "priority"_s)
+            || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s)
             continue;
         if (lower == "if-none-match"_s || lower == "if-modified-since"_s || lower == "if-match"_s
             || lower == "if-unmodified-since"_s || lower == "if-range"_s)
@@ -1610,17 +1614,21 @@ void DriftstackNetworkLoader::resume()
                     auto it = wk.find(String(key));
                     return it != wk.end() ? it->value : String(fallback);
                 };
-                h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
-                if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
+                // TIER-4 wire H3 regular-header ORDER — same real-iPhone-17 raw-wire order as the H2
+                // builder above (sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site,
+                // sec-fetch-mode, accept-language, priority, accept-encoding). Values unchanged.
                 if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
-                h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
-                if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, wk.contains("user-agent"_s) ? wk.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+                h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
+                if (wk.contains("referer"_s)) h3req.extraHeaders.append({ "referer"_s, wk.get("referer"_s) });
+                if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
+                if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
+                h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
                 // P3/W2438 (#61): derive the RFC 9218 `priority` (u=0 nav / u=3 fetch) when WebKit
                 // doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
                 h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s)
                     : driftstackPathBPriorityHeader(wk.get("sec-fetch-dest"_s), orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
-                h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+                h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
                 // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
                 if (!driftstackCookieHeader.isEmpty())
                     h3req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
@@ -2071,30 +2079,34 @@ void DriftstackNetworkLoader::resume()
                 return it != webkitHdrs.end() ? it->value : String(fallback);
             };
 
-            // Emit in iPhone-mandated order, using WebKit's natural values
-            h2req.extraHeaders.append({ "accept"_s,
-                getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
-            if (webkitHdrs.contains("sec-fetch-site"_s))
-                h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+            // TIER-4 wire H2 regular-header ORDER — real-iPhone-17 raw-wire (tls-full reference):
+            // sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site, sec-fetch-mode,
+            // accept-language, priority, accept-encoding. Same order as the pool builder above.
             if (webkitHdrs.contains("sec-fetch-dest"_s))
                 h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
-            h2req.extraHeaders.append({ "accept-encoding"_s,
-                driftstackPathBAcceptEncoding() });
-            if (webkitHdrs.contains("sec-fetch-mode"_s))
-                h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
                 webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+            h2req.extraHeaders.append({ "accept"_s,
+                getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
+            if (webkitHdrs.contains("referer"_s))
+                h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+            if (webkitHdrs.contains("sec-fetch-site"_s))
+                h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+            if (webkitHdrs.contains("sec-fetch-mode"_s))
+                h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+            h2req.extraHeaders.append({ "accept-language"_s,
+                driftstackPathBAcceptLanguage() });
             // P3/W2438 (#61): derive the RFC 9218 `priority` (u=0 nav / u=3 fetch) when WebKit doesn't
             // supply one — the one-shot path bypasses CFNetwork same as the pool builder above.
             h2req.extraHeaders.append({ "priority"_s,
                 webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
                     : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
-            h2req.extraHeaders.append({ "accept-language"_s,
-                driftstackPathBAcceptLanguage() });
+            h2req.extraHeaders.append({ "accept-encoding"_s,
+                driftstackPathBAcceptEncoding() });
 
-            // Forward any OTHER WebKit headers (referer, cookie was set
-            // earlier, content-type for POST, etc.) — preserved in their
-            // original positions (iPhone allows arbitrary trailing headers).
+            // Forward any OTHER WebKit headers (content-type for POST, etc.) —
+            // preserved in their original positions (iPhone allows arbitrary
+            // trailing headers). referer is emitted above in its iOS slot.
             for (auto& header : httpHeaders) {
                 String lower = header.key.convertToASCIILowercase();
                 if (lower == "host"_s || lower == "connection"_s
@@ -2102,7 +2114,7 @@ void DriftstackNetworkLoader::resume()
                     || lower == "accept"_s || lower == "accept-encoding"_s
                     || lower == "accept-language"_s || lower == "sec-fetch-site"_s
                     || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
-                    || lower == "user-agent"_s || lower == "priority"_s)
+                    || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s)
                     continue;
                 // Wave 29-499.261 — strip cache-validation headers. PathB v2
                 // has no client-side cache; If-None-Match / If-Modified-Since
