@@ -10427,6 +10427,14 @@ void WebPageProxy::showShareSheet(IPC::Connection& connection, ShareDataWithPars
     MESSAGE_CHECK_COMPLETION_BASE(!shareData.url || shareData.url->protocolIsInHTTPFamily() || shareData.url->protocolIsData(), connection, completionHandler(false));
     MESSAGE_CHECK_COMPLETION_BASE(shareData.files.isEmpty() || protect(preferences())->webShareFileAPIEnabled(), connection, completionHandler(false));
     MESSAGE_CHECK_COMPLETION_BASE(shareData.originator == ShareDataOriginator::Web, connection, completionHandler(false));
+#if PLATFORM(DRIFTSTACK)
+    // Per-session isolation guard (shared Mac fleet): navigator.share() must NEVER open the shared
+    // WORKER's NSSharingServicePicker — a visible Mac UI popup on the host + the shared payload
+    // (url/text/files) would flow to the worker's share targets (AirDrop, Messages, Notes…) across
+    // sessions. navigator.share stays present (iPhone-correct), but the interactive share resolves
+    // as cancelled (the iPhone-faithful "user dismissed the sheet" outcome). Never reaches the picker.
+    return completionHandler(false);
+#endif
     if (RefPtr pageClient = this->pageClient())
         pageClient->showShareSheet(WTF::move(shareData), WTF::move(completionHandler));
     else
