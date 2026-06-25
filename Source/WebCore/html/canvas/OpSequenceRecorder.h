@@ -134,6 +134,7 @@ private:
     void appendU16BE(uint16_t);
     void appendF64BE(double);
     void appendStringU16LenUTF8(const String&);
+    void appendStringU16LenUTF8(const CString&); // P4: append a precomputed UTF-8 (no re-transcode)
     void appendU8(uint8_t);
 
     Vector<uint8_t> m_buffer;

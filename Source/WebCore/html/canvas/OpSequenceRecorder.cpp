@@ -85,10 +85,9 @@ inline void appendBigEndianF64(Vector<uint8_t>& buf, double v)
         buf.append(static_cast<uint8_t>((bits >> (i * 8)) & 0xff));
 }
 
-inline void appendStringU16LenUTF8Buf(Vector<uint8_t>& buf, const String& s)
+// Core: append [u16 BE byte_len][bytes] from an ALREADY-encoded UTF-8 span (no transcode).
+inline void appendU16LenBytesBuf(Vector<uint8_t>& buf, std::span<const char> utf8Span)
 {
-    auto utf8 = s.utf8();
-    auto utf8Span = utf8.span();
     auto len = utf8Span.size();
     // Spec: u16 byte_len BE. If a string ever exceeds 65535 bytes we'd need to
     // change the wire format; canvas inputs in practice are well under this.
@@ -98,12 +97,20 @@ inline void appendStringU16LenUTF8Buf(Vector<uint8_t>& buf, const String& s)
     for (size_t i = 0; i < len; ++i)
         buf.append(static_cast<uint8_t>(utf8Span[i]));
 }
+inline void appendStringU16LenUTF8Buf(Vector<uint8_t>& buf, const String& s)
+{
+    auto utf8 = s.utf8();
+    appendU16LenBytesBuf(buf, utf8.span());
+}
 
 } // anonymous namespace
 
 void OpSequenceRecorder::appendU16BE(uint16_t v)            { appendBigEndianU16(m_buffer, v); }
 void OpSequenceRecorder::appendF64BE(double v)              { appendBigEndianF64(m_buffer, v); }
 void OpSequenceRecorder::appendStringU16LenUTF8(const String& s) { appendStringU16LenUTF8Buf(m_buffer, s); }
+// P4 (canvas-op-timing-audit): the setters already compute v.utf8() for the length — pass it here so the
+// string is transcoded ONCE, not twice (the recorder analogue of the toDataURL double-encode). Byte-identical.
+void OpSequenceRecorder::appendStringU16LenUTF8(const CString& utf8) { appendU16LenBytesBuf(m_buffer, utf8.span()); }
 void OpSequenceRecorder::appendU8(uint8_t v)                { m_buffer.append(v); }
 
 void OpSequenceRecorder::appendOpHeader(uint16_t opId, uint16_t argByteLen)
@@ -119,14 +126,14 @@ void OpSequenceRecorder::recordSetFillStyle(const String& v)
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpFillStyle, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetStrokeStyle(const String& v)
 {
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpStrokeStyle, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetLineWidth(double v)
 {
@@ -138,14 +145,14 @@ void OpSequenceRecorder::recordSetLineCap(const String& v)
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpLineCap, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetLineJoin(const String& v)
 {
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpLineJoin, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetMiterLimit(double v)
 {
@@ -157,21 +164,21 @@ void OpSequenceRecorder::recordSetFont(const String& v)
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpFont, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetTextAlign(const String& v)
 {
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpTextAlign, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetTextBaseline(const String& v)
 {
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpTextBaseline, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 void OpSequenceRecorder::recordSetGlobalAlpha(double v)
 {
@@ -183,7 +190,7 @@ void OpSequenceRecorder::recordSetGlobalCompositeOperation(const String& v)
     auto utf8 = v.utf8();
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpGlobalCompositeOperation, static_cast<uint16_t>(2 + len));
-    appendStringU16LenUTF8(v);
+    appendStringU16LenUTF8(utf8);
 }
 
 // ---- Draw / path ops -------------------------------------------------------
@@ -213,7 +220,7 @@ void OpSequenceRecorder::recordFillText(const String& text, double x, double y)
     auto utf8 = text.utf8();
     auto strLen = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpFillText, static_cast<uint16_t>(2 + strLen + 2 * 8));
-    appendStringU16LenUTF8(text);
+    appendStringU16LenUTF8(utf8);
     appendF64BE(x); appendF64BE(y);
 }
 void OpSequenceRecorder::recordFillTextWithMaxWidth(const String& text, double x, double y, double maxWidth)
@@ -221,7 +228,7 @@ void OpSequenceRecorder::recordFillTextWithMaxWidth(const String& text, double x
     auto utf8 = text.utf8();
     auto strLen = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpFillText, static_cast<uint16_t>(2 + strLen + 3 * 8));
-    appendStringU16LenUTF8(text);
+    appendStringU16LenUTF8(utf8);
     appendF64BE(x); appendF64BE(y); appendF64BE(maxWidth);
 }
 void OpSequenceRecorder::recordStrokeText(const String& text, double x, double y)
@@ -229,7 +236,7 @@ void OpSequenceRecorder::recordStrokeText(const String& text, double x, double y
     auto utf8 = text.utf8();
     auto strLen = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpStrokeText, static_cast<uint16_t>(2 + strLen + 2 * 8));
-    appendStringU16LenUTF8(text);
+    appendStringU16LenUTF8(utf8);
     appendF64BE(x); appendF64BE(y);
 }
 void OpSequenceRecorder::recordStrokeTextWithMaxWidth(const String& text, double x, double y, double maxWidth)
@@ -237,7 +244,7 @@ void OpSequenceRecorder::recordStrokeTextWithMaxWidth(const String& text, double
     auto utf8 = text.utf8();
     auto strLen = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpStrokeText, static_cast<uint16_t>(2 + strLen + 3 * 8));
-    appendStringU16LenUTF8(text);
+    appendStringU16LenUTF8(utf8);
     appendF64BE(x); appendF64BE(y); appendF64BE(maxWidth);
 }
 void OpSequenceRecorder::recordBeginPath() { appendOpHeader(kOpBeginPath, kArgs0); }
