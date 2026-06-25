@@ -527,6 +527,25 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // WebsiteDataStore which DOES read it, WebContent applies no noise). The TEST_FORCE seam above
             // masked this gap because it IS allowlisted; the real launch-env gate was not. (W2761 audit fix.)
             { "DRIFTSTACK_TRACKER_PRIVACY", getenv("DRIFTSTACK_TRACKER_PRIVACY") },
+            // W2950 (isolation audit wi8z2sdot, clipboard #10 + PDF-find #7 cross-session leak): the per-session
+            // pasteboard NAME. The WebProcess/WebContent reads getenv("DRIFTSTACK_PASTEBOARD_NAME") in
+            // Pasteboard::createForCopyAndPaste (WebCore PasteboardMac.mm, the DOM clipboard / copy-paste board)
+            // and PDFPluginBase::writeStringToFindPasteboard (WebKit PDFPluginBase.mm, the PDF find-string board)
+            // to route to a session-UNIQUE NSPasteboard instead of the shared system board. WebContent does NOT
+            // inherit the parent env and the __XPC_ shadow does NOT reach the child (see this file's header note +
+            // the TRACKER_PRIVACY/INLINE_OFFSET_SNAP/CANVAS_TEXT_RECOMPOSE siblings above) — so WITHOUT this
+            // allowlist entry getenv() returns null in production and BOTH read paths fall back to the shared
+            // "driftstack-pb-default" board, common to every co-tenant session on the Mac worker → clipboard +
+            // PDF-find bleed across customers (a co-tenant or the operator reads/overwrites the board; writes
+            // persist post-teardown). Same UIProcess→WebContent dsEnv[] forward gap class as W2947 (EGRESS_RELIABILITY),
+            // which the W2947 sibling-sweep scoped to EGRESS files and missed for the pasteboard. The harness sets a
+            // per-session-unique name (buildSpawnEnvironment "driftstack-pb-<sessionDir>") + the __XPC_ twin; this
+            // closes the WebContent-side hop so each session reads its own board. Gate-off no-op: unset → getenv()
+            // null → dsEnv loop's `if (kv.value)` skips it → byte-identical (the UIProcess grant/read paths in
+            // WebViewImpl.mm/WebPageProxyMac.mm already resolve it from the harness-set UIProcess env). Forward the
+            // UNPREFIXED name only (matching every dsEnv[] sibling); the WebProcess read tries unprefixed first
+            // (PasteboardMac.mm:114 / PDFPluginBase.mm:1275) so the dsEnv'd unprefixed value resolves directly.
+            { "DRIFTSTACK_PASTEBOARD_NAME", getenv("DRIFTSTACK_PASTEBOARD_NAME") },
             // Layer B ML:
             { "DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER", getenv("DRIFTSTACK_LAYER_B_OFFSCREEN_RENDER") },
             { "DRIFTSTACK_LAYER_B_SUBSTITUTE", getenv("DRIFTSTACK_LAYER_B_SUBSTITUTE") },
