@@ -41,6 +41,7 @@
 #include "ResourceResponse.h"
 #include "ResourceTiming.h"
 #include <wtf/URL.h>
+#include <wtf/WallTime.h> // S1: timing-fidelity virtual-clock skew accessor
 
 namespace WebCore {
 
@@ -49,7 +50,11 @@ static double networkLoadTimeToDOMHighResTimeStamp(MonotonicTime timeOrigin, Mon
     ASSERT(timeOrigin);
     if (timeStamp <= timeOrigin)
         return 0.0;
-    auto result = Performance::reduceTimeResolution(timeStamp - timeOrigin);
+    auto dsRel = timeStamp - timeOrigin;
+#if PLATFORM(DRIFTSTACK)
+    dsRel += WTF::driftstackVirtualSkew(); // S1 (timing audit): resource/nav-timing entries share performance.now()'s skewed clock
+#endif
+    auto result = Performance::reduceTimeResolution(dsRel);
     if (!result)
         result = Performance::timeResolution();
     return result.milliseconds();
