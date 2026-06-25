@@ -644,6 +644,111 @@ static dispatch_semaphore_t driftstackHandshakeCapSemaphore()
     static dispatch_semaphore_t sem = dispatch_semaphore_create(10);
     return sem;
 }
+
+// BUG-42 Fix #6 — per-PAGE aggregate retry deadline (heavy-site navigate timeout).
+// The existing W2750 budget (m_retryDeadline) is PER-REQUEST (20s, set on attempt
+// 1 of each loader). On a slow proxy, a heavy multi-origin page (westernunion-class:
+// cookielaw/quantummetric/amplitude preconnect storm) spreads its retry chains
+// across DOZENS of concurrent subresource loaders, EACH of which is independently
+// allowed to burn its own ~20s. The aggregate page-load wall-clock is therefore
+// unbounded (≈ slowest-tail × however-many-stalling-subresources), so the WD
+// navigate times out before the load settles. Introduce a single page-level
+// deadline shared across every request belonging to the same WebPageProxyIdentifier:
+// the FIRST request for a page stamps `now + budget`; every later request (and every
+// retry) on that page is ALSO bounded by that shared deadline, so the page's total
+// retry wall-clock can't compound past the budget. Keyed by the page-proxy id's
+// raw uint64 so a redirect re-resume() / a fresh subresource loader all share one
+// deadline. Pure pacing of the RETRY decision: it can only cause a stuck request to
+// GIVE UP sooner (so the parser/onload can settle), never changes wire bytes,
+// routing, or fingerprint. Gate-off no-op: every accessor early-returns when the
+// egress-reliability gate is off, so the per-request budget is the only bound (the
+// prior code) and behaviour is byte-identical.
+//
+// Budget rationale: 35s — comfortably above a healthy heavy-site full settle
+// (~10-20s on a slow proxy) yet below a typical WD navigate ceiling (60-300s), so a
+// genuinely-wedged tail of 3rd-party trackers bounds the navigate to a drivable
+// page instead of a timeout. Tunable via DRIFTSTACK_EGRESS_PAGE_DEADLINE_SECS.
+static Lock& driftstackPageDeadlineLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+static HashMap<uint64_t, MonotonicTime>& driftstackPageDeadlines()
+{
+    static NeverDestroyed<HashMap<uint64_t, MonotonicTime>> map;
+    return map.get();
+}
+static Seconds driftstackPageDeadlineBudget()
+{
+    static const Seconds budget = [] {
+        double secs = 35.0;
+        if (const char* e = getenv("DRIFTSTACK_EGRESS_PAGE_DEADLINE_SECS")) {
+            double parsed = atof(e);
+            if (parsed >= 5.0 && parsed <= 600.0)
+                secs = parsed;
+        }
+        return Seconds(secs);
+    }();
+    return budget;
+}
+// Return the shared deadline for `pageKey`, stamping `now + budget` on first sight.
+// pageKey 0 (no WebPageProxyIdentifier — e.g. a non-page load) opts OUT: returns a
+// null MonotonicTime so the caller applies no page-level bound. Caller has already
+// confirmed the gate is on.
+static MonotonicTime driftstackPageDeadlineFor(uint64_t pageKey)
+{
+    if (!pageKey)
+        return { };
+    Locker locker { driftstackPageDeadlineLock() };
+    auto& map = driftstackPageDeadlines();
+    auto it = map.find(pageKey);
+    if (it != map.end())
+        return it->value;
+    // Opportunistic GC: a page key never sees an explicit "page done" signal at this
+    // layer, so cap the map by evicting entries already well past their deadline
+    // (a stale page can't share its deadline with a genuinely-new load reusing the id).
+    if (map.size() > 64) {
+        MonotonicTime now = MonotonicTime::now();
+        Vector<uint64_t> expired;
+        for (auto& entry : map) {
+            if (now > entry.value + Seconds(120))
+                expired.append(entry.key);
+        }
+        for (auto k : expired)
+            map.remove(k);
+    }
+    MonotonicTime deadline = MonotonicTime::now() + driftstackPageDeadlineBudget();
+    map.set(pageKey, deadline);
+    return deadline;
+}
+
+// BUG-42 Fix #4 (this batch) — bounded retry budget for THIRD-PARTY parser-blocking
+// fetches. pageLoadStrategy=eager still waits on DOMContentLoaded, which a slow
+// parser-blocking 3rd-party tracker script in <head> (cookielaw/quantummetric/
+// amplitude) stalls indefinitely on a flaky proxy → the navigate never reports
+// "interactive"/load-complete and the WD navigate times out even in eager mode.
+// We can't change the parser's blocking semantics from the NetworkProcess, but we
+// CAN make a stuck 3rd-party (cross-origin) fetch FAIL FAST: a failed/aborted
+// script load unblocks the HTML parser (the parser proceeds past a script whose
+// load errored), letting DOMContentLoaded fire and the page become drivable.
+// First-party requests keep the full W2750 budget (the main document + its own
+// scripts must still be given every retry). Tunable via
+// DRIFTSTACK_EGRESS_3P_DEADLINE_SECS. Gate-off no-op: only consulted when the
+// egress-reliability gate is on; otherwise the original 20s applies to all requests.
+static Seconds driftstackThirdPartyRetryBudget()
+{
+    static const Seconds budget = [] {
+        double secs = 8.0;
+        if (const char* e = getenv("DRIFTSTACK_EGRESS_3P_DEADLINE_SECS")) {
+            double parsed = atof(e);
+            if (parsed >= 1.0 && parsed <= 60.0)
+                secs = parsed;
+        }
+        return Seconds(secs);
+    }();
+    return budget;
+}
+
 static Lock& driftstackH2PoolLock()
 {
     static NeverDestroyed<Lock> lock;
@@ -1198,6 +1303,17 @@ void DriftstackNetworkLoader::resume()
     }
     // Re-read headers AFTER the possible referer downgrade so every transport forwards the downgraded value.
     httpHeaders = m_request.httpHeaderFields();
+    // BUG-42 Fix #4 + #6 (egress-reliability, gated) — capture the per-PAGE key and the
+    // third-party flag HERE, on the main thread, while m_request + the task are safe to
+    // touch (webPageProxyID() / isThirdParty() are not thread-safe on loaderQueue). Both
+    // feed the retry-budget decision below. pageKey 0 = no page-proxy id (no page-level
+    // bound applied). Computed unconditionally (cheap); only CONSUMED when the gate is on.
+    uint64_t pageKey = 0;
+    if (RefPtr task = protectedTask()) {
+        if (auto id = task->webPageProxyID())
+            pageKey = id->toUInt64();
+    }
+    const bool requestIsThirdParty = m_request.isThirdParty();
     // Wave 29-499.321 — request-body (POST/PUT) support. Flatten the FormData to
     // bytes on the calling thread (FormData isn't thread-safe to touch off the
     // main thread). driftstackHttp2Execute already emits request.body as an h2
@@ -1263,9 +1379,31 @@ void DriftstackNetworkLoader::resume()
     // still gets all 8 attempts (8 quick ClientHello-reject fails fit easily in 20s, preserving the ~99.6% flaky
     // success), but a consistently-SLOW exit gives up at ~20s (page errors) instead of ~76s. Slow ORIGINS are NOT
     // retries (a single attempt awaiting the response), so they are unaffected. Deadline set once, on attempt 1.
-    if (currentAttempt == 1)
-        m_retryDeadline = MonotonicTime::now() + Seconds(20);
-    const bool withinRetryBudget = MonotonicTime::now() < m_retryDeadline;
+    // BUG-42 Fix #4 (gated): a THIRD-PARTY parser-blocking fetch that hangs in <head>
+    // stalls DOMContentLoaded even under pageLoadStrategy=eager. Give 3rd-party requests
+    // a TIGHTER per-request budget (default 8s) so a wedged cross-origin tracker script
+    // fails fast → the HTML parser proceeds past the errored script → the page becomes
+    // drivable. First-party requests keep the full 20s W2750 budget. Gate-off: always 20s.
+    if (currentAttempt == 1) {
+        Seconds perRequestBudget = Seconds(20);
+        if (driftstackEgressReliabilityEnabled() && requestIsThirdParty)
+            perRequestBudget = driftstackThirdPartyRetryBudget();
+        m_retryDeadline = MonotonicTime::now() + perRequestBudget;
+    }
+    bool withinRetryBudget = MonotonicTime::now() < m_retryDeadline;
+    // BUG-42 Fix #6 (gated): also bound the retry decision by the per-PAGE aggregate
+    // deadline shared across every request belonging to this page, so dozens of
+    // concurrent slow subresources can't compound the page-load wall-clock past the
+    // budget (the cause of the WD navigate timeout on heavy multi-origin sites). The
+    // first request for a page stamps the deadline; all later requests + retries honour
+    // it. Gate-off no-op: driftstackPageDeadlineFor is only consulted when the gate is on.
+    if (driftstackEgressReliabilityEnabled() && pageKey) {
+        MonotonicTime pageDeadline = driftstackPageDeadlineFor(pageKey);
+        if (pageDeadline && MonotonicTime::now() >= pageDeadline) {
+            withinRetryBudget = false;
+            WTFLogAlways("[BUG-42/Fix6] page-deadline reached for page %llu — no further retries for %s", static_cast<unsigned long long>(pageKey), url.host().toString().utf8().data());
+        }
+    }
     const bool canRetry = (currentAttempt < kMaxAttempts) && withinRetryBudget;
     int64_t retryDelayMs = static_cast<int64_t>(150) << (currentAttempt - 1);
     if (retryDelayMs > 600) retryDelayMs = 600;
