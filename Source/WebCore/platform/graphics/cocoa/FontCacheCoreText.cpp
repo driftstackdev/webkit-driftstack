@@ -28,6 +28,7 @@
 
 #include "Color.h"
 #include "Font.h"
+#include "FontCascade.h"
 #include "FontCascadeDescription.h"
 #include "FontCreationContext.h"
 #include "FontCustomPlatformData.h"
@@ -864,7 +865,65 @@ static void initializeDriftstackIOSFontMapIfNeeded()
             }
         }
     }
+
+    // Task #118 (timing-fp a.j in-context inflation): the DOM/probe FontCascade warmup that closes this
+    // lives in HTMLCanvasElement's eager-init (driftstackWarmDomFontCascades, called at first canvas
+    // creation) — NOT here. It MUST run OUTSIDE driftstackIOSFontMapLock: FontCascade::width() re-enters
+    // the font-lookup path which itself takes driftstackIOSFontMapLock, so warming inside this initializer
+    // (which holds that lock) would deadlock on the non-recursive WTF::Lock. See HTMLCanvasElement.cpp.
 }
+
+#if PLATFORM(DRIFTSTACK)
+// Task #118 (timing-fp a.j in-context inflation) — WebKit DOM/probe font-cascade warmup.
+//
+// ROOT CAUSE (empirically bisected; audit notes in /Users/john/code/driftstack):
+//   The site's a.j 55-font measureText probe runs cooperatively SLICED (50ms slices, yields via
+//   setTimeout(0)). RUN IN ISOLATION the 55-font loop is ~119ms = iPhone. But IN the full page each
+//   inter-slice setTimeout(0) yield lets the event loop run the cold FIRST layout/paint + canvas-probe
+//   of the live HUD DOM — and that cold work pays WebKit's per-Font INITIALIZATION for the page's DOM
+//   families (-apple-system, Arial, Georgia, Times New Roman) at the render sizes (~11-24pt): the V121/
+//   V690 glyph→codepoint reverse-map build, FontCascadeFonts resolution, advance-override caches. That
+//   cold init lands INSIDE a.j's wall-clock window → a.j measures ~220-315ms vs the iPhone's 110-139ms
+//   (the iPhone's equivalent caches are already warm). a.j's bitstring VALUE is unaffected — the slow
+//   work is the inter-slice DOM paint/measure, not a.j's own arithmetic — so a.j stays bit-identical.
+//   Verified: warming these (family,size) cascades before the cold pass drops a.j 222 → in-range.
+//
+// We warm through the REAL WebKit path (FontCascade::width) — a raw CoreText CTLine/CTFontCreateWithName
+// warm does NOT populate WebKit's per-Font reverse maps, so it does not help (measured). INTENTIONALLY
+// SCOPED to the families the page LAYS OUT and PAINTS; we do NOT pre-resolve a non-existent family's
+// system-fallback cascade, because a.j's own first unavailable-font miss (~115ms) is the iPhone-matching
+// cost a.j legitimately pays — warming that would push a.j below the 110ms iPhone floor (a new "too fast"
+// tell). Byte-safe: warming a cache changes zero fingerprint values; gated on DRIFTSTACK_EAGER_INIT_ATLAS.
+// Runs at-most-once (a static once-flag in the caller). Called OUTSIDE driftstackIOSFontMapLock.
+void driftstackWarmDomFontCascades();
+void driftstackWarmDomFontCascades()
+{
+    static const char* const warmFamilies[] = {
+        // CSS generics the page + a.j use ("font:13px ...,sans-serif"; a.j baselines on monospace/sans-serif/
+        // serif). a.j keys baseline widths off these THREE generics first → warm them or a.j re-resolves cold.
+        "monospace", "sans-serif", "serif",
+        // Named DOM/HUD + canvas-probe families.
+        "-apple-system", "Helvetica Neue", "Arial", "Georgia", "Times New Roman", "Helvetica",
+    };
+    // 11-24pt = the page's DOM/HUD render sizes (the dominant inter-slice paint cost); 72px = a.j's own
+    // probe size (pre-builds its 55-font reverse maps so a.j's measure loop is warm too).
+    const float warmSizes[] = { 11.0f, 12.0f, 13.0f, 16.0f, 17.0f, 18.0f, 24.0f, 72.0f };
+    unsigned warmed = 0;
+    for (const char* fam : warmFamilies) {
+        for (float sz : warmSizes) {
+            FontCascadeDescription description;
+            description.setOneFamily(AtomString { String::fromLatin1(fam) });
+            description.setComputedSize(sz);
+            description.setSpecifiedSize(sz);
+            FontCascade cascade(WTF::move(description));
+            cascade.update(nullptr);
+            (void)cascade.width(StringView { "Cwm fjordbank glyphs vext mmmmmmmmmmlli"_s });
+            ++warmed;
+        }
+    }
+    WTFLogAlways("[Driftstack-Task#118/DomCascadeWarmup] WebKit DOM/probe font cascades pre-warmed via FontCascade::width (%u family×size pairs) — timing-fp a.j in-context inflation closed (cold inter-slice DOM paint/measure no longer charged to a.j)", warmed);
+}
+#endif
 
 static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family, const FontDescription& fontDescription, float size)
 {

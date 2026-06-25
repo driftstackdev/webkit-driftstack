@@ -163,6 +163,9 @@ const int defaultHeight = 150;
 // forward decl needs to participate; using `namespace` re-entry below
 // resolves scope.
 namespace { void initV510AtlasOnce(); }
+// Task #118 — defined in FontCacheCoreText.mm (WebCore namespace). Warms the WebKit DOM/probe font
+// cascades; called once at first-canvas-creation eager-init, OUTSIDE driftstackIOSFontMapLock.
+void driftstackWarmDomFontCascades();
 #endif
 
 HTMLCanvasElement::HTMLCanvasElement(const QualifiedName& tagName, Document& document)
@@ -180,6 +183,11 @@ HTMLCanvasElement::HTMLCanvasElement(const QualifiedName& tagName, Document& doc
         if (eager && eager[0] == '1') {
             initV510AtlasOnce();
             WTFLogAlways("[Driftstack-EG-WK-1.10/Task#79/EagerInit] V510 atlas eagerly initialized at first HTMLCanvasElement creation — cold-cache 266ms outlier eliminated for subsequent canvas reads (DRIFTSTACK_EAGER_INIT_ATLAS=1)");
+            // Task #118: warm the WebKit DOM/probe font cascades (FontCascade::width path) so the
+            // timing-fp a.j 55-font probe is not charged for the page's cold inter-slice DOM paint/measure
+            // font init. Defined in FontCacheCoreText.mm; runs OUTSIDE driftstackIOSFontMapLock here (the
+            // first-canvas-creation path holds no font lock) — calling it at font-map-init would deadlock.
+            driftstackWarmDomFontCascades();
         }
         s_eagerInitDone = true;
     }

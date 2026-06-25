@@ -1121,6 +1121,15 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
     }
 #if PLATFORM(DRIFTSTACK)
+    // Task #118: the per-glyph V121/V690 width-override HIT + reverse-map-built WTFLogAlways below fire
+    // in this HOT path on EVERY ASCII-glyph advance (per-glyph during measureText / DOM text paint) —
+    // an os_log side-channel on the critical path that floods logd. Gate them behind DRIFTSTACK_FONT_VERBOSE
+    // (default OFF), mirroring the P5 DRIFTSTACK_CANVAS_VERBOSE pattern. Byte-neutral: logging never touches
+    // a returned advance; the override values are unchanged.
+    static bool s_dsFontVerbose = []() {
+        const char* env = getenv("DRIFTSTACK_FONT_VERBOSE");
+        return env && env[0] == '1';
+    }();
     // P-#48.I Wave 29-323 diag: when DRIFTSTACK_V433Z_GLYPH_DIAG=1, log
     // the advance Mac returns for our 10 V-433.Z target codepoints'
     // glyphs (capped at 30 fires per process to avoid log flood).
@@ -1419,6 +1428,42 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                 // V-690 (Wave 25 / 2026-05-11): extends reverse map to include codepoints from
                 // the DriftstackAdvanceAtlas binary file (2.7M (font, size, cp) → width entries).
                 // Coverage: full V-405 fuzzer codepoint range across 5 scripts × 37 sizes × 6 fonts.
+                //
+                // Task #118: the reverse map content depends ONLY on (fontId, sizePx, scriptRange) — the
+                // glyph→codepoint mapping for a given atlas font binary at a given size is identical across
+                // EVERY Font wrapper instance. Building it was a PER-INSTANCE ~2ms cost (12k+ CTFontGetGlyphs
+                // calls per atlas range), and a page that creates many Font instances for the same
+                // (atlasKey,size) — e.g. the timing-fp HUD re-rendering .AppleSystemUIFont@12 five times —
+                // paid that cost repeatedly. Those redundant cold builds landed inside the a.j 55-font probe's
+                // setTimeout-sliced wall-clock → a.j measured ~220ms vs the iPhone's ~117ms. Memoize the built
+                // map in a process-global cache keyed by (fontId,sizePx,scriptRange): the FIRST Font builds it;
+                // every later Font with the same key copies it (a HashMap copy, microseconds) instead of
+                // rebuilding. Byte-identical: the copied map has the exact entries the per-instance build would
+                // produce (same font binary, same CT glyph IDs) — zero fingerprint-value change; removes CPU only.
+                using DSReverseMap = HashMap<unsigned, char32_t, IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>>;
+                static Lock s_dsReverseMapCacheLock;
+                static NeverDestroyed<HashMap<uint64_t, DSReverseMap>> s_dsReverseMapCache;
+                // Key MUST capture everything the built map's glyph IDs depend on so two Fonts only share a map
+                // when their CTFonts are glyph-identical: the RESOLVED family name (distinguishes e.g. "Courier"
+                // vs "Courier New" — same atlasKey/fontId but DIFFERENT font binaries / cmaps → different glyph
+                // IDs), sizePx, scriptRange, AND bold/italic (synthetic-or-real → a different CTFont). A mismatch
+                // would mis-map glyph→cp → a wrong width override → a fingerprint change, so the key is exact.
+                CTFontSymbolicTraits dsKeyTraits = ctFont() ? CTFontGetSymbolicTraits(ctFont()) : 0;
+                uint64_t dsStyleBits = (((dsKeyTraits & kCTFontTraitBold) || m_platformData.syntheticBold()) ? 1u : 0u)
+                    | (((dsKeyTraits & kCTFontTraitItalic) || m_platformData.syntheticOblique()) ? 2u : 0u);
+                uint64_t cacheKey = (static_cast<uint64_t>(m_platformData.familyName().hash()) << 32)
+                    ^ (dsStyleBits << 30)
+                    ^ (static_cast<uint64_t>(sizePx & 0xFFFF) << 16)
+                    ^ (static_cast<uint64_t>(scriptRangeLo & 0xFF) << 8)
+                    ^ (static_cast<uint64_t>(scriptRangeHi == 0xFFFFFFFFu ? 1u : (scriptRangeHi & 0xFF)));
+                if (!m_driftstackAsciiReverseMapBuilt && fontId != 0xFFFF) {
+                    Locker locker(s_dsReverseMapCacheLock);
+                    auto cached = s_dsReverseMapCache->find(cacheKey);
+                    if (cached != s_dsReverseMapCache->end()) {
+                        m_driftstackAsciiReverseMap = cached->value;
+                        m_driftstackAsciiReverseMapBuilt = true;
+                    }
+                }
                 if (!m_driftstackAsciiReverseMapBuilt) {
                     RetainPtr font = ctFont();
                     if (font) {
@@ -1498,8 +1543,15 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                         }
                     }
                     m_driftstackAsciiReverseMapBuilt = true;
-                    WTFLogAlways("[Driftstack-V121+V688+V690] reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
-                        familyName.utf8().data(), atlasKey, ptSize, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
+                    // Task #118: publish this freshly-built map to the process-global cache so the NEXT Font
+                    // instance with the same (fontId,sizePx,scriptRange) copies it instead of rebuilding.
+                    if (fontId != 0xFFFF) {
+                        Locker locker(s_dsReverseMapCacheLock);
+                        s_dsReverseMapCache->add(cacheKey, m_driftstackAsciiReverseMap);
+                    }
+                    if (s_dsFontVerbose)
+                        WTFLogAlways("[Driftstack-V121+V688+V690] reverse map built for family='%s' atlasKey='%s' size=%.1f entries=%u",
+                            familyName.utf8().data(), atlasKey, ptSize, static_cast<unsigned>(m_driftstackAsciiReverseMap.size()));
                 }
                 auto it = m_driftstackAsciiReverseMap.find(glyph);
                 if (it != m_driftstackAsciiReverseMap.end()) {
@@ -1529,8 +1581,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
                                 if (e.fontId > fontId)
                                     break;
                                 if (e.fontId == fontId && e.sizePx == sizePx && e.codepoint == static_cast<uint32_t>(cp)) {
-                                    WTFLogAlways("[Driftstack-V121] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
-                                        atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
+                                    if (s_dsFontVerbose)
+                                        WTFLogAlways("[Driftstack-V121] HIT family='%s' resolved='%s' size=%u cp=U+%04X mac=%.4f → ios=%.4f",
+                                            atlasKey, familyName.utf8().data(), sizePx, static_cast<uint32_t>(cp), advance.width, e.widthPx);
                                     return e.widthPx;
                                 }
                             }
