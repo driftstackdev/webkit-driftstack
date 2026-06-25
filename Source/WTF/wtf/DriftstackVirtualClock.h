@@ -32,6 +32,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <wtf/ExportMacros.h>
+#include <wtf/Noncopyable.h>
 #include <wtf/Seconds.h>
 
 namespace WTF {
