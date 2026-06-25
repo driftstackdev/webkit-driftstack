@@ -4391,10 +4391,10 @@ JavaScriptCanOpenWindowsAutomatically:
   status: embedder
   defaultValue:
     WebKitLegacy:
-      "PLATFORM(IOS_FAMILY)": false
+      "PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)": false
       default: true
     WebKit:
-      "PLATFORM(IOS_FAMILY) || PLATFORM(GTK) || PLATFORM(WPE)": false
+      "PLATFORM(IOS_FAMILY) || PLATFORM(GTK) || PLATFORM(WPE) || PLATFORM(DRIFTSTACK)": false
       default: true
     WebCore:
       default: false
@@ -8289,6 +8289,7 @@ TextAreasAreResizable:
       default: false
     WebKit:
       "PLATFORM(IOS_FAMILY)": false
+      "PLATFORM(DRIFTSTACK)": false
       default: true
     WebCore:
       default: false
