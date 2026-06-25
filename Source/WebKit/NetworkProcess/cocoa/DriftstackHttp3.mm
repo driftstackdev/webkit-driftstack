@@ -2977,13 +2977,41 @@ static bool dsHttp3RecvAll(int fd, uint8_t* buf, size_t len)
 // DriftstackSocks5Client — its fallback raced an in-flight connect → first-connect handshake fail). Removed; the
 // call site below uses a plain blocking connect. (The EINTR-safe dsHttp3SendAll/dsHttp3RecvAll from W2748 stay —
 // they wrap send/recv, not poll, and correctly fix the real EINTR-on-handshake-IO class.)
+// BUG-42 Fix #2 — master gate for the egress-reliability arc (see
+// DriftstackNetworkLoader.mm). DEFAULT-OFF: when unset, the UDP-capability probe
+// keeps targeting the LOCAL gost relay (DRIFTSTACK_SOCKS5_PROXY) exactly as before
+// — a true no-op. When ON, the probe prefers the customer's UPSTREAM proxy
+// (DRIFTSTACK_SOCKS5_UDP_PROXY, set by the harness ONLY to a real non-loopback
+// customer upstream) so the no-UDP latch reflects the customer proxy's TRUE UDP
+// capability, not the local relay's. No egress leak: the upstream IS the customer's
+// egress; when unset, the fallback is the same local relay used today.
+static bool driftstackHttp3EgressReliabilityEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_EGRESS_RELIABILITY");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+// Mirror of NetworkRTCUDPSocketCocoa.mm:70 driftstackUdpProxyEndpointEnv() (W2876):
+// prefer the upstream UDP endpoint, fall back to the local relay. Gated so the
+// gate-off path is byte-identical to getenv("DRIFTSTACK_SOCKS5_PROXY").
+static const char* driftstackHttp3UdpProxyEndpointEnv()
+{
+    if (driftstackHttp3EgressReliabilityEnabled()) {
+        const char* u = getenv("DRIFTSTACK_SOCKS5_UDP_PROXY");
+        if (u && *u)
+            return u;
+    }
+    return getenv("DRIFTSTACK_SOCKS5_PROXY");
+}
 static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* outFd = nullptr, bool* outUdpRefused = nullptr)
 {
-    const char* proxyEnv = getenv("DRIFTSTACK_SOCKS5_PROXY");
+    const char* proxyEnv = driftstackHttp3UdpProxyEndpointEnv();
     const char* userEnv = getenv("DRIFTSTACK_SOCKS5_USER");
     const char* passEnv = getenv("DRIFTSTACK_SOCKS5_PASS");
     if (!proxyEnv || !proxyEnv[0]) {
-        WTFLogAlways("[Wave29-499.311] raw associate: DRIFTSTACK_SOCKS5_PROXY unset");
+        WTFLogAlways("[Wave29-499.311] raw associate: SOCKS5 UDP proxy endpoint unset");
         return false;
     }
     // Parse host:port (last colon). Manual parse — WTF::String has no toInt().

@@ -608,6 +608,42 @@ static bool driftstackH2PoolEnabled()
     }();
     return enabled;
 }
+
+// BUG-42 egress-reliability arc — ONE master gate for the proxy/custom-HTTP-client
+// reliability fixes (the no-UDP-latch local-vs-upstream split + the global
+// cross-origin handshake cap). DEFAULT-OFF: when unset, every change below is a
+// true no-op and the egress path (TLS/QUIC wire bytes, fingerprint, routing) is
+// byte-identical to the prior code. Flipped to "1" only after a coordinated build
+// + a non-UDP-proxy live-confirm (see docs/internal/BUG-42-egress-latch-diagnosis.md).
+static bool driftstackEgressReliabilityEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_EGRESS_RELIABILITY");
+        WTFLogAlways("[BUG-42/EgressReliability] DRIFTSTACK_EGRESS_RELIABILITY=%s", e ?: "(null)");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+
+// BUG-42 Fix #4 — process-wide concurrent-handshake cap. The custom loader has NO
+// global connection cap; H2/H3 pools coalesce only per-origin, so a heavy multi-
+// origin site opens dozens of concurrent SOCKS5 + ML-KEM-768 TLS handshakes on the
+// concurrent loaderQueue → relay/thread-pool saturation. Bound the number of
+// *fresh* connect+TLS handshakes in flight across all origins to ~Safari's total
+// (~17 minus same-origin coalescing already handled by the pools). Pacing ONLY:
+// changes no wire bytes (ClientHello/cipher/curve order, header order, ALPN), no
+// routing — every handshake still goes through the same loopback gost relay. The
+// cap wraps ONLY the winner/own-connect fresh-connection path; fast-path multiplex
+// and pooled reuse never touch it. Released via WTF::makeScopeExit on every exit
+// path, plus an explicit release right after the H2 winner publishes its session
+// (before its first execute) so the first multiplexed request isn't throttled.
+// Gate-off no-op: when DRIFTSTACK_EGRESS_RELIABILITY is unset the acquire/release
+// are skipped entirely, so the path is byte-identical to the prior code.
+static dispatch_semaphore_t driftstackHandshakeCapSemaphore()
+{
+    static dispatch_semaphore_t sem = dispatch_semaphore_create(10);
+    return sem;
+}
 static Lock& driftstackH2PoolLock()
 {
     static NeverDestroyed<Lock> lock;
@@ -1382,8 +1418,15 @@ void DriftstackNetworkLoader::resume()
             // proxy-RTT (~120ms), not the 800ms cap; (2) a 6-way concurrency semaphore that
             // returns immediately (h2) when saturated. So subresource probes no longer
             // starve the worker pool. Per-host cache means each origin is probed at most once.
+            // BUG-42 Fix #1 (gated): mirror the W2648 Alt-Svc gate at the next branch
+            // and skip the first-contact DNS-HTTPS-RR probe once the no-UDP latch is
+            // down — otherwise every novel HTTPS host fires a ~4s associate even on a
+            // known-no-UDP proxy (the DNS-spinner amplifier). Gate-off no-op: the added
+            // term collapses to `true` (!driftstackEgressReliabilityEnabled() short-
+            // circuits), leaving the original condition byte-identical.
             if (s_dnsRrEnabled && h3enabled && h3https && h3bodyless && !h3forced
-                && !driftstackLoaderHostKnownH3(h3host)) {
+                && !driftstackLoaderHostKnownH3(h3host)
+                && (!driftstackEgressReliabilityEnabled() || !WebKit::driftstackUdpRelayKnownDown())) {
                 if (WebKit::driftstackHostAdvertisesH3ViaDns(h3host))
                     driftstackLoaderRememberH3Host(h3host);
             }
@@ -1632,6 +1675,40 @@ void DriftstackNetworkLoader::resume()
         // of blocking the full 10s. On adopt-success we set h2PoolWinner=false.
         auto h2PoolGuard = WTF::makeScopeExit([&] {
             if (h2PoolWinner) driftstackH2PoolFinishPending(h2PoolOrigin);
+        });
+
+        // BUG-42 Fix #4 — global concurrent fresh-handshake cap. Acquire a slot
+        // IMMEDIATELY before the fresh connect+TLS sequence (this loader is a
+        // winner / last-resort own-connect here — the pool fast-path and pooled
+        // reuse above already returned). Bounded wait (never FOREVER) so a saturated
+        // cap can't extend a load past the per-request retry budget; on timeout we
+        // proceed without a slot rather than fail (worst case = today's unbounded
+        // behaviour for that one handshake). Released exactly once: either by the
+        // scope-exit below (covering every connect/TLS/session-create early return,
+        // the SSE return, and the retry-dispatch return) OR by the explicit release
+        // right after the H2 winner publishes its session (before its first execute,
+        // so the first multiplexed request isn't throttled). `handshakeSlotHeld`
+        // makes the two mutually exclusive. Gate-off: no acquire, no release — true
+        // no-op (handshakeSlotHeld stays false; the scope-exit does nothing).
+        bool handshakeSlotHeld = false;
+        if (driftstackEgressReliabilityEnabled()) {
+            // Cap the wait at the remaining retry budget (clamped to a sane floor) so
+            // a fully-saturated cap degrades to proceed-without-slot, never a hang.
+            Seconds remaining = m_retryDeadline - MonotonicTime::now();
+            double waitSecs = remaining.value();
+            if (waitSecs < 1.0) waitSecs = 1.0;
+            if (waitSecs > 20.0) waitSecs = 20.0;
+            dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(waitSecs * NSEC_PER_SEC));
+            if (dispatch_semaphore_wait(driftstackHandshakeCapSemaphore(), deadline) == 0)
+                handshakeSlotHeld = true;
+            else
+                WTFLogAlways("[BUG-42/Fix4] handshake-cap saturated (>%.1fs) — proceeding without a slot for %s", waitSecs, url.host().toString().utf8().data());
+        }
+        auto handshakeCapGuard = WTF::makeScopeExit([&] {
+            if (handshakeSlotHeld) {
+                handshakeSlotHeld = false;
+                dispatch_semaphore_signal(driftstackHandshakeCapSemaphore());
+            }
         });
 
         auto socks5Client = std::make_unique<DriftstackSocks5Client>(proxy, creds);
@@ -2039,6 +2116,16 @@ void DriftstackNetworkLoader::resume()
                     // own request runs) so they multiplex concurrently over it.
                     driftstackH2PoolSet(origin, RefPtr<WebKit::DriftstackHttp2Session>(session));
                     if (h2PoolWinner) { driftstackH2PoolFinishPending(origin); h2PoolWinner = false; }
+                    // BUG-42 Fix #4 — the fresh connect+TLS handshake is DONE and the
+                    // session is published; release the handshake-cap slot NOW (before
+                    // our own first request executes) so the first multiplexed request
+                    // and coalesced waiters aren't throttled by the cap. The scope-exit
+                    // guard becomes a no-op (handshakeSlotHeld cleared). Gate-off: held
+                    // is false, this is a no-op.
+                    if (handshakeSlotHeld) {
+                        handshakeSlotHeld = false;
+                        dispatch_semaphore_signal(driftstackHandshakeCapSemaphore());
+                    }
                     h2resp = session->execute(h2req);
                     WTFLogAlways("[Wave29-499.321/H2POOL] adopted connection for %s into pool (first request status=%d)", origin.utf8().data(), h2resp.statusCode);
                 } else {

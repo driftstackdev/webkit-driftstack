@@ -1076,6 +1076,34 @@ static bool sessionsCreated = false;
 // (DriftstackSocks5Client.mm + DriftstackSocks5URLProtocol.mm use the
 // same pattern). Raw BSD socket APIs work with C pointers/buffers and
 // can't be cleanly span-ified without rewriting the whole probe.
+// BUG-42 Fix #2 — master gate for the egress-reliability arc (see
+// DriftstackNetworkLoader.mm / DriftstackHttp3.mm). DEFAULT-OFF: when unset the
+// config-time UDP-capability probe keeps targeting the LOCAL gost relay
+// (DRIFTSTACK_SOCKS5_PROXY) exactly as before — a true no-op. When ON, it prefers
+// the customer's UPSTREAM proxy (DRIFTSTACK_SOCKS5_UDP_PROXY, set by the harness
+// ONLY to a real non-loopback customer upstream) so the no-UDP latch reflects the
+// customer proxy's TRUE UDP capability, not the local relay's. No egress leak: the
+// upstream IS the customer's egress; when unset, the fallback is today's local relay.
+static bool driftstackSessionEgressReliabilityEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_EGRESS_RELIABILITY");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+// Mirror of NetworkRTCUDPSocketCocoa.mm:70 driftstackUdpProxyEndpointEnv() (W2876):
+// prefer the upstream UDP endpoint, fall back to the local relay. Gated so the
+// gate-off path is byte-identical to getenv("DRIFTSTACK_SOCKS5_PROXY").
+static const char* driftstackSessionUdpProxyEndpointEnv()
+{
+    if (driftstackSessionEgressReliabilityEnabled()) {
+        const char* u = getenv("DRIFTSTACK_SOCKS5_UDP_PROXY");
+        if (u && *u)
+            return u;
+    }
+    return getenv("DRIFTSTACK_SOCKS5_PROXY");
+}
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 static bool driftstackProbeSocks5UdpAssociate(const char* host, int port, const char* user, const char* pass)
 {
@@ -1274,11 +1302,13 @@ static bool driftstackSocks5UdpSupported()
         // minus the 3s stall. No leak: h3 stays off until a positive data-path verdict.
         driftstackMarkUdpRelayDown();
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            const char* host = getenv("DRIFTSTACK_SOCKS5_PROXY");
+            // BUG-42 Fix #2: probe the customer UPSTREAM (gated) so the latch reflects
+            // the real proxy's UDP capability; falls back to the local relay when off.
+            const char* host = driftstackSessionUdpProxyEndpointEnv();
             const char* user = getenv("DRIFTSTACK_SOCKS5_USER");
             const char* pass = getenv("DRIFTSTACK_SOCKS5_PASS");
             if (!host || !host[0]) {
-                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no DRIFTSTACK_SOCKS5_PROXY set — UDP=unsupported (HTTP/3 stays disabled)");
+                WTFLogAlways("[Driftstack-EG-WK-CUSTOM-SOCKS5/Slice16.7.a/UdpProbe] no SOCKS5 UDP proxy endpoint set — UDP=unsupported (HTTP/3 stays disabled)");
                 return;
             }
             // Wave 29-499.79 — manual scan to satisfy -Werror=-Wunsafe-buffer-usage-in-libc-call (no strchr/memcpy/atoi).
