@@ -895,6 +895,22 @@ static String driftstackPathBAcceptEncoding()
     return "gzip, deflate, br, zstd"_s;  // Safari >=26.3 (incl the 26.4 launch) + default
 }
 
+// P3 (#61) — RFC 9218 `priority` header, nav-vs-fetch. Real iOS (40 in-repo aio captures,
+// 100% consistent) sends `u=0, i` for the document/navigation request and `u=3, i` for
+// fetch/XHR sub-requests. On iOS this is injected by CFNetwork; PathB bypasses CFNetwork, so
+// the value is derived from the request's own sec-fetch-dest / accept (already present in the
+// WebProcess request): dest=document OR accept contains text/html → navigation (u=0); else the
+// fetch/XHR default (u=3). The richer per-resource-type sub-urgency matrix (image/script/style/
+// font) is the deferred #61 residual (needs multi-resource capture); those still fall through to
+// u=3 here. `dest` and `accept` are the lowercased header values (empty if absent). If WebKit
+// already supplied a `priority` header, pass that through unchanged (handled at the call sites).
+static String driftstackPathBPriorityHeader(const String& secFetchDest, const String& accept)
+{
+    if (secFetchDest == "document"_s || accept.contains("text/html"_s))
+        return "u=0, i"_s;  // navigation / document
+    return "u=3, i"_s;      // fetch / XHR / sub-resource (deferred per-type matrix → u=3)
+}
+
 // W2341 (task #58, design W2323): cancel-aware read adapter for the PathB custom-TLS transports.
 // cancel() runs on another thread and must NOT touch the fd (it's owned by this dispatch block;
 // a cross-thread shutdown() is a TOCTOU against the block's concurrent close — a closed+reused fd
@@ -969,13 +985,14 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
     if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
-    // W2438 (#61): real iPhone-17 Safari 26.4 sends the RFC 9218 `priority` header on every request
-    // (16/16 BS browserleaks captures = `u=0, i`). On iOS that header is injected by CFNetwork at the
-    // network layer; PathB bypasses CFNetwork, so the WebProcess request has no `priority` and omitting
-    // it is a wire tell. Pass WebKit's value through if present, else FORCE the verified iPhone value.
-    // (u=0 is the verified navigation/document urgency; the per-resource-type urgency matrix for
-    // sub-resources is BS-gated — #61 residual. Regular header → does NOT affect the Akamai H2 hash.)
-    h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s) : "u=0, i"_s });
+    // P3/W2438 (#61): real iOS sends the RFC 9218 `priority` header on every request — `u=0, i` for
+    // document/navigation, `u=3, i` for fetch/XHR (40 in-repo aio captures, 100% consistent). On iOS
+    // it's injected by CFNetwork; PathB bypasses CFNetwork, so the WebProcess request has no `priority`
+    // and omitting it is a wire tell. Pass WebKit's value through if present, else derive nav-vs-fetch
+    // urgency from sec-fetch-dest / accept. (Per-resource sub-urgencies image/script/style/font are the
+    // deferred #61 residual. Regular header → does NOT affect the Akamai H2 hash.)
+    h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+        : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
     h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
     for (auto& header : httpHeaders) {
         String lower = header.key.convertToASCIILowercase();
@@ -1461,9 +1478,10 @@ void DriftstackNetworkLoader::resume()
                 h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
                 if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, wk.contains("user-agent"_s) ? wk.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
-                // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when
-                // WebKit doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
-                h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s) : "u=0, i"_s });
+                // P3/W2438 (#61): derive the RFC 9218 `priority` (u=0 nav / u=3 fetch) when WebKit
+                // doesn't supply one — h3 bypasses CFNetwork same as h2 (see the h2 builder note).
+                h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s)
+                    : driftstackPathBPriorityHeader(wk.get("sec-fetch-dest"_s), orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
                 h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
                 // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
                 if (!driftstackCookieHeader.isEmpty())
@@ -1928,10 +1946,11 @@ void DriftstackNetworkLoader::resume()
                 h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
                 webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
-            // W2438 (#61): force the RFC 9218 `priority` header iPhone sends (verified u=0, i) when WebKit
-            // doesn't supply one — the one-shot path bypasses CFNetwork same as the pool builder above.
+            // P3/W2438 (#61): derive the RFC 9218 `priority` (u=0 nav / u=3 fetch) when WebKit doesn't
+            // supply one — the one-shot path bypasses CFNetwork same as the pool builder above.
             h2req.extraHeaders.append({ "priority"_s,
-                webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s) : "u=0, i"_s });
+                webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+                    : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
             h2req.extraHeaders.append({ "accept-language"_s,
                 driftstackPathBAcceptLanguage() });
 
