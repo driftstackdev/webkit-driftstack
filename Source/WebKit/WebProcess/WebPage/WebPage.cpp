@@ -4259,6 +4259,13 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     // GC pauses, or a momentarily-stalled finger), and well below any plausible inter-gesture interval. The
     // re-anchor is a no-op for normal scrolling (gap is always <250ms) and only neutralizes a stale fling.
     constexpr WTF::Seconds reanchorWindow = 250_ms;
+    // W2961 (founder "slide like a new iPhone", hunt #3 — Step B kinetic momentum): gate the ENTIRE
+    // momentum path behind DRIFTSTACK_SCROLL_MOMENTUM. Unset or "0" → momentum is fully inert and the
+    // touch handling below is byte-identical to the prior strict-1:1 drag-only behavior. Read once.
+    static const bool s_driftstackScrollMomentum = [] {
+        const char* e = getenv("DRIFTSTACK_SCROLL_MOMENTUM");
+        return e && e[0] && e[0] != '0'; // unset / "" / "0…" → off (fork env idiom; avoids -Wunsafe strcmp)
+    }();
     auto pos = touchEvent.position();
     auto now = WTF::MonotonicTime::now();
     switch (touchEvent.type()) {
@@ -4272,6 +4279,14 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // drag's leftover fraction can't seed a phantom first-move scroll.
         m_driftstackScrollRemainderX = 0;
         m_driftstackScrollRemainderY = 0;
+        // W2961: a new finger down cancels any in-flight momentum coast (iOS: touching the screen mid-glide
+        // catches and stops the scroll). Also zero the tracked velocity so a stale lift-off can't seed the
+        // next gesture. No-op when momentum is gated off (the timer is never started).
+        if (s_driftstackScrollMomentum) {
+            if (m_driftstackScrollCoastTimer && m_driftstackScrollCoastTimer->isActive())
+                m_driftstackScrollCoastTimer->stop();
+            m_driftstackScrollVelocity = { };
+        }
         return;
     case WebEventType::TouchMove: {
         // W2770 (founder "scrolls me back up"): ignore a TouchMove with no finger down (a stray/orphan move
@@ -4312,6 +4327,9 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             m_driftstackScrollRemainderY = 0;
             return;
         }
+        // W2961: capture the inter-move interval BEFORE overwriting m_driftstackLastTouchTime — used to
+        // build the lift-off velocity EWMA below (px/s = scroll delta / dt).
+        WTF::Seconds dtMove = now - m_driftstackLastTouchTime;
         m_driftstackLastTouchTime = now;
         auto dx = pos.x() - m_driftstackTapStartPoint.x();
         auto dy = pos.y() - m_driftstackTapStartPoint.y();
@@ -4401,11 +4419,55 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                 }
             }
         }
+        // W2961 (Step B): track the lift-off velocity from the recent finger motion. The scroll delta this
+        // move applied (finger up → content scrolls down/positive) is (last − pos), the same vector the 1:1
+        // scroll above used; velocity is that delta / dt in content px/s. Use an EWMA weighted toward the
+        // most recent moves so the velocity at TouchEnd reflects the lift-off, not the whole drag (a flick
+        // that slows before lift coasts less; a flick released at speed coasts far). Skip degenerate dt
+        // (first move after re-anchor, or a duplicated timestamp) to avoid div-by-zero / spikes. Gated:
+        // when momentum is off this is never read by TouchEnd, so it is pure dead state.
+        if (s_driftstackScrollMomentum && !m_driftstackPotentialTap
+            && dtMove > 0_s && dtMove < reanchorWindow) {
+            double vx = static_cast<double>(m_driftstackLastTouchPoint.x() - pos.x()) / dtMove.seconds();
+            double vy = static_cast<double>(m_driftstackLastTouchPoint.y() - pos.y()) / dtMove.seconds();
+            // EWMA: 0.45 of the new sample, 0.55 of history — recent moves dominate without a single noisy
+            // last sample throwing the coast off. (First contributing move: history is 0, so v ≈ 0.45·v0,
+            // which the next moves quickly converge upward — fine for a multi-move flick.)
+            constexpr double kAlpha = 0.45;
+            m_driftstackScrollVelocity = WebCore::FloatSize(
+                kAlpha * vx + (1 - kAlpha) * m_driftstackScrollVelocity.width(),
+                kAlpha * vy + (1 - kAlpha) * m_driftstackScrollVelocity.height());
+        }
         m_driftstackLastTouchPoint = pos;
         return;
     }
     case WebEventType::TouchEnd:
         m_driftstackTouchActive = false;   // W2770: finger lifted — later orphan moves must not scroll.
+        // W2961 (Step B): if the finger lifted with meaningful velocity, start the momentum coast. The
+        // glide scrolls the SAME locked scrollable area the drag used (re-resolved from the fixed locked
+        // start point at each tick — never a moving re-hit-test, so it can't switch targets mid-coast),
+        // decaying the velocity ~0.998/ms until it falls below a rest threshold. A flick coasts past the
+        // last touch point; a slow drag (low lift-off velocity) does NOT fling. Cancelled on the next
+        // TouchStart. Entirely gated — no momentum when DRIFTSTACK_SCROLL_MOMENTUM is unset/0.
+        if (s_driftstackScrollMomentum) {
+            // Rest threshold: below ~80 px/s the coast distance is sub-perceptible; starting one would
+            // only add a detectable micro-creep after a deliberate slow drag. iOS likewise does not fling
+            // a slow release.
+            constexpr double kMinLiftoffSpeed = 80; // px/s
+            double speed = std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height());
+            if (speed >= kMinLiftoffSpeed) {
+                if (!m_driftstackScrollCoastTimer) {
+                    m_driftstackScrollCoastTimer = makeUnique<RunLoop::Timer>(RunLoop::mainSingleton(),
+                        "WebPage::DriftstackScrollCoastTimer"_s, this, &WebPage::driftstackScrollCoastTick);
+                }
+                m_driftstackCoastLastTick = WTF::MonotonicTime::now();
+                // ~60 Hz glide ticks (matches the display refresh the drag samples at). The decay is
+                // frame-rate-normalized in the tick via pow(0.998, dt_ms), so an occasional dropped/late
+                // tick decelerates proportionally and never jumps.
+                m_driftstackScrollCoastTimer->startRepeating(WTF::Seconds(1.0 / 60.0));
+            } else
+                m_driftstackScrollVelocity = { };
+        }
         break;
     case WebEventType::TouchCancel:
         // W1418: a cancelled touch (system gesture / scroll-takeover) is definitively NOT a tap —
@@ -4413,6 +4475,12 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // cancelled sequence. (Without this, TouchCancel fell through to `default` leaving the flag set.)
         m_driftstackPotentialTap = false;
         m_driftstackTouchActive = false;   // W2770: cancelled sequence — no active finger.
+        // W2961: a cancelled sequence stops any in-flight coast too (system gesture / scroll-takeover).
+        if (s_driftstackScrollMomentum) {
+            if (m_driftstackScrollCoastTimer && m_driftstackScrollCoastTimer->isActive())
+                m_driftstackScrollCoastTimer->stop();
+            m_driftstackScrollVelocity = { };
+        }
         return;
     default:
         return;
@@ -4445,6 +4513,98 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
     };
     localMainFrame->eventHandler().handleMousePressEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MousePressed));
     localMainFrame->eventHandler().handleMouseReleaseEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MouseReleased));
+}
+
+// W2961 (founder "slide like a new iPhone", hunt #3 — Step B kinetic momentum coast). One decel-glide
+// step, fired at ~60 Hz from TouchEnd until the velocity decays below rest. Defined INSIDE the
+// PLATFORM(DRIFTSTACK) block so the symbol co-locates with its only caller (the cont.⁵ build-failure
+// lesson: a bare-IOS_TOUCH_EVENTS def didn't link). This path runs ONLY when DRIFTSTACK_SCROLL_MOMENTUM
+// is set — the timer is never started otherwise. It is a SCROLL-FEEL change, not a fingerprint surface:
+// the coast scrolls via the same trusted engine path the drag uses (view->scrollBy /
+// scrollToPositionWithoutAnimation) — no synthetic wheel, no JS, no isTrusted=false event.
+void WebPage::driftstackScrollCoastTick()
+{
+    auto now = WTF::MonotonicTime::now();
+    WTF::Seconds dt = now - m_driftstackCoastLastTick;
+    m_driftstackCoastLastTick = now;
+    // Guard a degenerate/zero or absurd dt (timer reschedule jitter, debugger pause) — cap to ~50ms so a
+    // long stall can never lurch the page by a huge single step; skip a non-positive dt entirely.
+    if (dt <= 0_s)
+        return;
+    if (dt > 50_ms)
+        dt = 50_ms;
+
+    // Distance to scroll this frame = current velocity (px/s) × dt. Carry sub-pixel via static_cast<int>
+    // truncation-toward-zero (sign-preserving, like the W2761 drag remainder); the fractional part is
+    // re-derived next tick from the velocity, so no separate remainder accumulator is needed.
+    double stepX = m_driftstackScrollVelocity.width() * dt.seconds();
+    double stepY = m_driftstackScrollVelocity.height() * dt.seconds();
+    int sdx = static_cast<int>(stepX);
+    int sdy = static_cast<int>(stepY);
+
+    // Decay the velocity. iOS UIScrollView.DecelerationRate.normal ≈ 0.998 per ms; frame-rate-normalize
+    // via pow(0.998, dt_ms) so a 16.7ms tick decays by ~0.998^16.7 and an occasional late tick decays
+    // proportionally (never a discontinuity). NOTE: the exact decay constant is a behavioral TELL and is
+    // anchored on Apple's published 0.998/ms — re-validate against a fresh multi-flick iOS capture before
+    // flipping the gate on (per project_perfect_scroll_stepB_design).
+    constexpr double kDecayPerMs = 0.998;
+    double decay = std::pow(kDecayPerMs, dt.milliseconds());
+    m_driftstackScrollVelocity = WebCore::FloatSize(
+        m_driftstackScrollVelocity.width() * decay,
+        m_driftstackScrollVelocity.height() * decay);
+
+    // Stop once the coast slows below ~30 px/s (sub-perceptible drift) — like iOS settling to rest.
+    constexpr double kRestSpeed = 30; // px/s
+    if (std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height()) < kRestSpeed) {
+        if (m_driftstackScrollCoastTimer)
+            m_driftstackScrollCoastTimer->stop();
+        m_driftstackScrollVelocity = { };
+        return;
+    }
+
+    if (!sdx && !sdy)
+        return; // this frame's sub-pixel step truncated to 0; the velocity carries to the next tick.
+
+    RefPtr localMainFrame = this->localMainFrame();
+    if (!localMainFrame) {
+        if (m_driftstackScrollCoastTimer)
+            m_driftstackScrollCoastTimer->stop();
+        m_driftstackScrollVelocity = { };
+        return;
+    }
+    RefPtr view = localMainFrame->view();
+    if (!view) {
+        if (m_driftstackScrollCoastTimer)
+            m_driftstackScrollCoastTimer->stop();
+        m_driftstackScrollVelocity = { };
+        return;
+    }
+
+    // Resolve the coast target from the FIXED locked start point (m_driftstackTapStartPoint) — the SAME
+    // hit-test the drag used (W2402). Re-resolving the fixed point each tick yields the same scrollable
+    // area (it can't switch mid-coast since the point never moves), while avoiding a dangling WeakPtr to a
+    // scroller torn down during the glide. Inner overflow scroller → scroll it (clamped to its range, with
+    // over-scroll chaining to the page, mirroring the W2790 drag behavior); else the main frame view.
+    WebCore::ScrollableArea* area = nullptr;
+    auto htr = localMainFrame->eventHandler().hitTestResultAtPoint(
+        view->windowToContents(WebCore::flooredIntPoint(m_driftstackTapStartPoint)),
+        { WebCore::HitTestRequest::Type::ReadOnly, WebCore::HitTestRequest::Type::Active, WebCore::HitTestRequest::Type::DisallowUserAgentShadowContent });
+    if (RefPtr node = htr.innerNode())
+        area = localMainFrame->eventHandler().enclosingScrollableArea(node.get());
+
+    if (area && area != static_cast<WebCore::ScrollableArea*>(view.get())) {
+        auto cur = area->scrollPosition();
+        auto minP = area->minimumScrollPosition();
+        auto maxP = area->maximumScrollPosition();
+        int wantX = cur.x() + sdx, wantY = cur.y() + sdy;
+        int clampX = std::max(minP.x(), std::min(maxP.x(), wantX));
+        int clampY = std::max(minP.y(), std::min(maxP.y(), wantY));
+        area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(clampX, clampY));
+        int leftX = wantX - clampX, leftY = wantY - clampY;
+        if (leftX || leftY)
+            view->scrollBy(WebCore::IntSize(leftX, leftY)); // chain the over-scroll to the page
+    } else
+        view->scrollBy(WebCore::IntSize(sdx, sdy));
 }
 #endif // PLATFORM(DRIFTSTACK)
 #endif

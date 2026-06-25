@@ -1618,6 +1618,20 @@ public:
     // legitimate >250ms mid-drag PAUSE-then-continue is also safe: a paused finger barely moves, so the
     // re-anchored delta it "skips" is ~0, and the resumed move scrolls the small genuine post-pause delta.
     WTF::MonotonicTime m_driftstackLastTouchTime;
+    // W2961 (founder "slide like a new iPhone", hunt #3 — Step B): kinetic scroll momentum/coast.
+    // Real iOS keeps gliding after the finger lifts (UIScrollView exponential-decay deceleration); the
+    // fork's TouchEnd previously just stopped dead (strict 1:1 per-touchMove, the inverse of iOS). On
+    // TouchEnd we compute a lift-off velocity (EWMA of the recent finger deltas / dt, in CONTENT px/s),
+    // then run a decel-glide timer that scrolls the SAME locked scrollable area by velocity·dt each frame,
+    // decaying the velocity by ~0.998/ms until it falls below a rest threshold. A new TouchStart cancels
+    // the coast (iOS behavior). ENTIRELY gated behind DRIFTSTACK_SCROLL_MOMENTUM (env unset/0 → this state
+    // is never touched and behavior is byte-identical to the 1:1 drag-only path). This is a SCROLL-FEEL
+    // (behavioral) change, NOT a fingerprint surface — no synthetic wheel/JS, the coast scrolls via the
+    // same trusted engine path (view->scrollBy / scrollToPositionWithoutAnimation) as the drag.
+    WebCore::FloatSize m_driftstackScrollVelocity;          // lift-off / current coast velocity, content px/s (W2961)
+    WTF::MonotonicTime m_driftstackCoastLastTick;           // MonotonicTime of the last coast tick (for dt) (W2961)
+    std::unique_ptr<RunLoop::Timer> m_driftstackScrollCoastTimer; // lazily constructed on first coast (W2961)
+    void driftstackScrollCoastTick();                       // one decel-glide step (W2961)
 #endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);
