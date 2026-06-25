@@ -243,6 +243,12 @@ bool defaultShowModalDialogEnabled()
 #if ENABLE(GAMEPAD)
 bool defaultGamepadVibrationActuatorEnabled()
 {
+#if PLATFORM(DRIFTSTACK)
+    // iPhone exposes NO GamepadHapticActuator (verified absent on the iPhone /aio desktopOnlyAbsent
+    // list). HAVE(WIDE_GAMECONTROLLER_SUPPORT)=1 on the Mac host would return true and expose it — a
+    // fingerprint divergence from iPhone. Force false on the fork.
+    return false;
+#endif
 #if HAVE(WIDE_GAMECONTROLLER_SUPPORT) || ENABLE(WPE_PLATFORM) || PLATFORM(GTK)
     return true;
 #else

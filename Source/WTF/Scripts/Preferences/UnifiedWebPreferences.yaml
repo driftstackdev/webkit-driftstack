@@ -6369,9 +6369,11 @@ PointerLockEnabled:
   defaultValue:
     WebKitLegacy:
       "PLATFORM(IOS_FAMILY)": false
+      "PLATFORM(DRIFTSTACK)": false
       default: true
     WebKit:
       "PLATFORM(IOS_FAMILY)": false
+      "PLATFORM(DRIFTSTACK)": false
       default: true
     WebCore:
       default: false
