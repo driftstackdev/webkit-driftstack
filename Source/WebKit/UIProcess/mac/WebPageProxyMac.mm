@@ -1048,7 +1048,17 @@ void WebPageProxy::handleContextMenuCopySubject(const String& preferredMIMEType)
     if (!data)
         return;
 
+#if PLATFORM(DRIFTSTACK)
+    // W2858 follow-up (isolation audit wi8z2sdot, clipboard cross-session leak): the Image-Analysis "Copy Subject"
+    // context-menu action WRITES the recognized image subject to the clipboard. On the shared Mac worker the upstream
+    // NSPasteboard.generalPasteboard would land that image on the system board readable by every co-tenant session +
+    // the operator (and it persists post-teardown). Route to the SAME per-session named board as the DOM clipboard
+    // (driftstackPasteboardName(), matching PasteboardMac createForCopyAndPaste + WebViewImpl pasteboardForAccessCategory)
+    // so this copy is isolated to the session that triggered it. ENABLE(IMAGE_ANALYSIS_ENHANCEMENTS) is 1 on Mac.
+    RetainPtr<NSPasteboard> pasteboard = [NSPasteboard pasteboardWithName:driftstackPasteboardName()];
+#else
     RetainPtr<NSPasteboard> pasteboard = NSPasteboard.generalPasteboard;
+#endif
     RetainPtr pasteboardType = bridge_cast(type.get());
     [pasteboard clearContents];
     if (sessionID().isEphemeral())
