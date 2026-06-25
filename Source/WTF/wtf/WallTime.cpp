@@ -94,19 +94,21 @@ void advanceDriftstackVirtualSkew(Seconds delta)
 namespace {
 struct DSArchetypeTimingParams {
     struct ColdDist { double mean; double jitter; };   // jitter <= mean so cold draws stay >= 0 (no clamp bias)
+    // Defaults fit to reference/timing-params/by-chip-generation.json (iPhone17-line_A19).
+    // jitter <= mean keeps cold draws >= 0; warm = the iPhone marginal 0/1/2 multinomial.
     std::array<ColdDist, static_cast<size_t>(DriftstackTimedOp::Count)> cold { {
-        { 5.0, 1.0 },   // ToDataURL
-        { 0.4, 0.4 },   // GetImageData
-        { 3.6, 1.6 },   // Render
-        { 0.1, 0.1 },   // MeasureText
-        { 2.0, 1.0 },   // WasmCompile
+        { 1.85, 0.88 },   // ToDataURL   (ref cold_mean 1.85, cold_sd 0.88)
+        { 0.82, 0.51 },   // GetImageData (ref cold_mean 0.82, cold_sd 0.51)
+        { 0.0,  0.0  },   // Render      (ref cold_mean 0)
+        { 0.1,  0.1  },   // MeasureText
+        { 2.0,  1.0  },   // WasmCompile
     } };
     std::array<std::array<double, 3>, static_cast<size_t>(DriftstackTimedOp::Count)> warmP { {
-        { { 0.23, 0.75, 0.02 } },   // ToDataURL
-        { { 0.95, 0.05, 0.00 } },   // GetImageData
-        { { 0.58, 0.42, 0.00 } },   // Render
-        { { 0.98, 0.02, 0.00 } },   // MeasureText
-        { { 0.00, 0.00, 0.00 } },   // WasmCompile
+        { { 0.207, 0.726, 0.066 } },   // ToDataURL    (ref warm_p 0/1/2)
+        { { 0.836, 0.164, 0.000 } },   // GetImageData (ref warm_p — was 0.95/0.05, under-charged vs iPhone 84/16)
+        { { 0.998, 0.002, 0.000 } },   // Render       (ref warm_p)
+        { { 0.98,  0.02,  0.00  } },   // MeasureText
+        { { 0.00,  0.00,  0.00  } },   // WasmCompile
     } };
 };
 DSArchetypeTimingParams& dsParams() { static NeverDestroyed<DSArchetypeTimingParams> p; return p.get(); }

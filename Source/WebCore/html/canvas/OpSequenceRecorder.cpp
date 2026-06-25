@@ -143,6 +143,17 @@ void OpSequenceRecorder::appendU8(uint8_t v)                { if (!dsOpRecording
 
 void OpSequenceRecorder::appendOpHeader(uint16_t opId, uint16_t argByteLen)
 {
+    // P-render (canvas-op-timing-audit): amortize the per-op buffer growth — the recorder
+    // runs per draw op when a consuming gate is on (prod = FP10X), and on a long-lived
+    // canvas every recordX otherwise walks the geometric realloc ladder (16→32→…), each
+    // realloc copying the whole accumulated op stream. Pre-size once on the first op of a
+    // fresh/cleared buffer so subsequent appends are pure stores. Capacity-only — never
+    // touches a single recorded byte (opSeqSha / canonical bytes unchanged) → fingerprint-
+    // neutral. (Empirically NOT the dominant render-path 1ms driver — that is the load-
+    // bearing forced drawGlyphBuffer rasterization, see CanvasRenderingContext2DBase.cpp
+    // drawTextInternal — but a correct, free reduction of real per-draw work regardless.)
+    if (m_buffer.isEmpty() && dsOpRecordingEnabled())
+        m_buffer.reserveInitialCapacity(2048);
     appendU16BE(opId);
     appendU16BE(argByteLen);
 }

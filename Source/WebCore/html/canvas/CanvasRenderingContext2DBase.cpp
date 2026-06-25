@@ -2937,11 +2937,15 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
     MonotonicTime dsOpStart = MonotonicTime::now();
     auto dsCharge = makeScopeExit([&] {
         if (driftstackVirtualClockEnabled() && canvasBase().originClean()) { // M7: tainted canvas throws SecurityError in ~0ms on iPhone — don't charge
+            // Task-B: mirror the toDataURL charge site — route through the shared ledger's
+            // chargeOp(GetImageData, …) so the MEASURED getImageData duration converges to the
+            // iPhone's fitted warm 0/1 mix (the engine samples the per-archetype warmP and
+            // charges modeled-minus-macActual; cold-first-call handled by the per-op flag). The
+            // old inline px-scaled placeholder under-charged vs the iPhone (fork ~93% 0ms,
+            // iPhone 84/16), so it never lifted the warm distribution to the iPhone proportions.
             double px = static_cast<double>(sw) * static_cast<double>(sh);
             if (px < 0) px = -px;
-            // PLACEHOLDER iPhone-17 cost (per-iteration ~0.83ms @ 240x60=14400px); refine to isolated from BS.
-            double modeledMs = 0.83 * (px / 14400.0);
-            WTF::advanceDriftstackVirtualSkew(Seconds::fromMilliseconds(modeledMs) - (MonotonicTime::now() - dsOpStart));
+            WTF::DriftstackVirtualClock::singleton().chargeOp(WTF::DriftstackTimedOp::GetImageData, px, MonotonicTime::now() - dsOpStart);
         }
     });
 #endif
