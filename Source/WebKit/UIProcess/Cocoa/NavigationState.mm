@@ -604,14 +604,16 @@ void NavigationState::NavigationClient::decidePolicyForNavigationAction(WebPageP
 #if PLATFORM(MAC)
             // A file URL shouldn't fall through to here, but if it did,
             // it would be a security risk to open it.
-            // DRIFTSTACK per-session isolation guard (shared Mac fleet): an external-scheme
-            // navigation (tel:/mailto:/custom app scheme) here would call NSWorkspace and launch
-            // the WORKER's Mac handler app — a cross-session leak + visible Mac-app launch on a
-            // shared host. On the fleet we suppress the launch (the navigation is still ignored
-            // below, matching "nothing happens"). Env-gated; gate-off = bit-identical stock.
-            static bool dsBlockExternalAppLaunch = []{ const char* v = getenv("DRIFTSTACK_BLOCK_EXTERNAL_APP_LAUNCH"); return v && v[0] == '1'; }();
-            if (![[nsURLRequest URL] isFileURL] && !dsBlockExternalAppLaunch)
+            // DRIFTSTACK per-session isolation guard #1 (production WKWebView path; the MiniBrowser
+            // dev path is gated in WK2BrowserWindowController.m, e41fa539ad): never NSWorkspace-launch
+            // the worker's Mac handler app for an external-scheme nav (tel:/mailto:/custom) — a
+            // cross-session leak + visible Mac-app launch on the shared fleet. The navigation is still
+            // ignored below = iOS-plausible "nothing happens". Unconditional on the fork, matching
+            // guards #2 (Apple Pay) / #3 (WebAuthn). Not a fingerprint surface (cumrig/glyphHash unaffected).
+#if !PLATFORM(DRIFTSTACK)
+            if (![[nsURLRequest URL] isFileURL])
                 [[NSWorkspace sharedWorkspace] openURL:retainPtr([nsURLRequest URL]).get()];
+#endif
 #endif
 
             listener->ignore();
