@@ -28,6 +28,8 @@
 #include <wtf/ClockType.h>
 #include <wtf/GenericTimeMixin.h>
 #include <wtf/Int128.h>
+#include <cstdint>
+#include <wtf/Noncopyable.h>
 
 namespace WTF {
 
@@ -85,6 +87,30 @@ WTF_EXPORT_PRIVATE Int128 currentTimeInNanoseconds();
 // copy and cross-dylib charges (e.g. JSON.parse in JSC) become invisible to perf.now (WebCore).
 WTF_EXPORT_PRIVATE Seconds driftstackVirtualSkew();
 WTF_EXPORT_PRIVATE void advanceDriftstackVirtualSkew(Seconds delta);
+WTF_EXPORT_PRIVATE void resetDriftstackVirtualClockSession();   // reset per-document cold flags + skew on navigation/teardown
+
+// M8 virtual clock (engine + audit-corrected design notes in WallTime.cpp). INERT unless DRIFTSTACK_VIRTUAL_CLOCK=1.
+// Samples per-archetype op costs (UNIMODAL cold + 0/1/2 warm multinomial + AR(1) thermal, crypto-random — no
+// recoverable PRNG state) and charges modeled-minus-macActual into the shared skew ledger above. Declared here
+// (not a separate header) because the Xcode build only compiles files registered in WTF.xcodeproj. Per-archetype
+// params + spec: /Users/john/code/driftstack/docs/internal/timing-fidelity-variance-model.md.
+enum class DriftstackTimedOp : uint8_t { ToDataURL, GetImageData, Render, MeasureText, WasmCompile, Count };
+
+class DriftstackVirtualClock {
+    WTF_MAKE_NONCOPYABLE(DriftstackVirtualClock);
+public:
+    WTF_EXPORT_PRIVATE static DriftstackVirtualClock& singleton();
+    bool enabled() const { return m_enabled; }
+    // Charge a timed op: samples the archetype cost for `op` (cold on its first charged call), updates the skew
+    // ledger by (modeled - macActual). No-op unless enabled(). Caller measures macActual via a scope-exit.
+    WTF_EXPORT_PRIVATE void chargeOp(DriftstackTimedOp, double pixels, Seconds macActual);
+    WTF_EXPORT_PRIVATE Seconds currentSkew() const;            // == driftstackVirtualSkew()
+    DriftstackVirtualClock();   // public so NeverDestroyed can build the singleton; copies blocked. Use singleton().
+private:
+    double sampleCostMs(DriftstackTimedOp, double pixels, bool isCold);
+    uint64_t nextRandom(DriftstackTimedOp);
+    bool m_enabled { false };
+};
 #endif
 
 } // namespace WTF

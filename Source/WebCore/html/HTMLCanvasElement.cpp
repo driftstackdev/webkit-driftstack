@@ -1186,9 +1186,6 @@ static std::optional<double> NODELETE qualityFromJSValue(JSC::JSValue qualityVal
 }
 
 #if PLATFORM(DRIFTSTACK)
-// Phase-5 virtual-clock op-charging gate (default OFF until per-archetype iso-costs land from BS).
-static bool driftstackVirtualClockEnabled() { static bool e = []{ const char* v = getenv("DRIFTSTACK_VIRTUAL_CLOCK"); return v && v[0] == '1'; }(); return e; } // M4: truthiness, not presence (=0/""/false must DISABLE)
-
 ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType, JSC::JSValue qualityValue)
 {
     // Phase-5: charge the iPhone-modeled toDataURL cost minus the Mac's actual elapsed, so a fingerprinter's
@@ -1196,12 +1193,11 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // miss); the skew delta absorbs the macActual difference either way. Gated off by default.
     MonotonicTime dsOpStart = MonotonicTime::now();
     auto dsCharge = makeScopeExit([&] {
-        if (driftstackVirtualClockEnabled() && originClean()) { // M7: tainted canvas throws SecurityError in ~0ms on iPhone — don't charge the encode cost
+        if (WTF::DriftstackVirtualClock::singleton().enabled() && originClean()) { // M7: tainted canvas throws SecurityError in ~0ms on iPhone — don't charge the encode cost
             double px = static_cast<double>(width()) * static_cast<double>(height());
-            // PLACEHOLDER iPhone-17 cost (per-iteration ~1.82ms @ 240x60=14400px); refine to isolated +
-            // fitted c0+c1*px from the BS iso/size-sweep capture before flipping DRIFTSTACK_VIRTUAL_CLOCK on.
-            double modeledMs = 1.82 * (px / 14400.0);
-            WTF::advanceDriftstackVirtualSkew(Seconds::fromMilliseconds(modeledMs) - (MonotonicTime::now() - dsOpStart));
+            // Charge the per-archetype-sampled iPhone toDataURL cost minus the Mac's actual elapsed, so a
+            // fingerprinter's MEASURED toDataURL duration matches the iPhone (cold on the first charged call).
+            WTF::DriftstackVirtualClock::singleton().chargeOp(WTF::DriftstackTimedOp::ToDataURL, px, MonotonicTime::now() - dsOpStart);
         }
     });
     // W2882 timing-fidelity memo: cache the encoded dataURL per-canvas (2D contexts only; tracker-excluded)

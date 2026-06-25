@@ -631,7 +631,6 @@ set(WTF_SOURCES
     WTFAssertions.cpp
     WTFConfig.cpp
     WTFProcess.cpp
-    DriftstackVirtualClock.cpp
     WallTime.cpp
     WeakPtr.cpp
     WeakRandomNumber.cpp

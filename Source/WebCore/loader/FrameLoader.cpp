@@ -178,6 +178,7 @@
 #include "DocumentType.h"
 #include "ResourceLoader.h"
 #include <wtf/RuntimeApplicationChecks.h>
+#include <wtf/WallTime.h>
 #endif
 
 #define PAGE_ID (pageID() ? pageID()->toUInt64() : 0)
@@ -4839,6 +4840,14 @@ void FrameLoader::dispatchDidCommitLoad(std::optional<HasInsecureContent> initia
 {
     if (m_stateMachine.creatingInitialEmptyDocument())
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    // Per-document reset of the M8 virtual-clock cold-first-call flags + skew on a top-level navigation: "cold"
+    // timing is per-page (a re-navigated page / recycled WebProcess re-incurs cold) — not first-call-ever-in-
+    // process, which would leak cold state across customer sessions (engine review wbj0htxb5 #4).
+    if (m_frame->isMainFrame())
+        WTF::resetDriftstackVirtualClockSession();
+#endif
 
     m_client->dispatchDidCommitLoad(initialHasInsecureContent, initialUsedLegacyTLS, initialWasPrivateRelayed);
 
