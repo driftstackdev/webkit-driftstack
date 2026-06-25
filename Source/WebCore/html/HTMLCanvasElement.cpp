@@ -1196,7 +1196,7 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
     // miss); the skew delta absorbs the macActual difference either way. Gated off by default.
     MonotonicTime dsOpStart = MonotonicTime::now();
     auto dsCharge = makeScopeExit([&] {
-        if (driftstackVirtualClockEnabled()) {
+        if (driftstackVirtualClockEnabled() && originClean()) { // M7: tainted canvas throws SecurityError in ~0ms on iPhone — don't charge the encode cost
             double px = static_cast<double>(width()) * static_cast<double>(height());
             // PLACEHOLDER iPhone-17 cost (per-iteration ~1.82ms @ 240x60=14400px); refine to isolated +
             // fitted c0+c1*px from the BS iso/size-sweep capture before flipping DRIFTSTACK_VIRTUAL_CLOCK on.

@@ -2926,7 +2926,7 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
     // actual elapsed, so a fingerprinter's MEASURED getImageData duration == the iPhone's. Gated off.
     MonotonicTime dsOpStart = MonotonicTime::now();
     auto dsCharge = makeScopeExit([&] {
-        if (driftstackVirtualClockEnabled()) {
+        if (driftstackVirtualClockEnabled() && canvasBase().originClean()) { // M7: tainted canvas throws SecurityError in ~0ms on iPhone — don't charge
             double px = static_cast<double>(sw) * static_cast<double>(sh);
             if (px < 0) px = -px;
             // PLACEHOLDER iPhone-17 cost (per-iteration ~0.83ms @ 240x60=14400px); refine to isolated from BS.
