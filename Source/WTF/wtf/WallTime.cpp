@@ -74,6 +74,15 @@ void advanceDriftstackVirtualSkew(Seconds delta)
     //  a SUSTAINED fork-slower op (e.g. 200 mutating toDataURL in a row) that drains the bound — that needs the
     //  op itself made faster (<= iPhone), not the clock; a real mixed workload banks skew from faster ops.]
     const Seconds kSkewBound = Seconds::fromMilliseconds(40);
+    // Per-op cap: one anomalously slow op (e.g. the cold first toDataURL: fork ~144ms vs iPhone ~5ms) must NOT
+    // drain the skew to the bound in a single charge — that would clamp the *following* warm ops and distort
+    // their distribution. Cap each op's contribution; a genuinely-slow op stays a small residual on ITS own
+    // sample without corrupting the steady-state warm stream that the chi-square gate measures.
+    const Seconds kPerOpCap = Seconds::fromMilliseconds(6);
+    if (delta > kPerOpCap)
+        delta = kPerOpCap;
+    else if (delta < -kPerOpCap)
+        delta = -kPerOpCap;
     g_driftstackVirtualSkew = g_driftstackVirtualSkew + delta;
     if (g_driftstackVirtualSkew > kSkewBound)
         g_driftstackVirtualSkew = kSkewBound;

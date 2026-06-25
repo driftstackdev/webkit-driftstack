@@ -1241,6 +1241,12 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
 
     auto encodingMIMEType = toEncodingMimeType(mimeType);
     auto quality = qualityFromJSValue(qualityValue);
+#if PLATFORM(DRIFTSTACK)
+    // Hoisted to avoid a DOUBLE PNG encode on a V-510 atlas miss: the V-510 atlas-key encode (below) is reused
+    // at the return-encode sites instead of re-encoding. Reuse is gated on byte-identity (verified by glyphHash
+    // c587ed44): only reused when set AND it matches the return path's bytes.
+    String dsPngEncoded;
+#endif
 
 #if PLATFORM(DRIFTSTACK)
     // V-185 (founder Tier-2 ack 2026-05-04 V-171 Path 2 fallback): canvas-fp
@@ -1307,17 +1313,16 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             return env && env[0] == '1';
         }();
         if (s_v510EnabledEarly) {
-            auto encodedEarly = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
-            auto substituteEarly = v510AtlasLookup(encodedEarly, opSeqSha_early);
+            dsPngEncoded = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+            auto substituteEarly = v510AtlasLookup(dsPngEncoded, opSeqSha_early);
             if (!substituteEarly.isNull()) {
                 WTFLogAlways("[Driftstack-V510-EARLY] CanvasFuzzAtlas substitution FIRED (%dx%d, mac-len=%u, ip-len=%u) — pre-V-241",
-                    width(), height(), encodedEarly.length(), substituteEarly.length());
+                    width(), height(), dsPngEncoded.length(), substituteEarly.length());
                 return UncachedString { substituteEarly };
             }
-            // V-510 miss → fall through to V-241 + later atlas paths.
-            // Note: encodedEarly is discarded; later code re-encodes via
-            // its own path. Could cache for perf but keeping the flow
-            // simple — V-510 atlas hits short-circuit anyway.
+            // V-510 miss → fall through. dsPngEncoded (the Mac-fork PNG) is REUSED at the return-encode sites
+            // below instead of being re-encoded — eliminates the double encode that made toDataURL ~1ms slower
+            // than the iPhone (timing-fidelity). Byte-identity vs the return paths is gated by glyphHash.
         }
         auto fillText = lastFillText();
         // Exact (dims + lastFillText) match ONLY. The dimension-only fallback
@@ -1346,8 +1351,16 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
 
 #if USE(CG)
     // Try to get ImageData first, as that may avoid lossy conversions.
-    if (auto imageData = getImageData())
+    if (auto imageData = getImageData()) {
+#if PLATFORM(DRIFTSTACK)
+        // Reuse the V-510 atlas-key PNG instead of re-encoding (eliminates the double encode that made toDataURL
+        // ~1ms slower than the iPhone). Byte-identity vs the imageData encode is gated by glyphHash c587ed44 —
+        // if that ever diverges this reuse is reverted. PNG only (the early encode is PNG-gated).
+        if (!dsPngEncoded.isNull() && encodingMIMEType.containsIgnoringASCIICase("png"_s))
+            return UncachedString { dsPngEncoded };
+#endif
         return UncachedString { encodeDataURL(imageData->byteArrayPixelBuffer().get(), encodingMIMEType, quality) };
+    }
 #endif
 
     if (auto url = document->quirks().advancedPrivacyProtectionSubstituteDataURLForScriptWithFeatures(lastFillText(), width(), height()); !url.isNull()) {
@@ -1356,7 +1369,12 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         protect(canvasBaseScriptExecutionContext())->addConsoleMessage(MessageSource::Rendering, MessageLevel::Info, consoleMessage);
         return UncachedString { url };
     }
+#if PLATFORM(DRIFTSTACK)
+    // Reuse the V-510 atlas-key PNG (same makeRenderingResultsAvailable encode) instead of re-encoding.
+    auto encoded = !dsPngEncoded.isNull() ? dsPngEncoded : encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+#else
     auto encoded = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
+#endif
 #if PLATFORM(DRIFTSTACK)
     // V-507/V-510 V-405-A Option C atlas substitution: hash Mac fork's
     // encoded dataURL via SHA-256 (truncated 16 bytes), look up in
