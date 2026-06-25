@@ -3659,11 +3659,6 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
     auto& font = *fontProxy();
     auto& fontMetrics = font.metricsOfPrimaryFont();
 
-    GlyphOverflow glyphOverflow;
-    glyphOverflow.computeBounds = true;
-    float fontWidth = font.width(textRun, &glyphOverflow);
-    metrics->setWidth(fontWidth);
-
 #if PLATFORM(DRIFTSTACK)
     // V-184: canonical-probe override. Founder Tier-2 ack 2026-05-04.
     // Lookup (primary-family, textRun text) in the iPhone-canonical reference
@@ -3745,6 +3740,15 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
         }
     }
 #endif
+
+    // P0 (canvas-op-timing-audit): the full Core-Text shaping + per-glyph bounding boxes is relocated to HERE
+    // (below the V-184 override) so an override HIT — which returns atlas-derived metrics that never read
+    // fontWidth/glyphOverflow — skips it entirely. The measureText analogue of the toDataURL double-encode.
+    // Byte-identical: hit = atlas values (unchanged); miss = the same shaping, just not run twice.
+    GlyphOverflow glyphOverflow;
+    glyphOverflow.computeBounds = true;
+    float fontWidth = font.width(textRun, &glyphOverflow);
+    metrics->setWidth(fontWidth);
 
     FloatPoint offset = textOffset(fontWidth, textRun.direction());
     auto ascent = fontMetrics.ascent();
