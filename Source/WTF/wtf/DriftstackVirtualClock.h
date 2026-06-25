@@ -8,9 +8,10 @@
  *
  * Design (audit-corrected — do NOT regress to the first-pass model):
  *  - SAMPLE per-call from the archetype's fitted distribution, never a deterministic modeledMs.
- *      COLD first-call: the per-session DEVICE-CHARACTERISTIC mode (low|high) is picked ONCE at process
- *        start (Phase-2, with the archetype's p_low) and held for the session — a real single iPhone sits
- *        in one mode for life; per-call mixture would flip 5↔17ms = a novel tell. Then jitter within the mode.
+ *      COLD first-call: a UNIMODAL per-chip-generation distribution (mean + jitter). The apparent cold
+ *        bimodality was PROVEN a BrowserStack pool/temporal artifact (same iPhone-17 hardware, Safari 26.0
+ *        unimodal) — NOT a device property; so no per-session mode-pick. And the iPhone-17 line is
+ *        timing-uniform (17 == Pro == Pro Max, verified 2026-06-25), so timing keys by CHIP-GENERATION.
  *      WARM: a discrete 0/1/2 multinomial (warm is 1ms-quantized; a continuous lognormal re-quantized would
  *        not reproduce the observed mix).
  *  - AR(1) thermal latent: a slowly random-walking multiplier shared across ops so slow calls CLUSTER
@@ -18,8 +19,8 @@
  *  - Skew LEDGER (NOT a one-way monotonicity guard): carry negative deficits, amortize against positive
  *    charges so long-run mean skew ~= 0 and |skew| is capped — no monotonic upward drift tell. Date.now()
  *    and performance.now() share the ledger so dateNowVsPerf stays coherent. Apply skew BEFORE the 1ms floor.
- *  - CSPRNG-quality stream (SipHash counter-mode), seeded from a per-WebProcess pageNonce: session-stable,
- *    cross-session-varying, NOT state-recoverable (xoshiro is recoverable after ~1000 samples = synthetic-proof).
+ *  - Random draws use cryptographicallyRandomNumber (crypto entropy, NO recoverable PRNG state) — the audit
+ *    flagged xoshiro/xorshift as reconstructable after ~1000 samples (synthetic-proof). No seed to manage.
  *  - PRESENCE PARITY (separate from skew): the iPhone-17 has SharedArrayBuffer undefined + crossOriginIsolated
  *    false; the fork MUST match (a worker SAB clock would read true host time, bypassing this thread_local skew).
  *    Adding SAB is itself the divergence — enforced by verify-timing-fidelity.sh, not by this class.
@@ -61,8 +62,8 @@ public:
     WTF_EXPORT_PRIVATE void chargeOp(DriftstackTimedOp, double pixels, Seconds macActual);
 
     // The skew to ADD to a raw now() read, BEFORE the read's own 1ms floor is applied. Shared by
-    // performance.now() and Date.now().
-    Seconds currentSkew() const { return m_ledgerSkew; }
+    // performance.now() and Date.now(). (Ledger state is file-static in DriftstackVirtualClock.cpp.)
+    WTF_EXPORT_PRIVATE Seconds currentSkew() const;
 
     // Bucket-A: the per-read nanosecond advance so a tight now()-polling loop crosses a 1ms boundary at
     // the archetype's observed rate (e.g. now.resolution {0:p0,1:p1}). No-op unless enabled().
@@ -76,17 +77,13 @@ private:
     // applies the AR(1) thermal multiplier + CSPRNG jitter.
     double sampleCostMs(DriftstackTimedOp, double pixels, bool isCold);
 
-    // CSPRNG (SipHash counter) stream per op — returns the next 64-bit draw; not state-recoverable.
+    // A crypto-entropy draw (cryptographicallyRandomNumber) — not state-recoverable. No per-op seed/counter.
     uint64_t nextRandom(DriftstackTimedOp);
 
     bool m_enabled { false };
-
-    // Skew ledger.
-    Seconds m_ledgerSkew { 0_s };      // current applied skew (what now() reads add)
-    Seconds m_ledgerDeficit { 0_s };   // carried negative charge awaiting amortization
-    // |skew| cap + the per-op callCount, the per-op CSPRNG counters, the AR(1) thermal state, the picked
-    // per-session device-mode, the pageNonce seed, and the loaded archetype param table live in the .cpp
-    // (opaque here to keep the WTF header light). See DriftstackVirtualClock.cpp.
+    // The skew ledger (s_ledgerSkew / s_ledgerDeficit), the AR(1) thermal latent, and the loaded archetype
+    // param table are file-static in DriftstackVirtualClock.cpp — keeps this WTF header light and lets the
+    // free function advanceDriftstackVirtualSkew() share the same ledger.
 };
 
 // Back-compat shim: the existing HTMLCanvasElement toDataURL site calls this. It now routes through the
