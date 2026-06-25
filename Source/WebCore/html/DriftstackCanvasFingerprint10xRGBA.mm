@@ -49,6 +49,18 @@ HashMap<const char*, RefPtr<DecodedRGBABuffer>>& cache()
     return map.get();
 }
 
+// P1 (canvas-op-timing-audit): memo for the V-510 op-seq getImageData serve path
+// (getV510AtlasRGBAForOpSeq). The sibling cache() is keyed on a stable static
+// const char* (from lookupCanvasFp10xCanonicalWithText); the V-510 dataURL comes
+// from a String (v510AtlasLookupPublic) whose utf8().data() pointer is NOT stable
+// across calls, so it needs its OWN String-keyed memo. Keyed on opSeqSha (1:1 with
+// the served dataURL). Shares cacheLock(). Same decodeOnce output, cached.
+HashMap<String, RefPtr<DecodedRGBABuffer>>& v510OpSeqCache()
+{
+    static NeverDestroyed<HashMap<String, RefPtr<DecodedRGBABuffer>>> map;
+    return map.get();
+}
+
 RefPtr<DecodedRGBABuffer> decodeOnce(const char* dataURL)
 {
     static constexpr ASCIILiteral kPrefix = "data:image/png;base64,"_s;
@@ -196,16 +208,50 @@ bool getV510AtlasRGBAForOpSeq(const String& opSequenceSHA256Hex, int width, int 
 {
     if (width <= 0 || height <= 0 || opSequenceSHA256Hex.length() < 32)
         return false;
+
+    // P1 (canvas-op-timing-audit): memoize the decode. The original ran the FULL
+    // CG decode (base64→CGImageSource→CGBitmapContext draw→per-pixel unpremult)
+    // on EVERY getImageData hit — the 4ms outlier source. Mirror the sibling
+    // decodeCanvasFp10xCanonicalToRGBA HashMap+cacheLock() pattern: keyed on the
+    // op-seq sha (1:1 with the served dataURL). Second+ call = HashMap hit + one
+    // buffer copy. Same decodeOnce output, cached → byte-identical.
+    {
+        Locker locker(cacheLock());
+        auto& map = v510OpSeqCache();
+        auto it = map.find(opSequenceSHA256Hex);
+        if (it != map.end()) {
+            if (!it->value)
+                return false; // negative cache: lookup/decode previously failed
+            const auto& buf = *it->value;
+            if (buf.width != width || buf.height != height)
+                return false;
+            if (buf.rgba.size() != static_cast<size_t>(width) * height * 4)
+                return false;
+            outRGBA = buf.rgba;
+            return true;
+        }
+    }
+
     // V-510 atlas lookup (priority slot first, then main) keyed on op-seq sha.
     // Empty macForkDataURL: v3/v4 entries key on opSeqSha only (the §4 auto-learn
     // priority entries are v4). A hit returns the iPhone-canonical PNG dataURL.
     String hit = v510AtlasLookupPublic(String(), opSequenceSHA256Hex);
-    if (hit.isEmpty())
+    if (hit.isEmpty()) {
+        // Negative-cache the miss so repeat reads skip the atlas lookup too.
+        Locker locker(cacheLock());
+        v510OpSeqCache().set(opSequenceSHA256Hex, nullptr);
         return false;
+    }
     auto utf8 = hit.utf8();
     // decodeOnce (file-local) decodes the PNG dataURL to non-premultiplied RGBA
     // with the same CG round-trip as the V-373 path; copy out (caller-owned).
     RefPtr<DecodedRGBABuffer> decoded = decodeOnce(utf8.data());
+    {
+        // Store decoded (or nullptr on decode failure) so we decode at most once
+        // per op-seq, then copy out from the cached buffer below.
+        Locker locker(cacheLock());
+        v510OpSeqCache().set(opSequenceSHA256Hex, decoded);
+    }
     if (!decoded)
         return false;
     if (decoded->width != width || decoded->height != height)
