@@ -604,6 +604,19 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // because the launch-env flip silently never reaches getenv().
             { "DRIFTSTACK_H3_POOL", getenv("DRIFTSTACK_H3_POOL") },
             { "DRIFTSTACK_QUIC_CUSTOM_TLS", getenv("DRIFTSTACK_QUIC_CUSTOM_TLS") },
+            // BUG-42 egress-reliability master gate. Consumed in the NetworkProcess
+            // (static getenv() in DriftstackNetworkLoader.mm / DriftstackHttp3.mm /
+            // NetworkSessionCocoa.mm), which does NOT get the __XPC_ mirror — so it MUST
+            // be in this explicit dsEnv[] list (same class as H3_POOL / QUIC_CUSTOM_TLS /
+            // the cert-validate + WS_PATHB gates above), or the canary/launch-env flip
+            // silently never reaches getenv() (the W2823 trap) and every BUG-42 fix stays
+            // inert in production. Gate-off no-op: getenv() of an unset var is null → the
+            // dsEnv loop's `if (kv.value)` skips it → byte-identical to the prior child env.
+            // Also forward the customer-upstream UDP endpoint (Fix #2 reads it ONLY when the
+            // gate is on; harness sets it ONLY to a real non-loopback upstream, W2876) so the
+            // no-UDP latch can reflect the customer proxy's TRUE UDP capability.
+            { "DRIFTSTACK_EGRESS_RELIABILITY", getenv("DRIFTSTACK_EGRESS_RELIABILITY") },
+            { "DRIFTSTACK_SOCKS5_UDP_PROXY", getenv("DRIFTSTACK_SOCKS5_UDP_PROXY") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",
