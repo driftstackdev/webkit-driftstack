@@ -2822,6 +2822,14 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::makeImageDataIfContentsCached(co
 }
 
 #if PLATFORM(DRIFTSTACK)
+// Hot-path serve/miss diagnostics. These WTFLogAlways fire on EVERY canvas
+// readback (getImageData / #79-recompose serve paths) — a per-op format + os_log
+// side-channel on the critical path. Gate them behind DRIFTSTACK_CANVAS_VERBOSE=1
+// (default OFF) so production / cumrig serves pay nothing. Byte-neutral: logging
+// never touches a served pixel. NOTE: the one-time atlas-init/load logs
+// ("V510Atlas[...] mapped", "eagerly initialized") are intentionally NOT gated.
+static bool dsCanvasVerbose() { static bool e = []{ const char* v = getenv("DRIFTSTACK_CANVAS_VERBOSE"); return v && v[0] == '1'; }(); return e; }
+
 // #79 readback-recompose, EXTRACTED (2026-06-21) so getImageData + HTMLCanvasElement
 // toDataURL/toBlob (via HTMLCanvasElement::getImageData) share ONE byte-exact source →
 // cross-method coherent. For a NON-tracker, pure-simple-text, fully-atlas-served canvas:
@@ -2880,8 +2888,9 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() 
     }
     driftstackPopCanvasTextDraw();
     if (driftstackCanvasTextNativeFallbackOccurred()) {
-        WTFLogAlways("[Driftstack-#79-recompose] BAIL (native fallback — not fully atlas-served; %zu draws, font='%s')",
-            parsed.draws.size(), fontCascade.primaryFont().platformData().familyName().utf8().data());
+        if (dsCanvasVerbose())
+            WTFLogAlways("[Driftstack-#79-recompose] BAIL (native fallback — not fully atlas-served; %zu draws, font='%s')",
+                parsed.draws.size(), fontCascade.primaryFont().platformData().familyName().utf8().data());
         return nullptr;
     }
     auto [cfr, cfg, cfb, cfa] = fill.toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
@@ -2905,9 +2914,10 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() 
         if (!a) { px[i] = px[i + 1] = px[i + 2] = 0; continue; }
         px[i] = rt2(fillR, a); px[i + 1] = rt2(fillG, a); px[i + 2] = rt2(fillB, a);
     }
-    WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
-        fullW, fullH, parsed.draws.size(),
-        fontCascade.primaryFont().platformData().familyName().utf8().data());
+    if (dsCanvasVerbose())
+        WTFLogAlways("[Driftstack-#79-recompose] FIRED (%ux%u, %zu draws, font='%s')",
+            fullW, fullH, parsed.draws.size(),
+            fontCascade.primaryFont().platformData().familyName().utf8().data());
     return ImageData::create(rcPixels.releaseNonNull(), ImageDataPixelFormat::RgbaUnorm8);
 }
 #endif
@@ -3011,8 +3021,9 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                 && static_cast<unsigned>(sh) == fullH);
             if (isFullCanvas) {
                 // Full-canvas fast path (Wave 29-499 V-373 r1 behavior).
-                WTFLogAlways("[Driftstack-V373] canvas-fp getImageData FULL-rect substitution FIRED (%dx%d RGBA, lastFillText=%u chars)",
-                    sw, sh, static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
+                if (dsCanvasVerbose())
+                    WTFLogAlways("[Driftstack-V373] canvas-fp getImageData FULL-rect substitution FIRED (%dx%d RGBA, lastFillText=%u chars)",
+                        sw, sh, static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
                 PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
                 IntSize substSize { sw, sh };
                 if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, fullRGBA))
@@ -3035,9 +3046,10 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                     auto dstRow = subSpan.subspan(dstOffset, subStride);
                     std::copy(srcRow.begin(), srcRow.end(), dstRow.begin());
                 }
-                WTFLogAlways("[Driftstack-V373-§90] canvas-fp getImageData PARTIAL-rect substitution FIRED (canvas %dx%d → sub (%d,%d) %dx%d, lastFillText=%u chars)",
-                    fullW, fullH, sx, sy, sw, sh,
-                    static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
+                if (dsCanvasVerbose())
+                    WTFLogAlways("[Driftstack-V373-§90] canvas-fp getImageData PARTIAL-rect substitution FIRED (canvas %dx%d → sub (%d,%d) %dx%d, lastFillText=%u chars)",
+                        fullW, fullH, sx, sy, sw, sh,
+                        static_cast<unsigned>(canvasBase().lastFillTextForDispatch().length()));
                 PixelBufferFormat substFormat { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, toDestinationColorSpace(computedColorSpace) };
                 IntSize substSize { sw, sh };
                 if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
@@ -3085,8 +3097,9 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                     && static_cast<unsigned>(sw) == fullW
                     && static_cast<unsigned>(sh) == fullH);
                 if (isFullCanvas) {
-                    WTFLogAlways("[Driftstack-V510-getImageData] FULL HIT (%dx%d opSeq=%s)", sw, sh,
-                        opSeqSha.left(12).utf8().data());
+                    if (dsCanvasVerbose())
+                        WTFLogAlways("[Driftstack-V510-getImageData] FULL HIT (%dx%d opSeq=%s)", sw, sh,
+                            opSeqSha.left(12).utf8().data());
                     if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, fullRGBA.span()))
                         return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
                 } else {
@@ -3105,8 +3118,9 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
                         std::copy(srcRow.begin(), srcRow.end(), dstRow.begin());
                     }
                     if (sliceOk) {
-                        WTFLogAlways("[Driftstack-V510-getImageData] PARTIAL HIT (canvas %ux%u → sub (%d,%d) %dx%d opSeq=%s)",
-                            fullW, fullH, sx, sy, sw, sh, opSeqSha.left(12).utf8().data());
+                        if (dsCanvasVerbose())
+                            WTFLogAlways("[Driftstack-V510-getImageData] PARTIAL HIT (canvas %ux%u → sub (%d,%d) %dx%d opSeq=%s)",
+                                fullW, fullH, sx, sy, sw, sh, opSeqSha.left(12).utf8().data());
                         if (auto pixelBuffer = ByteArrayPixelBuffer::create(substFormat, substSize, subRGBA.span()))
                             return { { ImageData::create(WTF::move(*pixelBuffer), outputImageDataPixelFormat) } };
                     }
@@ -3173,6 +3187,10 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             RefPtr ctxDocGID = dynamicDowncast<Document>(scriptContext.get());
             RefPtr mainDocGID = ctxDocGID ? ctxDocGID->mainFrameDocument() : nullptr;
             String pageURL = mainDocGID ? mainDocGID->url().string() : (scriptContext ? scriptContext->url().string() : String());
+            // NOTE: not gated by dsCanvasVerbose() — this WTFLogAlways IS the
+            // auto-learn harvester's ProbeSig side-channel (functional output the
+            // BS replay pipeline consumes), not a hot-path diagnostic. Already
+            // gated behind DRIFTSTACK_PROBE_SIGNATURE_EMIT (OFF in prod/cumrig).
             WTFLogAlways("[Driftstack-W29399-S2-ProbeSig-getImageData] "
                 "w=%u h=%u opSeqSha=%s lastFillText=\"%s\" "
                 "archetype=%s ts=%lld mime=%s mac_len=%u "
@@ -3205,7 +3223,8 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             if (RefPtr afpBuffer = canvasBase().createImageForNoiseInjection()) {
                 auto afpFormat = PixelBufferFormat { AlphaPremultiplication::Unpremultiplied, outputPixelFormat, afpBuffer->colorSpace() };
                 if (RefPtr afpPixels = dynamicDowncast<ByteArrayPixelBuffer>(afpBuffer->getPixelBuffer(afpFormat, imageDataRect))) {
-                    WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=getImageData atlas-miss FIRED (%dx%d)", sw, sh);
+                    if (dsCanvasVerbose())
+                        WTFLogAlways("[Driftstack-AFP-Fallback-Fired] context=getImageData atlas-miss FIRED (%dx%d)", sw, sh);
                     return { { ImageData::create(afpPixels.releaseNonNull(), outputImageDataPixelFormat) } };
                 }
             }
