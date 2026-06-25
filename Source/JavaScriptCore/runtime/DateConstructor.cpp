@@ -107,7 +107,12 @@ JSObject* constructDate(JSGlobalObject* globalObject, JSValue newTarget, const A
     double value;
 
     if (numArgs == 0) // new Date() ECMA 15.9.3.3
+#if PLATFORM(DRIFTSTACK)
+        // M6 (timing audit): new Date() shares Date.now()'s skew (floored), else new Date().getTime() != Date.now().
+        value = static_cast<double>(static_cast<int64_t>(jsCurrentTime() + WTF::driftstackVirtualSkew().milliseconds()));
+#else
         value = jsCurrentTime();
+#endif
     else if (numArgs == 1) {
         JSValue arg0 = args.at(0);
         if (auto* dateInstance = dynamicDowncast<DateInstance>(arg0))
