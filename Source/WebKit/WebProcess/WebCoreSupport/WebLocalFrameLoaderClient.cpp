@@ -238,7 +238,11 @@ static void driftstackEmitNavState(ASCIILiteral state, const String& url, const 
         driftstackAppendJSONString(json, title);
     }
     json.append('}');
+    // Fixed format string + single %s — safe by construction; silence the libc unsafe-buffer
+    // diagnostic the same way the rest of the fork does (WTF_ALLOW_UNSAFE_BUFFER_USAGE_*).
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     fprintf(stderr, "DRIFTSTACK_NAV_STATE %s\n", json.toString().utf8().data());
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     fflush(stderr);
 }
 #endif // PLATFORM(DRIFTSTACK)
