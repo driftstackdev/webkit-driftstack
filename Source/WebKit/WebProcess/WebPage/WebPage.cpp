@@ -5873,6 +5873,41 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         settings.setSupportHDRDisplayEnabled(false);
         // overflow-block / overflow-inline (css-overflow-3 logical longhands) — real 18.6 lacks them.
         settings.setCSSLogicalOverflowEnabled(false);
+
+        // Family-A over-exposure cluster (2026-06-26 fork-as-18.6 vs real-18.6 same-probe
+        // sweep). The fork's ONE 26.x WebKit binary exposes these newer JS/Web-API members
+        // on the 18.6 archetype; real iPhone Safari 18.6 LACKS each. Every one is a verified
+        // FA/FB boundary (present on real aio-iPhone_17_Pro_Max Safari 26.4, absent on BOTH
+        // real aio-iPhone_16_Pro_Max Safari 18.6 captures). Each is gated by an EnabledBySetting
+        // flag (existing or Driftstack-added) the Family-A branch turns off; Family B (the else
+        // branch / unset 26.4 launch) keeps the 26.x-correct default.
+        //
+        // Trusted Types — TrustedHTML/TrustedScript/TrustedScriptURL/TrustedTypePolicy/
+        // TrustedTypePolicyFactory window globals + the window.trustedTypes accessor (all gated
+        // by EnabledBySetting=TrustedTypesEnabled). The version-coherence probe flags the leak
+        // directly (window.trustedTypes:INCOHERENT-present(object)). Real 18.6 → all undefined.
+        settings.setTrustedTypesEnabled(false);
+        // Element.currentCSSZoom / HTMLElement.currentCSSZoom (Element+CSSOMView.idl,
+        // EnabledBySetting=EnableElementCurrentCSSZoom; COCOA-default true). Real 18.6 lacks it
+        // on Element/HTMLElement and every HTML*Element prototype.
+        settings.setEnableElementCurrentCSSZoom(false);
+        // HTMLMediaElement.setSinkId / .sinkId (audio-output routing, HTMLMediaElement+AudioOutput
+        // .idl, EnabledBySetting=ExposeSpeakersEnabled&PerElementSpeakerSelectionEnabled). Both
+        // flags COCOA-default true and gate ONLY this AudioOutput partial-interface (grep-verified),
+        // so disabling the per-element one cleanly hides both members with no collateral. Real 18.6
+        // lacks them on HTMLMediaElement/HTMLAudioElement/HTMLVideoElement.
+        settings.setPerElementSpeakerSelectionEnabled(false);
+        // IntersectionObserver.prototype.scrollMargin — upstream IntersectionObserver.idl had NO
+        // settings gate (unconditionally compiled). Driftstack-added IntersectionObserverScrollMargin-
+        // Enabled flag (default true so 26.x stays exact) wired as EnabledBySetting on the attribute.
+        // Real 18.6 lacks scrollMargin (root/rootMargin/thresholds only).
+        settings.setIntersectionObserverScrollMarginEnabled(false);
+        // PublicKeyCredential.signalAllAcceptedCredentials / signalCurrentUserDetails /
+        // signalUnknownCredential (WebAuthn credential-signal statics) — upstream PublicKeyCredential
+        // .idl had NO settings gate. Driftstack-added WebAuthnSignalMethodsEnabled flag (default true
+        // so 26.x stays exact) wired as EnabledBySetting on the 3 static methods. Real 18.6 lacks all
+        // three (statics: getClientCapabilities/isUVPAA/parse*FromJSON only).
+        settings.setWebAuthnSignalMethodsEnabled(false);
     } else {
         // P0 named-timeline CSS-property EXPOSURE fix (CSS.supports gate).
         // The named scroll/view timeline CSS *properties* (scroll-timeline-name,
