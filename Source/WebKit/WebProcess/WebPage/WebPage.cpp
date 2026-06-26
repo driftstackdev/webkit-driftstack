@@ -5851,6 +5851,34 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         settings.setScrollendEventEnabled(false);
         // - CSS.supports scrollbar-color: false
         settings.setCSSScrollbarColorEnabled(false);
+    } else {
+        // P0 named-timeline CSS-property EXPOSURE fix (CSS.supports gate).
+        // The named scroll/view timeline CSS *properties* (scroll-timeline-name,
+        // view-timeline-name, timeline-scope) are gated by cssNamedTimelineProperties-
+        // Enabled, which defaults FALSE in UnifiedWebPreferences.yaml on every archetype.
+        // Real iPhone Safari 26.x SHIPS these properties:
+        //   aio-iPhone_17_Pro_Max (Safari 26.4, LAUNCH archetype) →
+        //     CSS.supports('scroll-timeline-name: --foo') === true
+        //     CSS.supports('view-timeline-name: --foo')   === true
+        //     CSS.supports('timeline-scope: --foo')       === true
+        // while Family A (aio-iPhone_16_Pro_Max, Safari 18.6) serves all three === false.
+        //
+        // The earlier fix (e7e0e8911c) force-enabled the flag only on the CSS *parser
+        // context* (CSSParserContext::propertySettings). But CSS.supports routes through
+        // DOMCSSNamespace::supports → the longhand-declaration form whose gate is
+        // isExposed(propertyID, &document.settings()) — it reads the DOCUMENT Settings,
+        // which the parser-context override does NOT reach. So production CSS.supports
+        // stayed false on 26.4 (A3 box-confirmed). FIX: set the document Setting itself
+        // here in the non-Family-A (Safari 26.x, incl 26.4 launch) branch, mirroring the
+        // per-archetype document Settings the Family-A block sets above. CSSPropertySettings
+        // then derives true from the document setting directly, and isExposed(…&document.
+        // settings()) returns true.
+        //
+        // Family A (the s_isFamilyAArchetype branch above) deliberately does NOT call this,
+        // so the YAML default-false stands → all three serve false on 18.x, matching real
+        // iPhone. The e7e0e8911c CSSParserContext force-true is left in place (additive,
+        // harmless; this document-Settings call is the one that reaches CSS.supports).
+        settings.setCSSNamedTimelinePropertiesEnabled(true);
     }
 
     // ── 26.0/26.3 per-minor DOM-API surface (Class C/F, master closure ledger) ──
