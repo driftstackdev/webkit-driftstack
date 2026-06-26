@@ -5851,6 +5851,28 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         settings.setScrollendEventEnabled(false);
         // - CSS.supports scrollbar-color: false
         settings.setCSSScrollbarColorEnabled(false);
+
+        // apiEnum.cssProperties EXPOSURE gate (computed-style enumeration). The
+        // built fork ships ONE WebKit binary whose CSS property table reflects
+        // Safari 26.x, so getComputedStyle(documentElement) over-enumerates three
+        // properties that real iPhone Safari 18.6 lacks. Boundary VERIFIED across
+        // real /aio captures (present on EVERY 26.x minor — 26.0/26.2/26.3/26.4 —
+        // and absent ONLY on Family-A 18.6, so this is the FA/FB boundary, NOT a
+        // 26-minor boundary):
+        //   real aio-iPhone_16_Pro_Max (Safari 18.6) cssProperties LACKS:
+        //     dynamic-range-limit, overflow-block, overflow-inline
+        //   real aio-iPhone_17_Pro_Max (Safari 26.0/26.2/26.3/26.4) HAS all three.
+        // Each property's enumeration is the indexed entry of a computed style, which
+        // CSSPropertyNames isExposed() gates by a Settings flag. dynamic-range-limit
+        // reads supportHDRDisplayEnabled (force-true ON by ENABLE_SUPPORT_HDR_DISPLAY_-
+        // BY_DEFAULT on macOS 26 builds); overflow-block/overflow-inline read the new
+        // cssLogicalOverflowEnabled flag (Driftstack-added settings-flag on those two
+        // CSSProperties.json entries, default-true so 26.x stays exact). Family B (the
+        // else branch below) leaves both flags at their 26.x-correct defaults.
+        // dynamic-range-limit (css-color-hdr) — real 18.6 lacks it.
+        settings.setSupportHDRDisplayEnabled(false);
+        // overflow-block / overflow-inline (css-overflow-3 logical longhands) — real 18.6 lacks them.
+        settings.setCSSLogicalOverflowEnabled(false);
     } else {
         // P0 named-timeline CSS-property EXPOSURE fix (CSS.supports gate).
         // The named scroll/view timeline CSS *properties* (scroll-timeline-name,

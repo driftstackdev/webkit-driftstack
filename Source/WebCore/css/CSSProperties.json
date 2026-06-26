@@ -7263,7 +7263,8 @@
                     "name": "overflow",
                     "resolver": "inline"
                 },
-                "parser-grammar": "<<values>>"
+                "parser-grammar": "<<values>>",
+                "settings-flag": "cssLogicalOverflowEnabled"
             },
             "specification": {
                 "category": "css-overflow",
@@ -7286,7 +7287,8 @@
                     "name": "overflow",
                     "resolver": "block"
                 },
-                "parser-grammar": "<<values>>"
+                "parser-grammar": "<<values>>",
+                "settings-flag": "cssLogicalOverflowEnabled"
             },
             "specification": {
                 "category": "css-overflow",

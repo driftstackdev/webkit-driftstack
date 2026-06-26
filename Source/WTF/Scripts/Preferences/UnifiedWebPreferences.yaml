@@ -1239,6 +1239,27 @@ CSSLineFitEdgeEnabled:
     WebCore:
       default: false
 
+# Driftstack (FA-CSS logical-overflow gate): the css-overflow-3 logical-longhand
+# properties overflow-block / overflow-inline are unconditionally compiled into the
+# 26.x WebKit binary but are ABSENT from real iPhone Safari 18.6's computed-style
+# property surface (apiEnum.cssProperties). Boundary verified across real /aio:
+# present on every 26.x minor (26.0/26.2/26.3/26.4), absent only on Family-A 18.6.
+# This Setting gates their CSS-property exposure (settings-flag on both CSSProperties.json
+# entries); default true keeps 26.x exact, Family-A WebPage branch flips it false.
+CSSLogicalOverflowEnabled:
+  type: bool
+  status: stable
+  category: css
+  humanReadableName: "CSS logical overflow properties"
+  humanReadableDescription: "Enable the overflow-block / overflow-inline CSS properties (per-archetype exposure gate)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 CSSMathDepthEnabled:
   type: bool
   status: stable
