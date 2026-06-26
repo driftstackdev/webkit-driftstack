@@ -518,9 +518,48 @@ void LineBoxBuilder::constructInlineLevelBoxes(LineBox& lineBox)
             if (auto fallbackFonts = collectFallbackFonts(parentInlineBox, run, style); !fallbackFonts.isEmptyIgnoringNullReferences()) {
                 // Adjust non-empty inline box height when glyphs from the non-primary font stretch the box.
                 if (parentInlineBox.isPreferredLineHeightFontMetricsBased()) {
+#if PLATFORM(DRIFTSTACK)
+                    // W2980 (#117): on the iPhone-emulation build, the line-box strut must stay
+                    // pinned to the PRIMARY (first-available) font of the element, glyph-INDEPENDENT,
+                    // matching real-iPhone Safari. browserleaks /fonts measures div.offsetHeight of a
+                    // single exotic codepoint at 128px for 43 cps x 6 generics; a real iPhone returns a
+                    // PERFECTLY UNIFORM per-generic line-box height for ALL codepoints (verified live:
+                    // default 192 / sans 193 / serif 194 / mono 193 / cursive 198 / fantasy 214 @128px;
+                    // 24/24/25/25/26/28 @16px) — i.e. the strut is the primary font's, never stretched
+                    // by whichever fallback font renders a given glyph. Upstream WebKit (CSS-inline-3
+                    // "enclose all glyphs from highest A to deepest D") stretches the strut to the MAX of
+                    // the primary and each per-glyph FALLBACK font's metrics. On iOS the fallback fonts'
+                    // metrics happen to fit within the primary strut, so the strut stays uniform; on the
+                    // Mac the fork selects Mac-only fallback fonts (Hiragino / Noto / Apple Color Emoji /
+                    // .LastResort, etc.) whose ascent+descent EXCEED the primary strut, scattering
+                    // div.offsetHeight per-glyph (149/150/129/162/199/256 ...) and diverging the live
+                    // Unicode-Glyphs fingerprint (fork BAA41872 vs real iPhone 5D474692 @128px).
+                    //
+                    // This is the CORRECT, SIZE-GENERAL CSS mechanism (the strut is set by the element's
+                    // first-available font, uniform regardless of which fallback renders a glyph) — it is
+                    // correct at 16px AND 128px AND any size, not a per-cell or per-size serve. Widths are
+                    // unaffected (the fallback advances are correct and drive the width column 1:1). The
+                    // 16px glyphHash surface stays intact because the strut already equals the primary
+                    // font's strut there too; suppressing only the FALLBACK over-stretch leaves the
+                    // primary-font strut (set by setLayoutBoundsForInlineBox above) as the sole height.
+                    static const bool s_primaryFontStrut = [] {
+                        const char* e = getenv("DRIFTSTACK_PRIMARY_FONT_STRUT");
+                        return e && e[0] == '1';
+                    }();
+                    if (s_primaryFontStrut) {
+                        if (getenv("DRIFTSTACK_LOG_LINE_BOX_HEIGHT")) {
+                            auto lb = parentInlineBox.layoutBounds();
+                            WTFLogAlways("[Driftstack-W2980-STRUT] primary-font strut pinned: ascent=%.3f descent=%.3f (fallback stretch suppressed, %u fallback fonts)",
+                                (double)lb.ascent, (double)lb.descent, (unsigned)fallbackFonts.computeSize());
+                        }
+                        // Leave the strut at the primary font's layout bounds (uniform per generic, any size).
+                    } else
+#endif
+                    {
                     auto enclosingAscentAndDescent = enclosingAscentDescentWithFallbackFonts(parentInlineBox, fallbackFonts, FontBaseline::Alphabetic);
                     auto layoutBounds = parentInlineBox.layoutBounds();
                     parentInlineBox.setLayoutBounds({ std::max(layoutBounds.ascent, enclosingAscentAndDescent.ascent), std::max(layoutBounds.descent, enclosingAscentAndDescent.descent) });
+                    }
                 }
             }
             continue;
@@ -792,6 +831,18 @@ void LineBoxBuilder::adjustIdeographicBaselineIfApplicable(LineBox& lineBox)
 
         auto needsFontFallbackAdjustment = inlineLevelBox.isInlineBox();
         if (needsFontFallbackAdjustment) {
+#if PLATFORM(DRIFTSTACK)
+            // W2980 (#117): same primary-font-strut pin as the Alphabetic-baseline path above, for the
+            // ideographic-baseline (vertical/CJK) variant — keep the strut on the primary font so the
+            // line-box height is glyph-independent (uniform per generic, any size) like a real iPhone.
+            static const bool s_primaryFontStrutI = [] {
+                const char* e = getenv("DRIFTSTACK_PRIMARY_FONT_STRUT");
+                return e && e[0] == '1';
+            }();
+            if (s_primaryFontStrutI) {
+                // Leave the strut at the primary font's layout bounds (no fallback over-stretch).
+            } else
+#endif
             if (auto fallbackFonts = m_fallbackFontsForInlineBoxes.get(&inlineLevelBox); !fallbackFonts.isEmptyIgnoringNullReferences() && inlineLevelBox.isPreferredLineHeightFontMetricsBased()) {
                 auto enclosingAscentAndDescent = enclosingAscentDescentWithFallbackFonts(inlineLevelBox, fallbackFonts, FontBaseline::Ideographic);
                 auto layoutBounds = inlineLevelBox.layoutBounds();
