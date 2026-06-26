@@ -149,6 +149,7 @@ public:
     void getAllCookies(Function<void(CommandResult&&)>&&);
     void driftstackGetAllCookiesAllDomains(Function<void(CommandResult&&)>&&); // Driftstack #48: whole-jar (all domains)
     void driftstackSetCookiesAllDomains(Ref<JSON::Array>&& cookies, Function<void(CommandResult&&)>&&); // Driftstack #40: batch multi-domain cookie-import
+    void driftstackProfileDumpNow(Function<void(CommandResult&&)>&&); // Driftstack W2985: flush+write a complete .driftstack-dump.json + ACK (teardown handshake)
     void getNamedCookie(const String& name, Function<void(CommandResult&&)>&&);
     void addCookie(const Cookie&, Function<void(CommandResult&&)>&&);
     void deleteCookie(const String& name, Function<void(CommandResult&&)>&&);

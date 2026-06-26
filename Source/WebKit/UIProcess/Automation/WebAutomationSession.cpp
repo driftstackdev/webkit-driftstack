@@ -81,6 +81,13 @@
 // FIXME: https://bugs.webkit.org/show_bug.cgi?id=306415
 #include "WebKit-Swift.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "WebsiteDataStore.h" // Driftstack W2985: syncLocalStorage (flush localStorage to disk for the opaque snapshot)
+#include <sys/stat.h>         // Driftstack W2985: chmod the dump to 0600 (A1 W2835 httpOnly-token defense-in-depth)
+#include <wtf/JSONValues.h>   // Driftstack W2985: build the .driftstack-dump.json object/array
+#include <wtf/text/CString.h>
+#endif
+
 namespace WebKit {
 
 using namespace Inspector;
@@ -1947,6 +1954,96 @@ void WebAutomationSession::setCookiesAllDomains(const Inspector::Protocol::Autom
     cookieStore->setCookies(WTF::move(cookies), [callback = WTF::move(callback)]() {
         callback({ });
     });
+}
+
+#if PLATFORM(DRIFTSTACK)
+// Driftstack W2985 (profile data-loss ROOT fix): serialize a cookie to the .driftstack-dump.json schema (A1 W2827,
+// byte-pinned in the harness ProfileSeedSidecar.testProfileSeedSidecarWireFormatPin) — the SAME shape the AppDelegate
+// SIGTERM dumper writes, so a fork that took THIS path round-trips identically to one that took the SIGTERM path:
+//   { domain, path, name, value, secure(bool), httpOnly(bool), sameSite:"lax"|"strict"|"none", expiresUnixMs?(ms, absent=session) }
+static Ref<JSON::Object> driftstackSerializeCookieToDumpSchema(const WebCore::Cookie& cookie)
+{
+    auto object = JSON::Object::create();
+    object->setString("domain"_s, cookie.domain.isNull() ? emptyString() : cookie.domain);
+    object->setString("path"_s, cookie.path.isEmpty() ? "/"_s : cookie.path);
+    object->setString("name"_s, cookie.name.isNull() ? emptyString() : cookie.name);
+    object->setString("value"_s, cookie.value.isNull() ? emptyString() : cookie.value);
+    object->setBoolean("secure"_s, cookie.secure);
+    object->setBoolean("httpOnly"_s, cookie.httpOnly);
+    ASCIILiteral sameSite = "none"_s;
+    if (cookie.sameSite == WebCore::Cookie::SameSitePolicy::Lax)
+        sameSite = "lax"_s;
+    else if (cookie.sameSite == WebCore::Cookie::SameSitePolicy::Strict)
+        sameSite = "strict"_s;
+    object->setString("sameSite"_s, sameSite);
+    // ABSENT key = session cookie (per the A3 W353 contract — OMIT, never null). WebCore::Cookie::expires is
+    // already UNIX-MILLISECONDS, matching the dump's expiresUnixMs unit exactly (no /1000 vs *1000 confusion).
+    if (cookie.expires)
+        object->setDouble("expiresUnixMs"_s, *cookie.expires);
+    return object;
+}
+#endif // PLATFORM(DRIFTSTACK)
+
+void WebAutomationSession::profileDumpNow(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, CommandCallbackOf<bool, int>&& callback)
+{
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack W2985 (profile data-loss ROOT fix — the teardown HANDSHAKE the harness sends on the LIVE WD bridge
+    // BEFORE the graceful fork SIGTERM): synchronously make the on-disk profile state COMPLETE, then ACK. Three steps,
+    // chained so the ACK fires only once everything is durably on disk:
+    //   (1) syncLocalStorage — flush the NetworkProcess localStorage to disk so the harness's opaque Origins/ dir
+    //       snapshot (taken AFTER the fork exits) captures the session's FINAL localStorage/IndexedDB state, not a
+    //       mid-session checkpoint (localStorage rides the opaque snapshot per A1 W2827/W356 — it is NOT in the dump).
+    //   (2) flushCookies — flush the cookie store to disk (defensive; the dump reads the in-memory jar but a flushed
+    //       store keeps disk + dump consistent).
+    //   (3) cookies() — read the WHOLE jar (all domains, incl httpOnly) and write a COMPLETE .driftstack-dump.json at
+    //       $DRIFTSTACK_DATA_DIR (0600 — it holds httpOnly session/auth tokens, A1 W2835), then ACK { wrote, count }.
+    // This is the ROOT fix: it eliminates the torn/empty-dump RACE that the prior SIGTERM-only dumper created (the
+    // harness SIGTERM'd, then read whatever was on disk; a fork that hadn't flushed → stale/empty dump → the W2977
+    // degenerate-dump guard SKIPPED the save = data preserved but STALE). The harness now gets a FRESH complete dump
+    // before it SIGTERMs. Self-gating on DRIFTSTACK_DATA_DIR: a non-fleet/non-profile session ACKs { wrote:false, 0 }
+    // (inert — same byte-output as before this command existed, since it writes no file).
+    RefPtr page = webPageProxyForHandle(browsingContextHandle);
+    ASYNC_FAIL_WITH_PREDEFINED_ERROR_IF(!page, WindowNotFound);
+
+    const char* dataDirEnv = getenv("DRIFTSTACK_DATA_DIR");
+    if (!dataDirEnv || !dataDirEnv[0]) {
+        callback({ { false, 0 } }); // inert no-op ACK — no per-session data dir ⇒ not a fleet/profile session
+        return;
+    }
+    String dataDir = String::fromUTF8(dataDirEnv);
+
+    Ref dataStore = protect(page->websiteDataStore());
+    Ref cookieStore = dataStore->cookieStore();
+    dataStore->syncLocalStorage([dataStore, cookieStore, dataDir, callback = WTF::move(callback)]() mutable {
+        cookieStore->flushCookies([cookieStore, dataDir, callback = WTF::move(callback)]() mutable {
+            cookieStore->cookies([dataDir, callback = WTF::move(callback)](Vector<WebCore::Cookie>&& cookies) mutable {
+                auto cookiesArray = JSON::Array::create();
+                for (const auto& cookie : cookies)
+                    cookiesArray->pushObject(driftstackSerializeCookieToDumpSchema(cookie));
+                auto root = JSON::Object::create();
+                root->setInteger("version"_s, 1);
+                root->setArray("cookies"_s, WTF::move(cookiesArray));
+
+                String json = root->toJSONString();
+                CString jsonUTF8 = json.utf8();
+                String dumpPath = FileSystem::pathByAppendingComponent(dataDir, ".driftstack-dump.json"_s);
+                // overwriteEntireFile writes via a temp + atomic rename (the harness never reads a partial dump).
+                auto written = FileSystem::overwriteEntireFile(dumpPath, byteCast<uint8_t>(jsonUTF8.span()));
+                bool wrote = written.has_value();
+                if (wrote) {
+                    // A1 W2835 (defense-in-depth): the dump holds the FULL cookie jar incl httpOnly session/auth
+                    // tokens — restrict to owner-only so a co-tenant uid can't read it (the per-session data dir
+                    // may be 0755). chmod the final inode after the atomic rename (matches the AppDelegate dumper).
+                    chmod(dumpPath.utf8().data(), 0600);
+                }
+                callback({ { wrote, wrote ? static_cast<int>(cookies.size()) : 0 } });
+            });
+        });
+    });
+#else
+    UNUSED_PARAM(browsingContextHandle);
+    callback({ { false, 0 } });
+#endif // PLATFORM(DRIFTSTACK)
 }
 
 void WebAutomationSession::deleteSingleCookie(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, const String& cookieName, CommandCallback<void>&& callback)

@@ -274,6 +274,7 @@ public:
     void getAllCookies(const Inspector::Protocol::Automation::BrowsingContextHandle&, Inspector::CommandCallback<Ref<JSON::ArrayOf<Inspector::Protocol::Automation::Cookie>>>&&) override;
     void getAllCookiesAllDomains(const Inspector::Protocol::Automation::BrowsingContextHandle&, Inspector::CommandCallback<Ref<JSON::ArrayOf<Inspector::Protocol::Automation::Cookie>>>&&) override; // Driftstack #48: whole-jar (all domains)
     void setCookiesAllDomains(const Inspector::Protocol::Automation::BrowsingContextHandle&, Ref<JSON::Array>&& cookies, Inspector::CommandCallback<void>&&) override; // Driftstack #40: batch multi-domain cookie-import
+    void profileDumpNow(const Inspector::Protocol::Automation::BrowsingContextHandle&, Inspector::CommandCallbackOf<bool /*wrote*/, int /*cookieCount*/>&&) override; // Driftstack W2985: flush+write a complete .driftstack-dump.json + ACK (teardown handshake)
     void deleteSingleCookie(const Inspector::Protocol::Automation::BrowsingContextHandle&, const String& cookieName, Inspector::CommandCallback<void>&&) override;
     void addSingleCookie(const Inspector::Protocol::Automation::BrowsingContextHandle&, Ref<JSON::Object>&& cookie, Inspector::CommandCallback<void>&&) override;
     Inspector::CommandResult<void> deleteAllCookies(const Inspector::Protocol::Automation::BrowsingContextHandle&) override;

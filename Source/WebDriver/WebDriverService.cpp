@@ -292,6 +292,7 @@ const WebDriverService::Command WebDriverService::s_commands[] = {
     { HTTPMethod::Get, "/session/$sessionId/cookie", &WebDriverService::getAllCookies },
     { HTTPMethod::Get, "/session/$sessionId/driftstack/cookies/all", &WebDriverService::driftstackGetAllCookiesAllDomains }, // Driftstack #48: whole-jar (all domains, httpOnly)
     { HTTPMethod::Post, "/session/$sessionId/driftstack/cookies/set", &WebDriverService::driftstackSetCookiesAllDomains }, // Driftstack #40 (A2 W2867): cookie-import — batch multi-domain WKHTTPCookieStore.setCookie, inverse of /all
+    { HTTPMethod::Post, "/session/$sessionId/driftstack/profile/dump", &WebDriverService::driftstackProfileDumpNow }, // Driftstack W2985 (profile data-loss ROOT fix): synchronously FLUSH+WRITE a complete .driftstack-dump.json BEFORE the teardown SIGTERM, return the count as the ACK
     { HTTPMethod::Get, "/session/$sessionId/cookie/$name", &WebDriverService::getNamedCookie },
     { HTTPMethod::Post, "/session/$sessionId/cookie", &WebDriverService::addCookie },
     { HTTPMethod::Delete, "/session/$sessionId/cookie/$name", &WebDriverService::deleteCookie },
@@ -2145,6 +2146,24 @@ void WebDriverService::driftstackSetCookiesAllDomains(RefPtr<JSON::Object>&& par
     }
 
     m_session->driftstackSetCookiesAllDomains(cookiesArray.releaseNonNull(), WTF::move(completionHandler));
+}
+
+void WebDriverService::driftstackProfileDumpNow(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
+{
+    // Driftstack W2985 (profile data-loss ROOT fix — the handshake the harness teardown sends BEFORE the
+    // graceful fork SIGTERM): synchronously FLUSH the per-session WKWebsiteDataStore to disk (cookies +
+    // localStorage) and write a COMPLETE .driftstack-dump.json at $DRIFTSTACK_DATA_DIR, then ACK with the
+    // count written. This eliminates the torn/empty-dump RACE: the prior mechanism dumped only in the fork's
+    // SIGTERM handler, so the harness SIGTERM'd then read whatever happened to be on disk — a fork that hadn't
+    // flushed yet left a stale/empty dump (the W2977 guard then SKIPPED the save → data preserved but STALE).
+    // With this command the harness gets a FRESH complete dump on the live WD bridge before the SIGTERM. No
+    // waitForNavigationToComplete (the data store is readable/flushable regardless of in-flight navigation, and
+    // a bounded teardown query must not stall behind a settling page). Self-gating in the backend on
+    // DRIFTSTACK_DATA_DIR (inert — a no-op ACK — for any non-fleet/non-profile session).
+    if (!findSessionOrCompleteWithError(*parameters, completionHandler))
+        return;
+
+    m_session->driftstackProfileDumpNow(WTF::move(completionHandler));
 }
 
 void WebDriverService::getNamedCookie(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)

@@ -2936,6 +2936,33 @@ void Session::driftstackSetCookiesAllDomains(Ref<JSON::Array>&& cookies, Functio
     });
 }
 
+void Session::driftstackProfileDumpNow(Function<void(CommandResult&&)>&& completionHandler)
+{
+    // Driftstack W2985 (profile data-loss ROOT fix): forward to the UIProcess backend, which FLUSHES the
+    // per-session WKWebsiteDataStore to disk (cookies + localStorage) and writes a COMPLETE .driftstack-dump.json
+    // at $DRIFTSTACK_DATA_DIR, then returns the cookie count written. The harness calls this on the live WD
+    // bridge BEFORE the graceful teardown SIGTERM so it reads a FRESH complete dump (eliminating the torn/empty
+    // dump race the W2977 degenerate-dump guard only defends the symptom of). No handleUserPrompts wrapper:
+    // flushing/writing the store does not depend on a settled page, and a bounded teardown query must not dismiss
+    // a dialog. Backend is a no-op ACK (count -1) when DRIFTSTACK_DATA_DIR is unset (non-fleet/non-profile).
+    if (!m_currentBrowsingContext) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::NoSuchWindow));
+        return;
+    }
+
+    auto parameters = JSON::Object::create();
+    parameters->setString("browsingContextHandle"_s, uncheckedTopLevelBrowsingContext());
+    m_host->sendCommandToBackend("profileDumpNow"_s, WTF::move(parameters), [protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)](SessionHost::CommandResponse&& response) mutable {
+        if (response.isError || !response.responseObject) {
+            completionHandler(CommandResult::fail(WTF::move(response.responseObject)));
+            return;
+        }
+        // Surface the backend ACK verbatim ({ cookieCount, wrote } — `wrote` false ⇒ inert/no DATA_DIR) so the
+        // harness can log/assert a complete dump was written before it SIGTERMs.
+        completionHandler(CommandResult::success(WTF::move(response.responseObject)));
+    });
+}
+
 void Session::getNamedCookie(const String& name, Function<void(CommandResult&&)>&& completionHandler)
 {
     getAllCookies([name, completionHandler = WTF::move(completionHandler)](CommandResult&& result) mutable {

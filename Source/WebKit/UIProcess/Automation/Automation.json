@@ -817,6 +817,18 @@
             "async": true
         },
         {
+            "name": "profileDumpNow",
+            "description": "Driftstack W2985 (profile data-loss ROOT fix — teardown handshake): synchronously FLUSH the per-session WKWebsiteDataStore to disk (cookies + localStorage) and write a COMPLETE .driftstack-dump.json at $DRIFTSTACK_DATA_DIR, then ACK with the cookie count written. The harness calls this on the live WD bridge BEFORE the graceful teardown SIGTERM so it reads a fresh complete dump (no torn/empty-dump race). A no-op ACK (wrote=false) when DRIFTSTACK_DATA_DIR is unset.",
+            "parameters": [
+                { "name": "browsingContextHandle", "$ref": "BrowsingContextHandle", "description": "Any handle in the session; used only to resolve the WKWebsiteDataStore." }
+            ],
+            "returns": [
+                { "name": "wrote", "type": "boolean", "description": "True iff a dump file was written (DRIFTSTACK_DATA_DIR set); false ⇒ inert no-op." },
+                { "name": "cookieCount", "type": "integer", "description": "Number of cookies written to the dump (0 when wrote is false)." }
+            ],
+            "async": true
+        },
+        {
             "name": "deleteSingleCookie",
             "description": "Deletes a cookie with the given name if visible to the specified browsing context.",
             "parameters": [
