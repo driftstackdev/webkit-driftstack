@@ -109,10 +109,12 @@
 #include <WebCore/UIEventWithKeyState.h>
 #include <WebCore/Widget.h>
 #include <WebCore/WindowFeatures.h>
+#include <wtf/HexNumber.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/ProcessID.h>
 #include <wtf/ProcessPrivilege.h>
 #include <wtf/RuntimeApplicationChecks.h>
+#include <wtf/text/StringBuilder.h>
 
 #if ENABLE(FULLSCREEN_API)
 #include <WebCore/DocumentFullscreen.h>
@@ -134,6 +136,112 @@
 
 namespace WebKit {
 using namespace WebCore;
+
+#if PLATFORM(DRIFTSTACK)
+// W2962 (founder failure-UX audit #2/#4): emit a parseable nav-lifecycle token on stderr so the Mac
+// fleet harness can surface IN-PAGE navigation failures (a customer clicking a link / a JS-or-meta
+// redirect / a form submit that hits a proxy/TLS/DNS/connection error) as a GUI page_state overlay.
+// Today page_state is ONLY wired to harness-MEDIATED navigates (IntentExecutor navigate/back-forward/
+// URL-bar); an in-page failure leaves the GUI on a bare WebKit error page / white screen with no
+// overlay. The harness already drains the fork's stderr for DRIFTSTACK_PAINT_READY; this mirrors that
+// channel exactly (a greppable `DRIFTSTACK_NAV_STATE {json}` line) and is translated to the EXISTING
+// HarnessOutbound.PageState contract harness-side. Default-OFF (DRIFTSTACK_NAV_PAGESTATE) -> byte-
+// identical to today. NON-fingerprint: a behavioral/observability channel only -- no render/JS surface
+// is touched (the token goes to stderr, never the page).
+static bool driftstackNavPageStateEnabled()
+{
+    // Memoized: the gate is process-lifetime stable (a session is one fork process), and this is
+    // consulted only on the MAIN frame's nav lifecycle (cold path), never per-frame/per-call.
+    static bool s_enabled = [] {
+        const char* env = getenv("DRIFTSTACK_NAV_PAGESTATE");
+        return env && env[0] && env[0] != '0';
+    }();
+    return s_enabled;
+}
+
+// Map a WebCore::ResourceError (its NSURLErrorDomain / CFNetwork errorCode) to the harness's page-state
+// error-kind wire enum: http | tls | dns | net | timeout. The harness's IntentExecutor.NavErrorKind
+// mirrors this exact set; classifyForkNavError(_:) consumes the string. Conservative: an unrecognized
+// code collapses to the generic `net` (never invents tls/dns/http).
+static ASCIILiteral driftstackNavErrorKind(const ResourceError& error)
+{
+    int code = error.errorCode();
+    // NSURLErrorDomain / kCFErrorDomainCFNetwork share the negative code space below.
+    switch (code) {
+    case -1001: // NSURLErrorTimedOut
+        return "timeout"_s;
+    case -1003: // NSURLErrorCannotFindHost
+    case -1006: // NSURLErrorDNSLookupFailed
+        return "dns"_s;
+    case -1200: // NSURLErrorSecureConnectionFailed
+    case -1201: // NSURLErrorServerCertificateHasBadDate
+    case -1202: // NSURLErrorServerCertificateUntrusted
+    case -1203: // NSURLErrorServerCertificateHasUnknownRoot
+    case -1204: // NSURLErrorServerCertificateNotYetValid
+    case -1205: // NSURLErrorClientCertificateRejected
+    case -1206: // NSURLErrorClientCertificateRequired
+        return "tls"_s;
+    case -1004: // NSURLErrorCannotConnectToHost
+    case -1005: // NSURLErrorNetworkConnectionLost
+    case -1009: // NSURLErrorNotConnectedToInternet
+        return "net"_s;
+    default:
+        break;
+    }
+    // SSL handshake errors surface in the kCFErrorDomainCFNetwork SSL band (-9800.. -9849).
+    if (code <= -9800 && code >= -9849)
+        return "tls"_s;
+    return "net"_s;
+}
+
+// Minimal RFC-8259 string escaper for the token's JSON payload (the URL/title can carry quotes,
+// backslashes, control chars). Only the chars JSON requires are escaped; everything else passes
+// through (UTF-8 is valid JSON). Bounded by the caller (URL/title are length-capped by WebKit).
+static void driftstackAppendJSONString(StringBuilder& out, const String& value)
+{
+    out.append('"');
+    for (unsigned i = 0; i < value.length(); ++i) {
+        UChar c = value[i];
+        switch (c) {
+        case '"': out.append("\\\""_s); break;
+        case '\\': out.append("\\\\"_s); break;
+        case '\n': out.append("\\n"_s); break;
+        case '\r': out.append("\\r"_s); break;
+        case '\t': out.append("\\t"_s); break;
+        case '\b': out.append("\\b"_s); break;
+        case '\f': out.append("\\f"_s); break;
+        default:
+            if (c < 0x20)
+                out.append("\\u"_s, hex(c, 4, Lowercase));
+            else
+                out.append(c);
+            break;
+        }
+    }
+    out.append('"');
+}
+
+// Emit one nav-lifecycle token. `state` in loading | loaded | errored. `errorKind`/`title` are optional
+// (empty -> omitted). One line, flushed, mirroring the DRIFTSTACK_PAINT_READY contract; the harness's
+// BrowserProcess.parseNavStateMarker parses exactly this shape.
+static void driftstackEmitNavState(ASCIILiteral state, const String& url, const String& title, ASCIILiteral errorKind)
+{
+    StringBuilder json;
+    json.append("{\"state\":\""_s, state, "\""_s);
+    json.append(",\"url\":"_s);
+    driftstackAppendJSONString(json, url);
+    if (errorKind.length()) {
+        json.append(",\"errorKind\":\""_s, errorKind, "\""_s);
+    }
+    if (!title.isEmpty()) {
+        json.append(",\"title\":"_s);
+        driftstackAppendJSONString(json, title);
+    }
+    json.append('}');
+    fprintf(stderr, "DRIFTSTACK_NAV_STATE %s\n", json.toString().utf8().data());
+    fflush(stderr);
+}
+#endif // PLATFORM(DRIFTSTACK)
 
 WebLocalFrameLoaderClient::WebLocalFrameLoaderClient(LocalFrame& localFrame, FrameLoader& loader, Ref<WebFrame>&& frame, ScopeExit<Function<void()>>&& invalidator)
     : LocalFrameLoaderClient(loader)
@@ -586,6 +694,17 @@ void WebLocalFrameLoaderClient::dispatchDidStartProvisionalLoad()
     webPage->findController().hideFindUI();
     webPage->sandboxExtensionTracker().didStartProvisionalLoad(m_frame.ptr());
 
+#if PLATFORM(DRIFTSTACK)
+    // W2962: nav-lifecycle -> page_state (MAIN FRAME ONLY). Loading begins for a top-level navigation,
+    // including IN-PAGE ones (link click / JS-or-meta redirect / form submit) the harness never mediated.
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled()) {
+        String navURL;
+        if (RefPtr pl = m_localFrame->loader().provisionalDocumentLoader())
+            navURL = pl->url().string();
+        driftstackEmitNavState("loading"_s, navURL, String(), ASCIILiteral());
+    }
+#endif
+
     RefPtr<API::Object> userData;
 
     // Notify the bundle client.
@@ -669,6 +788,14 @@ void WebLocalFrameLoaderClient::dispatchDidCommitLoad(std::optional<HasInsecureC
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidCommitLoadForFrame(frame->frameID(), frame->info(), documentLoader->request(), documentLoader->navigationID(), documentLoader->response().mimeType(), m_frameHasCustomContentProvider, m_localFrame->loader().loadType(), certificateInfo, usedLegacyTLS, wasPrivateRelayed, documentLoader->response().proxyName(), documentLoader->response().source(), m_localFrame->document()->isPluginDocument(), *hasInsecureContent, documentLoader->mouseEventPolicy(), *coreLocalFrame->frameDocumentSecurityPolicy(),  UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get())));
     webPage->didCommitLoad(m_frame.ptr());
+
+#if PLATFORM(DRIFTSTACK)
+    // W2962: the navigation committed (a new document is live) -> refresh the page_state URL early so the
+    // GUI's live URL bar tracks redirects before the page finishes loading. State is `loaded` (the same
+    // terminal contract the harness navigate path uses); the final title arrives at dispatchDidFinishLoad.
+    if (frame->isMainFrame() && driftstackNavPageStateEnabled())
+        driftstackEmitNavState("loaded"_s, frame->url().string(), documentLoader->title().string, ASCIILiteral());
+#endif
 }
 
 void WebLocalFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceError& error, WillContinueLoading willContinueLoading, WillInternallyHandleFailure willInternallyHandleFailure)
@@ -718,6 +845,21 @@ void WebLocalFrameLoaderClient::dispatchDidFailProvisionalLoad(const ResourceErr
 
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidFailProvisionalLoadForFrame(m_frame->info(), request, navigationID, m_localFrame->loader().provisionalLoadErrorBeingHandledURL().string(), error, willContinueLoading, UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get()), willInternallyHandleFailure));
+
+#if PLATFORM(DRIFTSTACK)
+    // W2962: a top-level provisional load FAILED (proxy/TLS/DNS/connection error) -> emit an `errored`
+    // page_state so the GUI renders its failure overlay instead of leaving the customer on a bare WebKit
+    // error page / white screen. errorKind is classified from the NSURLError/CFNetwork code. Skipped for a
+    // cancellation (error.isCancellation(), e.g. a user-initiated stop or a follow-on navigation supersede)
+    // and when the load will simply continue (willContinueLoading) -- neither is a customer-visible failure.
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled()
+        && willContinueLoading == WillContinueLoading::No && !error.isCancellation()) {
+        String failURL = error.failingURL().string();
+        if (failURL.isEmpty())
+            failURL = m_localFrame->loader().provisionalLoadErrorBeingHandledURL().string();
+        driftstackEmitNavState("errored"_s, failURL, String(), driftstackNavErrorKind(error));
+    }
+#endif
 }
 
 void WebLocalFrameLoaderClient::dispatchDidFailLoad(const ResourceError& error)
@@ -788,6 +930,13 @@ void WebLocalFrameLoaderClient::dispatchDidFinishLoad()
     webPage->send(Messages::WebPageProxy::DidFinishLoadForFrame(m_frame->frameID(), m_frame->info(), documentLoader->request(), documentLoader->navigationID(), UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get()), WallTime::now()));
 
     webPage->didFinishLoad(m_frame);
+
+#if PLATFORM(DRIFTSTACK)
+    // W2962: the main frame finished loading -> emit the terminal `loaded` page_state with the final title
+    // (clears any prior loading/errored overlay + populates the GUI URL bar title).
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled())
+        driftstackEmitNavState("loaded"_s, m_frame->url().string(), documentLoader->title().string, ASCIILiteral());
+#endif
 }
 
 void WebLocalFrameLoaderClient::completePageTransitionIfNeeded()
