@@ -39,6 +39,7 @@ OBJC_CLASS NSMutableURLRequest;
 
 namespace WebCore {
 class RegistrableDomain;
+class SecurityOrigin;
 class SharedBuffer;
 enum class AdvancedPrivacyProtections : uint16_t;
 }
@@ -86,6 +87,15 @@ public:
     std::optional<WebCore::FrameIdentifier> frameID() const final { return m_frameID; }
     std::optional<WebCore::PageIdentifier> pageID() const final { return m_pageID; }
     std::optional<WebPageProxyIdentifier> webPageProxyID() const final { return m_webPageProxyID; }
+
+#if PLATFORM(DRIFTSTACK)
+    // BUG-42 (#42) — the initiating document's origin (NetworkLoadParameters::sourceOrigin).
+    // The PathB-v2 custom-TLS loader needs an AUTHORITATIVE cross-origin signal that does not
+    // depend on the lazily-synced ResourceRequest firstPartyForCookies (which empirically reads
+    // empty on the loader's request copy for subresource trackers → isThirdParty() false-negatives).
+    // sourceOrigin is set unconditionally in the ctor and is stable. Main-thread only.
+    WebCore::SecurityOrigin* driftstackSourceOrigin() const { return m_sourceOrigin.get(); }
+#endif
 
     bool isInitiatedByDedicatedWorker() const final { return m_isInitiatedByDedicatedWorker; }
 

@@ -84,6 +84,8 @@
 #import <WebCore/SharedBuffer.h>
 // PathB v2 ITP: cookie filtering + 3rd-party referer downgrade (match real iPhone NSURLSession path).
 #import <WebCore/NetworkStorageSession.h>   // cookieRequestHeaderFieldValue + ApplyTrackingPrevention/IsKnownCrossSiteTracker enums
+#import <WebCore/RegistrableDomain.h>       // BUG-42 (#42) areRegistrableDomainsEqual — robust cross-origin (3p) detection on the PathB-v2 loader
+#import <WebCore/SecurityOrigin.h>          // BUG-42 (#42) NetworkLoadParameters::sourceOrigin → authoritative initiator origin (firstParty fallback)
 #import <WebCore/SameSiteInfo.h>            // SameSiteInfo::create(ResourceRequest&)
 #import <WebCore/CookieJar.h>               // full enum class IncludeSecureCookies { No, Yes }
 #import "NetworkProcess.h"                  // shouldRelaxThirdPartyCookieBlockingForPage (precedent: NetworkDataTask.cpp:33)
@@ -749,6 +751,73 @@ static Seconds driftstackThirdPartyRetryBudget()
     return budget;
 }
 
+// BUG-42 (#42) — robust cross-origin (third-party) determination for the PathB-v2 loader.
+// `ResourceRequestBase::isThirdParty()` is computed live as `url() vs firstPartyForCookies()`.
+// On the custom-TLS egress path the loader's request copy empirically reads an EMPTY
+// firstPartyForCookies for subresource trackers (the lazy Cocoa platform-sync of mainDocumentURL
+// doesn't always carry through to the loader's copy), so `isThirdParty()` false-NEGATIVES on a
+// genuine cross-origin tracker (westernunion's quantummetric/facebook/amplitude/optimizely/bing/
+// pubmatic) → the 8s 3p fast-fail never engages and each tracker burns the full 8-attempt/20s
+// budget → the 90s page hang. This recovers the signal from BOTH available sources and treats
+// the request as third-party if EITHER says cross-origin: (1) the request's own firstParty (when
+// populated), and (2) the initiating document's origin (NetworkLoadParameters::sourceOrigin —
+// set unconditionally in the NetworkDataTaskCocoa ctor, never lazily synced). Conservative: only
+// returns true when a non-empty reference origin's registrable domain DIFFERS from the request
+// URL's. An unknown/empty/opaque reference → false (first-party-safe; keeps the full retry budget).
+// MAIN THREAD ONLY (touches the request + task). Caller gates on the egress-reliability flag.
+static bool driftstackRequestIsThirdParty(const WebCore::ResourceRequest& request, WebCore::SecurityOrigin* sourceOrigin)
+{
+    const URL& url = request.url();
+
+    // (1) The request's own first-party-for-cookies, when the platform-sync populated it.
+    const URL& firstParty = request.firstPartyForCookies();
+    if (!firstParty.isNull() && !firstParty.isEmpty() && firstParty.isValid()) {
+        if (!WebCore::areRegistrableDomainsEqual(url, firstParty))
+            return true;
+        // firstParty present AND same-site → trust it as first-party (don't override below).
+        return false;
+    }
+
+    // (2) Fallback: the initiating document's origin (authoritative, ctor-set, non-lazy).
+    if (sourceOrigin && !sourceOrigin->isOpaque()) {
+        URL originURL = sourceOrigin->toURL();
+        if (!originURL.isNull() && !originURL.isEmpty() && originURL.isValid())
+            return !WebCore::areRegistrableDomainsEqual(url, originURL);
+    }
+
+    // No usable reference origin → first-party-safe (keep the full per-request budget).
+    return false;
+}
+
+// BUG-42 (#42) — derive a stable per-PAGE key for Fix6's aggregate deadline. The preferred key is
+// the WebPageProxyIdentifier (task->webPageProxyID()); but it empirically reads 0 on the PathB-v2
+// loader path for the subresource storm where the retry chains actually live, so Fix6 never
+// stamps/honours a page deadline. Fall back to a hash of the page's first-party/source-origin
+// registrable domain so every subresource of the SAME page still shares one aggregate deadline.
+// Returns 0 only when neither a page-proxy id NOR any reference origin is available (then Fix6
+// opts out for that request, as before). MAIN THREAD ONLY. Caller gates on the egress flag.
+static uint64_t driftstackPageKeyFor(uint64_t webPageProxyKey, const WebCore::ResourceRequest& request, WebCore::SecurityOrigin* sourceOrigin)
+{
+    if (webPageProxyKey)
+        return webPageProxyKey;
+
+    // Fall back to the page's registrable domain (first-party preferred, source-origin next).
+    // High bit set so a domain-hash key can never collide with a real WebPageProxyIdentifier
+    // (those are small monotonic counters), keeping the two keyspaces disjoint in the shared map.
+    String registrableDomain;
+    const URL& firstParty = request.firstPartyForCookies();
+    if (!firstParty.isNull() && !firstParty.isEmpty() && firstParty.isValid())
+        registrableDomain = WebCore::RegistrableDomain(firstParty).string();
+    else if (sourceOrigin && !sourceOrigin->isOpaque()) {
+        URL originURL = sourceOrigin->toURL();
+        if (!originURL.isNull() && !originURL.isEmpty() && originURL.isValid())
+            registrableDomain = WebCore::RegistrableDomain(originURL).string();
+    }
+    if (registrableDomain.isEmpty())
+        return 0;
+    return (static_cast<uint64_t>(registrableDomain.hash()) | (1ULL << 63));
+}
+
 static Lock& driftstackH2PoolLock()
 {
     static NeverDestroyed<Lock> lock;
@@ -1310,14 +1379,42 @@ void DriftstackNetworkLoader::resume()
     // BUG-42 Fix #4 + #6 (egress-reliability, gated) — capture the per-PAGE key and the
     // third-party flag HERE, on the main thread, while m_request + the task are safe to
     // touch (webPageProxyID() / isThirdParty() are not thread-safe on loaderQueue). Both
-    // feed the retry-budget decision below. pageKey 0 = no page-proxy id (no page-level
-    // bound applied). Computed unconditionally (cheap); only CONSUMED when the gate is on.
-    uint64_t pageKey = 0;
+    // feed the retry-budget decision below. Computed unconditionally (cheap); only CONSUMED
+    // when the gate is on.
+    //
+    // #42 ROOT-CAUSE FIX: the prior `m_request.isThirdParty()` (= url vs firstPartyForCookies)
+    // and `webPageProxyID()` both empirically read FALSE/0 on the PathB-v2 custom-TLS loader for
+    // the westernunion 3p-tracker storm (firstParty empty on the loader's request copy; page-proxy
+    // id 0 on the subresource path) → both Fix4's 8s 3p fast-fail and Fix6's per-page deadline
+    // collapsed to gate-OFF behaviour. Recover both signals from the initiating document's origin
+    // (NetworkLoadParameters::sourceOrigin — ctor-set, never lazily synced) as a fallback.
+    uint64_t webPageProxyKey = 0;
+    WebCore::SecurityOrigin* sourceOriginPtr = nullptr;
     if (RefPtr task = protectedTask()) {
         if (auto id = task->webPageProxyID())
-            pageKey = id->toUInt64();
+            webPageProxyKey = id->toUInt64();
+#if PLATFORM(DRIFTSTACK)
+        sourceOriginPtr = task->driftstackSourceOrigin();
+#endif
     }
-    const bool requestIsThirdParty = m_request.isThirdParty();
+    const bool requestIsThirdParty = driftstackRequestIsThirdParty(m_request, sourceOriginPtr);
+    const uint64_t pageKey = driftstackPageKeyFor(webPageProxyKey, m_request, sourceOriginPtr);
+    if (driftstackEgressReliabilityEnabled()) {
+        // One-time-per-process diagnostic so the #42 canary can confirm the predicates now FIRE
+        // (and which source supplied them). Gated → byte-identical no-op when egress-reliability off.
+        static bool loggedPredicatesOnce = false;
+        if (!loggedPredicatesOnce) {
+            loggedPredicatesOnce = true;
+            WTFLogAlways("[BUG-42/Fix4+6] predicate-capture: requestIsThirdParty=%d pageKey=%llu (webPageProxyKey=%llu rawIsThirdParty=%d firstPartyEmpty=%d sourceOrigin=%d) url=%s",
+                requestIsThirdParty,
+                static_cast<unsigned long long>(pageKey),
+                static_cast<unsigned long long>(webPageProxyKey),
+                m_request.isThirdParty(),
+                (m_request.firstPartyForCookies().isNull() || m_request.firstPartyForCookies().isEmpty()),
+                !!sourceOriginPtr,
+                url.host().toString().utf8().data());
+        }
+    }
     // Wave 29-499.321 — request-body (POST/PUT) support. Flatten the FormData to
     // bytes on the calling thread (FormData isn't thread-safe to touch off the
     // main thread). driftstackHttp2Execute already emits request.body as an h2
