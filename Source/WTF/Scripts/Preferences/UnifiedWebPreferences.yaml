@@ -9383,6 +9383,26 @@ WebAnimationsCustomFrameRateEnabled:
     WebCore:
       default: false
 
+# Driftstack (sweep whag2hew5): Animation.prototype.overallProgress landed at
+# Safari 26.2. Real iPhone serves it undefined at 18.6 AND at 26.0/26.0.1, function
+# at 26.2+. The IDL attribute was ungated (always exposed) so it leaked on 18.x and
+# 26.0/26.1. Gate the attribute via [EnabledBySetting=WebAnimationsOverallProgressEnabled];
+# default true so the 26.4 launch target and unset-env keep it. WebPage::updatePreferences
+# keys it off (driftstackArchetypeSafariAtLeast(26,2)) for <26.2 archetypes.
+WebAnimationsOverallProgressEnabled:
+  type: bool
+  status: stable
+  category: animation
+  humanReadableName: "Web Animations overallProgress"
+  humanReadableDescription: "Expose Animation.prototype.overallProgress"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 WebArchiveDebugModeEnabled:
   type: bool
   status: embedder

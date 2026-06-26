@@ -5652,6 +5652,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     settings.setOriginAPIEnabled(driftstackArchetypeSafariAtLeast(26, 5));
     settings.setHTMLEnhancedSelectEnabled(false);
     settings.setHTMLEnhancedSelectParsingEnabled(false);
+    // Sweep whag2hew5 (2026-06-26): Animation.prototype.overallProgress landed at Safari 26.2.
+    // Real iPhone serves it undefined at 18.6 AND at 26.0/26.0.1, function at 26.2+. The IDL
+    // attribute was ungated (always exposed), leaking on <26.2 (18.x + 26.0/26.1). Gate it via
+    // [EnabledBySetting=WebAnimationsOverallProgressEnabled] (YAML default true) and version-key
+    // it here exactly like OriginAPIEnabled: enabled only for >=26.2 archetypes, so the 26.4
+    // launch target keeps it and <26.2 archetypes report it undefined.
+    settings.setWebAnimationsOverallProgressEnabled(driftstackArchetypeSafariAtLeast(26, 2));
     // W546 (#17): ToggleEvent.prototype.source (STP 237) + SVGAnimationElement.prototype.onend
     // ("added the missing onend handler") are Safari-26.5-era prototype members — ABSENT real 26.4,
     // PRESENT real 26.5 (verified vs real iPhone-17, W533/W534). Version-key like Origin so the fork
