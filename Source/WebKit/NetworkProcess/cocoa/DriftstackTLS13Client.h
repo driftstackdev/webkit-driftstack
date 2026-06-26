@@ -29,6 +29,7 @@
 #include "DriftstackTLS13KeySchedule.h"
 #include <memory>
 #include <stdint.h>
+#include <wtf/MonotonicTime.h>   // BUG-42 Fix #4: total handshake wall-clock deadline
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 #include <Security/Security.h>   // W2202 L3: SecCertificateRef for the retained leaf cert
@@ -73,6 +74,18 @@ public:
 private:
     int m_fd { -1 };
     bool m_appReadBlockingRestored { false };  // Wave .352 — reset handshake recv-timeout once on first app read
+
+    // BUG-42 Fix #4 (egress-reliability, gated) — TOTAL handshake wall-clock deadline.
+    // The per-record SO_RCVTIMEO (6s, connect():116) RESETS on every record that has
+    // data, so a slow/dribbling origin can pin the loaderQueue worker thread FAR past
+    // one timeout (record-after-record, each just under 6s) — defeating Fix #2's whole
+    // point of freeing the worker fast. Stamp `now + budget` once at the top of
+    // connect(); the per-record read loops bail when it's exceeded, turning a slow
+    // origin into a clean fast failure (→ a fresh-exit retry / page settle) instead of
+    // an indefinitely-held worker. Null (default-constructed) when the gate is off →
+    // every deadline check is a no-op → byte-identical to the prior code.
+    MonotonicTime m_handshakeDeadline;
+    bool handshakeDeadlineExceeded() const { return m_handshakeDeadline && MonotonicTime::now() >= m_handshakeDeadline; }
     String m_sniHostname;
     String m_selectedALPN;
     String m_errorMessage;

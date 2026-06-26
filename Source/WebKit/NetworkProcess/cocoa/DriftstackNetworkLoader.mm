@@ -553,6 +553,11 @@ RefPtr<NetworkDataTaskCocoa> DriftstackNetworkLoader::protectedTask() const
     return m_task.get();
 }
 
+// BUG-42 Fix #2 — forward decl: the admission semaphore's definition lives below (next
+// to the handshake-cap semaphore), but the acquire/release member definitions just below
+// reference it.
+static dispatch_semaphore_t driftstackRequestAdmissionSemaphore();
+
 DriftstackNetworkLoader::~DriftstackNetworkLoader()
 {
     // Wave 29-499.272 — DON'T close m_fd here. The fd is owned by the
@@ -568,6 +573,44 @@ DriftstackNetworkLoader::~DriftstackNetworkLoader()
     // the lifetime through this handle. Cancellation just sets m_cancelled
     // which the dispatch block re-checks; the actual TCP teardown happens
     // when socks5Client falls out of scope.
+
+    // BUG-42 Fix #2 — final safety-net release of the concurrent-request admission slot.
+    // The terminal path (tryBeginCompletion) and cancel() normally release it, but a
+    // loader can be dropped on a path that completes neither (e.g. the m_cancelled
+    // early-return at the top of the dispatch block, or a task-gone early return that
+    // doesn't begin completion). Releasing here guarantees no slot is ever leaked across
+    // the loader's whole lifetime. Idempotent: only signals if a slot is still held.
+    releaseAdmissionSlot();
+}
+
+// BUG-42 Fix #2 — MAIN-THREAD non-blocking try-acquire of a process-wide admission slot.
+// Returns true (slot now held) or false (cap saturated → caller should defer, never
+// block the main thread). Acquired ONCE per logical request: the m_admissionSlotHeld
+// guard means retries/redirects that re-enter resume() keep the slot they already hold
+// and never double-acquire. Caller has confirmed the egress-reliability gate is on.
+bool DriftstackNetworkLoader::tryAcquireAdmissionSlot()
+{
+    if (m_admissionSlotHeld.load())
+        return true; // already admitted (a retry/redirect re-resume) — keep the held slot
+    // Non-blocking: DISPATCH_TIME_NOW try-wait. A slot held by THIS process's other
+    // in-flight requests means we bail to a deferred re-resume rather than parking here.
+    if (dispatch_semaphore_wait(driftstackRequestAdmissionSemaphore(), DISPATCH_TIME_NOW) == 0) {
+        m_admissionSlotHeld.store(true);
+        return true;
+    }
+    return false;
+}
+
+// BUG-42 Fix #2 — idempotent release. CAS true→false so exactly one of {terminal
+// completion, cancel, destructor} signals the semaphore for a given loader, regardless
+// of which fires first or how many fire. Safe from any thread (the signal hop and the
+// terminal completion both originate on loaderQueue; cancel/destructor on the main
+// thread). Gate-off no-op: m_admissionSlotHeld is never set when the gate is off.
+void DriftstackNetworkLoader::releaseAdmissionSlot()
+{
+    bool expected = true;
+    if (m_admissionSlotHeld.compare_exchange_strong(expected, false))
+        dispatch_semaphore_signal(driftstackRequestAdmissionSemaphore());
 }
 
 // Wave 29-499.321 — h3-capable origin registry (RFC 7838 Alt-Svc). A host is
@@ -644,6 +687,42 @@ static bool driftstackEgressReliabilityEnabled()
 static dispatch_semaphore_t driftstackHandshakeCapSemaphore()
 {
     static dispatch_semaphore_t sem = dispatch_semaphore_create(10);
+    return sem;
+}
+
+// BUG-42 Fix #2 — process-wide concurrent-REQUEST admission semaphore (the durable,
+// structural bound). UNLIKE the handshake cap above (Fix #4), which bounds only the
+// fresh-connect+TLS portion FROM INSIDE an already-dispatched block — so it wastes a
+// committed GCD worker thread parked in dispatch_semaphore_wait while throttled — this
+// cap is acquired on the MAIN thread BEFORE the dispatch_async submission. Each
+// PathB-v2 request pins ONE GCD worker for its ENTIRE blocking life (SOCKS5 + ML-KEM
+// TLS + the ≤60s h2/h3 response wait), so the ~64-worker libdispatch ceiling otherwise
+// becomes a hard total-in-flight-request cap: a many-origin page (browserleaks
+// DNS-leak-test = dozens of unique subdomains; westernunion = a swarm of distinct 3p
+// origins) enqueues dozens-to-hundreds of blocking blocks, ~64 workers park, the
+// concurrent loaderQueue STOPS scheduling new blocks, and subresources never even start
+// their connect (the founder's stall). Bounding admitted in-flight requests to 40 — below
+// the ~64 ceiling with headroom — guarantees the queue always has spare workers to keep
+// scheduling, so the swarm can never starve itself. On saturation the caller does NOT
+// block (resume() runs on the main thread): it re-schedules itself on the main queue
+// after a short backoff, so no worker and no main-thread stall while waiting. Pure
+// admission pacing: changes no wire bytes (ClientHello/cipher/curve/ALPN/header order),
+// no routing — every request still egresses identically through the same gost relay.
+// Tunable via DRIFTSTACK_EGRESS_REQUEST_CAP. Gate-off no-op: acquire/release are skipped
+// entirely when DRIFTSTACK_EGRESS_RELIABILITY is unset (m_admissionSlotHeld stays false),
+// so the path is byte-identical to the prior code.
+static dispatch_semaphore_t driftstackRequestAdmissionSemaphore()
+{
+    static dispatch_semaphore_t sem = [] {
+        long cap = 40;
+        if (const char* e = getenv("DRIFTSTACK_EGRESS_REQUEST_CAP")) {
+            long parsed = atol(e);
+            if (parsed >= 4 && parsed <= 60)
+                cap = parsed;
+        }
+        WTFLogAlways("[BUG-42/Fix2] request-admission cap = %ld (below the ~64 GCD ceiling)", cap);
+        return dispatch_semaphore_create(cap);
+    }();
     return sem;
 }
 
@@ -1357,6 +1436,41 @@ String DriftstackNetworkLoader::driftstackITPCookieHeader()
 
 void DriftstackNetworkLoader::resume()
 {
+    // BUG-42 Fix #2 (egress-reliability, gated) — process-wide concurrent-REQUEST
+    // admission. MUST run FIRST, before any per-call work below (cookie header, body
+    // flatten, ++m_attempt, retry-deadline stamping): on saturation we defer the WHOLE
+    // resume() to the main queue, and the deferred re-entry must NOT have consumed a
+    // retry attempt or re-flattened the body. resume() always runs on the main thread
+    // (initial NetworkDataTaskCocoa::resume; retry/redirect re-resume via the main
+    // queue), so a non-blocking try-acquire here can never stall a GCD worker — and we
+    // only submit the blocking dispatch_async block (below) once a slot is HELD, so the
+    // ~64-worker GCD pool can never be saturated past the cap. A retry/redirect that
+    // re-enters resume() already holds its slot (m_admissionSlotHeld) and proceeds
+    // immediately. Gate-off: skipped entirely → byte-identical to the prior code.
+    if (driftstackEgressReliabilityEnabled() && !m_cancelled) {
+        if (!tryAcquireAdmissionSlot()) {
+            // Cap saturated. Don't block the main thread and don't pin a GCD worker:
+            // re-schedule this resume() after a short backoff so an in-flight request
+            // can release its slot first. Bound the deferral loop (50 × ~20ms ≈ 1s) so
+            // a persistently-wedged cap degrades to proceed-without-a-slot (prior
+            // unbounded behaviour for this ONE request) rather than starving forever.
+            constexpr int kMaxAdmissionDeferrals = 50;
+            if (m_admissionDeferrals < kMaxAdmissionDeferrals) {
+                ++m_admissionDeferrals;
+                Ref<DriftstackNetworkLoader> deferRef { *this };
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(20) * NSEC_PER_MSEC),
+                    dispatch_get_main_queue(), ^{
+                        if (!deferRef->m_cancelled) deferRef->resume();
+                    });
+                return;
+            }
+            WTFLogAlways("[BUG-42/Fix2] request-admission cap saturated >%dx — proceeding without a slot for %s",
+                kMaxAdmissionDeferrals, m_request.url().host().toString().utf8().data());
+            // fall through: proceed without a slot (m_admissionSlotHeld stays false → no
+            // release later for this request, and it doesn't count against the cap).
+        }
+    }
+
     // Capture request data on the calling thread; do network work async.
     URL url = m_request.url();
     String httpMethod = m_request.httpMethod();
@@ -2825,6 +2939,9 @@ void DriftstackNetworkLoader::cancel()
     // dispatch block. Don't close here (see ~ for explanation).
     m_cancelled = true;
     m_fd = -1;
+    // BUG-42 Fix #2 — a cancelled request will never reach tryBeginCompletion's
+    // terminal release, so free its admission slot now (idempotent). Gate-off no-op.
+    releaseAdmissionSlot();
 }
 
 void DriftstackNetworkLoader::suspend()

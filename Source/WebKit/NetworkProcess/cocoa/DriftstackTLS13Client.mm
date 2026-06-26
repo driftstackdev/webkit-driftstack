@@ -24,10 +24,12 @@
 
 #import <errno.h>
 #import <poll.h>
+#import <stdlib.h>   // BUG-42 Fix #4: atof for DRIFTSTACK_EGRESS_HANDSHAKE_DEADLINE_SECS
 #import <string.h>
 #import <sys/socket.h>
 #import <sys/time.h>
 #import <unistd.h>
+#import <wtf/Seconds.h>   // BUG-42 Fix #4: Seconds(double) ctor for the handshake deadline
 #import <wtf/Assertions.h>
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
@@ -115,6 +117,37 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
         struct timeval tv { .tv_sec = 6, .tv_usec = 0 };
         setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     }
+
+    // BUG-42 Fix #4 (egress-reliability, gated) — stamp a TOTAL handshake wall-clock
+    // deadline. The 6s SO_RCVTIMEO above bounds ONE quiet record, but it RESETS on every
+    // record that arrives, so a slow/dribbling origin (record-after-record, each just
+    // under 6s) pins this loaderQueue worker indefinitely — defeating Fix #2 (which frees
+    // a worker only when the request completes/errors). The per-record read loops below
+    // check handshakeDeadlineExceeded() and bail to a clean failure once this is past, so
+    // a stalled origin frees its worker fast (→ a fresh-exit retry, or the page settles).
+    // 12s default: comfortably above a healthy full PQ TLS-1.3 handshake on a slow proxy
+    // (a handful of records, ~1-3 proxy-RTTs) yet far below the per-request retry budget,
+    // so it only ever trips on a genuinely-wedged origin. Tunable via
+    // DRIFTSTACK_EGRESS_HANDSHAKE_DEADLINE_SECS. Gate-off: left null → every check no-ops.
+    {
+        static const bool s_reliabilityEnabled = [] {
+            const char* e = getenv("DRIFTSTACK_EGRESS_RELIABILITY");
+            return e && e[0] == '1';
+        }();
+        if (s_reliabilityEnabled) {
+            static const double s_budgetSecs = [] {
+                double secs = 12.0;
+                if (const char* e = getenv("DRIFTSTACK_EGRESS_HANDSHAKE_DEADLINE_SECS")) {
+                    double parsed = atof(e);
+                    if (parsed >= 3.0 && parsed <= 60.0)
+                        secs = parsed;
+                }
+                return secs;
+            }();
+            m_handshakeDeadline = MonotonicTime::now() + Seconds(s_budgetSecs);
+        }
+    }
+
     if (getenv("DRIFTSTACK_RTR_TRACE"))
         WTFLogAlways("[RTR fd=%d] host=%s connect()", m_fd, sniHostname.utf8().data());
 
@@ -678,6 +711,16 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
         if (++hsRecordsRead > 512) {
             m_errorMessage = "server sent >512 handshake records without Finished — rejecting (DoS defense)"_s;
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.3 handshake record cap (512) exceeded without Finished — rejecting (hostile-peer DoS defense)");
+            return false;
+        }
+        // BUG-42 Fix #4 (gated): total handshake wall-clock cap. The per-record 6s
+        // SO_RCVTIMEO resets on every record with data, so a slow/dribbling origin
+        // could pin this loaderQueue worker indefinitely; bail once the connect()-stamped
+        // deadline is past so the worker frees fast. Gate-off: m_handshakeDeadline is
+        // null → no-op.
+        if (handshakeDeadlineExceeded()) {
+            m_errorMessage = "TLS1.3 handshake exceeded total wall-clock deadline — rejecting (slow-origin worker-hold defense)"_s;
+            WTFLogAlways("[BUG-42/Fix4] TLS1.3 handshake total-deadline exceeded for %s — failing fast (frees the worker)", m_sniHostname.utf8().data());
             return false;
         }
         if (m_transcriptBytes.size() > (static_cast<size_t>(1) << 20)) {   // 1 MiB — vastly above any legit transcript
@@ -1277,6 +1320,14 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
         if (++t12RecordsRead > 512) {
             m_errorMessage = "TLS1.2: >512 handshake records without ServerHelloDone — rejecting (DoS defense)"_s;
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2208] TLS1.2 handshake record cap (512) exceeded without ServerHelloDone — rejecting (hostile-peer DoS defense)");
+            return false;
+        }
+        // BUG-42 Fix #4 (gated): total handshake wall-clock cap (mirrors the 1.3 loop) —
+        // a slow 1.2 server's resetting per-record timeout can't pin the worker past the
+        // connect()-stamped deadline. Gate-off: m_handshakeDeadline null → no-op.
+        if (handshakeDeadlineExceeded()) {
+            m_errorMessage = "TLS1.2 handshake exceeded total wall-clock deadline — rejecting (slow-origin worker-hold defense)"_s;
+            WTFLogAlways("[BUG-42/Fix4] TLS1.2 handshake total-deadline exceeded for %s — failing fast (frees the worker)", m_sniHostname.utf8().data());
             return false;
         }
         if (acc.size() > (static_cast<size_t>(1) << 20)) {   // 1 MiB — vastly above any legit 1.2 server flight

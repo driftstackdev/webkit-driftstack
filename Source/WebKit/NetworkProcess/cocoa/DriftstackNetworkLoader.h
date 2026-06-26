@@ -114,7 +114,35 @@ private:
     // terminal path through; all others no-op. Atomic because deliveries originate
     // on loaderQueue (concurrent) before being marshalled to the main runloop.
     std::atomic<bool> m_completionStarted { false };
-    bool tryBeginCompletion() { bool expected = false; return m_completionStarted.compare_exchange_strong(expected, true); }
+    bool tryBeginCompletion()
+    {
+        bool expected = false;
+        bool won = m_completionStarted.compare_exchange_strong(expected, true);
+        // BUG-42 Fix #2 (egress-reliability, gated) — the request reached its single
+        // terminal completion; free its process-wide admission slot NOW (before the
+        // delivery hop) so a waiting subresource can start immediately. Idempotent:
+        // releaseAdmissionSlot() only signals if this loader still holds a slot.
+        // Gate-off no-op: m_admissionSlotHeld is never set when the gate is off.
+        if (won)
+            releaseAdmissionSlot();
+        return won;
+    }
+
+    // BUG-42 Fix #2 (egress-reliability, gated) — process-wide concurrent-REQUEST
+    // admission. The defect: 1 in-flight PathB-v2 request == 1 GCD worker pinned for
+    // the WHOLE blocking lifecycle (SOCKS5 + ML-KEM TLS + h2/h3 response wait), so the
+    // ~64-thread libdispatch ceiling becomes a hard total-request cap — a many-origin
+    // swarm parks every worker, the concurrent loaderQueue stops scheduling NEW blocks,
+    // and subresources never start (the stall). m_admissionSlotHeld tracks whether THIS
+    // loader holds a slot; it's acquired ONCE per logical request in resume() (the first
+    // call; retries/redirects re-enter resume() but already hold it) BEFORE the
+    // dispatch_async submission, and released exactly once on the terminal path
+    // (tryBeginCompletion), on cancel(), or in the destructor (safety net). Atomic +
+    // CAS so the at-most-once release is race-free across the queue→main hop.
+    std::atomic<bool> m_admissionSlotHeld { false };
+    int m_admissionDeferrals { 0 };   // Fix #2: main-thread re-resume deferrals while the cap is saturated (bounded)
+    bool tryAcquireAdmissionSlot();   // main thread; non-blocking try-acquire. defn in .mm
+    void releaseAdmissionSlot();      // idempotent; safe from any thread. defn in .mm
 };
 
 } // namespace WebKit
