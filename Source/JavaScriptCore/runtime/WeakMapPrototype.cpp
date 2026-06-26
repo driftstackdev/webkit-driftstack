@@ -55,6 +55,13 @@ void WeakMapPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
     // Wave 29-407.4 (2026-05-20): real iPhone Safari 18.6 (Family A) does
     // NOT expose WeakMap.prototype.getOrInsert / getOrInsertComputed.
     // Skip registration for Family A archetypes.
+    //
+    // Sweep whag2hew5 (2026-06-26): capture-corrected version floor. These two
+    // methods land in Safari 26.2 — real iPhone serves them undefined at 18.6
+    // AND at 26.0/26.0.1, function at 26.2+. The skip-list ceiling was safari25_,
+    // so safari26_0/safari26_1 fell through and installed (a leak on the 26.0/26.1
+    // cohort). EXTENDED to also skip safari26_0/safari26_1 (i.e. skip when <26.2).
+    // Launch 26.4 is UNAFFECTED — it stays installed.
     static const bool s_skipWeakMapGetOrInsert = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
@@ -68,7 +75,9 @@ void WeakMapPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
             || sv.find("safari22_") != std::string_view::npos
             || sv.find("safari23_") != std::string_view::npos
             || sv.find("safari24_") != std::string_view::npos
-            || sv.find("safari25_") != std::string_view::npos;
+            || sv.find("safari25_") != std::string_view::npos
+            || sv.find("safari26_0") != std::string_view::npos
+            || sv.find("safari26_1") != std::string_view::npos;
     }();
     if (!s_skipWeakMapGetOrInsert) {
         JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("getOrInsert"_s, protoFuncWeakMapGetOrInsert, static_cast<unsigned>(PropertyAttribute::DontEnum), 2, ImplementationVisibility::Public);
