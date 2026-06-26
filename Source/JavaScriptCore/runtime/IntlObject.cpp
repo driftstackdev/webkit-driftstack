@@ -437,6 +437,12 @@ static void addScriptlessLocaleIfNeeded(LocaleSet& availableLocales, StringView 
     availableLocales.add(StringImpl::createStaticStringImpl(buffer.span()));
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Forward decl — defined below near the calendar/tz overrides; used by the Collator
+// available-locale set (intlCollatorAvailableLocales) which appears earlier in the file.
+static bool driftstackArchetypeSafariVersion(int& outMajor, int& outMinor);
+#endif
+
 const LocaleSet& intlAvailableLocales()
 {
     static LazyNeverDestroyed<LocaleSet> availableLocales;
@@ -591,6 +597,28 @@ const LocaleSet& intlCollatorAvailableLocales()
             availableLocales->add(locale);
             addScriptlessLocaleIfNeeded(availableLocales.get(), locale);
         }
+#if PLATFORM(DRIFTSTACK)
+        // Collator available-locale set: Mac ICU76 vs iOS ICU78 diverge on exactly one
+        // edge tag — `blo` (Anii) has a collation tailoring in iOS ICU78 but NOT Mac
+        // ICU76, so Intl.Collator.supportedLocalesOf(['blo']) resolves on a real iPhone
+        // (Safari 26.4, BS real-device capture, probe intlsupportedlocales: Collator=18
+        // resolving blo) but not on the Mac-ICU76 fork (Collator=17, blo absent). Every
+        // other ctor (DateTimeFormat/Segmenter/NumberFormat/... = uloc_/ubrk_) resolves
+        // blo on both, and every other edge tag matches — so the ONLY add needed is blo
+        // to the Collator set, and only for the >=26.4 (iOS ICU78) band. Pre-26.4
+        // archetypes (18.6 / 26.0-26.3) ship the bare Mac-ICU76 set unchanged.
+        {
+            // Unset/unparseable archetype = the 26.4 launch default (matches the
+            // MathObject.cpp sumPrecise / JSIteratorConstructor.cpp concat gates) → add blo.
+            int dsMaj = 0, dsMin = 0;
+            bool dsHas = driftstackArchetypeSafariVersion(dsMaj, dsMin);
+            bool addBlo = !dsHas || dsMaj > 26 || (dsMaj == 26 && dsMin >= 4);
+            if (addBlo) {
+                constexpr char bloTag[] = "blo";
+                availableLocales->add(StringImpl::createStaticStringImpl(std::span<const char> { bloTag, 3 }));
+            }
+        }
+#endif
         IntlCollator::checkICULocaleInvariants(availableLocales.get());
     });
     return availableLocales;
