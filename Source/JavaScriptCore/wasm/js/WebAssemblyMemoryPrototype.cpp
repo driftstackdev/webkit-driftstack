@@ -36,6 +36,10 @@
 #include "JSWebAssemblyHelpers.h"
 #include "JSWebAssemblyMemory.h"
 #include "StructureCreateInlines.h"
+#if PLATFORM(DRIFTSTACK)
+#include <cstdlib>
+#include <string_view>
+#endif
 
 namespace JSC {
 static JSC_DECLARE_HOST_FUNCTION(webAssemblyMemoryProtoFuncGrow);
@@ -155,7 +159,33 @@ void WebAssemblyMemoryPrototype::finishCreation(VM& vm, JSGlobalObject* globalOb
     ASSERT(inherits(info()));
     JSC_TO_STRING_TAG_WITHOUT_TRANSITION();
 
-    if (Options::useWasmMemoryToBufferAPIs()) {
+    bool installToBufferAPIs = Options::useWasmMemoryToBufferAPIs();
+#if PLATFORM(DRIFTSTACK)
+    // WebAssembly.Memory.prototype.toFixedLengthBuffer / toResizableBuffer landed at Safari 26.2,
+    // co-varying 1:1 with Math.sumPrecise (window.safari26FeatureTells: both undefined on 18.x/26.0,
+    // both 'function' on 26.2+). Gate the install behind the SAME >=26.2 archetype predicate used for
+    // sumPrecise (MathObject.cpp) so a <26.2 archetype reports these undefined and stays self-consistent.
+    // Options default true so 26.2+ keeps them; unset env keeps the 26.4 launch default.
+    bool driftstackInstallToBufferAPIs = []() {
+        const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!arch || !arch[0])
+            return true;
+        std::string_view sv(arch);
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos)
+            return true;
+        sv.remove_prefix(pos + 6);
+        int maj = 0, min = 0;
+        size_t i = 0;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+        if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+            ++i;
+        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+        return maj > 26 || (maj == 26 && min >= 2);
+    }();
+    installToBufferAPIs = installToBufferAPIs && driftstackInstallToBufferAPIs;
+#endif
+    if (installToBufferAPIs) {
         JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("toFixedLengthBuffer"_s, webAssemblyMemoryProtoFuncToFixedLengthBuffer, static_cast<unsigned>(PropertyAttribute::None), 0, ImplementationVisibility::Public);
         JSC_NATIVE_FUNCTION_WITHOUT_TRANSITION("toResizableBuffer"_s, webAssemblyMemoryProtoFuncToResizableBuffer, static_cast<unsigned>(PropertyAttribute::None), 0, ImplementationVisibility::Public);
     }
