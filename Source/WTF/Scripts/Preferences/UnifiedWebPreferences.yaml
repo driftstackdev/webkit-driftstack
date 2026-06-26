@@ -9545,6 +9545,20 @@ WebAuthenticationEnabled:
   sharedPreferenceForWebProcess: true
   richJavaScript: true
 
+WebAuthnSignalMethodsEnabled:
+  type: bool
+  status: stable
+  category: security
+  humanReadableName: "WebAuthn signal methods"
+  humanReadableDescription: "Expose PublicKeyCredential.signal{AllAcceptedCredentials,CurrentUserDetails,UnknownCredential} (per-archetype exposure gate)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 WebCodecsAV1Enabled:
   type: bool
   status: preview
