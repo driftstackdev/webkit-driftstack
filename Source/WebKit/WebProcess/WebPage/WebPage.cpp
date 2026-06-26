@@ -5715,21 +5715,37 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // 26.2 with a REAL WebGPU adapter (vendor/arch/device/desc all "apple") — so navigator.gpu IS
     // present on the non-Pro iPhone 15, NOT just 15 Pro. file-122's "15 Pro and newer" baseline was a
     // claim about iOS behavior now falsified by capture (CLAUDE.md "reality wins"). find("iphone15")
-    // matches iphone15/iphone15plus/iphone15pro/iphone15promax (all A16/A17). iphone13* (A15) stays
-    // NON-capable — untestable (BS "iPhone 13 @ 26 not supported"), so the A16 boundary is the safe
-    // data-backed line; the A15 boundary is SURFACED for a real-device/Apple-docs confirmation (#56).
-    // W2557 per-archetype matrix audit: the boundary is the A16 CHIP, so iphone14pro/iphone14promax
-    // (ALSO A16 — the exact GPU/Metal feature set as the BS-proven iPhone 15) must be capable too;
-    // the prior list missed them. iphone14/iphone14plus stay NON-capable (A15) — so match the
-    // "iphone14pro" PREFIX, which excludes the A15 iphone14/iphone14plus.
+    // matches iphone15/iphone15plus/iphone15pro/iphone15promax (all A16/A17). iphone14pro/iphone14promax
+    // (ALSO A16) are capable too.
+    // ⚠️ STALE-COMMENT RETRACTION: the prior "iphone13*/iphone14/iphone14plus (A15) stays NON-capable"
+    // line is FALSIFIED by capture aio-iPhone_14-1782162865630 (real A15, "apple a15 gpu") @ Safari 26.2:
+    // navigator.gpu === 'object', GPUAdapter/GPUDevice defined, isFallbackAdapter=false → A15 HAS WebGPU
+    // on 26.x. So A15-non-Pro (iphone14/iphone14plus/iphone13/iphone13mini) is now capable. CAVEAT: A15
+    // WebGPU is capture-confirmed at 26.2 ONLY (no A15@26.0 capture exists) → A15 capability is gated
+    // conservatively to Safari minor >= 2 (26.0/26.1 NEEDS-CAPTURE). A16+ stay capable at all 26.x
+    // (unchanged). 18.x A15 archetypes never reach here — s_isFamilyAArchetype hides them above.
     static const bool s_webGPUNonCapableModel = []() {
         const char* a = getenv("DRIFTSTACK_ARCHETYPE");
         if (!a || !a[0])
             return false; // no archetype env = iphone17 launch = WebGPU-capable
         std::string_view sv(a);
-        bool capable = sv.find("iphone17") == 0 || sv.find("iphone16") == 0
+        bool capableA16 = sv.find("iphone17") == 0 || sv.find("iphone16") == 0
             || sv.find("iphone15") == 0 || sv.find("iphone14pro") == 0; // A16+ : 14 Pro/Pro Max, 15*, 16*, 17*
-        return !capable;
+        bool a15NonPro = sv.find("iphone14") == 0 || sv.find("iphone13") == 0; // A15: 14/14 Plus, 13/13 mini
+        bool a15Capable = false;
+        if (a15NonPro) {
+            // Parse safari major.minor; A15 capable only on 26.2+ (capture-confirmed at 26.2).
+            auto pos = sv.find("safari");
+            if (pos != std::string_view::npos) {
+                std::string_view v = sv.substr(pos + 6);
+                int maj = 0, min = 0; size_t i = 0;
+                while (i < v.size() && v[i] >= '0' && v[i] <= '9') { maj = maj * 10 + (v[i] - '0'); ++i; }
+                if (i < v.size() && (v[i] == '_' || v[i] == '.')) ++i;
+                while (i < v.size() && v[i] >= '0' && v[i] <= '9') { min = min * 10 + (v[i] - '0'); ++i; }
+                a15Capable = maj > 26 || (maj == 26 && min >= 2);
+            }
+        }
+        return !(capableA16 || a15Capable);
     }();
     if (s_webGPUNonCapableModel)
         settings.setWebGPUEnabled(false);

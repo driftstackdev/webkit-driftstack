@@ -130,14 +130,30 @@ GPU* WorkerNavigator::gpu()
     // the non-Pro iPhone 15 (A16) has navigator.gpu, and iphone14pro/promax are the SAME A16 chip.
     // This worker gate had been left at the stale iphone15pro (A17) → main/worker WebGPU INCOHERENCE
     // for iphone15/iphone14pro archetypes. Keep the two gates byte-identical.
+    // ⚠️ A15 RE-ENABLED (mirror of Navigator.cpp): capture aio-iPhone_14 @ Safari 26.2 shows real A15
+    // has navigator.gpu → A15-non-Pro capable on 26.2+ (conservative; 26.0/26.1 NEEDS-CAPTURE). 18.x
+    // A15 hidden by s_isFamilyAWorker above. A16+ unchanged.
     static bool s_hideWebGPUNonCapableModelWorker = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;
         std::string_view a(archetype);
-        bool capable = (a.find("iphone17") == 0) || (a.find("iphone16") == 0)
+        bool capableA16 = (a.find("iphone17") == 0) || (a.find("iphone16") == 0)
             || (a.find("iphone15") == 0) || (a.find("iphone14pro") == 0); // A16+ : 14 Pro/Pro Max, 15*, 16*, 17*
-        return !capable;
+        bool a15NonPro = (a.find("iphone14") == 0) || (a.find("iphone13") == 0); // A15: 14/14 Plus, 13/13 mini
+        bool a15Capable = false;
+        if (a15NonPro) {
+            auto pos = a.find("safari");
+            if (pos != std::string_view::npos) {
+                std::string_view v = a.substr(pos + 6);
+                int maj = 0, min = 0; size_t i = 0;
+                while (i < v.size() && v[i] >= '0' && v[i] <= '9') { maj = maj * 10 + (v[i] - '0'); ++i; }
+                if (i < v.size() && (v[i] == '_' || v[i] == '.')) ++i;
+                while (i < v.size() && v[i] >= '0' && v[i] <= '9') { min = min * 10 + (v[i] - '0'); ++i; }
+                a15Capable = maj > 26 || (maj == 26 && min >= 2);
+            }
+        }
+        return !(capableA16 || a15Capable);
     }();
     if (s_hideWebGPUNonCapableModelWorker)
         return nullptr;
