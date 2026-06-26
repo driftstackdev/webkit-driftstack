@@ -180,18 +180,25 @@ CSSParserContext::CSSParserContext(const Settings& settings)
         //   CSS.supports('inset-area: center')        === false  (real 26.x = false) ✓
         // i.e. the anchor + animation-timeline force-enables here ARE honored production-
         // path; the old "absent from the parser / scroll() unimplemented" notes were wrong.
-        // The one over-enable found by the capture was the NAMED-TIMELINE CSS properties:
-        //   CSS.supports('scroll-timeline: --t') / ('view-timeline: --v') served true, but
-        //   real iPhone 26.x = false (it ships the JS ScrollTimeline/ViewTimeline API +
-        //   animation-timeline + animation-range, NOT the named-timeline CSS properties).
-        // That was a 26.x-cohort tell because scroll-timeline*/view-timeline*/timeline-scope
-        // shared scrollDrivenAnimationsEnabled with animation-timeline. FIX: those 8 CSS
-        // properties were split onto cssNamedTimelinePropertiesEnabled (default false; see
-        // CSSProperties.json + UnifiedWebPreferences.yaml), so they now serve false on every
-        // archetype, matching real iOS, while animation-timeline/animation-range stay true
-        // via scrollDrivenAnimationsEnabled (left true here for Family B; the JS timeline
-        // constructors are unaffected). No regression risk: Family A respects Settings.
+        //
+        // NAMED-TIMELINE CSS PROPERTIES (scroll-timeline*/view-timeline*/timeline-scope):
+        // CAPTURE-CORRECTED (aio-iPhone_17_Pro_Max, Safari 26.4) — real iPhone 26.x serves
+        //   CSS.supports('scroll-timeline-name: --x') === true ✓
+        //   CSS.supports('view-timeline-name: --x')   === true ✓
+        //   CSS.supports('timeline-scope: --x')       === true ✓
+        // and Family A (aio-iPhone_16_Pro_Max, Safari 18.6) serves all three === false.
+        // The prior d9ae2575d3 comment ("real iPhone 26.x = false") was BACKWARDS and is
+        // RETRACTED: it defaulted cssNamedTimelinePropertiesEnabled false on EVERY archetype,
+        // which made the 26.4 LAUNCH archetype LEAK (served false; real = true). Those 8 CSS
+        // properties were split onto their own cssNamedTimelinePropertiesEnabled flag (default
+        // false in YAML so Family A is correct without intervention); here we force it TRUE for
+        // Family B so the 26.x cohort (incl launch 26.4) matches real iOS. animation-timeline/
+        // animation-range stay on scrollDrivenAnimationsEnabled (also true for Family B). The
+        // per-archetype split: Family B → both flags true (named-timeline + animation-timeline
+        // all parse), Family A → respects Settings (both false). JS timeline constructor IDL
+        // gating is unaffected.
         propertySettings.scrollDrivenAnimationsEnabled = true;
+        propertySettings.cssNamedTimelinePropertiesEnabled = true;
     }
 #endif
 }
