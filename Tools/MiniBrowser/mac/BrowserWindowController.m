@@ -48,6 +48,9 @@
 @interface BrowserWindowController () <NSSharingServicePickerDelegate, NSSharingServiceDelegate> {
     NSTimer *_mainThreadStallTimer;
 }
+// W2972: content-only-mode predicate (DRIFTSTACK_SAFARI_CHROME_HIDDEN) — forward-declared so
+// windowDidLoad (above the definition) can call it without an undeclared-selector warning.
+- (BOOL)driftSafariChromeHidden;
 @end
 
 @implementation BrowserWindowController
@@ -215,17 +218,44 @@
                         CGFloat titleInset = contentH - win.contentLayoutRect.size.height; // title-bar band
                         if (barH < 0) barH = 0;
                         if (titleInset < 0) titleInset = 0;
+                        // W2972 (founder "black space at the bottom, browser only ~70%" + A2 W2957/W2971
+                        // per-archetype-size bug): in content-only mode the web-view must FILL the captured
+                        // frame so (1) there is no black band to mask, and (2) the window aspect == the
+                        // per-archetype capture profile aspect → SCStream scalesToFit becomes a no-op (no
+                        // anamorphic scale, no letterbox). So:
+                        //   - DROP the 92px hidden-bar reserve (barH→0; the bar is invisible, reserving it
+                        //     only bakes a black void — the dominant ~12% bottom band the founder reports).
+                        //   - DROP the macOS title-band inset too: extend the web content under the title bar
+                        //     (NSFullSizeContentView + transparent titlebar) so the window content == the
+                        //     layout viewport EXACTLY and the web-view fills it edge-to-edge. The W1375
+                        //     page-shows-through-the-toolbar risk does NOT apply here: there is NO visible
+                        //     toolbar in content-only mode (the GUI Browser-mode supplies the URL bar), so
+                        //     nothing overlaps the page.
+                        // The web-view height stays == layoutViewportHeight (inner_height, e.g. 714/693/796),
+                        // so documentElement.clientHeight == window.innerHeight remains iPhone-exact (the
+                        // file-99 layout-viewport signal is UNCHANGED). The window WIDTH is the per-archetype
+                        // screen_width `w` (DRIFTSTACK_VIEWPORT_WIDTH: 390/402/430...) — already correct.
+                        // Chrome-SHOWN keeps the old barH + titleInset behavior (the bar is real chrome).
+                        BOOL chromeHidden = [strongSelf driftSafariChromeHidden];
+                        if (chromeHidden) {
+                            // Extend content under the title bar so its 32px band stops insetting the web-view.
+                            win.titlebarAppearsTransparent = YES;
+                            win.styleMask |= NSWindowStyleMaskFullSizeContentView;
+                            barH = 0;
+                            titleInset = 0;
+                        }
                         CGFloat targetContent = layoutViewportHeight + barH + titleInset;
                         [win setContentSize:NSMakeSize(w, targetContent)];
-                        // Pin the web view to EXACTLY the layout viewport, above the bottom bar.
+                        // Pin the web view to EXACTLY the layout viewport, above the bottom bar (origin.y
+                        // == barH; barH == 0 in content-only mode → the web-view fills the full content).
                         if (strongSelf->containerView) {
                             strongSelf->containerView.autoresizingMask = NSViewNotSizable;
                             strongSelf->containerView.frame = NSMakeRect(0, barH, w, layoutViewportHeight);
                             if (strongSelf.mainContentView)
                                 strongSelf.mainContentView.frame = strongSelf->containerView.bounds;
                         }
-                        NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f -> window content=%.0f web-view=%d (target viewport=%d)",
-                            contentH, barH, titleInset, (double)targetContent, layoutViewportHeight, layoutViewportHeight);
+                        NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f hidden=%d -> window content=%.0f web-view=%d (target viewport=%d, screen-w=%d)",
+                            contentH, barH, titleInset, (int)chromeHidden, (double)targetContent, layoutViewportHeight, layoutViewportHeight, w);
                     });
                 }
             });
@@ -243,6 +273,16 @@
 // NOTE (fingerprint): the bar height becomes the chrome; the web-content height (== layout viewport,
 // clientHeight==innerHeight, file-99) must be cumrig-verified before enabling for sessions. First cut
 // — visual layout iterates via the screenshot loop; tabs + scroll-minimize + final glass polish next.
+// W2972: content-only mode predicate — DRIFTSTACK_SAFARI_CHROME_HIDDEN truthy (the GUI Browser-mode
+// supplies its own URL bar, so the fork's rendered iOS bar is hidden AND its reserve band is dropped).
+// Shared by installDriftSafariBottomBar (web-container inset) + windowDidLoad's resize block (window-
+// content height / web-view frame) so they agree on whether the barH reserve exists.
+- (BOOL)driftSafariChromeHidden
+{
+    const char *raw = getenv("DRIFTSTACK_SAFARI_CHROME_HIDDEN");
+    return raw && (raw[0] == '1' || raw[0] == 't' || raw[0] == 'T' || raw[0] == 'y' || raw[0] == 'Y');
+}
+
 - (void)installDriftSafariBottomBar
 {
     NSView *content = self.window.contentView;
@@ -250,6 +290,14 @@
         return;
     const CGFloat barH = 92.0;   // iOS-26 Safari bottom bar: URL-pill row + toolbar-icon row
     NSRect cb = content.bounds;
+    // W2972: in content-only mode (DRIFTSTACK_SAFARI_CHROME_HIDDEN) the rendered bar is invisible, so
+    // RESERVING its barH band below the web container only bakes a black void into the captured frame
+    // (the founder's "black space at the bottom" — the web-view filled ~70% of the frame). When hidden,
+    // do NOT inset the web container by barH: the web-view fills from y=0 (the windowDidLoad resize block
+    // then sizes the window content to layoutViewport so the web-view == the full content height, and
+    // clientHeight == innerHeight stays exact). Chrome-SHOWN keeps the barH inset (the bar IS visible).
+    BOOL driftChromeHidden = [self driftSafariChromeHidden];
+    const CGFloat reservedBarH = driftChromeHidden ? 0.0 : barH;
 
     // Drop the native top toolbar (its controls are re-homed below).
     self.window.toolbar = nil;
@@ -267,9 +315,7 @@
     // The web-view stays pinned to the 714 layout viewport (set in windowDidLoad's size logic), so the
     // SITE still measures innerHeight == 714 (iPhone-exact) — the bar is merely invisible. Default OFF →
     // zero behavior change. The GUI overlays/crops the now-empty bar band on its side (A2).
-    const char *driftChromeHiddenRaw = getenv("DRIFTSTACK_SAFARI_CHROME_HIDDEN");
-    if (driftChromeHiddenRaw && (driftChromeHiddenRaw[0] == '1' || driftChromeHiddenRaw[0] == 't'
-            || driftChromeHiddenRaw[0] == 'T' || driftChromeHiddenRaw[0] == 'y' || driftChromeHiddenRaw[0] == 'Y'))
+    if (driftChromeHidden)
         bar.hidden = YES;
     // W1385: a subtle top hairline separating the bar from the page (iOS toolbars have one).
     NSView *hairline = [[NSView alloc] initWithFrame:NSMakeRect(0, barH - 0.5, cb.size.width, 0.5)];
@@ -334,8 +380,10 @@
     }
 
     // Shrink the web content to sit ABOVE the bar (the nib's containerView is the webView's parent).
+    // W2972: reservedBarH == 0 in content-only mode → the web container fills the FULL window content
+    // (no freed-bar black band), == barH when the bar is drawn.
     if (containerView) {
-        containerView.frame = NSMakeRect(0, barH, W, cb.size.height - barH);
+        containerView.frame = NSMakeRect(0, reservedBarH, W, cb.size.height - reservedBarH);
         containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     }
     if (self.mainContentView && containerView) {
