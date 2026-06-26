@@ -34,7 +34,10 @@
     // FIXME: `root` should have type `(Element or Document)?`.
     readonly attribute Node? root;
     readonly attribute DOMString rootMargin;
-    readonly attribute DOMString scrollMargin;
+    // Driftstack per-archetype exposure gate: scrollMargin is a newer IntersectionObserver
+    // member absent on real iPhone Safari 18.6 (present on 26.x). Upstream had no IDL gate;
+    // IntersectionObserverScrollMarginEnabled defaults true so 26.x stays exact, Family-A off.
+    [EnabledBySetting=IntersectionObserverScrollMarginEnabled] readonly attribute DOMString scrollMargin;
     readonly attribute FrozenArray<double> thresholds;
     // FIXME: Add support for `delay`.
     // readonly attribute long delay;

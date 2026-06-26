@@ -4269,6 +4269,20 @@ InterruptVideoOnPageVisibilityChangeEnabled:
     WebCore:
       default: false
 
+IntersectionObserverScrollMarginEnabled:
+  type: bool
+  status: stable
+  category: dom
+  humanReadableName: "IntersectionObserver scrollMargin"
+  humanReadableDescription: "Expose IntersectionObserver.prototype.scrollMargin (per-archetype exposure gate)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 InvisibleAutoplayNotPermitted:
   type: bool
   status: embedder
