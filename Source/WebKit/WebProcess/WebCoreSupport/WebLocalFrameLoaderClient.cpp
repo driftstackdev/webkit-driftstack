@@ -222,9 +222,13 @@ static void driftstackAppendJSONString(StringBuilder& out, const String& value)
 }
 
 // Emit one nav-lifecycle token. `state` in loading | loaded | errored. `errorKind`/`title` are optional
-// (empty -> omitted). One line, flushed, mirroring the DRIFTSTACK_PAINT_READY contract; the harness's
-// BrowserProcess.parseNavStateMarker parses exactly this shape.
-static void driftstackEmitNavState(ASCIILiteral state, const String& url, const String& title, ASCIILiteral errorKind)
+// (empty -> omitted). `httpStatus` is the committed main-frame HTTP status code (W2969 failure-UX #5):
+// a 4xx/5xx server error renders as a normal `loaded` (the error BODY is a valid document, NOT a WebKit
+// ResourceError), so `errorKind` never fires for it -- carrying the status lets the harness's navigate
+// result be HONEST about a 404/500 error-page landing. <= 0 means "no HTTP status" (file:// / about:blank
+// / data: / cached) -> the field is OMITTED, keeping the parser's nil-tolerant path byte-identical. The
+// harness's BrowserProcess.parseNavStateMarker reads `httpStatus` as an optional JSON number.
+static void driftstackEmitNavState(ASCIILiteral state, const String& url, const String& title, ASCIILiteral errorKind, int httpStatus = 0)
 {
     StringBuilder json;
     json.append("{\"state\":\""_s, state, "\""_s);
@@ -233,6 +237,8 @@ static void driftstackEmitNavState(ASCIILiteral state, const String& url, const 
     if (errorKind.length()) {
         json.append(",\"errorKind\":\""_s, errorKind, "\""_s);
     }
+    if (httpStatus > 0)
+        json.append(",\"httpStatus\":"_s, httpStatus);
     if (!title.isEmpty()) {
         json.append(",\"title\":"_s);
         driftstackAppendJSONString(json, title);
@@ -797,8 +803,11 @@ void WebLocalFrameLoaderClient::dispatchDidCommitLoad(std::optional<HasInsecureC
     // W2962: the navigation committed (a new document is live) -> refresh the page_state URL early so the
     // GUI's live URL bar tracks redirects before the page finishes loading. State is `loaded` (the same
     // terminal contract the harness navigate path uses); the final title arrives at dispatchDidFinishLoad.
+    // W2969 (failure-UX #5): the committed main-frame response carries the HTTP status -> emit it so a
+    // 4xx/5xx error-page landing (which renders as a normal `loaded`, not a WebKit ResourceError) is
+    // reported honestly. httpStatusCode() is 0 for non-HTTP loads -> omitted by driftstackEmitNavState.
     if (frame->isMainFrame() && driftstackNavPageStateEnabled())
-        driftstackEmitNavState("loaded"_s, frame->url().string(), documentLoader->title().string, ASCIILiteral());
+        driftstackEmitNavState("loaded"_s, frame->url().string(), documentLoader->title().string, ASCIILiteral(), documentLoader->response().httpStatusCode());
 #endif
 }
 
@@ -938,8 +947,10 @@ void WebLocalFrameLoaderClient::dispatchDidFinishLoad()
 #if PLATFORM(DRIFTSTACK)
     // W2962: the main frame finished loading -> emit the terminal `loaded` page_state with the final title
     // (clears any prior loading/errored overlay + populates the GUI URL bar title).
+    // W2969 (failure-UX #5): carry the committed main-frame HTTP status on the terminal token too (the
+    // 4xx/5xx error body is a normal load, not a ResourceError), so the harness navigate result is honest.
     if (m_frame->isMainFrame() && driftstackNavPageStateEnabled())
-        driftstackEmitNavState("loaded"_s, m_frame->url().string(), documentLoader->title().string, ASCIILiteral());
+        driftstackEmitNavState("loaded"_s, m_frame->url().string(), documentLoader->title().string, ASCIILiteral(), documentLoader->response().httpStatusCode());
 #endif
 }
 

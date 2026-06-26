@@ -2034,8 +2034,79 @@ void Session::elementClick(const String& elementID, Function<void(CommandResult&
                     };
                     if (isOptionElement)
                         selectOptionElement(elementID, WTF::move(continueAfterClickFunction));
-                    else
+                    else {
+#if ENABLE(DRIFTSTACK_TOUCH_STUBS)
+                        // Belt-and-suspenders (detectability: a mouse NSEvent on a touch iPhone archetype).
+                        // The DRIFTSTACK build enables BOTH WEBDRIVER_MOUSE_INTERACTIONS (it is also
+                        // PLATFORM(MAC)) AND WEBDRIVER_TOUCH_INTERACTIONS, so the harness tap/scroll path
+                        // (`/actions` pointerType:"touch") correctly synthesizes a native touch -- but a raw
+                        // WebDriver `/element/:id/click` would still reach performMouseInteraction -> a real
+                        // Automation mouse NSEvent, which a touch-only iPhone never emits. Coerce the click to
+                        // the SAME backend touch path the /actions tap uses: a `performInteractionSequence` with
+                        // a Touch input source (move -> pointer-down -> pointer-up at the in-view center), which
+                        // WebAutomationSession routes to simulateTouchInteraction / platformSimulateTouchInteraction
+                        // (the iPhone-contact-geometry WebTouchEvent). No WebDriver command can then emit a mouse
+                        // NSEvent on a touch archetype. Gated by ENABLE(DRIFTSTACK_TOUCH_STUBS) (the touch-archetype
+                        // build flag) -> upstream/non-touch builds keep the original mouse interaction byte-identical.
+                        int tapX = inViewCenter.value().x;
+                        int tapY = inViewCenter.value().y;
+
+                        static constexpr auto touchSourceId = "ds-touch"_s;
+
+                        auto buildPointerState = [&](ASCIILiteral interaction, bool withLocation, bool pressed) {
+                            auto state = JSON::Object::create();
+                            state->setString("sourceId"_s, touchSourceId);
+                            if (withLocation) {
+                                state->setString("origin"_s, "Viewport"_s);
+                                auto location = JSON::Object::create();
+                                location->setInteger("x"_s, tapX);
+                                location->setInteger("y"_s, tapY);
+                                state->setObject("location"_s, WTF::move(location));
+                            }
+                            if (pressed)
+                                state->setString("pressedButton"_s, "Left"_s);
+                            state->setString("mouseInteraction"_s, interaction);
+                            return state;
+                        };
+
+                        auto makeStep = [](Ref<JSON::Object>&& state) {
+                            auto states = JSON::Array::create();
+                            states->pushObject(WTF::move(state));
+                            auto step = JSON::Object::create();
+                            step->setArray("states"_s, WTF::move(states));
+                            return step;
+                        };
+
+                        auto steps = JSON::Array::create();
+                        // Tick 1: position the touch point. Tick 2: contact (down). Tick 3: lift (up).
+                        steps->pushObject(makeStep(buildPointerState("Move"_s, true, false)));
+                        steps->pushObject(makeStep(buildPointerState("Down"_s, true, true)));
+                        steps->pushObject(makeStep(buildPointerState("Up"_s, false, false)));
+
+                        auto inputSources = JSON::Array::create();
+                        auto touchSource = JSON::Object::create();
+                        touchSource->setString("sourceId"_s, touchSourceId);
+                        touchSource->setString("sourceType"_s, "Touch"_s);
+                        inputSources->pushObject(WTF::move(touchSource));
+
+                        auto parameters = JSON::Object::create();
+                        parameters->setString("handle"_s, uncheckedTopLevelBrowsingContext());
+                        if (m_currentBrowsingContext)
+                            parameters->setString("frameHandle"_s, m_currentBrowsingContext.value());
+                        parameters->setArray("steps"_s, WTF::move(steps));
+                        parameters->setArray("inputSources"_s, WTF::move(inputSources));
+
+                        m_host->sendCommandToBackend("performInteractionSequence"_s, WTF::move(parameters), [protectedThis = Ref { *this }, continueAfterClickFunction = WTF::move(continueAfterClickFunction)](SessionHost::CommandResponse&& response) mutable {
+                            if (response.isError) {
+                                continueAfterClickFunction(CommandResult::fail(WTF::move(response.responseObject)));
+                                return;
+                            }
+                            continueAfterClickFunction(CommandResult::success());
+                        });
+#else
                         performMouseInteraction(inViewCenter.value().x, inViewCenter.value().y, MouseButton::Left, MouseInteraction::SingleClick, WTF::move(continueAfterClickFunction));
+#endif
+                    }
                 });
             });
         });
