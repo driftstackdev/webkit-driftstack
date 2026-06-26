@@ -48,6 +48,50 @@ namespace IntlLocaleInternal {
 static constexpr bool verbose = false;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Parse Safari major.minor from the DRIFTSTACK_ARCHETYPE slug (e.g. "..._safari26_0").
+// Returns false when unset/unparseable → caller treats it as the 26.4 launch default.
+// JSC-local duplicate of IntlObject.cpp's file-static helper (the original is not
+// exported across translation units); mirrors its parser so the weekInfo.minimalDays
+// per-minor gate can distinguish Safari 26.3 from 26.4.
+static bool driftstackArchetypeSafariVersion(int& outMajor, int& outMinor)
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    if (sv.empty() || sv[0] < '0' || sv[0] > '9')
+        return false;
+    int major = 0, minor = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+    outMajor = major;
+    outMinor = minor;
+    return true;
+}
+
+// True when the archetype is Safari ≤26.3, which still emits weekInfo.minimalDays
+// (icuDataHash 9d8be172). Safari ≥26.4 dropped it (5f8a7144). Unset/unparseable
+// archetype → 26.4 launch default → false (no minimalDays).
+static bool driftstackWeekInfoEmitsMinimalDays()
+{
+    static const bool s_emits = []() {
+        int maj = 0, min = 0;
+        if (!driftstackArchetypeSafariVersion(maj, min))
+            return false; // unset = 26.4 launch default = no minimalDays.
+        return !(maj > 26 || (maj == 26 && min >= 4));
+    }();
+    return s_emits;
+}
+#endif
+
 IntlLocale* IntlLocale::create(VM& vm, Structure* structure)
 {
     auto* object = new (NotNull, allocateCell<IntlLocale>(vm)) IntlLocale(vm, structure);
@@ -1087,6 +1131,23 @@ JSObject* IntlLocale::weekInfo(JSGlobalObject* globalObject)
 
     JSObject* result = constructEmptyObject(globalObject);
     result->putDirect(vm, Identifier::fromString(vm, "firstDay"_s), jsNumber(convertUCalendarDaysOfWeekToMondayBasedDay(firstDayOfWeek)));
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack fork — weekInfo.minimalDays version gate (deep-sweep #2 P1).
+    // Real iPhone Safari ≤26.3 (18.6 / 26.0 / 26.3) emits a `minimalDays`
+    // member in the weekInfo object (icuDataHash 9d8be172). Safari ≥26.4
+    // dropped it (icuDataHash 5f8a7144). The launch archetype (safari26_4) is
+    // therefore CORRECT without minimalDays; only the ≤26.3 archetypes need it.
+    // The boundary is 26.4, NOT 26.0 — a major<26 gate would wrongly drop it on
+    // the shipped 26.0 / 26.3 archetypes. Reference (real iPhone, 9d8be172):
+    //   en-US/ar-EG/fa-IR/th-TH/he-IL/ja-JP/und → 1, zh-Hans-CN → 5.
+    // Value comes from ICU UCAL_MINIMAL_DAYS_IN_FIRST_WEEK on the resolved
+    // locale's calendar (same handle used for firstDay/weekend above), so it
+    // matches the exact CLDR data the real device emitted.
+    if (driftstackWeekInfoEmitsMinimalDays()) {
+        int32_t minimalDays = ucal_getAttribute(calendar.get(), UCAL_MINIMAL_DAYS_IN_FIRST_WEEK);
+        result->putDirect(vm, Identifier::fromString(vm, "minimalDays"_s), jsNumber(minimalDays));
+    }
+#endif
     result->putDirect(vm, Identifier::fromString(vm, "weekend"_s), weekendArray);
     return result;
 }
