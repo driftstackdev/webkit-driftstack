@@ -57,7 +57,34 @@ void JSIteratorConstructor::finishCreation(VM& vm, JSGlobalObject* globalObject,
     putDirectWithoutTransition(vm, vm.propertyNames->prototype, iteratorPrototype, static_cast<unsigned>(PropertyAttribute::DontEnum | PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly));
     JSC_BUILTIN_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->from, jsIteratorConstructorFromCodeGenerator, static_cast<unsigned>(PropertyAttribute::DontEnum));
 
-    if (Options::useIteratorSequencing())
+    bool installIteratorConcat = Options::useIteratorSequencing();
+#if PLATFORM(DRIFTSTACK)
+    // Iterator.concat (the iterator-sequencing proposal) landed at Safari 26.4 — real
+    // iPhone Safari 18.6 AND 26.0-26.3 do NOT expose it (BS real-device capture, probe
+    // iterseq: undefined on 18.6 and 26.2, 'function' on 26.4). It version-splits LATER
+    // than Math.sumPrecise (which shipped 26.2), so it needs its own >=26.4 gate rather
+    // than reusing the sumPrecise predicate. Skip the install for <26.4 archetypes so
+    // 18.6/26.0-26.3 match; unset (the 26.4 launch default) keeps it. Mirrors the
+    // MathObject.cpp sumPrecise gate pattern.
+    if (installIteratorConcat) {
+        const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+        if (arch && arch[0]) {
+            std::string_view sv(arch);
+            auto pos = sv.find("safari");
+            if (pos != std::string_view::npos) {
+                sv.remove_prefix(pos + 6);
+                int maj = 0, min = 0;
+                size_t i = 0;
+                while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+                if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+                    ++i;
+                while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+                installIteratorConcat = maj > 26 || (maj == 26 && min >= 4);
+            }
+        }
+    }
+#endif
+    if (installIteratorConcat)
         JSC_BUILTIN_FUNCTION_WITHOUT_TRANSITION(vm.propertyNames->builtinNames().concatPublicName(), jsIteratorConstructorConcatCodeGenerator, static_cast<unsigned>(PropertyAttribute::DontEnum));
 }
 
