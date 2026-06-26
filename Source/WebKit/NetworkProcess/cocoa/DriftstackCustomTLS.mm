@@ -6,9 +6,21 @@
  * iPhone reference (captured via tls.peet.ws V-2026-05-21-W29-499.108):
  *   Safari 26.x: JA4 t13d2013h2_a09f3c656075_7f0f34a4126d
  *                JA3 ecdf4f49dd59effc439639da29186671
- *   Safari 18.x (P1, per-archetype): JA4 t13d2014h2_a09f3c656075_e42f34c56612
+ *   Safari 18.x (P1, per-archetype): JA4 t13d2014h2_a09f3c656075_7f0f34a4126d
+ *     (BS real-device VERIFIED 2026-06-26 on iOS 18.3/18.4/18.5/18.6 — iPhone
+ *     13/16/16e/16Pro/16Plus; the earlier "_e42f34c56612" was an UNCAPTURED wrong
+ *     prediction. The sig-alg list is IDENTICAL to 26.x so the JA4 3rd component is
+ *     the same 7f0f34a4126d; the 18.x JA4 differs from 26.x ONLY in the ext-count
+ *     digit, 2014 vs 2013, from the added padding ext. NOTE: iOS <=18.2 — e.g.
+ *     18.0.1 — additionally carries ecdsa_sha1 (0x0203) in sig_algs → JA4
+ *     _874d27d7ca63; Apple dropped 0203 by 18.3. Launch Family-A is 18.6 = 7f0f...)
  *     deltas vs 26.x: drop X25519MLKEM768 from supported_groups+key_share;
  *     TLS1.3 cipher trio order 4865-4866-4867; padding ext (0x15) PRESENT.
+ *   MLKEM landing = the iOS-MAJOR boundary (OS Network.framework TLS stack, not
+ *     WebKit): every iOS-26.x device (Safari 26.2-26.5 BS-VERIFIED) emits 0x11EC;
+ *     no iOS-18.x device does. BS pool cannot yield Safari 26.0/26.1 (min is 26.2),
+ *     but Apple docs gate PQ TLS on "iOS 26 or later" → 26.0 emits MLKEM. zstd in
+ *     Accept-Encoding lands at Safari/iOS 26.3 (WebKit blog + BS-confirmed 26.3).
  *     Selected by driftstackArchetypeIsPreSafari26() (DRIFTSTACK_ARCHETYPE).
  *
  * GREASE values vary per-connection; non-GREASE structure is constant.
@@ -87,7 +99,8 @@ uint16_t pickGreaseValue()
 //   1. supported_groups + key_share DROP X25519MLKEM768 (0x11EC) — classical groups only.
 //   2. TLS1.3 cipher trio order = 4865-4866-4867 (26.x = 4866-4867-4865).
 //   3. padding extension (0x0015) PRESENT (26.x omits it) → JA4 ext-count 14 vs 13.
-// 18.x JA4 = t13d2014h2_a09f3c656075_e42f34c56612 ; 26.x = t13d2013h2_a09f3c656075_7f0f34a4126d.
+// 18.x JA4 = t13d2014h2_a09f3c656075_7f0f34a4126d ; 26.x = t13d2013h2_a09f3c656075_7f0f34a4126d
+// (BS real-device VERIFIED 2026-06-26 — the two bands differ ONLY in the 2014/2013 ext-count digit).
 bool driftstackArchetypeIsPreSafari26()
 {
     const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
