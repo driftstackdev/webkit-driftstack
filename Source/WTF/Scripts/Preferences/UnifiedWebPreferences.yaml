@@ -1252,7 +1252,31 @@ CSSMathDepthEnabled:
       default: true
     WebCore:
       default: true
-      
+
+# Driftstack (FA-CSS named-timeline gate): the named scroll/view timeline CSS
+# *properties* (scroll-timeline*, view-timeline*, timeline-scope) were split off
+# scrollDrivenAnimationsEnabled. Real iPhone Safari 26.x ships the scroll-driven
+# JS timeline API (ScrollTimeline/ViewTimeline constructors) + animation-timeline +
+# animation-range, but does NOT expose the named-timeline CSS properties:
+# CSS.supports('scroll-timeline: --t') / ('view-timeline: --v') === false. Leaving
+# them on scrollDrivenAnimationsEnabled over-enabled them to true (a 26.x-cohort
+# tell). This flag gates ONLY those properties and defaults false so CSS.supports
+# matches real iOS across all archetypes; animation-timeline/animation-range stay on
+# scrollDrivenAnimationsEnabled (correctly true). Constructor IDL gating is unchanged.
+CSSNamedTimelinePropertiesEnabled:
+  type: bool
+  status: stable
+  category: css
+  humanReadableName: "CSS named scroll/view timeline properties"
+  humanReadableDescription: "Enable the scroll-timeline / view-timeline / timeline-scope CSS properties"
+  defaultValue:
+    WebKitLegacy:
+      default: false
+    WebKit:
+      default: false
+    WebCore:
+      default: false
+
 CSSOverflowClipMarginEnabled:
   type: bool
   status: testable

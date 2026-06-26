@@ -12766,7 +12766,7 @@
                 "parser-function": "consumeScrollTimelineShorthand",
                 "parser-grammar-unused": "[ <'scroll-timeline-name'> <'scroll-timeline-axis'>? ]#",
                 "parser-grammar-unused-reason": "Needs support for shorthand grammars.",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -12790,7 +12790,7 @@
                 "computed-style-storage-path": ["m_nonInheritedData", "rareData", "scrollTimelines"],
                 "parser-exported": true,
                 "parser-grammar": "<axis>#",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -12811,7 +12811,7 @@
                 "computed-style-storage-path": ["m_nonInheritedData", "rareData", "scrollTimelines"],
                 "parser-exported": true,
                 "parser-grammar": "<single-scroll-timeline-name>#",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -12950,7 +12950,7 @@
                 "computed-style-storage-kind": "reference",
                 "computed-style-type": "Style::NameScope",
                 "parser-grammar": "none | all | <dashed-ident>#",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
            },
            "specification": {
                "category": "scroll-animations",
@@ -12967,7 +12967,7 @@
                 "parser-function": "consumeViewTimelineShorthand",
                 "parser-grammar-unused": "[ <'view-timeline-name'> [ <'view-timeline-axis'> || <'view-timeline-inset'> ]? ]#",
                 "parser-grammar-unused-reason": "Needs support for shorthand grammars.",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -12991,7 +12991,7 @@
                 "computed-style-storage-path": ["m_nonInheritedData", "rareData", "viewTimelines"],
                 "parser-exported": true,
                 "parser-grammar": "<axis>#",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -13012,7 +13012,7 @@
                 "computed-style-storage-container": "opaque",
                 "computed-style-storage-path": ["m_nonInheritedData", "rareData", "viewTimelines"],
                 "parser-grammar": "<single-view-timeline-inset-item>#@(no-single-item-opt)",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
@@ -13033,7 +13033,7 @@
                 "computed-style-storage-path": ["m_nonInheritedData", "rareData", "viewTimelines"],
                 "parser-exported": true,
                 "parser-grammar": "<single-scroll-timeline-name>#",
-                "settings-flag": "scrollDrivenAnimationsEnabled"
+                "settings-flag": "cssNamedTimelinePropertiesEnabled"
             },
             "specification": {
                 "category": "scroll-animations",
