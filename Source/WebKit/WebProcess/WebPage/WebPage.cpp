@@ -42,6 +42,7 @@
 #include "DragEventForwardingData.h"
 #include "DrawingArea.h"
 #include "DrawingAreaMessages.h"
+#include "Shared/DriftstackScrollCoastMath.h"
 #include "EditorState.h"
 #include "EventDispatcher.h"
 #include "FindController.h"
@@ -4453,9 +4454,10 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             // Rest threshold: below ~80 px/s the coast distance is sub-perceptible; starting one would
             // only add a detectable micro-creep after a deliberate slow drag. iOS likewise does not fling
             // a slow release.
-            constexpr double kMinLiftoffSpeed = 80; // px/s
+            // W2995: thresholds/decay live in Shared/DriftstackScrollCoastMath.h so the live coast
+            // and its unit test share one source of truth (kMinLiftoffSpeed = 80 px/s).
             double speed = std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height());
-            if (speed >= kMinLiftoffSpeed) {
+            if (WebKit::DriftstackScrollCoast::shouldStartCoast(speed)) {
                 if (!m_driftstackScrollCoastTimer) {
                     m_driftstackScrollCoastTimer = makeUnique<RunLoop::Timer>(RunLoop::mainSingleton(),
                         "WebPage::DriftstackScrollCoastTimer"_s, this, &WebPage::driftstackScrollCoastTick);
@@ -4525,20 +4527,23 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
 void WebPage::driftstackScrollCoastTick()
 {
     auto now = WTF::MonotonicTime::now();
-    WTF::Seconds dt = now - m_driftstackCoastLastTick;
+    WTF::Seconds rawDt = now - m_driftstackCoastLastTick;
     m_driftstackCoastLastTick = now;
     // Guard a degenerate/zero or absurd dt (timer reschedule jitter, debugger pause) — cap to ~50ms so a
     // long stall can never lurch the page by a huge single step; skip a non-positive dt entirely.
-    if (dt <= 0_s)
+    // W2995: the cap + decay + thresholds are the PURE math in Shared/DriftstackScrollCoastMath.h, shared
+    // verbatim with the unit test (DriftstackScrollCoastMathTests). Behavior is byte-identical to the prior
+    // inline form: clampTickSeconds bounds only the upper end (50ms), the <=0 skip is unchanged.
+    if (rawDt <= 0_s)
         return;
-    if (dt > 50_ms)
-        dt = 50_ms;
+    double dtSeconds = WebKit::DriftstackScrollCoast::clampTickSeconds(rawDt.seconds());
+    double dtMs = dtSeconds * 1000.0;
 
     // Distance to scroll this frame = current velocity (px/s) × dt. Carry sub-pixel via static_cast<int>
     // truncation-toward-zero (sign-preserving, like the W2761 drag remainder); the fractional part is
     // re-derived next tick from the velocity, so no separate remainder accumulator is needed.
-    double stepX = m_driftstackScrollVelocity.width() * dt.seconds();
-    double stepY = m_driftstackScrollVelocity.height() * dt.seconds();
+    double stepX = WebKit::DriftstackScrollCoast::offsetForTick(m_driftstackScrollVelocity.width(), dtSeconds);
+    double stepY = WebKit::DriftstackScrollCoast::offsetForTick(m_driftstackScrollVelocity.height(), dtSeconds);
     int sdx = static_cast<int>(stepX);
     int sdy = static_cast<int>(stepY);
 
@@ -4547,15 +4552,13 @@ void WebPage::driftstackScrollCoastTick()
     // proportionally (never a discontinuity). NOTE: the exact decay constant is a behavioral TELL and is
     // anchored on Apple's published 0.998/ms — re-validate against a fresh multi-flick iOS capture before
     // flipping the gate on (per project_perfect_scroll_stepB_design).
-    constexpr double kDecayPerMs = 0.998;
-    double decay = std::pow(kDecayPerMs, dt.milliseconds());
+    double decay = WebKit::DriftstackScrollCoast::decayFactorForTickMs(dtMs);
     m_driftstackScrollVelocity = WebCore::FloatSize(
         m_driftstackScrollVelocity.width() * decay,
         m_driftstackScrollVelocity.height() * decay);
 
     // Stop once the coast slows below ~30 px/s (sub-perceptible drift) — like iOS settling to rest.
-    constexpr double kRestSpeed = 30; // px/s
-    if (std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height()) < kRestSpeed) {
+    if (WebKit::DriftstackScrollCoast::isAtRest(std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height()))) {
         if (m_driftstackScrollCoastTimer)
             m_driftstackScrollCoastTimer->stop();
         m_driftstackScrollVelocity = { };

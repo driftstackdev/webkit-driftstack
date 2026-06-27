@@ -249,6 +249,7 @@
 		0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */ = {isa = PBXBuildFile; fileRef = 086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		93EB25BBB6DB60BAD94DB09A /* DriftstackStun.h in Headers */ = {isa = PBXBuildFile; fileRef = ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		4D00941226EC54CDCB147BAD /* DriftstackTLS13Client.h in Headers */ = {isa = PBXBuildFile; fileRef = C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */; settings = {ATTRIBUTES = (Project, ); }; };
+		8CD80D85C77BE863C76C0E7A /* DriftstackScrollCoastMath.h in Headers */ = {isa = PBXBuildFile; fileRef = 74A93A6CAF28CA7A1EFA5257 /* DriftstackScrollCoastMath.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		0AE523848E823CD1487C986E /* DriftstackTLS13KeySchedule.h in Headers */ = {isa = PBXBuildFile; fileRef = D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		CBB1BEE585D32A7BEBFBDD89 /* DriftstackCrypto.h in Headers */ = {isa = PBXBuildFile; fileRef = F5849FAB6860C0E6333029A6 /* DriftstackCrypto.h */; settings = {ATTRIBUTES = (Project, ); }; };
 		285FDE5C0BC751E653A155A4 /* DriftstackTLS13.h in Headers */ = {isa = PBXBuildFile; fileRef = 74CDD592CF1F5D86D519D250 /* DriftstackTLS13.h */; settings = {ATTRIBUTES = (Project, ); }; };
@@ -3596,6 +3597,7 @@
 		086607B68B493D8A801AEBA4 /* DriftstackSocks5Client.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackSocks5Client.h; sourceTree = "<group>"; };
 		ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackStun.h; sourceTree = "<group>"; };
 		C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackTLS13Client.h; sourceTree = "<group>"; };
+		74A93A6CAF28CA7A1EFA5257 /* DriftstackScrollCoastMath.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackScrollCoastMath.h; sourceTree = "<group>"; };
 		D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackTLS13KeySchedule.h; sourceTree = "<group>"; };
 		F5849FAB6860C0E6333029A6 /* DriftstackCrypto.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackCrypto.h; sourceTree = "<group>"; };
 		74CDD592CF1F5D86D519D250 /* DriftstackTLS13.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DriftstackTLS13.h; sourceTree = "<group>"; };
@@ -15135,6 +15137,7 @@
 				ED20E54E9B751965C8BCBA77 /* DriftstackStun.h */,
 				836C3C4D54F72704C95A54C7 /* DriftstackStun.mm */,
 				C9511D4610CBA543E528E350 /* DriftstackTLS13Client.h */,
+				74A93A6CAF28CA7A1EFA5257 /* DriftstackScrollCoastMath.h */,
 				56F4FA1AF64A9F1FB729D866 /* DriftstackTLS13Client.mm */,
 				D922852180161819C5372C08 /* DriftstackTLS13KeySchedule.h */,
 				E0849F192E7CC3E7576360B4 /* DriftstackTLS13KeySchedule.mm */,
@@ -19765,6 +19768,7 @@
 				0A3472E4FB53BB01B392DFA5 /* DriftstackSocks5Client.h in Headers */,
 				93EB25BBB6DB60BAD94DB09A /* DriftstackStun.h in Headers */,
 				4D00941226EC54CDCB147BAD /* DriftstackTLS13Client.h in Headers */,
+				8CD80D85C77BE863C76C0E7A /* DriftstackScrollCoastMath.h in Headers */,
 				0AE523848E823CD1487C986E /* DriftstackTLS13KeySchedule.h in Headers */,
 				CBB1BEE585D32A7BEBFBDD89 /* DriftstackCrypto.h in Headers */,
 				285FDE5C0BC751E653A155A4 /* DriftstackTLS13.h in Headers */,
