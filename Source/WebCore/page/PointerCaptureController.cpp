@@ -459,6 +459,35 @@ void PointerCaptureController::dispatchEvent(PointerEvent& event, EventTarget* t
     pointerEventWillBeDispatched(event, target);
     target->dispatchEvent(event);
     pointerEventWasDispatched(event);
+
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-27 (#9/#10): the fork synthesizes a one-finger tap through the MOUSE compatibility
+    // path (Element::dispatchPointerEventIfNeeded, #101/W2642 dispatches pointerType="touch"
+    // pointerdown/pointerup). On real iOS the touch-LIFT additionally fires `pointerout` then
+    // `pointerleave` for the lifted contact (verified against a real iPhone iOS 26.5 gold capture
+    // tap-pointer-ios265-manual.json + WebKit's own LayoutTests/pointerevents/ios/pointer-event-order:
+    //   pointerover -> pointerenter -> pointerdown -> gotpointercapture
+    //   -> pointerup -> lostpointercapture -> pointerout -> pointerleave -> [mouse compat burst]).
+    // That touch-lift boundary pair is emitted by the IOS_FAMILY/WPE/GTK touch path
+    // (dispatchEventForTouchAtIndex / cancelPointer), which is compiled OUT on the fork's Mac
+    // platform — the mouse path only fires pointerout/leave when the element under the cursor
+    // CHANGES, which a tap-in-place never does. So a synthetic tap was missing pointerout +
+    // pointerleave, an ordering tell vs a real finger. Emit them here, immediately after the
+    // touch `pointerup` (lostpointercapture has just fired in pointerEventWasDispatched ->
+    // processPendingPointerCapture), in the exact iOS order, with the same pointerId / pointerType
+    // / isPrimary. Mouse-pointer taps are unaffected (real Safari mouse leaves the element under
+    // the cursor, so they keep the element-change path). Does not touch the #101 presence or the
+    // tap->click activation (this runs strictly after pointerup is already dispatched).
+    if (event.type() == eventNames().pointerupEvent && event.pointerType() == touchPointerEventType()) {
+        if (RefPtr element = dynamicDowncast<Element>(target)) {
+            auto pointerId = event.pointerId();
+            bool isPrimary = event.isPrimary();
+            auto pointerType = event.pointerType();
+            element->dispatchEvent(PointerEvent::create(eventNames().pointeroutEvent, pointerId, pointerType, isPrimary ? PointerEvent::IsPrimary::Yes : PointerEvent::IsPrimary::No));
+            element->dispatchEvent(PointerEvent::create(eventNames().pointerleaveEvent, pointerId, pointerType, isPrimary ? PointerEvent::IsPrimary::Yes : PointerEvent::IsPrimary::No));
+        }
+    }
+#endif
 }
 
 void PointerCaptureController::pointerEventWillBeDispatched(const PointerEvent& event, EventTarget* target)

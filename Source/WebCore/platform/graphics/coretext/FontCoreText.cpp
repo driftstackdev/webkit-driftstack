@@ -33,6 +33,7 @@
 #include "../cocoa/DriftstackNonAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
+#include "../DriftstackKefaAdvances.h"
 #include "DriftstackKerningTable.h"
 #include "DriftstackPingFangMetrics.h"
 #include "DriftstackTrackIMetrics.h"
@@ -1121,6 +1122,43 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         CTFontGetAdvancesForGlyphs(protect(ctFont()).get(), orientation, &glyph, &advance, 1);
     }
 #if PLATFORM(DRIFTSTACK)
+    // 2026-06-27 Kefa Family-A per-glyph advance override (blfonts metricsHash c6bdb116).
+    // CSS family "Kefa" aliases to the macOS "Kefa III" face (FontCacheCoreText), whose per-glyph
+    // advances differ from real iOS Kefa → the browserleaks 1:1 metric GROUP for Kefa reads
+    // ~4155,149 (fork) instead of 4367,149 (real) → divergent grouped metricsHash. Override the
+    // resolved "Kefa III" face's probe-string glyph advances to the real-iOS-captured values
+    // (DriftstackKefaAdvances.h). Family-A only; on >=26 Kefa is absent so this face never resolves.
+    // Reverse-map the glyph→codepoint via CTFontGetGlyphsForCharacters over the 14 probe codepoints
+    // only (cheap; the override is a no-op for every other glyph/face → byte-neutral elsewhere).
+    if (platformData().size() > 0.f && driftstackKefaAdvancesActive()
+        && m_platformData.familyName() == "Kefa III"_s) {
+        // Latin probe codepoints only — the GCPS chars (₹▁₺₸ẞॿ) render via fallback faces (not
+        // Kefa III) and are corrected in DriftstackGcpsFallback.h keyed by the primary "Kefa".
+        static constexpr char32_t kKefaProbeCps[] = {
+            0x006D, 0x004D, 0x006C, 0x004C, 0x0069, 0x0049, 0x0077, 0x0057
+        };
+        RetainPtr kefaFont = ctFont();
+        if (kefaFont) {
+            for (char32_t cp : kKefaProbeCps) {
+                UniChar ch[2] = { 0, 0 };
+                CGGlyph g[2] = { 0, 0 };
+                CFIndex len = 1;
+                if (cp > 0xFFFF) {
+                    uint32_t scalar = cp - 0x10000;
+                    ch[0] = static_cast<UniChar>(0xD800 + (scalar >> 10));
+                    ch[1] = static_cast<UniChar>(0xDC00 + (scalar & 0x3FF));
+                    len = 2;
+                } else
+                    ch[0] = static_cast<UniChar>(cp);
+                if (CTFontGetGlyphsForCharacters(kefaFont.get(), ch, g, len) && g[0] && g[0] == glyph) {
+                    float kefaAdv = 0.f;
+                    if (driftstackLookupKefaAdvance(cp, platformData().size(), kefaAdv))
+                        return kefaAdv;
+                    break;
+                }
+            }
+        }
+    }
     // Task #118: the per-glyph V121/V690 width-override HIT + reverse-map-built WTFLogAlways below fire
     // in this HOT path on EVERY ASCII-glyph advance (per-glyph during measureText / DOM text paint) —
     // an os_log side-channel on the critical path that floods logd. Gate them behind DRIFTSTACK_FONT_VERBOSE

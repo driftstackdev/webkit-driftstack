@@ -51,6 +51,10 @@
 // W2972: content-only-mode predicate (DRIFTSTACK_SAFARI_CHROME_HIDDEN) — forward-declared so
 // windowDidLoad (above the definition) can call it without an undeclared-selector warning.
 - (BOOL)driftSafariChromeHidden;
+// W2990: the layout-viewport height-correction body (W1421/W2972), extracted so windowDidLoad can
+// invoke it SYNCHRONOUSLY for the content-only path + on the deferred fallback for chrome-shown.
+// Forward-declared (defined below windowDidLoad) to avoid an undeclared-selector warning.
+- (void)driftApplyLayoutViewportHeight:(int)layoutViewportHeight screenWidth:(int)screenWidth;
 @end
 
 @implementation BrowserWindowController
@@ -186,76 +190,50 @@
             // webView height == the layout viewport (measure the chrome, add it).
             const char* lvhEnv = getenv("DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT");
             int layoutViewportHeight = lvhEnv ? atoi(lvhEnv) : 0;
+            // W2990 (A3 render-investigation a57228b6 — height-settle fidelity polish): in the PRODUCTION
+            // content-only / chrome-HIDDEN path the final window-content height is DETERMINISTIC up front.
+            // chromeHidden forces barH=0 (the bar is invisible; its reserve is dropped per W2972) and
+            // titleInset=0 (NSFullSizeContentView + transparent titlebar extends content under the ~32px
+            // title band), so targetContent == layoutViewportHeight EXACTLY — with NO dependency on any
+            // value that only settles after the window displays (contentView height / contentLayoutRect /
+            // the web-view's origin.y). Both the web container (containerView) and the web view
+            // (mainContentView == _webView) are already created + parented by awakeFromNib, which runs
+            // BEFORE windowDidLoad. So commit the final size SYNCHRONOUSLY here — before AppDelegate's
+            // makeKeyAndOrderFront + loadURLString run (same runloop turn) — so the page lays out at the
+            // FINAL height from first paint, with no late one-time vertical resize nudging the layout
+            // ~0.4s in (real Safari lays out at the final size from first paint; the old dispatch_after
+            // 0.4s deferral caused a late height-reflow if the page painted inside that window). The WIDTH
+            // was already committed synchronously above (setContentSize:vpSize). This changes ONLY WHEN the
+            // already-correct HEIGHT is applied — never the VALUE (DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT is A1's
+            // fingerprint). Chrome-SHOWN keeps the 0.4s deferral FALLBACK below (its inset is a real visible
+            // bar, NOT deterministic until display).
+            BOOL chromeHiddenAtLoad = [self driftSafariChromeHidden];
+            if (layoutViewportHeight > 0 && chromeHiddenAtLoad)
+                [self driftApplyLayoutViewportHeight:layoutViewportHeight screenWidth:w];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [weakWindow setContentSize:vpSize];
                 if (layoutViewportHeight > 0) {
-                    // The webView's final height (content - URL-bar chrome) only
-                    // settles after the window displays + lays out, several
-                    // runloop turns later. Correct on a short delay: measure the
-                    // real webView height, derive the chrome, and resize so the
-                    // webView == the layout viewport (clientHeight == innerHeight).
+                    typeof(self) strongSelfAsync = weakSelf;
+                    // Content-only path: already pinned SYNCHRONOUSLY in windowDidLoad above. The display
+                    // path re-asserted vpSize (the [weakWindow setContentSize:vpSize] just above), so
+                    // re-apply the deterministic final height ONCE more here (cheap + idempotent — same
+                    // constants, no measurement) to win that race, then SKIP the 0.4s deferral entirely
+                    // (no late reflow). The web-view stays pinned to the layout viewport throughout.
+                    if (strongSelfAsync && [strongSelfAsync driftSafariChromeHidden]) {
+                        [strongSelfAsync driftApplyLayoutViewportHeight:layoutViewportHeight screenWidth:w];
+                        return;
+                    }
+                    // Chrome-SHOWN FALLBACK (dev/visual only — production sets SAFARI_CHROME_HIDDEN=1, the
+                    // synchronous path above): the bar IS a real visible inset, so barH (the web-view's
+                    // origin.y) + the title-band inset are NOT deterministic until the window displays +
+                    // lays out several runloop turns later. Keep the short deferral: measure the real
+                    // chrome, derive the inset, resize so the web view == the layout viewport
+                    // (clientHeight == innerHeight).
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         typeof(self) strongSelf = weakSelf;
-                        NSWindow *win = weakWindow;
-                        if (!strongSelf || !win)
+                        if (!strongSelf || !weakWindow)
                             return;
-                        // W1421 (fingerprint FIX): documentElement.clientHeight == the WEB VIEW's
-                        // FRAME height (the layout viewport), so the window must be sized so the
-                        // web view == layoutViewportHeight exactly. The OLD measure
-                        // (contentView.height - contentLayoutRect.height) saw ONLY the title-bar
-                        // band (~32px) — it was BLIND to the Driftstack bottom bar, which insets
-                        // the web container (containerView) by barH (92px) under DRIFTSTACK_SAFARI_CHROME.
-                        // Result, proven empirically: clientHeight = layoutViewport - 92 (782 vs 874)
-                        // = a file-99 tell whenever the chrome is on. Fix: derive the chrome from the
-                        // ACTUAL web view (its origin.y == the bottom-bar height, 0 when chrome off)
-                        // PLUS the title-bar band, then DETERMINISTICALLY pin the web-view frame to
-                        // the layout viewport — do NOT rely on autoresize propagating the resize
-                        // (empirically it did not; the window is non-resizable so an explicit frame
-                        // sticks).
-                        CGFloat contentH = win.contentView.frame.size.height;
-                        NSView *web = strongSelf->containerView ?: strongSelf.mainContentView;
-                        CGFloat barH = web ? web.frame.origin.y : 0;                       // bottom-bar height (0 = chrome off)
-                        CGFloat titleInset = contentH - win.contentLayoutRect.size.height; // title-bar band
-                        if (barH < 0) barH = 0;
-                        if (titleInset < 0) titleInset = 0;
-                        // W2972 (founder "black space at the bottom, browser only ~70%" + A2 W2957/W2971
-                        // per-archetype-size bug): in content-only mode the web-view must FILL the captured
-                        // frame so (1) there is no black band to mask, and (2) the window aspect == the
-                        // per-archetype capture profile aspect → SCStream scalesToFit becomes a no-op (no
-                        // anamorphic scale, no letterbox). So:
-                        //   - DROP the 92px hidden-bar reserve (barH→0; the bar is invisible, reserving it
-                        //     only bakes a black void — the dominant ~12% bottom band the founder reports).
-                        //   - DROP the macOS title-band inset too: extend the web content under the title bar
-                        //     (NSFullSizeContentView + transparent titlebar) so the window content == the
-                        //     layout viewport EXACTLY and the web-view fills it edge-to-edge. The W1375
-                        //     page-shows-through-the-toolbar risk does NOT apply here: there is NO visible
-                        //     toolbar in content-only mode (the GUI Browser-mode supplies the URL bar), so
-                        //     nothing overlaps the page.
-                        // The web-view height stays == layoutViewportHeight (inner_height, e.g. 714/693/796),
-                        // so documentElement.clientHeight == window.innerHeight remains iPhone-exact (the
-                        // file-99 layout-viewport signal is UNCHANGED). The window WIDTH is the per-archetype
-                        // screen_width `w` (DRIFTSTACK_VIEWPORT_WIDTH: 390/402/430...) — already correct.
-                        // Chrome-SHOWN keeps the old barH + titleInset behavior (the bar is real chrome).
-                        BOOL chromeHidden = [strongSelf driftSafariChromeHidden];
-                        if (chromeHidden) {
-                            // Extend content under the title bar so its 32px band stops insetting the web-view.
-                            win.titlebarAppearsTransparent = YES;
-                            win.styleMask |= NSWindowStyleMaskFullSizeContentView;
-                            barH = 0;
-                            titleInset = 0;
-                        }
-                        CGFloat targetContent = layoutViewportHeight + barH + titleInset;
-                        [win setContentSize:NSMakeSize(w, targetContent)];
-                        // Pin the web view to EXACTLY the layout viewport, above the bottom bar (origin.y
-                        // == barH; barH == 0 in content-only mode → the web-view fills the full content).
-                        if (strongSelf->containerView) {
-                            strongSelf->containerView.autoresizingMask = NSViewNotSizable;
-                            strongSelf->containerView.frame = NSMakeRect(0, barH, w, layoutViewportHeight);
-                            if (strongSelf.mainContentView)
-                                strongSelf.mainContentView.frame = strongSelf->containerView.bounds;
-                        }
-                        NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f hidden=%d -> window content=%.0f web-view=%d (target viewport=%d, screen-w=%d)",
-                            contentH, barH, titleInset, (int)chromeHidden, (double)targetContent, layoutViewportHeight, layoutViewportHeight, w);
+                        [strongSelf driftApplyLayoutViewportHeight:layoutViewportHeight screenWidth:w];
                     });
                 }
             });
@@ -264,6 +242,81 @@
 
     [share sendActionOn:NSEventMaskLeftMouseDown];
     [super windowDidLoad];
+}
+
+// W2990 (A3 render-investigation a57228b6): the layout-viewport height correction, extracted from
+// windowDidLoad's deferred block so it can run SYNCHRONOUSLY (content-only / chrome-hidden — the
+// production path, where the final size is deterministic up front) OR on the 0.4s deferral
+// (chrome-SHOWN fallback, where the real bar inset only settles after the window displays). It is
+// IDEMPOTENT: the same constants in → the same final frame out, so re-invoking it (sync + the async
+// re-assert) is harmless. Operates on self/self.window directly; the callers guard lifetime.
+- (void)driftApplyLayoutViewportHeight:(int)layoutViewportHeight screenWidth:(int)screenWidth
+{
+    NSWindow *win = self.window;
+    if (!win || layoutViewportHeight <= 0)
+        return;
+    int w = screenWidth;
+    // W1421 (fingerprint FIX): documentElement.clientHeight == the WEB VIEW's
+    // FRAME height (the layout viewport), so the window must be sized so the
+    // web view == layoutViewportHeight exactly. The OLD measure
+    // (contentView.height - contentLayoutRect.height) saw ONLY the title-bar
+    // band (~32px) — it was BLIND to the Driftstack bottom bar, which insets
+    // the web container (containerView) by barH (92px) under DRIFTSTACK_SAFARI_CHROME.
+    // Result, proven empirically: clientHeight = layoutViewport - 92 (782 vs 874)
+    // = a file-99 tell whenever the chrome is on. Fix: derive the chrome from the
+    // ACTUAL web view (its origin.y == the bottom-bar height, 0 when chrome off)
+    // PLUS the title-bar band, then DETERMINISTICALLY pin the web-view frame to
+    // the layout viewport — do NOT rely on autoresize propagating the resize
+    // (empirically it did not; the window is non-resizable so an explicit frame
+    // sticks).
+    CGFloat contentH = win.contentView.frame.size.height;
+    NSView *web = containerView ?: self.mainContentView;
+    CGFloat barH = web ? web.frame.origin.y : 0;                       // bottom-bar height (0 = chrome off)
+    CGFloat titleInset = contentH - win.contentLayoutRect.size.height; // title-bar band
+    if (barH < 0) barH = 0;
+    if (titleInset < 0) titleInset = 0;
+    // W2972 (founder "black space at the bottom, browser only ~70%" + A2 W2957/W2971
+    // per-archetype-size bug): in content-only mode the web-view must FILL the captured
+    // frame so (1) there is no black band to mask, and (2) the window aspect == the
+    // per-archetype capture profile aspect → SCStream scalesToFit becomes a no-op (no
+    // anamorphic scale, no letterbox). So:
+    //   - DROP the 92px hidden-bar reserve (barH→0; the bar is invisible, reserving it
+    //     only bakes a black void — the dominant ~12% bottom band the founder reports).
+    //   - DROP the macOS title-band inset too: extend the web content under the title bar
+    //     (NSFullSizeContentView + transparent titlebar) so the window content == the
+    //     layout viewport EXACTLY and the web-view fills it edge-to-edge. The W1375
+    //     page-shows-through-the-toolbar risk does NOT apply here: there is NO visible
+    //     toolbar in content-only mode (the GUI Browser-mode supplies the URL bar), so
+    //     nothing overlaps the page.
+    // The web-view height stays == layoutViewportHeight (inner_height, e.g. 714/693/796),
+    // so documentElement.clientHeight == window.innerHeight remains iPhone-exact (the
+    // file-99 layout-viewport signal is UNCHANGED). The window WIDTH is the per-archetype
+    // screen_width `w` (DRIFTSTACK_VIEWPORT_WIDTH: 390/402/430...) — already correct.
+    // Chrome-SHOWN keeps the old barH + titleInset behavior (the bar is real chrome).
+    // W2990: in content-only mode this whole computation is constant (barH=0, titleInset=0 →
+    // targetContent == layoutViewportHeight) — which is why windowDidLoad can call it SYNCHRONOUSLY
+    // (before first paint), eliminating the late height-reflow. The measured contentH / origin.y /
+    // contentLayoutRect feed ONLY the chrome-SHOWN fallback branch.
+    BOOL chromeHidden = [self driftSafariChromeHidden];
+    if (chromeHidden) {
+        // Extend content under the title bar so its 32px band stops insetting the web-view.
+        win.titlebarAppearsTransparent = YES;
+        win.styleMask |= NSWindowStyleMaskFullSizeContentView;
+        barH = 0;
+        titleInset = 0;
+    }
+    CGFloat targetContent = layoutViewportHeight + barH + titleInset;
+    [win setContentSize:NSMakeSize(w, targetContent)];
+    // Pin the web view to EXACTLY the layout viewport, above the bottom bar (origin.y
+    // == barH; barH == 0 in content-only mode → the web-view fills the full content).
+    if (containerView) {
+        containerView.autoresizingMask = NSViewNotSizable;
+        containerView.frame = NSMakeRect(0, barH, w, layoutViewportHeight);
+        if (self.mainContentView)
+            self.mainContentView.frame = containerView.bounds;
+    }
+    NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f hidden=%d -> window content=%.0f web-view=%d (target viewport=%d, screen-w=%d)",
+        contentH, barH, titleInset, (int)chromeHidden, (double)targetContent, layoutViewportHeight, layoutViewportHeight, w);
 }
 
 // W1378: the iOS-26 Safari BOTTOM bar. Re-homes the existing controls (IBOutlets = the real control

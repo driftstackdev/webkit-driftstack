@@ -539,6 +539,11 @@ static OptionSet<ActivityState> driftstackForceForeground(OptionSet<ActivityStat
 {
     state.add({ ActivityState::IsVisible, ActivityState::IsVisibleOrOccluded, ActivityState::IsInWindow,
                 ActivityState::WindowIsActive, ActivityState::IsFocused });
+    // Driftstack rAF-LEAK-1 / #16: the host WindowServer marks an unattended desktop page visually-idle,
+    // which throttles rAF to 30fps and aligns foreground DOM-timers to 1s. Real iOS holds the settled
+    // foreground page at 60fps with no idle throttle. Clear IsVisuallyIdle so the impersonated page is
+    // never treated as host-idle.
+    state.remove(ActivityState::IsVisuallyIdle);
     return state;
 }
 #endif
@@ -4429,8 +4434,18 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // when momentum is off this is never read by TouchEnd, so it is pure dead state.
         if (s_driftstackScrollMomentum && !m_driftstackPotentialTap
             && dtMove > 0_s && dtMove < reanchorWindow) {
-            double vx = static_cast<double>(m_driftstackLastTouchPoint.x() - pos.x()) / dtMove.seconds();
-            double vy = static_cast<double>(m_driftstackLastTouchPoint.y() - pos.y()) / dtMove.seconds();
+            // W3000 (defense-in-depth vs the W2962 EWMA over-read): floor the inter-move dt at 8ms
+            // before the Δpos/dt velocity divide. A real iPhone samples touchmoves at ~display
+            // cadence (~8–16ms apart), but injected/coalesced touchmoves can arrive with a
+            // micro-dt (sub-millisecond) — a small but real Δpos divided by a tiny dt yields a
+            // spuriously huge px/s, which the EWMA then carries to lift-off and over-triggers a
+            // fling on what was a slow drag. Clamping dtMove to a minimum of 8ms (the fastest a
+            // genuine 120Hz iOS sample arrives) caps that per-sample velocity to a physical
+            // ceiling. The kMinLiftoffSpeed=205 gate is the primary slow-drag/flick separator;
+            // this floor is the secondary guard so micro-dt coalescing can't manufacture speed.
+            double dtSeconds = std::max(dtMove.seconds(), 0.008);
+            double vx = static_cast<double>(m_driftstackLastTouchPoint.x() - pos.x()) / dtSeconds;
+            double vy = static_cast<double>(m_driftstackLastTouchPoint.y() - pos.y()) / dtSeconds;
             // EWMA: 0.45 of the new sample, 0.55 of history — recent moves dominate without a single noisy
             // last sample throwing the coast off. (First contributing move: history is 0, so v ≈ 0.45·v0,
             // which the next moves quickly converge upward — fine for a multi-move flick.)
@@ -4451,11 +4466,12 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // last touch point; a slow drag (low lift-off velocity) does NOT fling. Cancelled on the next
         // TouchStart. Entirely gated — no momentum when DRIFTSTACK_SCROLL_MOMENTUM is unset/0.
         if (s_driftstackScrollMomentum) {
-            // Rest threshold: below ~80 px/s the coast distance is sub-perceptible; starting one would
-            // only add a detectable micro-creep after a deliberate slow drag. iOS likewise does not fling
-            // a slow release.
-            // W2995: thresholds/decay live in Shared/DriftstackScrollCoastMath.h so the live coast
-            // and its unit test share one source of truth (kMinLiftoffSpeed = 80 px/s).
+            // Lift-off gate: below ~205 px/s the release is a slow drag, not a flick; starting a coast
+            // would add a detectable micro-creep / fling on a deliberate slow drag. iOS likewise does
+            // not fling a slow release.
+            // W2995/W3000: thresholds/decay live in Shared/DriftstackScrollCoastMath.h so the live coast
+            // and its unit test share one source of truth (kMinLiftoffSpeed = 205 px/s — raised from 80
+            // on A1's real-device fling-begin capture to separate slow-drag ~190 from flick ~1187).
             double speed = std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height());
             if (WebKit::DriftstackScrollCoast::shouldStartCoast(speed)) {
                 if (!m_driftstackScrollCoastTimer) {

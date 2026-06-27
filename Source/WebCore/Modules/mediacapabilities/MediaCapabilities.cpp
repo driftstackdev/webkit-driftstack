@@ -193,6 +193,27 @@ static void applyDriftstackHardwareCeiling(PlatformMediaCapabilitiesDecodingInfo
     bool isHEVC = v->contentType.contains("hev1"_s) || v->contentType.contains("hvc1"_s);
     if (isHEVC)
         info.smooth = false;
+
+    // 2026-06-27 VP9 decodingInfo pin (captured, real iPhone 17): VP9 support is CONTAINER-gated on iOS.
+    // VP9-in-MP4 (codec string 'vp09.*') reports {supported,smooth,powerEfficient} all TRUE; VP9-in-WebM
+    // (codec string 'vp9', container video/webm) reports all FALSE. The fork only clamps HEVC, so Mac
+    // VideoToolbox VP9 passes through — and a host M-series Mac may report VP9-in-WebM smooth/supported=true,
+    // a cross-device tell against the iPhone-false reference. Pin both branches to the captured iPhone values.
+    // Both 'vp09.*' (MP4) and 'vp9' (WebM) codec strings denote VP9; disambiguate by container MIME.
+    bool isVP9 = v->contentType.contains("vp09"_s) || v->contentType.contains("vp9"_s);
+    if (isVP9) {
+        bool isWebM = v->contentType.contains("webm"_s);
+        bool isMP4 = v->contentType.contains("mp4"_s) || v->contentType.contains("m4v"_s);
+        if (isWebM) {
+            info.supported = false;
+            info.smooth = false;
+            info.powerEfficient = false;
+        } else if (isMP4) {
+            info.supported = true;
+            info.smooth = true;
+            info.powerEfficient = true;
+        }
+    }
 }
 #endif
 

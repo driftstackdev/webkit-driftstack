@@ -31,10 +31,10 @@ namespace WebCore {
 
 static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCascade, char32_t cp, float sizePx, float& outAdvance)
 {
-    if (cp != 0x1E9E && cp != 0x20B9 && cp != 0x20B8 && cp != 0x097F && cp != 0x2581) // ẞ ₹ ₸ ॿ ▁ -- listed GCPS codepoints
+    if (cp != 0x1E9E && cp != 0x20B9 && cp != 0x20B8 && cp != 0x097F && cp != 0x2581 && cp != 0x20BA) // ẞ ₹ ₸ ॿ ▁ ₺ -- listed GCPS codepoints
         return false;
     struct Entry { ASCIILiteral family; char32_t cp; float adv128; };
-    static constexpr std::array<Entry, 8> kGcpsNamed { {
+    static constexpr std::array<Entry, 14> kGcpsNamed { {
         { "Futura"_s, 0x1E9E, 86.9375f },  // ẞ -- closes the blfonts uniqueMetrics off-by-one (Futura↔Kailasa)
         { "Savoye LET"_s, 0x097F, 71.808f },  // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (71.80799865722656 == float 71.808f); prior 71.576f was Mac-native-tuned-to-group, not the real iOS per-char float (the founder's "actually-correct not tune-to-pass" — iOS's own group is computed WITH 71.808 so it satisfies both)
         // -apple-system / system-ui: ONLY ▁ (U+2581) diverges (sim measureText: fork 118.19 vs iOS 119.738);
@@ -47,6 +47,18 @@ static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCa
         { "Impact"_s, 0x20B8, 71.1875f },   // ₸ W2879: exact iOS float (iOS=71.1875=1139/16; was 71.188f=71.18800354)
         { "Impact"_s, 0x1E9E, 88.375f },   // ẞ
         { "Impact"_s, 0x097F, 74.496f },   // ॿ -- W2878: exact iOS-26.5-sim measureText FLOAT (74.49600219726562 == float 74.496f); prior 74.648f was native-cascade-tuned-to-group, not the real iOS per-char (offsetWidth 75 unchanged; iOS's group uses 74.496 so metricsHash holds)
+        // 2026-06-27 Kefa Family-A GCPS fallback (blfonts metricsHash c6bdb116). Primary "Kefa" aliases to
+        // the macOS "Kefa III" face; the GCPS chars have no Kefa glyph and route to Mac fallback fonts whose
+        // advance differs from real iOS. Inject the real iOS @128px in-run advances (captured
+        // blfonts-iPhone_16_Pro_Max-1782581084705.json kefaPerChar.floatPer, metricsHash c6bdb116
+        // re-confirmed same capture) so the fork's Kefa metric group lands 4367,149. Latin glyphs are
+        // corrected separately via DriftstackKefaAdvances.h on the Kefa III face.
+        { "Kefa"_s, 0x20B9, 66.5f },       // ₹ INDIAN RUPEE SIGN
+        { "Kefa"_s, 0x2581, 128.0f },      // ▁ LOWER ONE EIGHTH BLOCK
+        { "Kefa"_s, 0x20BA, 71.1875f },    // ₺ TURKISH LIRA SIGN
+        { "Kefa"_s, 0x20B8, 71.1875f },    // ₸ TENGE SIGN
+        { "Kefa"_s, 0x1E9E, 86.9375f },    // ẞ LATIN CAPITAL LETTER SHARP S
+        { "Kefa"_s, 0x097F, 72.576f },     // ॿ DEVANAGARI LETTER BBA
     } };
     // Scale by the PRIMARY's computed size (the requested font-size), NOT the fallback run font's size:
     // Mac CTLine metric-shrinks some fallbacks relative to the primary, which would mis-scale the @128px value.

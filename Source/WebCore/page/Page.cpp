@@ -550,8 +550,14 @@ Page::Page(PageConfiguration&& pageConfiguration)
 
     settingsDidChange();
 
+#if !PLATFORM(DRIFTSTACK)
+    // Driftstack rAF-LEAK-2: m_lowPowerModeNotifier reads the HOST Mac's Low Power Mode. Leaking host LPM
+    // into the impersonated page throttles rAF/timers in a way the iOS device's own (off-unless-archetype-
+    // driven) LPM would not. The impersonated LPM state is set via handleLowPowerModeChange / the testing
+    // override path, not from the host at construction.
     if (m_lowPowerModeNotifier->isLowPowerModeEnabled())
         m_throttlingReasons.add(ThrottlingReason::LowPowerMode);
+#endif
 
     if (m_thermalMitigationNotifier->thermalMitigationEnabled()) {
         m_throttlingReasons.add(ThrottlingReason::ThermalMitigation);
@@ -3052,8 +3058,15 @@ void Page::updateDOMTimerAlignmentInterval()
 
     switch (m_timerThrottlingState) {
     case TimerThrottlingState::Disabled: {
+#if PLATFORM(DRIFTSTACK)
+        // Driftstack #3: the foreground (Disabled-throttling) DOM-timer alignment interval must mirror iOS,
+        // which uses the default (0ms) interval. The host-LPM branch would pin it to the 30ms low-power
+        // interval whenever the host Mac is in Low Power Mode, leaking a host-state tell into timer cadence.
+        m_domTimerAlignmentInterval = DOMTimer::defaultAlignmentInterval();
+#else
         bool isInLowPowerOrThermallyMitigatedMode = isLowPowerModeEnabled() || isThermalMitigationEnabled();
         m_domTimerAlignmentInterval = isInLowPowerOrThermallyMitigatedMode ? DOMTimer::defaultAlignmentIntervalInLowPowerOrThermallyMitigatedMode() : DOMTimer::defaultAlignmentInterval();
+#endif
         break;
     }
     case TimerThrottlingState::Enabled:
