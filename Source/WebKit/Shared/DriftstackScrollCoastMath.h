@@ -52,7 +52,14 @@ constexpr double kDecayPerMs = 0.998;
 
 // Below this lift-off speed (px/s) the coast distance is sub-perceptible, so no coast is
 // started -- iOS likewise does not fling a slow release.
-constexpr double kMinLiftoffSpeed = 80; // px/s
+// W3000: raised 80 -> 205 on A1's real-device fling-begin BrowserStack capture. This is the
+// gate-3 over-read fix from the W2962 attempted-then-reverted flip: a genuine slow drag lifts
+// off around ~190 px/s (NO fling on a real iPhone), while a gentle flick lifts off around
+// ~1187 px/s (DOES fling). The old 80 threshold sat below the slow-drag band, so the W2962
+// box-verify saw a 4390px fling on a slow drag. 205 separates the two bands (just above the
+// ~190 slow-drag ceiling) so a slow release stays 1:1 and only a real flick coasts. Paired
+// with the WebPage.cpp 8ms dt-floor (defense-in-depth vs micro-dt EWMA over-read).
+constexpr double kMinLiftoffSpeed = 205; // px/s
 
 // Once the coast slows below this speed (px/s) it stops and the velocity is zeroed -- iOS
 // settling to rest.
