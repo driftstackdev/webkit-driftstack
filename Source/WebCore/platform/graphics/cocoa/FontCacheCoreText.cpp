@@ -993,6 +993,22 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     // 2026-06-27 split of W232's unconditional exclusion — A3-flagged 18.6 over-exclusion.
     if (lowercase == "kefa"_s && !driftstackKefaPresentForArchetype())
         return nullptr;
+    // 2026-06-27 (A3 Q1) Family-A Kefa FONT-NAME alias. On Safari <26 (gate true) the line
+    // above does NOT return — Kefa must resolve to the REAL macOS Kefa face so blfonts'
+    // width-detection sees Kefa PRESENT (Family-A real device: uniqueMetrics 138 /
+    // metricsHash c6bdb116 / blfonts 254). BUT the macOS Kefa file is KefaIII.ttf whose
+    // internal nameID=1 family is "Kefa III" (no nameID=16) — driftstackWalkFontDir keys it
+    // under "kefa iii", so a CSS request for family "Kefa" (lowercase=="kefa") MISSES the
+    // map and returns nullptr (Kefa absent → blfonts 253, the bug A3 flagged). Alias "kefa"
+    // → the REAL "kefa iii" map key so the lookup HITS the actual Kefa face. NOTE this maps
+    // to the REAL Kefa glyphs (NOT the removed kefa→helvetica fallback, which over-detected
+    // by resolving even when an explicit fallback was specified). Gated on the SAME predicate
+    // as the nullptr-exclusion: at Safari ≥26 the gate is false → the exclusion above already
+    // returned nullptr, so this alias is never reached → Kefa stays genuinely absent (blfonts
+    // 253/137). #else-trap: plain `if` (not part of the else-if chain below), so the gate is
+    // the only condition that decides whether the rewrite happens.
+    if (lowercase == "kefa"_s && driftstackKefaPresentForArchetype())
+        lowercase = "kefa iii"_s;
     // V-479 Times-family alias (V-442 TRIGGER C closure 2026-05-08):
     // iOS Stage B install ships TimesNewRoman.ttf, registered under
     // family 'times new roman'. Mac CSS and CT_FONT_NAME 'Times'
