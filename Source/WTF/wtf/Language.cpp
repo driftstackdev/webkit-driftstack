@@ -149,6 +149,17 @@ static Vector<String>& computeUserPreferredLanguages(ShouldMinimizeLanguages sho
         return override;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-27 (deep-host-leak LEAK-1): NEVER fall through to platformUserPreferredLanguages (host
+    // Mac CFLocaleCopyPreferredLanguages) when no DRIFTSTACK_APPLELANGUAGES env is set — that leaks the
+    // fleet Mac's system locale into JSC IntlObject::defaultLocale -> Intl.*.resolvedOptions().{locale,
+    // calendar,numberingSystem}, and is incoherent with NavigatorBase's en-US pin (NavigatorBase.cpp:174,
+    // W2613). Hard-pin the launch default en-US (the iPhone default); tier-1 geo APPLELANGUAGES (above)
+    // and tier-2 config.lang (carried via that env) still win when set. NOTE: launch-env should export
+    // DRIFTSTACK_APPLELANGUAGES from config.lang for non-en archetypes so Intl stays geo-coherent.
+    static NeverDestroyed<Vector<String>> s_driftstackDefaultLanguages { Vector<String> { "en-US"_s } };
+    return s_driftstackDefaultLanguages.get();
+#else
     auto& languages = shouldMinimizeLanguages == ShouldMinimizeLanguages::Yes ? cachedMinimizedPlatformPreferredLanguages() : cachedFullPlatformPreferredLanguages();
     if (languages.isEmpty()) {
         LOG(Language, "userPreferredLanguages() cache miss");
@@ -156,6 +167,7 @@ static Vector<String>& computeUserPreferredLanguages(ShouldMinimizeLanguages sho
     } else
         LOG(Language, "userPreferredLanguages() cache hit");
     return languages;
+#endif
 }
 
 Vector<String> userPreferredLanguages(ShouldMinimizeLanguages shouldMinimizeLanguages)

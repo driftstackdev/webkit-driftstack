@@ -417,6 +417,13 @@ void Notification::requestPermission(Document& document, RefPtr<NotificationPerm
         });
     };
 
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-27 (LEAK-2): mirror the Notification.permission getter (forced Permission::Denied on iPhone
+    // archetypes, Notification.cpp:402). requestPermission() had NO short-circuit, so a user-gesture
+    // request fell through to the host Mac WebNotificationClient — a real macOS prompt + incoherence vs
+    // the forced getter. Real iPhone Safari resolves 'denied'; resolve it immediately, before any client.
+    return resolvePromiseAndCallback(Permission::Denied);
+#else
     auto* client = static_cast<ScriptExecutionContext&>(document).notificationClient();
     if (!client)
         return resolvePromiseAndCallback(Permission::Denied);
@@ -439,6 +446,7 @@ void Notification::requestPermission(Document& document, RefPtr<NotificationPerm
     }
 
     client->requestPermission(document, WTF::move(resolvePromiseAndCallback));
+#endif
 }
 
 void Notification::eventListenersDidChange()
