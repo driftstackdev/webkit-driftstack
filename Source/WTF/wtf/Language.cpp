@@ -157,6 +157,14 @@ static Vector<String>& computeUserPreferredLanguages(ShouldMinimizeLanguages sho
     // W2613). Hard-pin the launch default en-US (the iPhone default); tier-1 geo APPLELANGUAGES (above)
     // and tier-2 config.lang (carried via that env) still win when set. NOTE: launch-env should export
     // DRIFTSTACK_APPLELANGUAGES from config.lang for non-en archetypes so Intl stays geo-coherent.
+    //
+    // 2026-06-27 LEAK-1 build follow-on (combined-build BUILD_EXIT=65 at Language.cpp:106): on the
+    // DRIFTSTACK path the en-US pin returns WITHOUT consulting shouldMinimizeLanguages (the min-vs-full
+    // distinction only matters for the host platformUserPreferredLanguages lookup in the #else), so the
+    // parameter is unused here and -Werror,-Wunused-parameter trips at the signature. The pin is CORRECT
+    // to ignore it (en-US is identical minimized-or-full), so suppress with the WTF idiom — behavior and
+    // fingerprint are UNCHANGED; the #else still uses the param. (A1 LEAK-1 follow-on, to confirm/own.)
+    UNUSED_PARAM(shouldMinimizeLanguages);
     static NeverDestroyed<Vector<String>> s_driftstackDefaultLanguages { Vector<String> { "en-US"_s } };
     return s_driftstackDefaultLanguages.get();
 #else
