@@ -34,6 +34,13 @@
 #include "CanvasRenderingContext2DBase.h"
 
 #if PLATFORM(DRIFTSTACK)
+// 2026-06-26 canvas-family fix: include the shared override header so this TU sees the inline
+// WebCore::driftstackIsCanvasFamilyA() it calls (~line 3088, the V-510 family-aware reorder) —
+// defined in DriftstackCanvasFingerprint10xOverride.h. This TU lives in html/canvas/, so the
+// header (in html/) is NOT same-directory and the brand-new header is not yet in the WebCore
+// header-map; use the Source/WebCore-relative path so the -ISource/WebCore search dir resolves it
+// (matches how sibling cross-dir headers resolve here).
+#include "html/DriftstackCanvasFingerprint10xOverride.h"
 // V-373 Driftstack canvas-fp getImageData substitution. Forward
 // declarations here (rather than including the header from
 // Source/WebCore/html/) avoid cross-directory header-search-path
@@ -3076,6 +3083,16 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
             const char* env = getenv("DRIFTSTACK_GETIMAGEDATA_ATLAS");
             return env && env[0] == '1';
         }();
+        // 2026-06-26 (founder #1 canvas Family-A fix — mirror toDataURL/toBlob):
+        // the V-510 atlas is family-BLIND (one family-B-supplemented bin for all
+        // archetypes). On a Family-A archetype (≤26.3 incl 18.6 + 26.0-26.3) a
+        // V-510 getImageData HIT would serve Family-B (57186fab) RGBA — but the
+        // V-373 (V-185 canonical) path above is family-CONSTRAINED and already
+        // served the correct Family-A bytes if covered. So SKIP the family-blind
+        // V-510 getImageData serve on Family-A; on a V-373 miss fall through to
+        // the native/AFP path (device-exact for uncovered content). dsHasArch-
+        // guarded → false when env unset, so the 26.4 launch path is UNCHANGED.
+        const bool dsCanvasFamilyA_GID = WebCore::driftstackIsCanvasFamilyA();
         // W2481 — extend the V-510 getImageData serve to PARTIAL-rect (mirror the §90
         // V-373 path): look up the FULL-canvas V-510 RGBA by op-seq, then slice the
         // requested (sx,sy,sw,sh). Without this, a sub-region getImageData of a
@@ -3083,6 +3100,7 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         // full-canvas read + toDataURL serve the iPhone bytes — FPJS's sub-region
         // noise-sensitivity probe would detect that inconsistency.
         if (s_getImageDataAtlas
+            && !dsCanvasFamilyA_GID
             && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
             && sw > 0 && sh > 0 && sx >= 0 && sy >= 0
             // SEC-2026-06-18 (audit-w2 INFO): size_t bounds — avoid the signed-int `sx + sw` overflow UB (W2530 convention).

@@ -1314,13 +1314,42 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             uint16_t h = static_cast<uint16_t>(std::min<unsigned>(height(), 0xffff));
             opSeqSha_early = ctx2D->driftstackOpSequenceSHA256(w, h);
         }
+        auto fillText = lastFillText();
+        // 2026-06-26 (founder #1 — canvas Family-A boundary fix): the V-510
+        // canvas-fuzz atlas is keyed on sha256(macForkDataURL)/opSeqSha ONLY —
+        // it carries NO archetype/family tag (family-BLIND), and the single
+        // shipped atlas is the family-B-supplemented bin served to every
+        // archetype. So on a Family-A archetype (≤26.3 incl 18.6 + 26.0-26.3)
+        // a V-510 HIT would serve Family-B (57186fab) bytes for a shape that
+        // ALSO lives in the family-constrained V-185 canonical table, routing
+        // 26.0-26.3 to the WRONG canvas family. The V-185 table fallback IS
+        // family-correct (driftstackArchetypeIsFamilyB ≤26.3). So when the
+        // current archetype is canvas Family-A, try the family-CONSTRAINED
+        // canonical table FIRST; only fall through to the family-blind V-510
+        // atlas on a canonical miss. Family-B (the 26.4 launch + ≥26.4) keeps
+        // the original V-510-first order — dsHasArch-guarded helper returns
+        // false when DRIFTSTACK_ARCHETYPE is unset, so the launch path is
+        // byte-for-byte UNCHANGED (no glyphHash/cumrig regression).
+        const bool dsCanvasFamilyA = driftstackIsCanvasFamilyA();
+        if (dsCanvasFamilyA) {
+            const char* canonicalFA = lookupCanvasFp10xCanonicalWithText(width(), height(), fillText);
+            if (canonicalFA) {
+                WTFLogAlways("[Driftstack-V241-FA] canvas-fp FAMILY-A canonical substitution FIRED (%dx%d PNG, lastFillText=%d chars) — pre-V-510 (family-blind atlas would mis-serve Family-B)",
+                    width(), height(), fillText.length());
+                return UncachedString { String::fromLatin1(canonicalFA) };
+            }
+        }
         // We don't have `encoded` yet; compute it lazily only if V-510
         // is enabled (else skip the early-encode cost).
         static bool s_v510EnabledEarly = []() {
             const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
             return env && env[0] == '1';
         }();
-        if (s_v510EnabledEarly) {
+        // On a Family-A archetype the family-blind V-510 atlas is SKIPPED entirely
+        // (the canonical table above is the family-correct serve; on its miss we
+        // proceed to the family-A text-run/per-glyph recompose + native paths
+        // below). Family-B keeps V-510 as the primary substitution.
+        if (s_v510EnabledEarly && !dsCanvasFamilyA) {
             dsPngEncoded = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
             auto substituteEarly = v510AtlasLookup(dsPngEncoded, opSeqSha_early);
             if (!substituteEarly.isNull()) {
@@ -1332,7 +1361,6 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             // below instead of being re-encoded — eliminates the double encode that made toDataURL ~1ms slower
             // than the iPhone (timing-fidelity). Byte-identity vs the return paths is gated by glyphHash.
         }
-        auto fillText = lastFillText();
         // Exact (dims + lastFillText) match ONLY. The dimension-only fallback
         // substituted ANOTHER canvas's canonical for uncovered (width,height)
         // states — a 100%-WRONG canvas (proven by the rigcanvas test: a 200x100
@@ -1658,14 +1686,30 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
             opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
         }
         auto macForkDataURL = makeString("data:image/png;base64,"_s, base64Encoded(blobData.span()));
-        auto substitute = v510AtlasLookup(macForkDataURL, opSeqSha);
-        bool fromV510 = !substitute.isNull();
-        if (substitute.isNull()) {
-            // Exact (dims+lastFillText) match only — dim-only fallback removed (it
-            // returned a wrong canvas for uncovered states; native is device-exact).
+        // 2026-06-26 (founder #1 canvas Family-A fix — mirror toDataURL): the
+        // V-510 atlas is family-BLIND (single family-B-supplemented bin for all
+        // archetypes). On a Family-A archetype (≤26.3) a V-510 hit would serve
+        // Family-B bytes; the V-185 canonical table fallback IS family-correct.
+        // So on Family-A try the family-constrained canonical FIRST and SKIP the
+        // family-blind V-510 lookup. Family-B keeps V-510 primary (launch path
+        // unchanged — helper is dsHasArch-guarded, false when env unset).
+        const bool dsCanvasFamilyA = driftstackIsCanvasFamilyA();
+        String substitute;
+        bool fromV510 = false;
+        if (dsCanvasFamilyA) {
             const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
             if (canonical)
                 substitute = String::fromUTF8(canonical);
+        } else {
+            substitute = v510AtlasLookup(macForkDataURL, opSeqSha);
+            fromV510 = !substitute.isNull();
+            if (substitute.isNull()) {
+                // Exact (dims+lastFillText) match only — dim-only fallback removed (it
+                // returned a wrong canvas for uncovered states; native is device-exact).
+                const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+                if (canonical)
+                    substitute = String::fromUTF8(canonical);
+            }
         }
         static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
         if (!substitute.isNull() && substitute.startsWith(kPNGPrefix)) {

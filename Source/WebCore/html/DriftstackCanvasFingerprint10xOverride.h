@@ -63891,6 +63891,38 @@ inline bool driftstackArchetypeIsFamilyB(const char* slug)
     return false;
 }
 
+// 2026-06-26 — canonical CANVAS-PIXEL family boundary helper (founder #1).
+// The browserleaks canvas FP family is ≤26.3 (Family A, md5 61b7a151) vs ≥26.4
+// (Family B, md5 57186fab). This is the CANVAS boundary ONLY — it is NOT the
+// WebGPU/feature boundary (pre-26 vs 26.0, the s_isFamilyAArchetype lambda);
+// the WebPage.cpp:5497 comment warns "do not conflate". 18.6 + 26.0/26.1/26.2/26.3
+// ALL render the Family-A canvas; only 26.4+ is Family-B. The pre-26-only
+// s_isFamilyAArchetype lambda WRONGLY excludes 26.0-26.3, so any canvas-pixel
+// path keyed on it routes 26.0-26.3 to Family-B — this helper is the correct key.
+//
+// GUARDRAIL (the landmine, mirrors WebPage.cpp:5963): when DRIFTSTACK_ARCHETYPE
+// is UNSET we are the 26.4 LAUNCH default (Family B) — return FALSE so the unset
+// launch path is NEVER treated as Family-A (no regression). dsHasArch-guarded:
+// FamilyA requires BOTH (a) an explicit archetype env AND (b) Safari ≤26.3.
+inline bool driftstackArchetypeIsCanvasFamilyA(const char* slug)
+{
+    if (!slug || !slug[0])
+        return false; // unset = 26.4 launch default = Family B, never Family A
+    return !driftstackArchetypeIsFamilyB(slug);
+}
+
+// Convenience overload keyed on the live process archetype env. Reads the RAW
+// DRIFTSTACK_ARCHETYPE env (NOT driftstackCurrentArchetypeCStr(), which defaults
+// to the legacy "iphone16pro_ios18_6" Family-A slug when unset — that default is
+// for the V-185 canonical-table back-compat path, and using it here would
+// wrongly classify the UNSET 26.4 launch default as Family-A). Unset env =
+// 26.4 launch = Family B → false.
+inline bool driftstackIsCanvasFamilyA()
+{
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    return driftstackArchetypeIsCanvasFamilyA(env);
+}
+
 // V-245 archetype-aware content-aware dispatch (preferred path).
 // Tries (archetype, w, h, fillText) exact match first.
 inline const char* lookupCanvasFp10xCanonicalForArchetypeWithText(
