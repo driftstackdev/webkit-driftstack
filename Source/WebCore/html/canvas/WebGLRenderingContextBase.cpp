@@ -2065,8 +2065,25 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
     case GraphicsContextGL::LINE_WIDTH:
         return getFloatParameter(pname);
     case GraphicsContextGL::MAX_COMBINED_TEXTURE_IMAGE_UNITS:
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix (sibling of the W2741/W2522 MAX_*_VECTORS pins below): real
+        // iPhone (A14..A19, Safari 17.1..26.5) reports 32 across webgl1+webgl2 getParameter
+        // (capture-confirmed: reference/realdevice-bs/aio-iPhone_{14,15Pro,16ProMax,17,17ProMax}
+        // — MAX_COMBINED_TEXTURE_IMAGE_UNITS=32 on every chip). m_textureUnits.size() is the bare
+        // host MAX_COMBINED_TEXTURE_IMAGE_UNITS the Mac ANGLE/Metal backend reported at init
+        // (host-variable on the fleet axis: M2/M3/M4 Mac GPUs need not agree). We pin only the
+        // REPORTED value; the internal m_textureUnits array keeps its host size so texture-unit
+        // bind bookkeeping is unaffected. Apple-GPU-uniform.
+        return 32;
+#endif
         return static_cast<GCGLint>(m_textureUnits.size());
     case GraphicsContextGL::MAX_CUBE_MAP_TEXTURE_SIZE:
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix: real iPhone (A14..A19, Safari 17.1..26.5) reports 16384
+        // (capture-confirmed across reference/realdevice-bs/aio-* on every chip). m_maxCubeMapTextureSize
+        // is the bare host value cached at init (host-variable on the fleet axis). Apple-GPU-uniform.
+        return 16384;
+#endif
         return m_maxCubeMapTextureSize;
     case GraphicsContextGL::MAX_FRAGMENT_UNIFORM_VECTORS:
 #if PLATFORM(DRIFTSTACK)
@@ -2078,6 +2095,15 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_RENDERBUFFER_SIZE:
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix: real iPhone (A14..A19, Safari 17.1..26.5) reports 16384
+        // (capture-confirmed across reference/realdevice-bs/aio-* on every chip). m_maxRenderbufferSize
+        // is the bare host value cached at init (host-variable on the fleet axis). Apple-GPU-uniform.
+        // NOTE: m_maxRenderbufferSize is still used internally for canvas-size clamping (see
+        // clampedCanvasSize / maxRenderbufferSize()), so we override only the REPORTED getParameter
+        // value, not the cached member.
+        return 16384;
+#endif
         return m_maxRenderbufferSize;
     case GraphicsContextGL::MAX_TEXTURE_IMAGE_UNITS:
 #if PLATFORM(DRIFTSTACK)
@@ -2092,6 +2118,14 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_TEXTURE_SIZE:
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix: real iPhone (A14..A19, Safari 17.1..26.5) reports 16384
+        // (capture-confirmed across reference/realdevice-bs/aio-* on every chip). m_maxTextureSize
+        // is the bare host value cached at init (host-variable on the fleet axis). Apple-GPU-uniform.
+        // NOTE: m_maxTextureSize is still used internally for texture-level/canvas-size clamping,
+        // so we override only the REPORTED getParameter value, not the cached member.
+        return 16384;
+#endif
         return m_maxTextureSize;
     case GraphicsContextGL::MAX_VARYING_VECTORS:
 #if PLATFORM(DRIFTSTACK)
@@ -2102,6 +2136,15 @@ WebGLAny WebGLRenderingContextBase::getParameter(GCGLenum pname)
 #endif
         return getIntParameter(pname);
     case GraphicsContextGL::MAX_VERTEX_ATTRIBS:
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix: real iPhone (A14..A19, Safari 17.1..26.5) reports 16
+        // (capture-confirmed across reference/realdevice-bs/aio-* on every chip). maxVertexAttribs()
+        // is m_vertexAttribValue.size(), grown to the bare host MAX_VERTEX_ATTRIBS at init
+        // (host-variable on the fleet axis). We pin only the REPORTED value; the internal
+        // m_vertexAttribValue array keeps its host size so vertex-attrib bookkeeping is unaffected.
+        // Apple-GPU-uniform.
+        return 16;
+#endif
         return static_cast<GCGLint>(maxVertexAttribs());
     case GraphicsContextGL::MAX_VERTEX_TEXTURE_IMAGE_UNITS:
 #if PLATFORM(DRIFTSTACK)
@@ -5024,6 +5067,20 @@ RefPtr<Float32Array> WebGLRenderingContextBase::getWebGLFloatArrayParameter(GCGL
 {
     std::array<GCGLfloat, 4> value { };
     graphicsContextGL()->getFloatv(pname, value);
+#if PLATFORM(DRIFTSTACK)
+    // C2 host-passthrough fix (sibling of the W2741/W2522 getParameter pins): the ALIASED_*_RANGE
+    // float ranges are read raw from the Mac ANGLE/Metal backend (host-variable on the fleet axis:
+    // M2/M3/M4 Mac GPUs need not agree). Real iPhone (A14..A19, Safari 17.1..26.5) reports
+    // ALIASED_LINE_WIDTH_RANGE=[1,1] and ALIASED_POINT_SIZE_RANGE=[1,511] across webgl1+webgl2
+    // (capture-confirmed across reference/realdevice-bs/aio-* on every chip). Apple-GPU-uniform.
+    if (pname == GraphicsContextGL::ALIASED_LINE_WIDTH_RANGE) {
+        value[0] = 1;
+        value[1] = 1;
+    } else if (pname == GraphicsContextGL::ALIASED_POINT_SIZE_RANGE) {
+        value[0] = 1;
+        value[1] = 511;
+    }
+#endif
     unsigned length = 0;
     switch (pname) {
     case GraphicsContextGL::ALIASED_POINT_SIZE_RANGE:
@@ -5044,8 +5101,19 @@ RefPtr<Float32Array> WebGLRenderingContextBase::getWebGLFloatArrayParameter(GCGL
 RefPtr<Int32Array> WebGLRenderingContextBase::getWebGLIntArrayParameter(GCGLenum pname)
 {
     switch (pname) {
-    case GraphicsContextGL::MAX_VIEWPORT_DIMS:
+    case GraphicsContextGL::MAX_VIEWPORT_DIMS: {
+#if PLATFORM(DRIFTSTACK)
+        // C2 host-passthrough fix (sibling of the W2741/W2522 getParameter pins): m_maxViewportDims
+        // is read raw from the Mac ANGLE/Metal backend at init (host-variable on the fleet axis:
+        // M2/M3/M4 Mac GPUs need not agree). Real iPhone (A14..A19, Safari 17.1..26.5) reports
+        // [16384, 16384] across webgl1+webgl2 (capture-confirmed across reference/realdevice-bs/aio-*
+        // on every chip). We report the pinned pair; the cached m_maxViewportDims still drives the
+        // internal clampedCanvasSize() clamp. Apple-GPU-uniform.
+        std::array<GCGLint, 2> pinned { 16384, 16384 };
+        return Int32Array::tryCreate(pinned.data(), pinned.size());
+#endif
         return Int32Array::tryCreate(m_maxViewportDims.data(), m_maxViewportDims.size());
+    }
     case GraphicsContextGL::SCISSOR_BOX:
     case GraphicsContextGL::VIEWPORT:
         break;

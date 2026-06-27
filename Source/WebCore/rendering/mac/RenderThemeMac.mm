@@ -494,6 +494,57 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
     const bool forVisitedLink = options.contains(StyleColorOptions::ForVisitedLink);
 
 #if PLATFORM(DRIFTSTACK)
+    // C1 (2026-06-27): Family-A (pre-Safari-26, i.e. the 18.6 archetype) CSS system-color palette. Apple's
+    // iOS-26 "Liquid Glass" P3 vibrant-hue refresh shifted the -apple-system vibrant hues + the
+    // separator/grid/container-border opacity between the 18.6 set and the 26.x set. The fork's W14xx override
+    // block below (and the AppKit fall-through for the un-overridden hues, which resolves to macOS-26.2 NSColor
+    // == the iOS-26.x set) serve the 26.x palette to EVERY archetype — so an 18.6 archetype diverges on 12
+    // keywords. This is the same "fork serves the launch value for a non-launch archetype" class as the
+    // Kefa-font + canvas-family Family-A catches. Below, when the archetype is pre-26 (Safari major < 26 ⇒
+    // !driftstackArchetypeSafariAtLeast(26, 0)), serve the captured 18.6 values for those 12 keywords and return;
+    // for 26.0+ (incl. the unset launch default) this whole block is skipped and the 26.x handling below runs
+    // BYTE-UNCHANGED. Every value extracted from REAL-DEVICE BS /aio captures
+    // (categories.vendor.v3-system-colors-probe-1-0.value.systemColors), paletteHash 7181e18c, unanimous across
+    // 4 UA-verified 18.6 captures (iPhone 16 Pro / 16 Pro Max / 16 Plus). The separator/grid/container-border
+    // 8-bit alphas (74=0.29 light, 153=0.6 dark) are the bytes whose WebKit shortest-round-trip serialization is
+    // the exact captured getComputedStyle string (the W1456 "minimal round-tripping decimal" method). This stays
+    // a CANDIDATE (per-minor paletteHash gate css_system_colors_per_minor, captures/v1) pending A3 compile +
+    // a real-device 18.6 paletteHash==7181e18c verify; do NOT mark closed. (-apple-system-indigo dark also
+    // shifted 26.0→26.2 — handled separately at its own keyword below; here it's the 18.6 value.)
+    if (!driftstackArchetypeSafariAtLeast(26, 0)) {
+        switch (cssValueID) {
+        // Vibrant hues — 18.6 P3 set (pre-Liquid-Glass). The 26.x values fall through to macOS NSColor
+        // (== iOS-26.x) for non-Family-A archetypes; here we serve the 18.6 device values explicitly.
+        case CSSValueAppleSystemBlue:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 10, 132, 255 } } : Color { SRGBA<uint8_t> { 0, 122, 255 } };
+        case CSSValueAppleSystemBrown:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 172, 142, 104 } } : Color { SRGBA<uint8_t> { 162, 132, 94 } };
+        case CSSValueAppleSystemOrange:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 159, 10 } } : Color { SRGBA<uint8_t> { 255, 149, 0 } };
+        case CSSValueAppleSystemPurple:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 191, 90, 242 } } : Color { SRGBA<uint8_t> { 175, 82, 222 } };
+        case CSSValueAppleSystemRed:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 69, 58 } } : Color { SRGBA<uint8_t> { 255, 59, 48 } };
+        case CSSValueAppleSystemYellow:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 255, 214, 10 } } : Color { SRGBA<uint8_t> { 255, 204, 0 } };
+        case CSSValueAppleSystemIndigo:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 94, 92, 230 } } : Color { SRGBA<uint8_t> { 88, 86, 214 } };
+        case CSSValueAppleSystemTeal:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 64, 200, 224 } } : Color { SRGBA<uint8_t> { 48, 176, 199 } };
+        // Separator / grid / container-border — 18.6 opacity (light 0.29 = alpha 74, dark 0.6 = alpha 153;
+        // 26.x is 0.12 = 31 / 0.5 = 128, handled below).
+        case CSSValueAppleSystemSeparator:
+        case CSSValueAppleSystemContainerBorder:
+        case CSSValueAppleSystemGrid:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 84, 84, 88, 153 } } : Color { SRGBA<uint8_t> { 60, 60, 67, 74 } };
+        // Opaque separator — 18.6 opaque value (26.x is 231,231,232 / 42,42,44, handled below).
+        case CSSValueAppleSystemOpaqueSeparator:
+            return useDarkAppearance ? Color { SRGBA<uint8_t> { 50, 50, 52 } } : Color { SRGBA<uint8_t> { 198, 198, 200 } };
+        default:
+            break;  // not a Family-A-divergent keyword — fall through to the shared (26.x-pinned) handling.
+        }
+    }
+
     // iPhone form-control palette: Mac's NSColor resolutions of these -apple-system colors diverge from iOS.
     // -apple-system-label is OPAQUE on iOS (UIColor.label: rgb(0,0,0) light / rgb(255,255,255) dark) where Mac
     // returns 85% (NSColor.labelColor = rgba(0,0,0,0.847)); -apple-system-opaque-secondary-fill is opaque

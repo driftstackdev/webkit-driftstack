@@ -2988,6 +2988,16 @@ bool WebGL2RenderingContext::validateNonDefaultFramebufferAttachment(ASCIILitera
 
 GCGLint WebGL2RenderingContext::maxDrawBuffers()
 {
+#if PLATFORM(DRIFTSTACK)
+    // C2 host-passthrough fix (sibling of the W2741/W2522 getParameter pins): MAX_DRAW_BUFFERS
+    // is read raw from the Mac ANGLE/Metal backend (host-variable on the fleet axis: M2/M3/M4
+    // Mac GPUs need not agree). Real iPhone (A14..A19, Safari 17.1..26.5) reports 8 across
+    // webgl2 getParameter(MAX_DRAW_BUFFERS) (capture-confirmed across reference/realdevice-bs/aio-*
+    // on every chip). Pinned host-independent. 8 is also the iPhone's true draw-buffer count, so the
+    // internal bounds-checks that call this (drawBuffers / blendEquationiOES index validation) stay
+    // correct. Apple-GPU-uniform. Mirrors maxColorAttachments() below (GL ES 3.0 requires equality).
+    return 8;
+#endif
     if (!m_maxDrawBuffers)
         m_maxDrawBuffers = protect(graphicsContextGL())->getInteger(GraphicsContextGL::MAX_DRAW_BUFFERS);
     return m_maxDrawBuffers;
@@ -2995,6 +3005,14 @@ GCGLint WebGL2RenderingContext::maxDrawBuffers()
 
 GCGLint WebGL2RenderingContext::maxColorAttachments()
 {
+#if PLATFORM(DRIFTSTACK)
+    // C2 host-passthrough fix: real iPhone (A14..A19, Safari 17.1..26.5) reports MAX_COLOR_ATTACHMENTS=8
+    // across webgl2 getParameter (capture-confirmed across reference/realdevice-bs/aio-* on every chip).
+    // DrawBuffers requires MAX_COLOR_ATTACHMENTS == MAX_DRAW_BUFFERS; pinned host-independent to match
+    // maxDrawBuffers()==8 above. 8 is the iPhone's true color-attachment count, so the internal
+    // attachment-index bounds-checks that call this stay correct. Apple-GPU-uniform.
+    return 8;
+#endif
     // DrawBuffers requires MAX_COLOR_ATTACHMENTS == MAX_DRAW_BUFFERS
     if (!m_maxColorAttachments)
         m_maxColorAttachments = protect(graphicsContextGL())->getInteger(GraphicsContextGL::MAX_DRAW_BUFFERS);

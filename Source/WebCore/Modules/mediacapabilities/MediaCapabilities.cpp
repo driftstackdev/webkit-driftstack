@@ -180,13 +180,18 @@ static void applyDriftstackHardwareCeiling(PlatformMediaCapabilitiesDecodingInfo
     if (!v)
         return;
 
-    // HEVC at 4K resolution with framerate >= 60fps: iPhone 16 Pro can decode
-    // (supported=true) and does so power-efficiently, but not smoothly.
-    // Match. Both 'hev1.*' and 'hvc1.*' codec strings are HEVC.
+    // 2026-06-27 (D1, divergence-hunt worjyvm13): real iPhone reports HEVC decodingInfo smooth=false at
+    // EVERY level/resolution/framerate (720p@30 .. 4K@60) — 0 HEVC smooth=true rows across the whole
+    // reference/realdevice-bs corpus (models 14-17, Safari 18.6-26.5; e.g. hevclevels-iPhone_17 45-row
+    // matrix all smo:false, mediacaps-iPhone_16_Pro 18.6 both hvc1/hev1 false). The OLD clamp fired ONLY
+    // at 4K>=60fps, so all sub-4K-60 HEVC leaked the host-Mac VideoToolbox smooth=true on the M-series
+    // fleet (a cross-device tell on every archetype + a fleet-axis tell). The "below-60fps-at-4K hardware
+    // ceiling" premise was WRONG — the divergence is device-class-wide. H.264 (avc1.*) is unaffected
+    // (correctly smooth=true). Both 'hev1.*' and 'hvc1.*' codec strings are HEVC.
+    // (N1: powerEfficient is host-passthrough — likely true on Apple Silicon; pin it after a real-device
+    //  capture confirms the supported-row gating, to lock the full {supported,smooth,powerEfficient} triple.)
     bool isHEVC = v->contentType.contains("hev1"_s) || v->contentType.contains("hvc1"_s);
-    bool is4KOrHigher = v->width >= 3840 || v->height >= 2160;
-    bool is60fpsOrHigher = v->framerate >= 60.0;
-    if (isHEVC && is4KOrHigher && is60fpsOrHigher)
+    if (isHEVC)
         info.smooth = false;
 }
 #endif
