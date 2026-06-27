@@ -136,28 +136,53 @@ static bool driftstackIOSFontMapInitialized WTF_GUARDED_BY_LOCK(driftstackIOSFon
 // "safariNN_M" token from DRIFTSTACK_ARCHETYPE; defaults to apply (launch = 26.4).
 static bool driftstackBlfonts69ShouldApply()
 {
-    static const bool s_apply = []() -> bool {
-        const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!arch || !arch[0])
-            return true;
-        std::string_view sv(arch);
-        auto pos = sv.find("safari");
-        if (pos == std::string_view::npos)
-            return true;
-        pos += 6;
-        int major = 0, minor = 0;
-        while (pos < sv.size() && isASCIIDigit(sv[pos])) { major = major * 10 + (sv[pos] - '0'); ++pos; }
-        if (pos < sv.size() && sv[pos] == '_') {
-            ++pos;
-            while (pos < sv.size() && isASCIIDigit(sv[pos])) { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
-        }
-        if (major > 26)
-            return false;          // Safari 27+ : Apple removed these (assume stays removed)
-        if (major == 26 && minor >= 5)
-            return false;          // Safari 26.5+ : verified real = 253 (not detected)
-        return true;               // Safari <= 26.4 (incl Family-A 17/18/19) : verified/assumed 256
-    }();
-    return s_apply;
+    // 2026-06-27: read getenv LIVE (NOT a static cache — the static cached the wrong/default value when it
+    // initialized before DRIFTSTACK_ARCHETYPE was set; same Kefa/AV1 static-cache class). Mirror C1.
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !arch[0])
+        return true;
+    std::string_view sv(arch);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0, minor = 0;
+    while (pos < sv.size() && isASCIIDigit(sv[pos])) { major = major * 10 + (sv[pos] - '0'); ++pos; }
+    if (pos < sv.size() && sv[pos] == '_') {
+        ++pos;
+        while (pos < sv.size() && isASCIIDigit(sv[pos])) { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    }
+    if (major > 26)
+        return false;          // Safari 27+ : Apple removed these (assume stays removed)
+    if (major == 26 && minor >= 5)
+        return false;          // Safari 26.5+ : verified real = 253 (not detected)
+    return true;               // Safari <= 26.4 (incl Family-A 17/18/19) : verified/assumed 256
+}
+
+// 2026-06-27 Kefa Family-A split. Kefa is PRESENT on real Safari 18.x (verified uniqueMetrics 138
+// / metricsHash c6bdb116 in aio-iPhone_16_Pro_Max-1781873317444) but ABSENT on real 26.x (W232
+// evidence was iPhone-17/26.4 only — Apple removed Kefa at Safari 26). So Kefa is present for
+// Safari major < 26 (Family-A 17/18/19), excluded for ≥26. Unset env = 26.4 launch = absent.
+// (Migration candidate: derive from boundary-registry / DriftstackBoundaryRegistry.h when M2-codegen lands.)
+static bool driftstackKefaPresentForArchetype()
+{
+    // 2026-06-27 (A3 box root-cause): read getenv("DRIFTSTACK_ARCHETYPE") LIVE — NOT the archetype-config JSON,
+    // NOT a static cache. The WebContent CHILD is SANDBOX-DENIED reading the config JSON ("[Driftstack-
+    // ArchetypeConfig] read failed ... you don't have permission" -> cfg.isLoaded()=false in the child), but
+    // getenv IS forwarded to WebContent + sandbox-safe (PROVEN by the C1 RenderThemeMac palette gate working
+    // live at 18.6 -> 7181e18c). Mirror C1's driftstackArchetypeSafariAtLeast exactly: parse the Safari major
+    // after "safari" in the slug. Kefa present for major < 26 (Family-A 17/18/19); excluded >=26 (unset/26.4 = absent).
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !arch[0])
+        return false;
+    std::string_view sv(arch);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    pos += 6;
+    int major = 0;
+    while (pos < sv.size() && isASCIIDigit(sv[pos])) { major = major * 10 + (sv[pos] - '0'); ++pos; }
+    return major > 0 && major < 26;
 }
 
 static void driftstackBuildLocalizedFamilyMap(const std::string& path, HashMap<String, Vector<String>>& out)
@@ -961,8 +986,12 @@ static RetainPtr<CTFontRef> driftstackIOSFontWithFamily(const AtomString& family
     if (lowercase == "gujarati sangam mn"_s
         || lowercase == "oriya sangam mn"_s
         || lowercase == "plantagenet cherokee"_s
-        || lowercase == "gurmukhi mn"_s
-        || lowercase == "kefa"_s)
+        || lowercase == "gurmukhi mn"_s)
+        return nullptr;
+    // Kefa: exclude ONLY on Safari ≥26 (real 26.x lacks it, W232 iPhone-17/26.4); KEEP it for
+    // Family-A 18.x where the real device detects it (uniqueMetrics 138 / metricsHash c6bdb116).
+    // 2026-06-27 split of W232's unconditional exclusion — A3-flagged 18.6 over-exclusion.
+    if (lowercase == "kefa"_s && !driftstackKefaPresentForArchetype())
         return nullptr;
     // V-479 Times-family alias (V-442 TRIGGER C closure 2026-05-08):
     // iOS Stage B install ships TimesNewRoman.ttf, registered under

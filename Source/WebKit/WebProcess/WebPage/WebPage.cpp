@@ -5510,7 +5510,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // for the full pattern. All future Safari-26-only feature hides on
     // Family A follow this same pattern: add the per-archetype override
     // here after updateSettingsGenerated().
-    static const bool s_isFamilyAArchetype = []() {
+    // 2026-06-27 (silently-inert-gate sweep): read getenv LIVE — NOT a static cache.
+    // A `static const` lambda caches at FIRST call, which can fire during early process
+    // init BEFORE the per-band DRIFTSTACK_ARCHETYPE env is applied → it caches the
+    // launch/26.4 default for ALL archetypes (gate silently inert). Mirror the C1
+    // RenderThemeMac.mm driftstackArchetypeSafariAtLeast live-getenv pattern.
+    const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;
@@ -5724,7 +5729,8 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // WebGPU is capture-confirmed at 26.2 ONLY (no A15@26.0 capture exists) → A15 capability is gated
     // conservatively to Safari minor >= 2 (26.0/26.1 NEEDS-CAPTURE). A16+ stay capable at all 26.x
     // (unchanged). 18.x A15 archetypes never reach here — s_isFamilyAArchetype hides them above.
-    static const bool s_webGPUNonCapableModel = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (see s_isFamilyAArchetype above).
+    const bool s_webGPUNonCapableModel = []() {
         const char* a = getenv("DRIFTSTACK_ARCHETYPE");
         if (!a || !a[0])
             return false; // no archetype env = iphone17 launch = WebGPU-capable

@@ -491,7 +491,8 @@ static inline RTCRtpCapabilities toRTCRtpCapabilities(const webrtc::RtpCapabilit
         // on audio/red — preserve Mac fork's empty default.
         if (sdpFmtpLine.isEmpty()
             && equalLettersIgnoringASCIICase(mimeType, "audio/red"_s)) {
-            static const bool s_isFamilyAArchetypeRTC = []() {
+            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            const bool s_isFamilyAArchetypeRTC = []() {
                 const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!archetype) return false;
                 std::string_view sv(archetype);

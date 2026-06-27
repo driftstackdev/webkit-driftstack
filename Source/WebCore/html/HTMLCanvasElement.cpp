@@ -1620,7 +1620,8 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     // ImageUtilitiesCG.cpp encoder already redirects avif/heic → png bytes
     // (V-090 Track 6); this patch matches Family A's Blob.type normalization.
     // Family B (Safari 26.4+) emits image/avif natively, so leaves type intact.
-    static const bool s_isFamilyAArchetypeToBlob = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAArchetypeToBlob = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype) return false;
         std::string_view sv(archetype);

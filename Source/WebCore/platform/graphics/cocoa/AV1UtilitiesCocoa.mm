@@ -55,16 +55,16 @@ namespace WebCore {
 // (project_codec_capability_perchip_hostderived_w2560.)
 static bool driftstackArchetypeHasAV1Decode()
 {
-    static const bool hasAV1 = [] {
-        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!env || !env[0])
-            return true; // no archetype set => default fleet behavior (host passthrough)
-        std::string_view sv { env };
-        // A17 Pro+: "iphone15pro" matches iphone15pro AND iphone15promax (NOT iphone15/iphone15plus,
-        // which have no "pro"); "iphone16"/"iphone17" match all of those families.
-        return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
-    }();
-    return hasAV1;
+    // 2026-06-27: read getenv LIVE (NOT a static cache) — a static initializes during early process init
+    // when DRIFTSTACK_ARCHETYPE may still be unset, caching the wrong value; the per-band slug is forwarded
+    // to WebContent + sandbox-safe (proven by the C1 RenderThemeMac gate). Same fix-class as Kefa/C1.
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!env || !env[0])
+        return true; // no archetype set => default fleet behavior (host passthrough)
+    std::string_view sv { env };
+    // A17 Pro+: "iphone15pro" matches iphone15pro AND iphone15promax (NOT iphone15/iphone15plus,
+    // which have no "pro"); "iphone16"/"iphone17" match all of those families.
+    return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
 }
 // True ONLY when an A17Pro+ archetype is EXPLICITLY set (env present + matches). Distinct from
 // driftstackArchetypeHasAV1Decode() which ALSO returns true for no-env (host passthrough). A real
@@ -74,14 +74,14 @@ static bool driftstackArchetypeHasAV1Decode()
 // HW-decode-available TRUE for an explicit A17Pro+ archetype so M2==M3==M4==iPhone (host-independent).
 static bool driftstackArchetypeExplicitlyA17ProPlus()
 {
-    static const bool v = [] {
-        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!env || !env[0])
-            return false;
-        std::string_view sv { env };
-        return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
-    }();
-    return v;
+    // 2026-06-27: read getenv LIVE (NOT a static cache — see driftstackArchetypeHasAV1Decode above). The
+    // static cached false when init ran before DRIFTSTACK_ARCHETYPE was set -> AV1 forced unsupported even on
+    // the iphone17 launch archetype (av1-decinfo-matrix gate ALL-FALSE on 90209). Same fix-class as Kefa/C1.
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!env || !env[0])
+        return false;
+    std::string_view sv { env };
+    return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
 }
 #endif
 

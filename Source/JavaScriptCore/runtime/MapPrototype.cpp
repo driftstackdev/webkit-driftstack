@@ -100,7 +100,8 @@ void MapPrototype::finishCreation(VM& vm, JSGlobalObject* globalObject)
     // so safari26_0/safari26_1 fell through and installed (a leak on the 26.0/26.1
     // cohort). EXTENDED to also skip safari26_0/safari26_1 (i.e. skip when <26.2).
     // Launch 26.4 is UNAFFECTED — it stays installed.
-    static const bool s_skipMapGetOrInsert = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_skipMapGetOrInsert = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;

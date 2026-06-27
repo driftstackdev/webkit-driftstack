@@ -466,7 +466,8 @@ GPU* Navigator::gpu()
     // (Safari 26.4+) keeps native exposure. Static init reads
     // DRIFTSTACK_ARCHETYPE env var (forwarded via ProcessLauncherCocoa
     // allowlist Wave 29-400 §8.A).
-    static bool s_isFamilyA = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyA = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype) return false;  // default Family B (launch archetype)
         // Family A archetype identifiers (per CLAUDE.md launch verdict 2026-05-17):
@@ -491,7 +492,8 @@ GPU* Navigator::gpu()
     // iphone13/iphone13mini) IS WebGPU-capable on 26.x. Gated conservatively to Safari minor >= 2
     // (only 26.2 is capture-confirmed; 26.0/26.1 = NEEDS-CAPTURE). 18.x A15 already hidden by
     // s_isFamilyA above. A16+ unchanged (capable at all 26.x).
-    static bool s_hideWebGPUNonCapableModel = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_hideWebGPUNonCapableModel = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;

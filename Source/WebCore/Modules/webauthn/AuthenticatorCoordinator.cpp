@@ -408,7 +408,8 @@ void AuthenticatorCoordinator::isUserVerifyingPlatformAuthenticatorAvailable(con
     // returns true. Per WebPage::updatePreferences s_isFamilyAArchetype
     // pattern, archetype detection via DRIFTSTACK_ARCHETYPE env at process
     // init time.
-    static const bool s_isFamilyAArchetype = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype) return false;
         std::string_view sv(archetype);
@@ -450,7 +451,8 @@ void AuthenticatorCoordinator::isConditionalMediationAvailable(const Document& d
     // empirical n=3 Family A returns false; empirical n=1 Family B
     // returns true. Same archetype detection as
     // isUserVerifyingPlatformAuthenticatorAvailable above.
-    static const bool s_isFamilyAArchetype = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype) return false;
         std::string_view sv(archetype);

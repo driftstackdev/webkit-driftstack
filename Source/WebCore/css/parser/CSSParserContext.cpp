@@ -147,7 +147,8 @@ CSSParserContext::CSSParserContext(const Settings& settings)
     // For Family A archetype, RESPECT the Settings value (which
     // WebPage::updatePreferences sets to false). Force-enable only
     // applies to Family B archetypes (Safari 26.4+ launch path).
-    static const bool s_isFamilyAArchetype = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;

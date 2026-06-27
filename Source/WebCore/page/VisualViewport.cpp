@@ -155,7 +155,8 @@ double VisualViewport::height() const
         if (RefPtr document = legacyFrame->document()) {
             const auto& args = document->viewportArguments();
             if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit) {
-                static int s_legacyVVHeight = []() {
+                // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+                const int s_legacyVVHeight = []() {
                     const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
                     if (!archetype || !archetype[0])
                         return 1741;
@@ -180,7 +181,8 @@ double VisualViewport::height() const
     // the Config doesn't carry it. Mirrors LocalDOMWindow::innerHeight() exactly.
     if (auto ih = DriftstackArchetypeConfig::singleton().innerHeight(); ih > 0)
         return static_cast<double>(ih);
-    static double s_height = []() -> double {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const double s_height = []() -> double {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype || !archetype[0])
             return 714.0;

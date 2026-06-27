@@ -63844,11 +63844,14 @@ static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
 // which archetype is the launch default.
 inline const char* driftstackCurrentArchetypeCStr()
 {
-    static const char* archetype = []() {
-        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
-        return env && env[0] ? env : "iphone16pro_ios18_6";
-    }();
-    return archetype;
+    // 2026-06-27 sweep: read getenv LIVE — NOT a static cache. A `static const char*`
+    // here caches at FIRST call, which can fire during early process init BEFORE the
+    // per-band DRIFTSTACK_ARCHETYPE env is applied → it would pin "iphone16pro_ios18_6"
+    // for ALL archetypes, routing every band to the wrong canvas atlas entry (this is
+    // on the live served canvas path: lookupCanvasFp10xCanonical[WithText]). getenv's
+    // returned pointer is process-stable, so returning it live is dangle-safe.
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    return env && env[0] ? env : "iphone16pro_ios18_6";
 }
 
 // Wave 29-360 Item 5: classify an archetype slug as canvas pipeline

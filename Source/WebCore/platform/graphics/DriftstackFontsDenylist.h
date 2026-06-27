@@ -134,11 +134,14 @@ static constexpr DriftstackFontsDenylistEntry kDriftstackFontsDenylist[] = {
 // arithmetic under -Werror,-Wunsafe-buffer-*).
 inline const char* driftstackFontsCurrentArchetypeCStr()
 {
-    static const char* archetype = []() {
-        const char* env = getenv("DRIFTSTACK_ARCHETYPE");
-        return env && env[0] ? env : "iphone16pro_ios18_6";
-    }();
-    return archetype;
+    // 2026-06-27 sweep: read getenv LIVE — NOT a static cache. A `static const char*`
+    // here caches at FIRST call, possibly before the per-band DRIFTSTACK_ARCHETYPE env
+    // is applied → it would pin "iphone16pro_ios18_6" (iOS 18.6) for ALL archetypes, so
+    // the iOS-version-keyed Mac-only-font denylist (driftstackFontsIosKey) would serve
+    // the 18.6 set to every band incl. iOS 18.7 = a per-model font-detection tell.
+    // getenv's returned pointer is process-stable, so returning it live is dangle-safe.
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    return env && env[0] ? env : "iphone16pro_ios18_6";
 }
 
 // W2556 (config-coherence audit #5): the Mac-only-font denylist reflects iOS FONT AVAILABILITY

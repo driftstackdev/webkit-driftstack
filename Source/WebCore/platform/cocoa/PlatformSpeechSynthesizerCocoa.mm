@@ -348,7 +348,8 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             // SourcesCocoa.txt @nonARC @no-unify entry. Xcode project regen
             // required before C-A1 accessor wiring can land. Tracked as
             // Tier-3 founder-action.
-            static const bool v657NeedsCompactRemap = []() {
+            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            const bool v657NeedsCompactRemap = []() {
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
                 NSString *archStr = [NSString stringWithUTF8String:env];
@@ -390,7 +391,8 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
             // DIFFERENT real-device tier at the same iOS 18.7); A15 iphone14/iphone14plus (the substring
             // "iphone14pro" matches only the A16 Pro/ProMax, not the non-Pro A15); and ALL ios18_6 slugs
             // (the Samantha tier at iOS 18.6 is unverified — never assume across an iOS version, W2274).
-            static const bool needsSamanthaSuperCompact = []() {
+            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            const bool needsSamanthaSuperCompact = []() {
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
                 NSString* slug = [NSString stringWithUTF8String:env];

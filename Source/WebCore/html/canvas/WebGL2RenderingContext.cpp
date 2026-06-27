@@ -748,14 +748,13 @@ void WebGL2RenderingContext::framebufferTextureLayer(GCGLenum target, GCGLenum a
 // wrong-chip GPU tell on 67 coming_soon archetypes; found by the W2556 config-coherence audit).
 static int driftstackArchetypeMaxSamples()
 {
-    static const int s_samples = []() -> int {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return 8; // no archetype env = launch default = iPhone 17 (A19)
-        // Only the iPhone 17 family carries A19; its slugs are the only ones containing "iphone17".
-        return std::string_view(archetype).find("iphone17") != std::string_view::npos ? 8 : 4;
-    }();
-    return s_samples;
+    // 2026-06-27 sweep: live getenv, NOT static-cached (a static caches at first call,
+    // possibly before the per-band DRIFTSTACK_ARCHETYPE env is applied → silently inert).
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype)
+        return 8; // no archetype env = launch default = iPhone 17 (A19)
+    // Only the iPhone 17 family carries A19; its slugs are the only ones containing "iphone17".
+    return std::string_view(archetype).find("iphone17") != std::string_view::npos ? 8 : 4;
 }
 #endif
 
@@ -3219,23 +3218,21 @@ void WebGL2RenderingContext::addMembersToOpaqueRoots(JSC::AbstractSlotVisitor& v
 // (e.g. "iphone17_ios18_7_safari26_4"); default (no archetype) = launch 26.4 → 12/24/12.
 static bool driftstackWebGLUniformBlocksV265Plus()
 {
-    static const bool s_v265plus = []() -> bool {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return false;
-        std::string_view sv(archetype);
-        auto pos = sv.find("safari");
-        if (pos == std::string_view::npos)
-            return false;
-        sv.remove_prefix(pos + 6);
-        int major = 0, minor = 0;
-        size_t i = 0;
-        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
-        if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) ++i;
-        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
-        return major > 26 || (major == 26 && minor >= 5);
-    }();
-    return s_v265plus;
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype)
+        return false;
+    std::string_view sv(archetype);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    int major = 0, minor = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+    return major > 26 || (major == 26 && minor >= 5);
 }
 #endif
 

@@ -117,7 +117,8 @@ GPU* WorkerNavigator::gpu()
 #if PLATFORM(DRIFTSTACK)
     // Wave 29-402 v1.0 navigator.gpu Family A hide (Worker context mirror;
     // founder verdict 2026-05-19). See Navigator.cpp:412 for full rationale.
-    static bool s_isFamilyAWorker = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAWorker = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype) return false;
         return std::string_view(archetype).find("safari18_") != std::string_view::npos;
@@ -133,7 +134,8 @@ GPU* WorkerNavigator::gpu()
     // ⚠️ A15 RE-ENABLED (mirror of Navigator.cpp): capture aio-iPhone_14 @ Safari 26.2 shows real A15
     // has navigator.gpu → A15-non-Pro capable on 26.2+ (conservative; 26.0/26.1 NEEDS-CAPTURE). 18.x
     // A15 hidden by s_isFamilyAWorker above. A16+ unchanged.
-    static bool s_hideWebGPUNonCapableModelWorker = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_hideWebGPUNonCapableModelWorker = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;

@@ -181,7 +181,9 @@ JSObject* IntlPluralRules::resolvedOptions(JSGlobalObject* globalObject) const
     // "notation" in Intl.PluralRules resolvedOptions output. The field
     // was added to JSC at a Safari version > 18.6. Skip the field for
     // Family A archetypes to match BS REF.
-    static const bool s_skipPluralRulesNotation = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (a static caches at first call,
+    // possibly before the per-band DRIFTSTACK_ARCHETYPE env is applied → silently inert).
+    const bool s_skipPluralRulesNotation = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype)
             return false;

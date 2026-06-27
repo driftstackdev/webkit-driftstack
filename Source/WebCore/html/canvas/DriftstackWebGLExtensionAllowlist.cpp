@@ -122,22 +122,20 @@ static const HashSet<String>& newerGpuOnlyExtensions()
 // no-op for it; A17 Pro stays at the full set (Apple-spec + = current behavior → no unverified change).
 static bool archetypeIsOlderGpuExtensionTier()
 {
-    static const bool s_older = []() -> bool {
-        const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
-            return false; // no archetype env = launch default iPhone 17 (A19) = newer-GPU tier
-        std::string_view a(archetype);
-        if (a.find("iphone13") != std::string_view::npos)
-            return true; // A15
-        if (a.find("iphone14") != std::string_view::npos)
-            return true; // A15 (14/14 Plus) / A16 (14 Pro/Pro Max)
-        if (a.find("iphone15pro") != std::string_view::npos)
-            return false; // iPhone 15 Pro / 15 Pro Max = A17 Pro = newer-GPU tier
-        if (a.find("iphone15") != std::string_view::npos)
-            return true; // iPhone 15 / 15 Plus = A16
-        return false; // iphone16* / iphone17* = A18 / A19 = newer-GPU tier
-    }();
-    return s_older;
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype)
+        return false; // no archetype env = launch default iPhone 17 (A19) = newer-GPU tier
+    std::string_view a(archetype);
+    if (a.find("iphone13") != std::string_view::npos)
+        return true; // A15
+    if (a.find("iphone14") != std::string_view::npos)
+        return true; // A15 (14/14 Plus) / A16 (14 Pro/Pro Max)
+    if (a.find("iphone15pro") != std::string_view::npos)
+        return false; // iPhone 15 Pro / 15 Pro Max = A17 Pro = newer-GPU tier
+    if (a.find("iphone15") != std::string_view::npos)
+        return true; // iPhone 15 / 15 Plus = A16
+    return false; // iphone16* / iphone17* = A18 / A19 = newer-GPU tier
 }
 
 void filterWebGLExtensionsToIphoneCanonical(Vector<String>& extensions)

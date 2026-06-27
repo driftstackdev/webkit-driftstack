@@ -1419,7 +1419,8 @@ int LocalDOMWindow::innerHeight() const
         const auto& args = document->viewportArguments();
         bool noViewportMeta = (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit);
         if (noViewportMeta) {
-            static int s_legacyHeight = []() {
+            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            const int s_legacyHeight = []() {
                 const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!archetype || !archetype[0])
                     return 1741;
@@ -1447,7 +1448,8 @@ int LocalDOMWindow::innerHeight() const
     // inner_height (un-populated matrix models — no regression vs the prior behavior).
     if (auto ih = DriftstackArchetypeConfig::singleton().innerHeight(); ih > 0)
         return ih;
-    static int s_metaViewportHeight = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const int s_metaViewportHeight = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype || !archetype[0])
             return 714;

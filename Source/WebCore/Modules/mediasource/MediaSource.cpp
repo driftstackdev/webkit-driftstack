@@ -1172,7 +1172,8 @@ bool MediaSource::isTypeSupported(ScriptExecutionContext& context, const String&
     // gate it off for Family A so the archetype matches the real device. iOS exposes only ManagedMediaSource (not
     // MediaSource), so this is exactly the MMS surface the fingerprint probes read. (Family-A archetype = pre-26
     // Safari; matches the s_isFamilyAArchetype convention used in CSSParserContext/LibWebRTCProvider.)
-    static const bool s_isFamilyAArchetypeMSE = [] {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_isFamilyAArchetypeMSE = [] {
         const char* a = getenv("DRIFTSTACK_ARCHETYPE");
         if (!a)
             return false;

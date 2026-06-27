@@ -172,7 +172,8 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
     // reject the promise with TypeError. The v2 fingerprint probe wraps
     // every query in try/catch, so the rejected promise's TypeError
     // surfaces identically to the real iPhone IDL-parse rejection.
-    static bool s_familyA = []() {
+    // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+    const bool s_familyA = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         if (!archetype || !archetype[0])
             return false;
