@@ -2027,15 +2027,30 @@ void WebAutomationSession::profileDumpNow(const Inspector::Protocol::Automation:
                 String json = root->toJSONString();
                 CString jsonUTF8 = json.utf8();
                 String dumpPath = FileSystem::pathByAppendingComponent(dataDir, ".driftstack-dump.json"_s);
-                // overwriteEntireFile writes via a temp + atomic rename (the harness never reads a partial dump).
-                auto written = FileSystem::overwriteEntireFile(dumpPath, byteCast<uint8_t>(jsonUTF8.span()));
-                bool wrote = written.has_value();
+                // W2988 (audit wggdfj7od #5): overwriteEntireFile is openFile(Truncate)+write — NOT a
+                // temp+rename; the prior comment here ("temp + atomic rename") was FALSE. A plain in-place
+                // truncate (a) zeroes the prior good dump before any new byte lands (a fork SIGKILL mid-dump
+                // → 0-byte file) and (b) reports a SHORT write (disk-full) as success (FileHandle::write is
+                // a single ::write() that returns the byte count without looping → has_value()=true on a
+                // truncated prefix), so the ACK would lie. Write to a sibling temp then rename(2) over the
+                // real path (atomic within the same dir), and REJECT a short write so the ACK is honest.
+                // The read-side guards (ProfileSeedSidecar.decode malformed-throw + W2977 degenerateDump
+                // guard) already prevent a torn dump from clobbering the good R2 blob, so this is
+                // robustness + comment-correctness, not a data-loss stop-ship.
+                String tmpPath = FileSystem::pathByAppendingComponent(dataDir, ".driftstack-dump.json.tmp"_s);
+                auto written = FileSystem::overwriteEntireFile(tmpPath, byteCast<uint8_t>(jsonUTF8.span()));
+                bool wrote = written.has_value() && *written == jsonUTF8.length(); // reject a short/partial write
                 if (wrote) {
                     // A1 W2835 (defense-in-depth): the dump holds the FULL cookie jar incl httpOnly session/auth
                     // tokens — restrict to owner-only so a co-tenant uid can't read it (the per-session data dir
-                    // may be 0755). chmod the final inode after the atomic rename (matches the AppDelegate dumper).
-                    chmod(dumpPath.utf8().data(), 0600);
-                }
+                    // may be 0755). chmod the TEMP inode BEFORE publishing so the dump is never world-readable
+                    // even for the rename window (matches the AppDelegate dumper's owner-only intent).
+                    chmod(tmpPath.utf8().data(), 0600);
+                    wrote = FileSystem::moveFile(tmpPath, dumpPath); // atomic publish (rename) — now the comment is true
+                    if (!wrote)
+                        FileSystem::deleteFile(tmpPath); // don't leak a stale temp on a failed rename
+                } else
+                    FileSystem::deleteFile(tmpPath); // clean up a partial temp
                 callback({ { wrote, wrote ? static_cast<int>(cookies.size()) : 0 } });
             });
         });

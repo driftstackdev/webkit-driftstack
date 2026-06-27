@@ -391,6 +391,15 @@ NetworkDataTaskCocoa::NetworkDataTaskCocoa(NetworkSession& session, NetworkDataT
 
 NetworkDataTaskCocoa::~NetworkDataTaskCocoa()
 {
+#if PLATFORM(DRIFTSTACK)
+    // W2988 (audit wggdfj7od #1): safety-net for teardown paths that drop the task
+    // without an explicit cancel() — forward to the loader so an abandoned PathB-v2
+    // load releases its W2983 admission slot + GCD worker instead of running to
+    // completion. Idempotent + no-op when the gate is off. Done first so the slot is
+    // freed before the dataTaskMap cleanup below.
+    if (m_driftstackLoader)
+        m_driftstackLoader->cancel();
+#endif
     if (m_task)
         WTFEndSignpost(m_task.get(), DataTask);
 
@@ -636,6 +645,21 @@ String NetworkDataTaskCocoa::suggestedFilename() const
 void NetworkDataTaskCocoa::cancel()
 {
     WTFEmitSignpost(m_task.get(), DataTask, "cancel");
+#if PLATFORM(DRIFTSTACK)
+    // W2988 (audit wggdfj7od #1): PathB-v2's in-flight work runs on m_driftstackLoader
+    // (m_task is NEVER resumed when the loader is active — resume() returns before
+    // [m_task resume]), so [m_task cancel] alone is a no-op for the real blocking
+    // SOCKS5+ML-KEM-TLS+recv work AND leaves the W2983 admission slot pinned for the
+    // full blocking lifetime. Forward the cancel so the loader (a) releases its W2983
+    // admission slot now (DriftstackNetworkLoader::cancel -> releaseAdmissionSlot) and
+    // (b) trips the mid-flight m_cancelled re-checks (recv poll, TLS-policy sites) so
+    // the blocking cycle + its GCD worker are released early instead of running to
+    // completion for a response nobody will use. cancel() is idempotent (CAS in
+    // releaseAdmissionSlot) + a no-op when the gate is off (slot never held), and it
+    // does NOT close m_fd (the owning socks5Client tears the fd down) — contract preserved.
+    if (m_driftstackLoader)
+        m_driftstackLoader->cancel();
+#endif
     [m_task cancel];
 }
 

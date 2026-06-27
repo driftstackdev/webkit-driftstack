@@ -2788,9 +2788,31 @@ _Pragma("clang diagnostic pop")
             // mid-response (or a server that never closes) can't park this block in
             // recv() forever (the thread+fd leak). On cancel the partial response is
             // discarded by the m_cancelled guards downstream.
+            //
+            // W2988 (audit wggdfj7od #2): the W2341 poll-slice loop has NO wall-clock
+            // deadline — a server that dribbles a byte every <1s keeps pr>0 forever (the
+            // m_cancelled check is on the pr==0 tick only, so it's never even reached), and
+            // a server that goes silent without a FIN yields pr==0 each tick but, before the
+            // cancel-wiring fix (#1), m_cancelled never flips → the loop (and its W2983
+            // admission slot + GCD worker) leaks forever. Give it the same 60s idle/no-
+            // progress deadline the h2 path already has (DriftstackHttp2.mm:1711
+            // kIdleTimeout=Seconds(60)): progress (a read) extends the window, 60s of no
+            // progress breaks out and delivers the partial via the normal completion path
+            // so the slot is released within 60s regardless of cancel wiring. Also re-check
+            // m_cancelled on the DATA path, not just the pr==0 tick, so the #1 cancel-wiring
+            // takes effect on a dribbling server too. Gated under DRIFTSTACK_EGRESS_RELIABILITY
+            // so when the gate is off the loop is byte-identical to the prior W2341 code.
             NSMutableData* respMutable = [NSMutableData data];
             uint8_t readBuf[4096];
+            const bool h1DeadlineActive = driftstackEgressReliabilityEnabled();
+            const Seconds kH1IdleTimeout = Seconds(60); // match the h2 kIdleTimeout
+            MonotonicTime h1IdleDeadline = MonotonicTime::now() + kH1IdleTimeout;
             while (true) {
+                if (m_cancelled) break;
+                if (h1DeadlineActive && MonotonicTime::now() >= h1IdleDeadline) {
+                    WTFLogAlways("[BUG-42/W2988] h1 app-data idle-timeout (60s no progress) — abandoning response for %s (slot released)", host.utf8().data());
+                    break;
+                }
                 int pr = customTLSClient->pollReadable(1000);
                 if (pr == 0) {
                     if (m_cancelled) break;
@@ -2800,6 +2822,8 @@ _Pragma("clang diagnostic pop")
                 int n = customTLSClient->read(readBuf, sizeof(readBuf));
                 if (n <= 0) break;
                 [respMutable appendBytes:readBuf length:static_cast<NSUInteger>(n)];
+                if (h1DeadlineActive)
+                    h1IdleDeadline = MonotonicTime::now() + kH1IdleTimeout; // progress → extend the window
             }
             responseBytes = respMutable;
         } else if (useBoringSSL) {
