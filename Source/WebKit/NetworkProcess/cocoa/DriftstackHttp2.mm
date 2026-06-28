@@ -296,11 +296,44 @@ static size_t hpackEncodeInteger(Vector<uint8_t>& out, uint32_t value, int prefi
     return out.size() - initialSize;
 }
 
-// HPACK string literal encoding (no Huffman for simplicity): length-prefixed.
+// Forward decls — the Huffman code table (kHpackHuffmanTable) and the per-byte
+// bit-length helper are defined alongside the DECODER lower in this file (RFC 7541
+// Appendix B). Declared here so the literal-string ENCODER can Huffman-compress.
+static size_t hpackHuffmanEncodedLength(const CString&);
+static void hpackHuffmanEncodeBytes(Vector<uint8_t>& out, const CString&);
+
+// RFC 7541 §5.2 — emit a Huffman-encoded HPACK literal (H bit set in the length
+// prefix). Used by hpackEncodeString when Huffman is shorter than raw.
+static void hpackEncodeHuffmanString(Vector<uint8_t>& out, const CString& utf8)
+{
+    size_t huffLen = hpackHuffmanEncodedLength(utf8);
+    hpackEncodeInteger(out, huffLen, 7, 0x80);  // H bit = 1
+    hpackHuffmanEncodeBytes(out, utf8);
+}
+
+// HPACK string literal encoding (RFC 7541 §5.2): length-prefixed octets, optionally
+// Huffman-compressed. Real iOS Safari (CFNetwork h2) Huffman-encodes every literal
+// name and value when the Huffman form is shorter (verified: the captured iPhone
+// HEADERS frame length matches Huffman-of-names+values to the byte; raw plaintext
+// is ~25% larger — a sub-akamai raw-HPACK wire tell). Gated for safety: when OFF
+// the legacy raw-plaintext path is used unchanged.
 static void hpackEncodeString(Vector<uint8_t>& out, const String& s)
 {
     auto utf8 = s.utf8();
-    hpackEncodeInteger(out, utf8.length(), 7, 0x00);  // huffman flag = 0
+    // DRIFTSTACK_H2_HPACK_HUFFMAN: iOS-faithful Huffman literal compression.
+    // Default OFF pending A3 on-box build-verify — this changes EVERY h2 request's
+    // header bytes, so a regression would break all h2 (the server must Huffman-
+    // decode, which standard h2 servers do). When ON, apply the canonical heuristic
+    // (Huffman only when strictly shorter; ties → raw, matching nghttp2/CFNetwork).
+    static const bool huffmanEnabled = getenv("DRIFTSTACK_H2_HPACK_HUFFMAN") != nullptr;
+    if (huffmanEnabled) {
+        size_t huffLen = hpackHuffmanEncodedLength(utf8);
+        if (huffLen < utf8.length()) {
+            hpackEncodeHuffmanString(out, utf8);
+            return;
+        }
+    }
+    hpackEncodeInteger(out, utf8.length(), 7, 0x00);  // huffman flag = 0 (raw)
     for (size_t i = 0; i < utf8.length(); ++i)
         out.append(static_cast<uint8_t>(utf8.data()[i]));
 }
@@ -436,6 +469,46 @@ static const HuffmanEntry kHpackHuffmanTable[257] = {
     {0x7ffffec, 27}, {0x7ffffed, 27}, {0x7ffffee, 27}, {0x7ffffef, 27}, {0x7fffff0, 27},
     {0x3ffffee, 26}, {0x3fffffff, 30}
 };
+
+// RFC 7541 §5.2 / Appendix B — HPACK Huffman ENCODER. Mirrors the decoder's
+// kHpackHuffmanTable above: per source byte, emit its variable-length code MSB-first
+// into a bit accumulator. The final partial byte is right-padded with the EOS prefix
+// (all 1s) per spec, which is exactly what the existing decoder treats as padding
+// (it stops once <8 bits or >31 unconsumed bits remain). hpackHuffmanEncodedLength
+// computes the byte length without materialising bytes (for the shorter-than-raw
+// heuristic in hpackEncodeString).
+static size_t hpackHuffmanEncodedLength(const CString& utf8)
+{
+    size_t bits = 0;
+    const auto* p = reinterpret_cast<const uint8_t*>(utf8.data());
+    for (size_t i = 0; i < utf8.length(); ++i)
+        bits += kHpackHuffmanTable[p[i]].bits;
+    return (bits + 7) / 8;  // ceil to whole octets; remainder padded with 1s (EOS prefix)
+}
+
+static void hpackHuffmanEncodeBytes(Vector<uint8_t>& out, const CString& utf8)
+{
+    uint64_t acc = 0;   // bit accumulator, MSB-first
+    int accBits = 0;
+    const auto* p = reinterpret_cast<const uint8_t*>(utf8.data());
+    for (size_t i = 0; i < utf8.length(); ++i) {
+        uint8_t sym = p[i];
+        uint32_t code = kHpackHuffmanTable[sym].code;
+        int len = kHpackHuffmanTable[sym].bits;   // 5..30 bits
+        acc = (acc << len) | code;
+        accBits += len;
+        while (accBits >= 8) {
+            accBits -= 8;
+            out.append(static_cast<uint8_t>((acc >> accBits) & 0xff));
+        }
+    }
+    // Pad the final partial octet with the EOS code's high bits (all 1s), RFC 7541 §5.2.
+    if (accBits > 0) {
+        int pad = 8 - accBits;
+        uint8_t last = static_cast<uint8_t>(((acc << pad) | ((1U << pad) - 1)) & 0xff);
+        out.append(last);
+    }
+}
 
 // Decode HPACK Huffman-encoded byte stream.
 static Vector<uint8_t> hpackHuffmanDecode(const uint8_t* data, size_t len)

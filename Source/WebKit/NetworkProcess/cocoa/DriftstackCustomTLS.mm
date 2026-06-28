@@ -75,8 +75,11 @@ constexpr uint16_t kIPhoneCiphers[] = {
 };
 constexpr size_t kIPhoneCipherCount = sizeof(kIPhoneCiphers) / sizeof(kIPhoneCiphers[0]);
 
-// GREASE values per RFC 8701. iPhone picks 1 GREASE byte and uses it for
-// cipher GREASE position, extension GREASE positions, version GREASE.
+// GREASE values per RFC 8701. iPhone draws an INDEPENDENT GREASE value per slot —
+// cipher, leading-extension, trailing-extension, and version GREASE are ALL distinct
+// in 12/12 real-device captures (the group GREASE == key_share GREASE is the only
+// intentional pairing, per RFC 8446 §4.2.8). The earlier "1 GREASE byte for all" note
+// was a false premise that produced a 100%-correlated cipher==ext0 raw-bytes tell.
 // Valid GREASE values: 0x0a0a, 0x1a1a, 0x2a2a, ... 0xfafa.
 constexpr uint16_t kGreaseValues[] = {
     0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A, 0x4A4A, 0x5A5A,
@@ -187,11 +190,22 @@ Vector<uint8_t> makeExtRenegotiationInfo()
 // P1 — preSafari26: iOS 18.x DROPS X25519MLKEM768 (post-quantum hybrid landed in Safari 26);
 // the 18.x supported_groups is classical-only (GREASE + X25519 + P-256/384/521). 26.x keeps
 // 0x11EC first. The GREASE group still leads and must match key_share's GREASE.
-Vector<uint8_t> makeExtSupportedGroups(uint16_t greaseGroup, bool preSafari26 = false)
+// FIX 4 — forceClassicalGroups: keep supported_groups LOCK-STEP with key_share even on a
+// 26.x archetype when the runtime KEY_SHARE cannot carry X25519MLKEM768 (e.g. MLKEM-768
+// keygen FAILED → the X25519-only fallback builder runs with preSafari26=false). RFC 8446
+// §4.2.8: every key_share group MUST appear in supported_groups, but advertising 0x11EC in
+// supported_groups while the key_share OMITS it produces an internally-incoherent CH that NO
+// real iPhone emits (6/6 BS-verified: 26.x carries 0x11EC in groups AND key_share in
+// lock-step). Strict edges (Cloudflare/Akamai — used by heavy sites like westernunion.com)
+// reject the mismatch with illegal_parameter → heavy-site load failure. The X25519-only
+// fallback builder passes forceClassicalGroups=true so its classical groups match its
+// classical key_share. The NORMAL 26.x hybrid path (key_share HAS 0x11EC) leaves this false
+// → groups AND key_share both carry 0x11EC, byte-identical to before.
+Vector<uint8_t> makeExtSupportedGroups(uint16_t greaseGroup, bool preSafari26 = false, bool forceClassicalGroups = false)
 {
     Vector<uint8_t> list;
     appendU16(list, greaseGroup);  // GREASE (must match key_share)
-    if (!preSafari26)
+    if (!preSafari26 && !forceClassicalGroups)
         appendU16(list, 0x11EC);  // X25519MLKEM768 (Safari >=26 only)
     appendU16(list, 0x001D);  // X25519
     appendU16(list, 0x0017);  // P-256 (secp256r1)
@@ -367,14 +381,24 @@ Vector<uint8_t> makeExtPSKKeyExchangeModes()
     return makeExtension(45, body);
 }
 
-// supported_versions (43) — iPhone: GREASE + TLS 1.3 + TLS 1.2
-Vector<uint8_t> makeExtSupportedVersions()
+// supported_versions (43) — iPhone: GREASE + TLS 1.3 + TLS 1.2 (Safari 26.x). The 18.x
+// (pre-Safari-26) band ALSO offers TLS 1.1 + TLS 1.0 (GREASE + 4 versions, list_len 0x0a) —
+// confirmed on all 18.x real-device captures (iPhone 13/16/16e/16Pro/16Plus): the version
+// list = GREASE,772,771,770,769. (QUIC uses makeExtSupportedVersionsQuic = TLS 1.3 only.)
+Vector<uint8_t> makeExtSupportedVersions(bool preSafari26 = false)
 {
     Vector<uint8_t> list;
-    list.append(static_cast<uint8_t>(0x06));  // total length of versions list = 6 bytes
-    uint16_t versions[] = { pickGreaseValue(), 0x0304, 0x0303 };
-    for (int i = 0; i < 3; ++i)
-        appendU16(list, versions[i]);
+    if (preSafari26) {
+        list.append(static_cast<uint8_t>(0x0a));  // versions list = 10 bytes (GREASE + TLS 1.3/1.2/1.1/1.0)
+        uint16_t versions[] = { pickGreaseValue(), 0x0304, 0x0303, 0x0302, 0x0301 };
+        for (int i = 0; i < 5; ++i)
+            appendU16(list, versions[i]);
+    } else {
+        list.append(static_cast<uint8_t>(0x06));  // versions list = 6 bytes (GREASE + TLS 1.3/1.2)
+        uint16_t versions[] = { pickGreaseValue(), 0x0304, 0x0303 };
+        for (int i = 0; i < 3; ++i)
+            appendU16(list, versions[i]);
+    }
     return makeExtension(43, list);
 }
 
@@ -431,6 +455,13 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     // Wave 29-499.328 — shared GREASE group for supported_groups + key_share (RFC 8446
     // §4.2.8 / RFC 8701); independent picks caused illegal_parameter on strict edges.
     uint16_t greaseGroup = pickGreaseValue();
+    // iOS draws the cipher-suites GREASE INDEPENDENTLY of the leading-extension GREASE
+    // (0/12 real-device captures have them equal; the fork previously reused greasePrimary
+    // for both, a 100%-correlated raw-bytes tell). Use a separate greaseCipher, distinct
+    // from the primary (leading-ext), secondary (trailing-ext) and group GREASE values.
+    uint16_t greaseCipher = pickGreaseValue();
+    while (greaseCipher == greasePrimary || greaseCipher == greaseSecondary || greaseCipher == greaseGroup)
+        greaseCipher = pickGreaseValue();
 
     // P1 — X25519-only fallback CH; apply the 18.x deltas for pre-Safari-26 archetypes
     // (cipher trio reorder + supported_groups MLKEM drop + padding ext). This builder
@@ -439,7 +470,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
 
     // Build cipher_suites (40 bytes content + 2-byte length = 42 bytes)
     Vector<uint8_t> ciphers;
-    appendU16(ciphers, greasePrimary);  // GREASE cipher
+    appendU16(ciphers, greaseCipher);  // GREASE cipher
     if (preSafari26) {
         appendU16(ciphers, 0x1301);  // 18.x TLS1.3 trio order 4865-4866-4867
         appendU16(ciphers, 0x1302);
@@ -457,7 +488,12 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     extensions.append(makeExtServerName(sni).span());              // server_name (0)
     extensions.append(makeExtExtendedMasterSecret().span());       // extended_master_secret (23)
     extensions.append(makeExtRenegotiationInfo().span());          // renegotiation_info (65281)
-    extensions.append(makeExtSupportedGroups(greaseGroup, preSafari26).span()); // supported_groups (10)
+    // FIX 4 — this builder's key_share (makeExtKeyShare below) is X25519-only and can NEVER
+    // carry X25519MLKEM768 (0x11EC). It runs as the MLKEM-unavailable fallback for ALL bands,
+    // including 26.x (preSafari26=false) when MLKEM-768 keygen fails at runtime. forceClassical-
+    // Groups=true keeps supported_groups classical-only so it stays LOCK-STEP with the X25519-only
+    // key_share (no orphaned 0x11EC → no illegal_parameter on strict edges).
+    extensions.append(makeExtSupportedGroups(greaseGroup, preSafari26, /*forceClassicalGroups*/ true).span()); // supported_groups (10)
     extensions.append(makeExtEcPointFormats().span());             // ec_point_formats (11)
     extensions.append(makeExtALPN().span());                       // ALPN (16)
     extensions.append(makeExtStatusRequest().span());              // status_request (5)
@@ -465,11 +501,11 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     extensions.append(makeExtSCT().span());                        // signed_certificate_timestamp (18)
     extensions.append(makeExtKeyShare(x25519Pub, greaseGroup).span()); // key_share (51)
     extensions.append(makeExtPSKKeyExchangeModes().span());        // psk_key_exchange_modes (45)
-    extensions.append(makeExtSupportedVersions().span());          // supported_versions (43)
+    extensions.append(makeExtSupportedVersions(preSafari26).span());          // supported_versions (43)
     extensions.append(makeExtCompressCertificate().span());        // compress_certificate (27)
-    if (preSafari26)
-        extensions.append(makeExtPadding().span());                // padding (21) — 18.x only
     extensions.append(makeExtGREASE(greaseSecondary).span());      // GREASE-2
+    if (preSafari26)
+        extensions.append(makeExtPadding().span());                // padding (21) — 18.x only, LAST (iOS emits padding AFTER the trailing GREASE)
 
     // Build ClientHello body (handshake message)
     Vector<uint8_t> body;
@@ -530,12 +566,19 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     // key_share GREASE group is present in supported_groups (RFC 8446 §4.2.8 / RFC 8701).
     // Independent picks here caused intermittent illegal_parameter aborts on strict edges.
     uint16_t greaseGroup = pickGreaseValue();
+    // iOS draws the cipher-suites GREASE INDEPENDENTLY of the leading-extension GREASE
+    // (0/12 real-device captures have them equal; the fork previously reused greasePrimary
+    // for both, a 100%-correlated raw-bytes tell). Use a separate greaseCipher, distinct
+    // from the primary (leading-ext), secondary (trailing-ext) and group GREASE values.
+    uint16_t greaseCipher = pickGreaseValue();
+    while (greaseCipher == greasePrimary || greaseCipher == greaseSecondary || greaseCipher == greaseGroup)
+        greaseCipher = pickGreaseValue();
 
     // P1 — pre-Safari-26 archetypes (iOS 17/18/19) emit the iOS-18.x ClientHello.
     const bool preSafari26 = driftstackArchetypeIsPreSafari26();
 
     Vector<uint8_t> ciphers;
-    appendU16(ciphers, greasePrimary);
+    appendU16(ciphers, greaseCipher);
     if (preSafari26) {
         // 18.x TLS1.3 cipher trio order = 4865-4866-4867 (0x1301,0x1302,0x1303);
         // the remaining 17 ciphers (slots 4..) are identical to 26.x.
@@ -567,12 +610,12 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
         // 26.x HYBRID keyshare: GREASE + X25519MLKEM768 + X25519 (GREASE matches supported_groups)
         extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span());
     extensions.append(makeExtPSKKeyExchangeModes().span());
-    extensions.append(makeExtSupportedVersions().span());
+    extensions.append(makeExtSupportedVersions(preSafari26).span());
     extensions.append(makeExtCompressCertificate().span());
-    if (preSafari26)
-        // 18.x: padding extension (0x0015) PRESENT → JA4 ext-count 2014.
-        extensions.append(makeExtPadding().span());
     extensions.append(makeExtGREASE(greaseSecondary).span());
+    if (preSafari26)
+        // 18.x: padding extension (0x0015) PRESENT → JA4 ext-count 2014; emitted LAST (after the trailing GREASE) to match iOS wire order.
+        extensions.append(makeExtPadding().span());
 
     Vector<uint8_t> body;
     appendU16(body, kTLSVersionTLS12);
@@ -618,13 +661,20 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     // Wave 29-499.328 — HRR CH2 key_share (P-256) carries no GREASE, so supported_groups'
     // GREASE is standalone here; still use a valid GREASE value.
     uint16_t greaseGroup = pickGreaseValue();
+    // iOS draws the cipher-suites GREASE INDEPENDENTLY of the leading-extension GREASE
+    // (0/12 real-device captures have them equal; the fork previously reused greasePrimary
+    // for both, a 100%-correlated raw-bytes tell). Use a separate greaseCipher, distinct
+    // from the primary (leading-ext), secondary (trailing-ext) and group GREASE values.
+    uint16_t greaseCipher = pickGreaseValue();
+    while (greaseCipher == greasePrimary || greaseCipher == greaseSecondary || greaseCipher == greaseGroup)
+        greaseCipher = pickGreaseValue();
 
     // P1 — CH2 mirrors CH1 except key_share (RFC 8446 §4.1.2), so carry the same 18.x
     // deltas (cipher trio reorder + supported_groups MLKEM drop + padding) for pre-26.
     const bool preSafari26 = driftstackArchetypeIsPreSafari26();
 
     Vector<uint8_t> ciphers;
-    appendU16(ciphers, greasePrimary);
+    appendU16(ciphers, greaseCipher);
     if (preSafari26) {
         appendU16(ciphers, 0x1301);
         appendU16(ciphers, 0x1302);
@@ -649,11 +699,11 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     extensions.append(makeExtSCT().span());
     extensions.append(makeExtKeyShareP256(p256PublicKey).span());  // ← P-256 keyshare (HRR)
     extensions.append(makeExtPSKKeyExchangeModes().span());
-    extensions.append(makeExtSupportedVersions().span());
+    extensions.append(makeExtSupportedVersions(preSafari26).span());
     extensions.append(makeExtCompressCertificate().span());
+    extensions.append(makeExtGREASE(greaseSecondary).span());
     if (preSafari26)
         extensions.append(makeExtPadding().span());
-    extensions.append(makeExtGREASE(greaseSecondary).span());
 
     Vector<uint8_t> body;
     appendU16(body, kTLSVersionTLS12);
@@ -704,11 +754,18 @@ Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
     while (greaseSecondary == greasePrimary)
         greaseSecondary = pickGreaseValue();
     uint16_t greaseGroup = pickGreaseValue();
+    // iOS draws the cipher-suites GREASE INDEPENDENTLY of the leading-extension GREASE
+    // (0/12 real-device captures have them equal; the fork previously reused greasePrimary
+    // for both, a 100%-correlated raw-bytes tell). Use a separate greaseCipher, distinct
+    // from the primary (leading-ext), secondary (trailing-ext) and group GREASE values.
+    uint16_t greaseCipher = pickGreaseValue();
+    while (greaseCipher == greasePrimary || greaseCipher == greaseSecondary || greaseCipher == greaseGroup)
+        greaseCipher = pickGreaseValue();
 
     // QUIC ciphers: GREASE + the 3 TLS 1.3 AEAD suites (iPhone offers no TLS 1.2 suites
     // over QUIC). ja4 cipher hash 55b375c5d22e (GREASE excluded from the hash).
     Vector<uint8_t> ciphers;
-    appendU16(ciphers, greasePrimary);
+    appendU16(ciphers, greaseCipher);
     appendU16(ciphers, 0x1301);  // TLS_AES_128_GCM_SHA256
     appendU16(ciphers, 0x1302);  // TLS_AES_256_GCM_SHA384
     appendU16(ciphers, 0x1303);  // TLS_CHACHA20_POLY1305_SHA256
