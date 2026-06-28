@@ -187,11 +187,23 @@ void StorageManager::estimate(DOMPromiseDeferred<IDLDictionary<StorageEstimate>>
                 }
             }
             if (!resolved) {
-                uint64_t halved = estimate.quota / 2;
-                WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: V-072 halving fallback %llu → %llu",
-                    static_cast<unsigned long long>(estimate.quota),
-                    static_cast<unsigned long long>(halved));
-                estimate.quota = halved;
+                // Belt-and-suspenders (2026-06-28): the original V-072 "halving"
+                // fallback was HOST-REFLECTIVE (box disk capacity / 2) — if the
+                // env + config tiers are both unset (a misconfigured host, or a
+                // path that doesn't load launch-env), it would leak the fleet
+                // Mac's disk size AND vary per-box (the same "iPhone" reporting
+                // different quotas on different boxes = correlatable). iOS reports
+                // a FIXED disk-INDEPENDENT anti-fingerprint constant — 41231686042
+                // (0.6 × 64 GiB), invariant across all real-device BS captures and
+                // every model (iPhone 14 → 17 Pro Max). Pin the fallback to that
+                // constant so an env-unset host stays iPhone-coherent instead of
+                // leaking box-disk/2. (Prod always sets the env tier above, so this
+                // is defense-in-depth, not the live path.)
+                constexpr uint64_t driftstackIPhoneFreshQuotaBytes = 41231686042ULL;
+                WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: env/config unset → iPhone constant %llu (was box/2=%llu)",
+                    static_cast<unsigned long long>(driftstackIPhoneFreshQuotaBytes),
+                    static_cast<unsigned long long>(estimate.quota / 2));
+                estimate.quota = driftstackIPhoneFreshQuotaBytes;
             }
             WTFLogAlways("[Driftstack-Storage-Diag] sub-3.3: OUTBOUND estimate.quota=%llu (resolved=%d)",
                 static_cast<unsigned long long>(estimate.quota), resolved);

@@ -129,6 +129,12 @@ std::optional<PlatformMediaCapabilitiesInfo> validateHEVCParameters(const HEVCPa
     // (false); the Mac fork's VT DOES expose it → smooth=true above (a host-leak, fleet-axis varying).
     // H.264 is a separate path and correctly reports smooth=true on iPhone — only HEVC is pinned here.
     info.smooth = false;
+    // host-leak sweep acf8db98 residual #1: info.powerEfficient above reads the host VT
+    // kVTHEVCDecoderProfileCapability_IsHardwareAccelerated → fleet-chip-varying host-passthrough.
+    // BS real-device ground truth (aio iPhone 15 Pro Max / 16 Pro Max / 14, 2026-06-28; hevcLevels
+    // all pe:true, hvc1 decodingInfo powerEfficient:true, decodingInfoPosture.hevc_4k60="s=true,sm=false,pe=true"):
+    // iPhones (A9+) have dedicated HEVC HW decode → powerEfficient is ALWAYS true once supported. Pin it.
+    info.powerEfficient = true;
 #endif
 
     return info;

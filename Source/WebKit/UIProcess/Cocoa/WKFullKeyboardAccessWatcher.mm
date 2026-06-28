@@ -45,9 +45,17 @@ static const CFStringRef AppleKeyboardUIMode = CFSTR("AppleKeyboardUIMode");
 static inline BOOL platformIsFullKeyboardAccessEnabled()
 {
     BOOL fullKeyboardAccessEnabled = NO;
-#if PLATFORM(MAC)
+#if PLATFORM(DRIFTSTACK)
+    // host-leak sweep acf8db98 residual #3: upstream PLATFORM(MAC) reads the host AppleKeyboardUIMode
+    // pref → feeds WebPage::keyboardUIMode()'s KeyboardAccessFull bit → behaviorally observable Tab
+    // order (EventHandler tabsToAllFormControls / tabsToLinks). That is a fleet-host-varying leak.
+    // No JS-readable property exists, so this is behavioral; pin to the iOS Safari default, where
+    // Full Keyboard Access is OFF by default (_AXSFullKeyboardAccessEnabled() == NO ⇒ KeyboardAccessDefault).
+    // Returning NO makes the fork host-independent and matches an out-of-the-box iPhone. Launch-safe.
+    fullKeyboardAccessEnabled = NO;
+#elif PLATFORM(MAC)
     CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
-    
+
     Boolean keyExistsAndHasValidFormat;
     int mode = CFPreferencesGetAppIntegerValue(AppleKeyboardUIMode, kCFPreferencesCurrentApplication, &keyExistsAndHasValidFormat);
     if (keyExistsAndHasValidFormat) {
@@ -59,7 +67,7 @@ static inline BOOL platformIsFullKeyboardAccessEnabled()
 #elif PLATFORM(IOS_FAMILY)
     fullKeyboardAccessEnabled = _AXSFullKeyboardAccessEnabled();
 #endif
-    
+
     return fullKeyboardAccessEnabled;
 }
 

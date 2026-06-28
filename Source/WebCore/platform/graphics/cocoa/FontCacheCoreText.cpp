@@ -1333,7 +1333,18 @@ static bool& platformShouldEnhanceTextLegibility()
 
 static inline bool shouldEnhanceTextLegibility()
 {
+#if PLATFORM(DRIFTSTACK)
+    // host-leak (W713 §A class, font-metric path): "Enhance Text Legibility" / "Bolder Text"
+    // is OFF by default on a stock iPhone. Both the override (host per-app AX prefs propagated
+    // from the UIProcess) and the platform read (_AXSEnhanceTextLegibilityEnabled, host macOS AX
+    // state) leak the fleet host's accessibility setting into font preparation —
+    // modifyFromContext() boldens system-font weight via CTFontGetAccessibilityBoldWeightOfWeight
+    // when set, changing glyph metrics / measureText widths. Pin the iPhone default (false) so the
+    // served font metrics are host-independent regardless of which fleet Mac runs the session.
+    return false;
+#else
     return overrideEnhanceTextLegibility().value_or(platformShouldEnhanceTextLegibility());
+#endif
 }
 
 RetainPtr<CTFontRef> preparePlatformFont(UnrealizedCoreTextFont&& originalFont, const FontDescription& fontDescription, const FontCreationContext& fontCreationContext, FontTypeForPreparation fontTypeForPreparation, ApplyTraitsVariations applyTraitsVariations)

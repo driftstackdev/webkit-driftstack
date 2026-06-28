@@ -921,16 +921,25 @@ Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOpt
                 return { SRGBA<uint8_t> { 63, 99, 139, 204 }, Color::Flags::Semantic };
             return { SRGBA<uint8_t> { 128, 188, 254, 153 }, Color::Flags::Semantic };
 
-        case CSSValueAppleSystemEvenAlternatingContentBackground: {
-            NSArray<NSColor *> *alternateColors = [NSColor alternatingContentBackgroundColors];
-            ASSERT(alternateColors.count >= 2);
-            return semanticColorFromNSColor(retainPtr(alternateColors[0]).get());
-        }
-
+        case CSSValueAppleSystemEvenAlternatingContentBackground:
         case CSSValueAppleSystemOddAlternatingContentBackground: {
+#if PLATFORM(DRIFTSTACK)
+            // host-leak sweep acf8db98 residual #2: upstream reads live
+            // [NSColor alternatingContentBackgroundColors] → exposes the host appearance preference
+            // (the sibling -apple-system-* cases at 906-922 are hardcoded for exactly this reason).
+            // BS real-device ground truth (aio iPhone 15 Pro Max / 16 Pro Max / 14, 2026-06-28,
+            // vendor.v3-system-colors-probe-1-0): on the real iPhone these two keywords are
+            // {"recognized": false, "light": null, "dark": null} — iOS uses RenderThemeIOS, not
+            // RenderThemeMac, and does NOT resolve these to a color. Return an invalid Color so the
+            // property resolves like iOS (no host appearance leak). Keyword still parses (launch-safe).
+            return { };
+#else
             NSArray<NSColor *> *alternateColors = [NSColor alternatingContentBackgroundColors];
             ASSERT(alternateColors.count >= 2);
+            if (cssValueID == CSSValueAppleSystemEvenAlternatingContentBackground)
+                return semanticColorFromNSColor(retainPtr(alternateColors[0]).get());
             return semanticColorFromNSColor(retainPtr(alternateColors[1]).get());
+#endif
         }
 
         // FIXME: Remove this fallback when AppKit without tertiary-fill is not used anymore; see rdar://108340604.
