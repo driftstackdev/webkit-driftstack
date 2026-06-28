@@ -251,6 +251,64 @@ WebKeyboardEvent WebEventFactory::createWebKeyboardEvent(NSEvent *event, bool ha
         unmodifiedText = text;
     }
 
+    // Driftstack iOS soft-keyboard KeyboardEvent shape (anti-detection fingerprint surface).
+    //
+    // This Mac WebKit runs as an iPhone archetype and is driven by WebDriver synthetic keys
+    // (WebAutomationSession::platformSimulateKeyboardInteraction / platformSimulateKeySequence
+    // → AppKit NSEvent → here). On a desktop Mac that yields the PHYSICAL-keyboard JS shape
+    // (e.g. typing 'q' → KeyboardEvent.code "KeyQ", keyCode/which 81). Real iPhone Safari has no
+    // physical keyboard: its on-screen soft keyboard inputs characters through the IME/text-input
+    // path, so for a character key the JS KeyboardEvent reports an EMPTY code (no physical key),
+    // keyCode/which 229 (VK_PROCESSKEY, the IME "process" code) on keydown/keyup, and the keypress
+    // carries the character code (matching Mac). Control keys keep their iOS keyCodes (Enter 13,
+    // Backspace 8, Tab 9, Space 32, ArrowLeft/Up/Right/Down 37/38/39/40) but also report an empty
+    // code. Fingerprinters read code/keyCode/which to tell a desktop keyboard from an iOS soft
+    // keyboard, so emitting the desktop shape is a tell. Mirror PlatformEventFactoryIOS.mm: iOS
+    // never reports the "KeyX" physical code for soft-keyboard input.
+    //
+    // Gated default-ON via DRIFTSTACK_IOS_KEYBOARD_EVENT (disabled only when explicitly "0"); applies
+    // only to KeyDown/KeyUp (not FlagsChanged, which iOS uses for bare modifier keys). The shape is
+    // applied to the JS-visible fields (code/keyIdentifier and, for character keys, windowsVirtualKeyCode
+    // == JS keyCode/which). nativeVirtualKeyCode/macCharCode/text are left intact so editing/IME and the
+    // keypress character path keep working exactly as before.
+    static const bool driftstackIOSKeyboardEvent = [] {
+        const char* env = getenv("DRIFTSTACK_IOS_KEYBOARD_EVENT");
+        return !env || env[0] != '0'; // default-ON
+    }();
+    if (driftstackIOSKeyboardEvent && (type == WebEventType::KeyDown || type == WebEventType::KeyUp)) {
+        // Control/navigation keys that real iOS keeps with their own keyCode (but still empty code).
+        bool isNamedControlKey = false;
+        switch (windowsVirtualKeyCode) {
+        case VK_RETURN:   // Enter / Return -> 13
+        case VK_BACK:     // Backspace -> 8
+        case VK_TAB:      // Tab -> 9
+        case VK_SPACE:    // Space -> 32 (a character, but a named key)
+        case VK_LEFT:     // ArrowLeft -> 37
+        case VK_UP:       // ArrowUp -> 38
+        case VK_RIGHT:    // ArrowRight -> 39
+        case VK_DOWN:     // ArrowDown -> 40
+        case VK_ESCAPE:   // Escape -> 27
+            isNamedControlKey = true;
+            break;
+        default:
+            break;
+        }
+
+        // iOS soft-keyboard input never carries a physical-key `code`; KeyboardEvent.code is "".
+        code = emptyString();
+        // keyIdentifier is the legacy sibling of code; iOS reports it empty for the same reason.
+        keyIdentifier = emptyString();
+
+        if (!isNamedControlKey) {
+            // Character keys (letters/digits/symbols): the soft keyboard routes through the IME, so
+            // keydown/keyup report the "process" keyCode 229. The keypress (Char type, dispatched
+            // downstream from `text`) is unaffected and still carries the character code, matching iOS.
+            windowsVirtualKeyCode = VK_PROCESSKEY; // 0xE5 == 229
+        }
+        // Named control keys keep their existing windowsVirtualKeyCode (13/8/9/32/37-40/27) — that already
+        // matches real iOS — and only their code/keyIdentifier are emptied above.
+    }
+
     return WebKeyboardEvent({ type, modifiers, timestamp, WTF::UUID::createVersion4() }, text, unmodifiedText, key, code, keyIdentifier, windowsVirtualKeyCode, nativeVirtualKeyCode, macCharCode, handledByInputMethod, commands, autoRepeat, isKeypad, isSystemKey);
 }
 
