@@ -104,6 +104,10 @@ uint16_t pickGreaseValue()
 //   3. padding extension (0x0015) PRESENT (26.x omits it) → JA4 ext-count 14 vs 13.
 // 18.x JA4 = t13d2014h2_a09f3c656075_7f0f34a4126d ; 26.x = t13d2013h2_a09f3c656075_7f0f34a4126d
 // (BS real-device VERIFIED 2026-06-26 — the two bands differ ONLY in the 2014/2013 ext-count digit).
+// (Definition moved OUT of the anonymous namespace — now WebKit-namespace external linkage so the
+// TLS client can read it to pick the matching ECDH private for the two-keypair key_share.)
+} // close anonymous namespace for the externally-linked archetype predicate
+
 bool driftstackArchetypeIsPreSafari26()
 {
     const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
@@ -114,6 +118,8 @@ bool driftstackArchetypeIsPreSafari26()
     }
     return false;  // Safari >=26 (incl the 26.4 launch) + default → 26.x ClientHello
 }
+
+namespace { // reopen anonymous namespace for the remaining file-local builder helpers
 
 // Append big-endian u16
 void appendU16(Vector<uint8_t>& out, uint16_t v)
@@ -320,8 +326,19 @@ Vector<uint8_t> makeExtKeyShareP256(const Vector<uint8_t>& p256PubKey)
 //   group: 0x11EC (X25519MLKEM768)
 //   key_exchange (1216 bytes): MLKEM768_pubkey (1184) || X25519_pubkey (32)
 //   ORDER: MLKEM first, X25519 second (per draft + iPhone Safari)
-Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const Vector<uint8_t>& x25519PubKey, uint16_t greaseGroup)
+//
+// DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON): the hybrid X25519 tail carries keypair
+// A's pubkey (x25519PubKeyA); the standalone X25519 (0x001D) entry carries keypair B's
+// pubkey (x25519PubKeyB) — two INDEPENDENT ephemeral keypairs, so the two wire X25519
+// components DIFFER, matching real iPhone (7/7 captures). When x25519PubKeyB is empty
+// (the QUIC builder, or the gate-off path) the standalone entry reuses x25519PubKeyA —
+// byte-identical to the prior single-keypair behavior.
+Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const Vector<uint8_t>& x25519PubKeyA, uint16_t greaseGroup, const Vector<uint8_t>& x25519PubKeyB = Vector<uint8_t>())
 {
+    // Standalone (0x001D) pubkey: keypair B when provided + gate ON, else reuse A.
+    const Vector<uint8_t>& standalonePub =
+        (driftstackTlsKeyShareDistinctEnabled() && x25519PubKeyB.size() == 32) ? x25519PubKeyB : x25519PubKeyA;
+
     Vector<uint8_t> list;
     // GREASE entry (1-byte placeholder for keyshare list slot 0).
     // Wave 29-499.328 — greaseGroup MUST equal the supported_groups GREASE value, else
@@ -331,16 +348,16 @@ Vector<uint8_t> makeExtKeyShareHybrid(const Vector<uint8_t>& mlkemPubKey, const 
     appendU16(list, 0x0001);
     list.append(0x00);
 
-    // X25519MLKEM768 (0x11EC): 1216-byte combined keyshare
+    // X25519MLKEM768 (0x11EC): 1216-byte combined keyshare — X25519 tail = keypair A.
     appendU16(list, 0x11EC);
     appendU16(list, 0x04C0);  // 1216 bytes
-    list.append(mlkemPubKey.span());  // 1184 bytes first
-    list.append(x25519PubKey.span()); // 32 bytes second
+    list.append(mlkemPubKey.span());   // 1184 bytes first
+    list.append(x25519PubKeyA.span()); // 32 bytes second (keypair A)
 
-    // X25519 (0x001D): 32-byte keyshare (iPhone offers both)
+    // X25519 (0x001D): 32-byte keyshare (iPhone offers both) — keypair B (independent).
     appendU16(list, 0x001D);
     appendU16(list, 0x0020);
-    list.append(x25519PubKey.span());
+    list.append(standalonePub.span());
 
     Vector<uint8_t> body;
     appendVecU16Len(body, list);
@@ -550,8 +567,9 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
 // (iPhone-byte-exact since iPhone Safari 26 sends both entries)
 Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     const Vector<uint8_t>& mlkemPubKey,
-    const Vector<uint8_t>& x25519PubKey,
-    Vector<uint8_t>& outClientRandom)
+    const Vector<uint8_t>& x25519PubKeyA,
+    Vector<uint8_t>& outClientRandom,
+    const Vector<uint8_t>& x25519PubKeyB)
 {
     outClientRandom.resize(32);
     (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
@@ -605,10 +623,12 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     extensions.append(makeExtSCT().span());
     if (preSafari26)
         // 18.x: classical X25519-only key_share (GREASE + X25519 + pubkey) — no MLKEM hybrid.
-        extensions.append(makeExtKeyShare(x25519PubKey, greaseGroup).span());
+        // ONE X25519 entry only → no two-keypair correlation; uses keypair A.
+        extensions.append(makeExtKeyShare(x25519PubKeyA, greaseGroup).span());
     else
-        // 26.x HYBRID keyshare: GREASE + X25519MLKEM768 + X25519 (GREASE matches supported_groups)
-        extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKey, greaseGroup).span());
+        // 26.x HYBRID keyshare: GREASE + X25519MLKEM768(tail=keypair A) + standalone X25519(=keypair B,
+        // distinct when DRIFTSTACK_TLS_KEYSHARE_DISTINCT default-ON; reuses A if B empty/gate-off).
+        extensions.append(makeExtKeyShareHybrid(mlkemPubKey, x25519PubKeyA, greaseGroup, x25519PubKeyB).span());
     extensions.append(makeExtPSKKeyExchangeModes().span());
     extensions.append(makeExtSupportedVersions(preSafari26).span());
     extensions.append(makeExtCompressCertificate().span());
@@ -824,6 +844,24 @@ bool driftstackCustomTlsEnabled()
 {
     const char* env = getenv("DRIFTSTACK_PATHB_V2_CUSTOM_TLS");
     return env && env[0] == '1';
+}
+
+// DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON) — emit two INDEPENDENT X25519 ephemeral
+// pubkeys across the two key_share entries (hybrid X25519MLKEM768 tail vs standalone
+// X25519), matching real iPhone Safari 26.2-26.5 (verified 7/7 captures: the standalone
+// X25519 component != the hybrid's X25519 slot, every connection). The reuse of one
+// keypair for both made key_share[0x11EC].key_exchange[1184:1216] == key_share[0x001D]
+// byte-for-byte — a deterministic structural correlation a TLS-introspecting server/DPI
+// computes (invisible to JA3/JA4/peetprint, which hash no key material). Default-ON is the
+// iOS-correct behavior; an explicit "0" reverts to the single-keypair wire (escape hatch
+// if a derivation bug ever surfaces). Read once (static-init thread-safe).
+bool driftstackTlsKeyShareDistinctEnabled()
+{
+    static const bool s_enabled = [] {
+        const char* e = getenv("DRIFTSTACK_TLS_KEYSHARE_DISTINCT");
+        return !(e && e[0] == '0');   // default-ON: only an explicit "0" disables
+    }();
+    return s_enabled;
 }
 
 } // namespace WebKit

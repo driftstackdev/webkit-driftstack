@@ -199,26 +199,56 @@ bool DriftstackTLS13Client::connect(int socketFd, const String& sniHostname)
 bool DriftstackTLS13Client::sendClientHello()
 {
     Vector<uint8_t> clientRandom;
-    Vector<uint8_t> x25519Private;
-    Vector<uint8_t> x25519Pub;
-    if (!driftstackX25519GenerateKeypair(x25519Private, x25519Pub)) {
-        m_errorMessage = "X25519 keypair gen failed"_s;
+    // Keypair A — used for the X25519MLKEM768 hybrid (0x11EC) key_share tail (and the
+    // X25519-only fallback / classical archetype, each of which carries a SINGLE X25519 entry).
+    Vector<uint8_t> x25519PrivateA;
+    Vector<uint8_t> x25519PubA;
+    if (!driftstackX25519GenerateKeypair(x25519PrivateA, x25519PubA)) {
+        m_errorMessage = "X25519 keypair A gen failed"_s;
         return false;
     }
-    m_ourX25519Private = x25519Private;
-    m_ourX25519Public = x25519Pub;
+    m_ourX25519PrivateA = x25519PrivateA;
+    m_ourX25519PublicA = x25519PubA;
+
+    // Keypair B — INDEPENDENT ephemeral, used for the standalone X25519 (0x001D) key_share
+    // entry in the hybrid CH. Real iPhone Safari 26.2-26.5 sends TWO distinct X25519
+    // ephemerals (verified 7/7 captures: the standalone X25519 != the hybrid's X25519 slot,
+    // every connection). The fork previously reused keypair A for both → the two wire X25519
+    // components were byte-identical = a deterministic structural correlation a TLS-
+    // introspecting server/DPI computes (invisible to JA3/JA4/peetprint, which hash no key
+    // material). Gated by DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON, evaluated inside the
+    // builder); when off, the builder reuses keypair A's pub for the standalone entry. The
+    // server selects ONE group, so derivation picks the matching private (A for 0x11EC,
+    // B for 0x001D) — see receiveServerHello.
+    Vector<uint8_t> x25519PrivateB;
+    Vector<uint8_t> x25519PubB;
+    if (!driftstackX25519GenerateKeypair(x25519PrivateB, x25519PubB)) {
+        m_errorMessage = "X25519 keypair B gen failed"_s;
+        return false;
+    }
+    m_ourX25519PrivateB = x25519PrivateB;
+    m_ourX25519PublicB = x25519PubB;
 
     // Wave 29-499.219 — generate MLKEM768 keypair for hybrid X25519MLKEM768 keyshare
     m_mlkemKeypair = driftstackMLKEM768Generate();
     Vector<uint8_t> chRecord;
     if (m_mlkemKeypair.ok && m_mlkemKeypair.publicKey.size() == 1184) {
-        // Hybrid path: send MLKEM768 + X25519 keyshare (matches iPhone Safari 26)
+        // Hybrid path: send MLKEM768 + X25519 keyshare (matches iPhone Safari 26).
+        // Pubkey A → hybrid X25519 tail; pubkey B → standalone X25519 (0x001D) entry.
         chRecord = driftstackBuildIPhoneClientHelloHybrid(m_sniHostname,
-            m_mlkemKeypair.publicKey, x25519Pub, clientRandom);
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] Using HYBRID X25519MLKEM768+X25519 keyshare");
+            m_mlkemKeypair.publicKey, x25519PubA, clientRandom, x25519PubB);
+        // The standalone 0x001D entry carries keypair B's pubkey ONLY when the builder
+        // actually emitted the 26.x HYBRID keyshare (non-18.x archetype) AND the distinct
+        // gate is ON. An 18.x archetype takes the builder's preSafari26 branch → single
+        // X25519 entry with keypair A (so this stays false → derivation uses A). This is set
+        // at build time (not re-derived in receiveServerHello) so a 0x001D server selection
+        // is matched to the EXACT private that produced the wire pubkey.
+        m_standaloneX25519IsB = !driftstackArchetypeIsPreSafari26() && driftstackTlsKeyShareDistinctEnabled();
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] Using HYBRID X25519MLKEM768+X25519 keyshare (standalone X25519 distinct=%d)", m_standaloneX25519IsB);
     } else {
-        // Fallback: X25519-only keyshare (less iPhone-exact but works on non-PQ servers)
-        chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, x25519Pub, clientRandom);
+        // Fallback: X25519-only keyshare (single 0x001D entry → keypair A; no two-keypair
+        // issue → m_standaloneX25519IsB stays false → derivation uses private A).
+        chRecord = driftstackBuildIPhoneClientHello(m_sniHostname, x25519PubA, clientRandom);
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] MLKEM768 unavailable, falling back to X25519-only keyshare");
     }
 
@@ -483,10 +513,15 @@ bool DriftstackTLS13Client::receiveServerHello()
             m_errorMessage = "MLKEM768 decap failed"_s;
             return false;
         }
-        // X25519 ECDH with server's X25519 pubkey (last 32 bytes)
+        // X25519 ECDH with server's X25519 pubkey (last 32 bytes). The server selected the
+        // hybrid group (0x11EC), so its X25519 share is the DH against the pubkey we put in
+        // the HYBRID X25519 tail = keypair A → derive with private A. (With the gate ON the
+        // standalone 0x001D entry carried a DIFFERENT pubkey/private B; using B here would
+        // derive the WRONG secret → handshake failure. This per-group selection is the
+        // correctness pivot of the two-keypair change.)
         Vector<uint8_t> serverX25519;
         serverX25519.append(std::span<const uint8_t>(sh.keyShareKey.span().data() + 1088, 32));
-        Vector<uint8_t> x25519Shared = driftstackX25519SharedSecret(m_ourX25519Private, serverX25519);
+        Vector<uint8_t> x25519Shared = driftstackX25519SharedSecret(m_ourX25519PrivateA, serverX25519);
         if (x25519Shared.size() != 32) {
             m_errorMessage = "Hybrid X25519 ECDH failed"_s;
             return false;
@@ -498,8 +533,15 @@ bool DriftstackTLS13Client::receiveServerHello()
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.219] Hybrid X25519MLKEM768 shared derived: %zu bytes (MLKEM 32 + X25519 32)",
             m_ecdhShared.size());
     } else if (sh.keyShareGroup == 0x001D && sh.keyShareKey.size() == 32) {
-        // Plain X25519
-        m_ecdhShared = driftstackX25519SharedSecret(m_ourX25519Private, sh.keyShareKey);
+        // Plain X25519. The server selected the STANDALONE X25519 entry (0x001D). Derive
+        // with the EXACT private that produced that entry's wire pubkey: keypair B when the
+        // 26.x hybrid CH emitted a distinct standalone pubkey (m_standaloneX25519IsB), else
+        // keypair A (the X25519-only fallback builder + 18.x archetype each emit a SINGLE
+        // 0x001D entry carrying A, and the gate-off hybrid reuses A). Using the wrong private
+        // here would derive a mismatched secret → Finished verification / decrypt failure.
+        const Vector<uint8_t>& standalonePriv =
+            m_standaloneX25519IsB ? m_ourX25519PrivateB : m_ourX25519PrivateA;
+        m_ecdhShared = driftstackX25519SharedSecret(standalonePriv, sh.keyShareKey);
         if (m_ecdhShared.size() != 32) {
             m_errorMessage = "X25519 ECDH derivation failed"_s;
             return false;
@@ -509,10 +551,10 @@ bool DriftstackTLS13Client::receiveServerHello()
             " or size "_s, String::number(sh.keyShareKey.size()));
         return false;
     }
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.188] ECDH shared (32B): %02x%02x%02x%02x...%02x%02x | priv=%02x%02x | peer_pub=%02x%02x",
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.188] ECDH shared (32B): %02x%02x%02x%02x...%02x%02x | privA=%02x%02x | peer_pub=%02x%02x",
         m_ecdhShared[0], m_ecdhShared[1], m_ecdhShared[2], m_ecdhShared[3],
         m_ecdhShared[30], m_ecdhShared[31],
-        m_ourX25519Private[0], m_ourX25519Private[1],
+        m_ourX25519PrivateA[0], m_ourX25519PrivateA[1],
         sh.keyShareKey[0], sh.keyShareKey[1]);
 
     // Wave 29-499.186: cipher-aware key schedule

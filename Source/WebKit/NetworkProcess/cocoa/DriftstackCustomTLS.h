@@ -81,11 +81,20 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     Vector<uint8_t>& outClientRandom);         // 32 bytes (for handshake derivation)
 
 // Wave 29-499.219 — Build CH with X25519MLKEM768 hybrid + X25519 keyshare entries
-// (matches iPhone Safari 26 exactly when MLKEM is available)
+// (matches iPhone Safari 26 exactly when MLKEM is available).
+//
+// DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON): real iPhone Safari 26.2-26.5 uses TWO
+// INDEPENDENT X25519 ephemeral keypairs (verified 7/7 captures) — pubkey A in the hybrid
+// X25519MLKEM768 (0x11EC) tail (the 32 bytes after the 1184B MLKEM), pubkey B in the
+// standalone X25519 (0x001D) entry; on the wire the two X25519 components DIFFER. Pass
+// x25519PubKeyB for keypair B's standalone pubkey. When x25519PubKeyB is EMPTY (or the
+// gate is off), the standalone entry reuses x25519PubKeyA — the prior byte-identical
+// behavior (used by the QUIC builder, which is out of scope for the distinct-keypair fix).
 Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
-    const Vector<uint8_t>& mlkemPubKey,    // 1184 bytes MLKEM768 encoded
-    const Vector<uint8_t>& x25519PubKey,   // 32 bytes
-    Vector<uint8_t>& outClientRandom);
+    const Vector<uint8_t>& mlkemPubKey,     // 1184 bytes MLKEM768 encoded
+    const Vector<uint8_t>& x25519PubKeyA,   // 32 bytes — keypair A (hybrid X25519 tail)
+    Vector<uint8_t>& outClientRandom,
+    const Vector<uint8_t>& x25519PubKeyB = Vector<uint8_t>());   // 32 bytes — keypair B (standalone 0x001D); empty → reuse A
 
 // Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
 // Per RFC 8446 §4.1.2: CH2 mirrors CH1 except key_share + early_data + pre_shared_key.
@@ -106,6 +115,21 @@ Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
 
 // Phase 1.5e gate (DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1).
 bool driftstackCustomTlsEnabled();
+
+// DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON) — the hybrid CH emits two INDEPENDENT
+// X25519 ephemeral pubkeys (hybrid X25519MLKEM768 tail = keypair A; standalone X25519
+// 0x001D entry = keypair B), matching real iPhone Safari 26.2-26.5 (7/7 captures). When
+// off (env "0") the standalone entry reuses keypair A — the prior single-keypair wire.
+// The TLS client reads this to pick the matching private during ECDH derivation (the
+// server selects exactly one group: 0x11EC → private A, 0x001D → private B-when-ON).
+bool driftstackTlsKeyShareDistinctEnabled();
+
+// True for pre-Safari-26 archetypes (iOS 17/18/19 — DRIFTSTACK_ARCHETYPE substring match),
+// which emit the classical 18.x ClientHello (X25519-only key_share, single 0x001D entry).
+// Exposed so the TLS client can decide whether the standalone X25519 entry on the wire
+// carried keypair B (only the 26.x HYBRID path with the distinct gate ON) vs keypair A
+// (the 18.x single-entry path) — needed to pick the matching ECDH private.
+bool driftstackArchetypeIsPreSafari26();
 
 } // namespace WebKit
 

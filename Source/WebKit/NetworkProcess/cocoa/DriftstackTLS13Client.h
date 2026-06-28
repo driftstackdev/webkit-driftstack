@@ -110,8 +110,30 @@ private:
     TLS13TrafficKey m_clientAppKey;
     TLS13TrafficKey m_serverAppKey;
 
-    // Saved ephemeral X25519 private key (for ECDH after ServerHello)
-    Vector<uint8_t> m_ourX25519Private;
+    // Saved ephemeral X25519 private keys (for ECDH after ServerHello).
+    // DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON): the iPhone-correct wire emits TWO
+    // INDEPENDENT X25519 ephemeral keypairs — keypair A's pubkey in the X25519MLKEM768
+    // hybrid (0x11EC) key_share tail, keypair B's pubkey in the standalone X25519 (0x001D)
+    // key_share entry (verified 7/7 real-device captures: the standalone X25519 component
+    // != the hybrid's X25519 slot, every connection). The fork previously reused ONE
+    // keypair for both slots → the two wire X25519 components were byte-identical = a
+    // deterministic structural correlation a TLS-introspecting DPI/server computes by
+    // parsing the two key_share entries (invisible to JA3/JA4/peetprint). A TLS 1.3 server
+    // selects exactly ONE group, so derivation MUST pick the matching private per the
+    // server's selected group: 0x11EC → private A (the hybrid X25519 tail), 0x001D →
+    // private B (the standalone entry). When the gate is OFF, B == A (the old behavior:
+    // both slots carry the same pubkey, A derives both).
+    Vector<uint8_t> m_ourX25519PrivateA;
+    Vector<uint8_t> m_ourX25519PrivateB;
+    // True ONLY when the standalone X25519 (0x001D) key_share entry on the wire carried
+    // keypair B's pubkey — i.e. the 26.x HYBRID builder ran (MLKEM available, non-18.x
+    // archetype) AND DRIFTSTACK_TLS_KEYSHARE_DISTINCT is ON. Set at CH-build time so
+    // derivation is unambiguous: if a server selects 0x001D, use private B iff this is
+    // true, else private A. (The X25519-only FALLBACK builder + 18.x archetype emit a
+    // SINGLE 0x001D entry carrying keypair A, so this stays false and derivation correctly
+    // uses A there — re-deriving the gate condition in receiveServerHello would WRONGLY
+    // pick B for those single-entry-A cases → handshake failure.)
+    bool m_standaloneX25519IsB { false };
 
     // Saved ECDH shared secret (until handshake secret derived)
     Vector<uint8_t> m_ecdhShared;
@@ -121,7 +143,8 @@ private:
 
     // Wave 29-499.219 — MLKEM768 keypair for hybrid X25519MLKEM768
     MLKEM768Keypair m_mlkemKeypair;
-    Vector<uint8_t> m_ourX25519Public;  // 32 bytes (kept alongside private)
+    Vector<uint8_t> m_ourX25519PublicA;  // 32 bytes — keypair A pub (hybrid X25519MLKEM768 tail)
+    Vector<uint8_t> m_ourX25519PublicB;  // 32 bytes — keypair B pub (standalone X25519 0x001D)
 
     // Wave 29-499.195 — read buffer for leftover decrypted bytes between
     // read() calls. TLS record may contain >1 HTTP/2 frames; must not
