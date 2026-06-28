@@ -102,6 +102,41 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm / WebPage.cpp
+// driftstackArchetypeSafariAtLeast; returns TRUE when DRIFTSTACK_ARCHETYPE is unset so the
+// 26.4 launch default is NEVER gated — the guardrail is baked in).
+// NOTE (A3 structural-link fix 2026-06-27): renamed from the bare
+// `driftstackArchetypeSafariAtLeast` to a file-distinct `…Cocoa` symbol because
+// RenderThemeCocoa.mm and RenderThemeMac.mm unify into the SAME UnifiedSource57-nonARC
+// translation unit (Cocoa first), and RenderThemeMac.mm already defines an identical
+// file-local `driftstackArchetypeSafariAtLeast` (committed, used by the CSS system-color
+// palette gate) → an ODR redefinition error. Byte-identical body, zero behavioral change;
+// A1 to own canonicalization (ideally one shared helper). F.3 logic is unchanged.
+static bool driftstackArchetypeSafariAtLeastCocoa(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
+
 #if !USE(APPLE_INTERNAL_SDK)
 static constexpr auto switchCornerRadiusFraction = 0.f;
 #endif
@@ -3371,6 +3406,22 @@ bool RenderThemeCocoa::adjustButtonStyleForVectorBasedControls(RenderStyle& styl
         // uastylesheet-iPhone_17: input_submit.color rgb(255,255,255)). Mac would set buttonTextColor (the label,
         // now opaque black via our systemColor override) which is the REGULAR-button color, wrong for submit.
         style.setColor(Color { SRGBA<uint8_t> { 255, 255, 255 } });
+        // Class F.3 (26.0/26.3 closure ledger): real iPhone Safari serves input[type=submit] computed
+        // font-weight as BOLD (700) on Safari <26.2 (18.6 + 26.0) and NORMAL (400) on >=26.2
+        // (26.2/26.3/26.4/26.5). Boundary CONFIRMED across reference/realdevice-bs (18.6+26.0=700,
+        // 26.2/26.3/26.4/26.5=400 — ONLY input_submit gets the emphasized default-button weight;
+        // input_button/button stay 400 both sides). The fork's default-submit-button picks up the
+        // emphasized (bold) system control weight for EVERY band, over-exposing 700 on the >=26.2 bands
+        // incl. the 26.4 launch. On >=26.2 (incl. the unset 26.4 launch default → driftstackArchetypeSafariAtLeast
+        // returns true, guardrail baked in, no 26.4 regression) NORMALIZE the spurious emphasized weight
+        // back to 400. Only act when the resolved weight is at/above bold so an author-set lighter
+        // font-weight (or the already-correct <26.2 bold) is never clobbered — this removes the UA
+        // default-button bold, it does not impose a weight.
+        if (driftstackArchetypeSafariAtLeastCocoa(26, 2) && style.fontDescription().weight() >= boldWeightValue()) {
+            auto submitFontDescription = style.fontDescription();
+            submitFontDescription.setWeight(normalWeightValue());
+            style.setFontDescription(WTF::move(submitFontDescription));
+        }
 #elif PLATFORM(MAC)
         style.setColor(buttonTextColor(styleColorOptions, isEnabled));
 #endif

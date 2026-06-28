@@ -2605,6 +2605,20 @@ DriftstackLegacyCanvasDrawImageFromRectEnabled:
     WebCore:
       default: false
 
+DriftstackLegacyWebGPUPerStageLimitsEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Legacy WebGPU per-stage storage limits"
+  humanReadableDescription: "Re-expose the 4 per-stage WebGPU limits (maxStorageBuffersInFragmentStage/InVertexStage + maxStorageTexturesInFragmentStage/InVertexStage = 4294967295 sentinel; limits-count 36 vs 32) that real iPhone Safari 26.0 reports and Apple removed at 26.2; default off so the 26.4 launch band keeps 32 limits"
+  defaultValue:
+    WebKitLegacy:
+      default: false
+    WebKit:
+      default: false
+    WebCore:
+      default: false
+
 DriftstackSafari264MembersEnabled:
   type: bool
   status: stable

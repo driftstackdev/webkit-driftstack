@@ -242,4 +242,31 @@ uint32_t GPUSupportedLimits::maxComputeWorkgroupsPerDimension() const
     return m_backing->maxComputeWorkgroupsPerDimension();
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Class E (26.0/26.3 closure ledger): real iPhone Safari 26.0 reports these 4 per-stage
+// storage limits as the constant UINT32_MAX (4294967295) sentinel; Apple removed them at
+// 26.2 (26.0 = 36 limits, 26.2+ = 32). The IDL gate (DriftstackLegacyWebGPUPerStageLimits-
+// Enabled, default false) keeps them OFF for 26.3/26.4(launch)/26.5; the WebPage.cpp <26.2
+// block enables them for the safari26_0 band. Constant — no backing/IPC dependency.
+uint32_t GPUSupportedLimits::maxStorageBuffersInFragmentStage() const
+{
+    return 4294967295u;
+}
+
+uint32_t GPUSupportedLimits::maxStorageTexturesInFragmentStage() const
+{
+    return 4294967295u;
+}
+
+uint32_t GPUSupportedLimits::maxStorageBuffersInVertexStage() const
+{
+    return 4294967295u;
+}
+
+uint32_t GPUSupportedLimits::maxStorageTexturesInVertexStage() const
+{
+    return 4294967295u;
+}
+#endif
+
 }

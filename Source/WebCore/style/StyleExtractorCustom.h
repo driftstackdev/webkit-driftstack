@@ -31,6 +31,11 @@
 
 #pragma once
 
+#if PLATFORM(DRIFTSTACK)
+#include <cstdlib>
+#include <string_view>
+#endif
+
 #include "ColorSerialization.h"
 #include "ContainerNodeInlines.h"
 #include "CSSFontValue.h"
@@ -78,6 +83,34 @@
 
 namespace WebCore {
 namespace Style {
+
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm /
+// WebPage.cpp driftstackArchetypeSafariAtLeast; returns TRUE when DRIFTSTACK_ARCHETYPE
+// is unset so the 26.4 launch default is NEVER gated — the guardrail is baked in).
+static bool driftstackArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
 
 // Custom handling of computed value extraction.
 class ExtractorCustom {
@@ -978,6 +1011,15 @@ template<> struct PropertyExtractorAdaptor<CSSPropertyTranslate> {
 template<> struct PropertyExtractorAdaptor<CSSPropertyWidows> {
     template<typename F> decltype(auto) computedValue(ExtractorState& state, F&& functor) const
     {
+#if PLATFORM(DRIFTSTACK)
+        // Class F (26.0/26.3 closure ledger): real iPhone Safari serves the computed
+        // widows/orphans as the 'auto' keyword on Safari <26.2 (18.6 + 26.0) and the
+        // integer '2' on >=26.2 (26.3/26.4/26.5). The fork's WebKit binary natively
+        // resolves to value_or(2) for ALL archetypes, over-exposing '2' on the pre-26.2
+        // bands. Serve 'auto' there; >=26.2 and the unset 26.4 launch default keep '2'.
+        if (!driftstackArchetypeSafariAtLeast(26, 2))
+            return functor(CSS::Keyword::Auto { });
+#endif
         return functor(state.style.widows().tryValue().value_or(2));
     }
 };
@@ -985,6 +1027,11 @@ template<> struct PropertyExtractorAdaptor<CSSPropertyWidows> {
 template<> struct PropertyExtractorAdaptor<CSSPropertyOrphans> {
     template<typename F> decltype(auto) computedValue(ExtractorState& state, F&& functor) const
     {
+#if PLATFORM(DRIFTSTACK)
+        // Class F (26.0/26.3 closure ledger): see Widows above — 'auto' on Safari <26.2.
+        if (!driftstackArchetypeSafariAtLeast(26, 2))
+            return functor(CSS::Keyword::Auto { });
+#endif
         return functor(state.style.orphans().tryValue().value_or(2));
     }
 };

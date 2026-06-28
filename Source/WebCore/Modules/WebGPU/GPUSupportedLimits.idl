@@ -68,4 +68,13 @@ interface GPUSupportedLimits {
     readonly attribute unsigned long maxComputeWorkgroupSizeY;
     readonly attribute unsigned long maxComputeWorkgroupSizeZ;
     readonly attribute unsigned long maxComputeWorkgroupsPerDimension;
+    // Class E (26.0/26.3 closure ledger): real iPhone Safari 26.0 reports 36 limits;
+    // Apple removed these 4 per-stage storage limits at 26.2 (26.2+ report 32). Each is
+    // a constant UINT32_MAX (4294967295) sentinel on 26.0 — no IPC plumbing. Gated by a
+    // Driftstack setting (default false) the WebPage.cpp <26.2 block turns ON for the
+    // safari26_0 band only; 26.3/26.4(launch)/26.5 keep the 32-limit surface.
+    [EnabledBySetting=DriftstackLegacyWebGPUPerStageLimitsEnabled] readonly attribute unsigned long maxStorageBuffersInFragmentStage;
+    [EnabledBySetting=DriftstackLegacyWebGPUPerStageLimitsEnabled] readonly attribute unsigned long maxStorageTexturesInFragmentStage;
+    [EnabledBySetting=DriftstackLegacyWebGPUPerStageLimitsEnabled] readonly attribute unsigned long maxStorageBuffersInVertexStage;
+    [EnabledBySetting=DriftstackLegacyWebGPUPerStageLimitsEnabled] readonly attribute unsigned long maxStorageTexturesInVertexStage;
 };

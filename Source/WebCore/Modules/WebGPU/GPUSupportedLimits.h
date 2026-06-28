@@ -70,6 +70,14 @@ public:
     uint32_t NODELETE maxComputeWorkgroupSizeY() const;
     uint32_t NODELETE maxComputeWorkgroupSizeZ() const;
     uint32_t NODELETE maxComputeWorkgroupsPerDimension() const;
+#if PLATFORM(DRIFTSTACK)
+    // Class E: 4 per-stage storage limits real Safari 26.0 reports (UINT32_MAX sentinel),
+    // exposed only when DriftstackLegacyWebGPUPerStageLimitsEnabled (safari26_0 band).
+    uint32_t maxStorageBuffersInFragmentStage() const;
+    uint32_t maxStorageTexturesInFragmentStage() const;
+    uint32_t maxStorageBuffersInVertexStage() const;
+    uint32_t maxStorageTexturesInVertexStage() const;
+#endif
 
     WebGPU::SupportedLimits& backing() { return m_backing; }
     const WebGPU::SupportedLimits& backing() const { return m_backing; }

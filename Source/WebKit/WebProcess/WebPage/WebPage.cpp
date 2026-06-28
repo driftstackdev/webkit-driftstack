@@ -5983,6 +5983,14 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             settings.setReadableByteStreamAPIEnabled(false);  // window.ReadableByteStreamController/ReadableStreamBYOBReader/BYOBRequest
             settings.setCSSMathDepthEnabled(false);           // CSS 'math-depth' property (apiEnum.cssProperties + CSS.supports)
             settings.setDriftstackSafari264MembersEnabled(false); // PRT deliveryType/finalResponseHeadersStart/firstInterimResponseStart + CSS flow-tolerance + window.webkit.buffers
+            // Element.currentCSSZoom / HTMLElement.currentCSSZoom (EnableElementCurrentCSSZoom,
+            // COCOA-default true). Real iPhone ships it ONLY >=26.4 (GT 0/27 <26.4 [18.6 0/5,
+            // 26.0 0/16, 26.2 0/5, 26.3 0/1], 40/40 >=26.4). The Family-A block (~L5918) already
+            // hides it for 18.x; this closes the 26.0/26.2/26.3 over-exposure that was falling
+            // through to the Family-B 26.4 Cocoa-default true. (residual-hunt a88cc34b; the
+            // 26-0-26-3-master-closure-ledger:379 "non-issue/default-FALSE" note was mistaken —
+            // the real default is true/Cocoa, so the <26.4 gate was never added until now.)
+            settings.setEnableElementCurrentCSSZoom(false);       // typeof Element.prototype.currentCSSZoom (+ every HTML*Element prototype)
         }
         // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2). Boundary
         // VERIFIED across real 26.0/26.2/26.3/26.4/26.5 /aio (apiEnum + cssSupports, 2026-06-19).
@@ -6007,6 +6015,11 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             // (both present 26.0/26.1, absent 26.2+) — force the legacy forms ON for <26.2:
             settings.setOverflowEventEnabled(true);
             settings.setDriftstackLegacyCanvasDrawImageFromRectEnabled(true);
+            // Class E (WebGPU 26.0): Apple removed the 4 per-stage storage limits at 26.2
+            // (real 26.0 reports 36 limits incl maxStorage{Buffers,Textures}In{Fragment,Vertex}-
+            // Stage = 4294967295; 26.2+ report 32). Re-expose them for <26.2 (safari26_0 band).
+            // Only observable on WebGPU-capable models (18.x has no WebGPU). 26.3 keeps 32.
+            settings.setDriftstackLegacyWebGPUPerStageLimitsEnabled(true);
         }
         // GPUDevice.adapterInfo added at Safari 26.2 (real 26.0 lacks it, 26.2+ have it; corrected
         // from 26.3 — adapterInfo is the single member 26.0→26.2 gains on GPUDevice). 26.0 hidden,
