@@ -149,6 +149,22 @@ private:
 // Gate: true if h3 connection pooling is enabled via DRIFTSTACK_H3_POOL=1.
 bool driftstackHttp3PoolEnabled();
 
+// W2890 (#37 DNS-leak fail-closed invariant) — DEFAULT-ON. When true (the default), the QUIC/h3
+// path NEVER falls back to a LOCAL getaddrinfo on a §7 proxy-resolve failure: it aborts the h3
+// attempt so the loader falls through to h2/TCP (proxy-resolved, no leak), matching a real iPhone's
+// UDP-blocked → h2 behaviour. DRIFTSTACK_H3_DNS_FAIL_CLOSED=0 restores the legacy (leaking) fallback.
+bool driftstackH3DnsFailClosed();
+
+// W2890 — privacy/fingerprint INVARIANT: count of LOCAL getaddrinfo calls reached on the QUIC/h3
+// path under DRIFTSTACK_CUSTOM_SOCKS5=1. MUST be 0 in production (non-zero = DNS-leak regression).
+uint64_t driftstackH3LocalGetaddrinfoCount();
+
+// W2890 — hard guard for a would-be LOCAL getaddrinfo on the QUIC/h3 path. Returns true ONLY if the
+// legacy local fallback is permitted (fail-closed disabled); callers MUST treat false as "abort the
+// h3 attempt, do NOT getaddrinfo". Asserts + counts on the (escape-hatch-only) leaking path. Shared
+// with the §7 framer sites in DriftstackQuicSocks5Bridge.mm.
+bool driftstackH3LocalResolveAllowed(const char* site, const char* host);
+
 } // namespace WebKit
 
 #endif // PLATFORM(DRIFTSTACK)

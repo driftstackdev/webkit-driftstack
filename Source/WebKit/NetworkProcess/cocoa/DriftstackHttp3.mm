@@ -28,6 +28,7 @@
 // works for WebRTC (Wave 29-499.99-106) per the V-2026-05-23-W29-499.221
 // STUN verification.
 #import "DriftstackRTCSocks5Bridge.h"
+#import "DriftstackQuicSocks5Bridge.h"   // W2890 — isCustomSocks5Active() for the #37 DNS-leak fail-closed invariant guard
 #import "DriftstackSocks5Framing.h"
 
 #if PLATFORM(DRIFTSTACK)
@@ -2891,6 +2892,24 @@ qdone:
     return String();
 }
 
+// W2890 (#37 DNS-leak fail-closed) — dual-resolver §7 resolve over an ALREADY-ESTABLISHED
+// relay (the in-Http3 sites hold a live udpFd/relaySa). Mirrors the W2752 dual-resolver bias
+// in NetworkSessionCocoa.mm:~1239: try 1.1.1.1 first, then 8.8.8.8 on miss, so a single
+// transient §7 packet loss does NOT trigger the (removed) local-getaddrinfo leak fallback.
+// Returns the dotted-quad A record, or a null String if BOTH proxy-resolvers fail.
+[[maybe_unused]] static String driftstackResolveHostViaSocks5RelayDual(const String& host,
+    int udpFd, const struct sockaddr_in& relaySa)
+{
+    String ip = driftstackResolveHostViaSocks5Relay(host, udpFd, relaySa, "1.1.1.1");
+    if (!ip.isEmpty())
+        return ip;
+    // Transient loss / resolver hiccup — retry once on 8.8.8.8 before giving up (fail-closed).
+    ip = driftstackResolveHostViaSocks5Relay(host, udpFd, relaySa, "8.8.8.8");
+    if (!ip.isEmpty())
+        WTFLogAlways("[W2890/#37] §7 DNS retry on 8.8.8.8 resolved '%s' -> %s (1.1.1.1 missed; no local leak)", host.utf8().data(), ip.utf8().data());
+    return ip;
+}
+
 // Sketch of caller-side event loop (Wave .236 will wire this into
 // driftstackHttp3Execute):
 //
@@ -3109,6 +3128,55 @@ static bool driftstackQuicRawSocks5Associate(struct sockaddr_in* outRelay, int* 
 
 } // anonymous namespace — closed so the #37 DNS-over-proxy resolver below has EXTERNAL linkage (W2557)
 
+// W2890 (#37 DNS-leak fail-closed invariant) — DEFAULT-ON gate. On the QUIC/h3 path the fork must
+// NEVER fall back to a LOCAL getaddrinfo: that issues a system-resolver A query for the customer's
+// destination host via the fleet box's configured DNS → the box resolver sees it → DNS-geo(box) !=
+// IP-geo(proxy) = LEAK. A real iPhone has NO local-resolver fallback on the QUIC path; when UDP is
+// blocked it silently falls to h2/TCP. So when fail-closed (the default), a §7 proxy-resolve miss
+// FAILS the h3 attempt — driftstackHttp3Execute returns failed / the pool create returns nullptr /
+// the §7 framer aborts the packet — and the loader falls through to the h2/TCP path (which proxy-
+// resolves via the CONNECT tunnel, no leak). Set DRIFTSTACK_H3_DNS_FAIL_CLOSED=0 ONLY as an escape
+// hatch to restore the legacy (leaking) getaddrinfo fallback (the prior default that WAS the bug).
+bool driftstackH3DnsFailClosed()
+{
+    static const bool kFailClosed = [] {
+        const char* e = getenv("DRIFTSTACK_H3_DNS_FAIL_CLOSED");
+        return !(e && e[0] == '0');   // default-ON: anything but an explicit "0" → fail-closed
+    }();
+    return kFailClosed;
+}
+
+// W2890 — the privacy/fingerprint INVARIANT counter: how many times a LOCAL getaddrinfo was
+// REACHED on the QUIC/h3 path while DRIFTSTACK_CUSTOM_SOCKS5=1. This MUST stay 0 in production (a
+// non-zero value is a DNS-leak regression). It can only become non-zero on the legacy escape-hatch
+// path (DRIFTSTACK_H3_DNS_FAIL_CLOSED=0); the default fail-closed path aborts before any getaddrinfo.
+// A3's verify reads this alongside a tcpdump of the box physical egress iface (expect ZERO port-53 to
+// the box resolver). Shared across this TU + the §7 framer sites in DriftstackQuicSocks5Bridge.mm.
+static std::atomic<uint64_t> s_h3LocalGetaddrinfoCount { 0 };
+uint64_t driftstackH3LocalGetaddrinfoCount() { return s_h3LocalGetaddrinfoCount.load(std::memory_order_relaxed); }
+
+// W2890 — hard guard + counter for an attempted LOCAL getaddrinfo on the QUIC/h3 path. Returns true
+// ONLY if the legacy local fallback is permitted (i.e. fail-closed disabled) — callers MUST treat
+// false as "abort the h3 attempt, do NOT getaddrinfo". With fail-closed ON (the default) this is
+// UNREACHABLE for a real resolve; the ASSERT trips in debug, the counter latches in release for A3's
+// invariant check. `site` names the call site for the leak/abort log line.
+bool driftstackH3LocalResolveAllowed(const char* site, const char* host)
+{
+    if (driftstackH3DnsFailClosed()) {
+        // INVARIANT: never local-resolve on the QUIC/h3 path. Loader falls through to h2/TCP.
+        WTFLogAlways("[W2890/#37/FAIL-CLOSED] %s: §7 proxy-resolve failed for '%s' — ABORTING h3 (NO local getaddrinfo; loader falls through to h2/TCP, no DNS leak)", site, host ? host : "");
+        return false;
+    }
+    if (DriftstackQuic::isCustomSocks5Active()) {
+        uint64_t n = s_h3LocalGetaddrinfoCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        // Reaching here under the custom proxy is a privacy-invariant violation (only possible with
+        // the escape hatch explicitly enabled).
+        ASSERT_NOT_REACHED_WITH_MESSAGE("[W2890/#37] LOCAL getaddrinfo on the QUIC/h3 path under DRIFTSTACK_CUSTOM_SOCKS5 (DNS leak) at %s", site);
+        WTFLogAlways("[W2890/#37/LEAK] %s: DRIFTSTACK_H3_DNS_FAIL_CLOSED=0 escape-hatch — LOCAL getaddrinfo for '%s' WILL LEAK to the box resolver (count=%llu)", site, host ? host : "", (unsigned long long)n);
+    }
+    return true;
+}
+
 // Prototype (also forward-declared in DriftstackQuicSocks5Bridge.mm) — satisfies -Wmissing-prototypes.
 String driftstackResolveHostOverSocks5Proxy(const String& host);
 
@@ -3153,7 +3221,10 @@ String driftstackResolveHostOverSocks5Proxy(const String& host)
             ::close(controlFd);
         return String();
     }
-    String ip = driftstackResolveHostViaSocks5Relay(host, udpFd, relaySa, "1.1.1.1");
+    // W2890 (#37 fail-closed): dual-resolver over the live relay — 1.1.1.1 then 8.8.8.8 on miss —
+    // so a transient §7 packet loss doesn't push the §7 framer callers to their local-getaddrinfo
+    // leak (now guarded by driftstackH3LocalResolveAllowed at those call sites).
+    String ip = driftstackResolveHostViaSocks5RelayDual(host, udpFd, relaySa);
     ::close(udpFd);
     if (controlFd >= 0)
         ::close(controlFd);
@@ -3709,11 +3780,9 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
 
     // Wave 29-499.321 — resolve the REAL request host → IPv4 for production
     // routing (was hardcoded 1.1.1.1 smoke target). gost's §7 relay requires
-    // ATYP=0x01 (IPv4 literal), so we resolve locally via getaddrinfo before
-    // §7-wrapping. (DNS-over-proxy via ATYP=0x03 is a separate hardening item;
-    // the QUIC bridge framer path already does the same local pre-resolution
-    // per .319b, so this is consistent.) Default port 443 unless the authority
-    // carries an explicit :port.
+    // ATYP=0x01 (IPv4 literal). W2890 (#37): resolve ONLY DNS-over-§7 through the
+    // customer proxy — NO local getaddrinfo (that leaked the destination to the box
+    // resolver). Default port 443 unless the authority carries an explicit :port.
     String authHost;
     uint16_t authPort = 443;
     {
@@ -3731,31 +3800,38 @@ DriftstackHttp3Response driftstackHttp3Execute(void* /*socks5UdpRelay*/, const D
     }
     String peerIpStr = "1.1.1.1"_s;  // smoke fallback (empty authority)
     if (!authHost.isEmpty()) {
-        // Prefer DNS-over-§7 (resolves through the customer proxy, no local
-        // hostname leak). Fall back to local getaddrinfo only if that fails so
-        // the path stays functional — best case no leak, worst case current
-        // behaviour. (Tracked: the fallback still leaks; the proxy-DNS path is
-        // the privacy-correct one.)
-        String viaRelay = driftstackResolveHostViaSocks5Relay(authHost, udpFd, relaySa, "1.1.1.1");
+        // W2890 (#37 DNS-leak fail-closed): resolve DNS-over-§7 ONLY (through the customer proxy —
+        // no local hostname leak), dual-resolver (1.1.1.1 then 8.8.8.8) so a transient §7 packet loss
+        // doesn't trip a fallback. On BOTH-resolver failure we do NOT local-getaddrinfo (that leaked
+        // the customer's destination to the box resolver = #37); we FAIL the h3 attempt so the loader
+        // falls through to h2/TCP (proxy-resolved, no leak) — a real iPhone has no local-resolver
+        // fallback on the QUIC path. Legacy escape hatch: DRIFTSTACK_H3_DNS_FAIL_CLOSED=0.
+        CString hostC = authHost.utf8();
+        String viaRelay = driftstackResolveHostViaSocks5RelayDual(authHost, udpFd, relaySa);
         if (!viaRelay.isEmpty())
             peerIpStr = viaRelay;
-        else {
+        else if (!driftstackH3LocalResolveAllowed("Http3Execute(one-shot)", hostC.data())) {
+            // FAIL CLOSED: abort this h3 attempt → loader falls through to h2/TCP (no DNS leak).
+            ::close(udpFd);
+            bsf.SSL_free(ssl);
+            bsf.SSL_CTX_free(ctx);
+            resp.failed = true;
+            resp.errorMessage = "h3 §7 DNS-resolve failed (fail-closed; falling to h2/TCP)"_s;
+            return resp;
+        } else {
+            // Legacy escape-hatch ONLY (fail-closed disabled): the prior leaking getaddrinfo.
             struct addrinfo hints { };
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_DGRAM;
             struct addrinfo* res = nullptr;
-            CString hostC = authHost.utf8();
             if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
                 auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
                 char ipbuf[INET_ADDRSTRLEN] = {};
                 inet_ntop(AF_INET, &sin->sin_addr, ipbuf, sizeof(ipbuf));
                 peerIpStr = String::fromUTF8(ipbuf);
                 freeaddrinfo(res);
-                WTFLogAlways("[Wave29-499.321] DNS-over-§7 failed for '%s' — fell back to LOCAL getaddrinfo (leaks; %s)", hostC.data(), ipbuf);
-            } else {
-                WTFLogAlways("[Wave29-499.321] both DNS-over-§7 and getaddrinfo FAILED for '%s' — using 1.1.1.1", hostC.data());
-                if (res) freeaddrinfo(res);
-            }
+            } else if (res)
+                freeaddrinfo(res);
         }
     }
 
@@ -4247,15 +4323,24 @@ RefPtr<DriftstackHttp3Session> DriftstackHttp3Session::create(const String& auth
 
     String peerIpStr = "1.1.1.1"_s;
     if (!authHost.isEmpty()) {
-        String viaRelay = driftstackResolveHostViaSocks5Relay(authHost, udpFd, relaySa, "1.1.1.1");
+        // W2890 (#37 DNS-leak fail-closed) — H3_POOL variant. DNS-over-§7 dual-resolver only; on
+        // BOTH-resolver failure FAIL the session create (return nullptr → pool not established →
+        // loader falls through to h2/TCP, no leak). NO local getaddrinfo. Legacy escape hatch:
+        // DRIFTSTACK_H3_DNS_FAIL_CLOSED=0.
+        CString hostC = authHost.utf8();
+        String viaRelay = driftstackResolveHostViaSocks5RelayDual(authHost, udpFd, relaySa);
         if (!viaRelay.isEmpty())
             peerIpStr = viaRelay;
-        else {
+        else if (!driftstackH3LocalResolveAllowed("Http3Session::create(H3_POOL)", hostC.data())) {
+            ::close(udpFd);
+            cleanup();
+            return nullptr;
+        } else {
+            // Legacy escape-hatch ONLY (fail-closed disabled): the prior leaking getaddrinfo.
             struct addrinfo hints { };
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_DGRAM;
             struct addrinfo* res = nullptr;
-            CString hostC = authHost.utf8();
             if (getaddrinfo(hostC.data(), nullptr, &hints, &res) == 0 && res) {
                 auto* sin = reinterpret_cast<struct sockaddr_in*>(res->ai_addr);
                 char ipbuf[INET_ADDRSTRLEN] = {};

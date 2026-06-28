@@ -582,6 +582,53 @@ bool NetworkStorageSession::setCookieFromDOM(const URL& firstParty, const SameSi
     return false;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// PathB v2 within-session Set-Cookie WRITE — the symmetric counterpart of cookieRequestHeaderFieldValue
+// (the 9-arg ITP READ DriftstackNetworkLoader uses). PathB v2 bypasses NSURLSession, so CFNetwork's
+// auto-parse of Set-Cookie (incl on 3xx) into HTTPCookieStorage is gone; this restores it for the egress
+// path. Differs from setCookiesFromDOM in two ways that matter:
+//   (1) it parses via [NSHTTPCookie cookiesWithResponseHeaderFields:forURL:] (the server/HTTP-response
+//       parser), which PRESERVES httpOnly cookies — the DOM path's _cookieForSetCookieString +
+//       adjustScriptWrittenCookie deliberately DROPS httpOnly (a JS-write must never set httpOnly);
+//   (2) it does NOT apply clientSideCookieCap — that cap is for script-written cookies only; NSURLSession's
+//       auto-write of server Set-Cookie applies no such cap, so neither do we (keeps PathB byte-equivalent).
+// The ITP/partition decision (thirdPartyCookieBlockingDecisionForRequest + shouldBlockCookies) and the
+// final setHTTPCookiesForURL/policyProperties are IDENTICAL to the READ, so a 3rd-party/partitioned WRITE
+// inherits the same decision the READ would — no new tracker-handling tell vs a real iPhone's NSURLSession.
+// `setCookieHeaderValue` MUST be a single RAW (un-folded) Set-Cookie header value — the caller passes each
+// Set-Cookie line separately so commas inside Expires=... or multiple cookies are never mis-joined.
+void NetworkStorageSession::driftstackSetCookiesFromHTTPResponse(const URL& firstParty, const SameSiteInfo& sameSiteInfo, const URL& url, std::optional<FrameIdentifier> frameID, std::optional<PageIdentifier> pageID, ApplyTrackingPrevention applyTrackingPrevention, ShouldRelaxThirdPartyCookieBlocking shouldRelaxThirdPartyCookieBlocking, IsKnownCrossSiteTracker isKnownCrossSiteTracker, const String& setCookieHeaderValue) const
+{
+    ASSERT(hasProcessPrivilege(ProcessPrivilege::CanAccessRawCookies) || m_isInMemoryCookieStore);
+
+    if (setCookieHeaderValue.isEmpty())
+        return;
+
+    BEGIN_BLOCK_OBJC_EXCEPTIONS
+
+    auto thirdPartyCookieBlockingDecision = thirdPartyCookieBlockingDecisionForRequest(firstParty, url, frameID, pageID, shouldRelaxThirdPartyCookieBlocking, isKnownCrossSiteTracker);
+    if (applyTrackingPrevention == ApplyTrackingPrevention::Yes && shouldBlockCookies(thirdPartyCookieBlockingDecision))
+        return;
+
+    RetainPtr cookieURL = url.createNSURL();
+
+    // Server/HTTP-response parse (preserves httpOnly). One raw Set-Cookie value per call.
+    RetainPtr<NSArray<NSHTTPCookie *>> parsedCookies = [NSHTTPCookie cookiesWithResponseHeaderFields:@{ @"Set-Cookie": setCookieHeaderValue.createNSString().get() } forURL:cookieURL.get()];
+    if (![parsedCookies count])
+        return;
+
+#if ENABLE(OPT_IN_PARTITIONED_COOKIES) && defined(CFN_COOKIE_ACCEPTS_POLICY_PARTITION) && CFN_COOKIE_ACCEPTS_POLICY_PARTITION
+    String partitionKey = isOptInCookiePartitioningEnabled() ? cookiePartitionIdentifier(firstParty) : String { };
+#else
+    String partitionKey;
+#endif
+
+    setHTTPCookiesForURL(cookieStorage().get(), parsedCookies.get(), cookieURL.get(), firstParty.createNSURL().get(), nsStringNilIfEmpty(partitionKey).get(), sameSiteInfo, thirdPartyCookieBlockingDecision);
+
+    END_BLOCK_OBJC_EXCEPTIONS
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 static NSHTTPCookieAcceptPolicy httpCookieAcceptPolicy(CFHTTPCookieStorageRef cookieStorage)
 {
     ASSERT(hasProcessPrivilege(ProcessPrivilege::CanAccessRawCookies));

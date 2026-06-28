@@ -211,6 +211,18 @@ public:
     WEBCORE_EXPORT void setCookies(const Vector<Cookie>&, const URL&, const URL& mainDocumentURL);
     WEBCORE_EXPORT void setCookiesFromDOM(const URL& firstParty, const SameSiteInfo&, const URL&, std::optional<FrameIdentifier>, std::optional<PageIdentifier>, ApplyTrackingPrevention, RequiresScriptTrackingPrivacy, const String& cookieString, ShouldRelaxThirdPartyCookieBlocking, IsKnownCrossSiteTracker) const;
     WEBCORE_EXPORT bool setCookieFromDOM(const URL& firstParty, const SameSiteInfo&, const URL&, std::optional<FrameIdentifier>, std::optional<PageIdentifier>, ApplyTrackingPrevention, RequiresScriptTrackingPrivacy, const Cookie&, ShouldRelaxThirdPartyCookieBlocking, IsKnownCrossSiteTracker) const;
+#if PLATFORM(DRIFTSTACK)
+    // PathB v2 within-session Set-Cookie WRITE (egress audit). NSURLSession's auto-parse of every
+    // Set-Cookie (incl on 3xx) into HTTPCookieStorage is GONE on PathB v2 (it bypasses NSURLSession),
+    // so httpOnly server-set cookies (session/auth/consent) were dropped → 302+Set-Cookie consent
+    // gates (OneTrust/cookielaw, e.g. westernunion) looped forever. This is the symmetric WRITE for
+    // the 9-arg cookieRequestHeaderFieldValue READ DriftstackNetworkLoader uses: it parses the RAW
+    // (un-folded) Set-Cookie header value via [NSHTTPCookie cookiesWithResponseHeaderFields:forURL:]
+    // (which PRESERVES httpOnly, unlike the DOM path's _cookieForSetCookieString) and persists through
+    // setHTTPCookiesForURL with the SAME thirdPartyCookieBlockingDecisionForRequest()/partition/
+    // policyProperties as the READ — so PathB stays byte-equivalent to NSURLSession ITP (no new tell).
+    WEBCORE_EXPORT void driftstackSetCookiesFromHTTPResponse(const URL& firstParty, const SameSiteInfo&, const URL&, std::optional<FrameIdentifier>, std::optional<PageIdentifier>, ApplyTrackingPrevention, ShouldRelaxThirdPartyCookieBlocking, IsKnownCrossSiteTracker, const String& setCookieHeaderValue) const;
+#endif
     WEBCORE_EXPORT void deleteCookie(const Cookie&, CompletionHandler<void()>&&);
     WEBCORE_EXPORT void deleteCookie(const URL& firstParty, const URL&, const String&, CompletionHandler<void()>&&) const;
     WEBCORE_EXPORT void deleteAllCookies(CompletionHandler<void()>&&);

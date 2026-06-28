@@ -348,8 +348,12 @@ static void initDriftstackSslCtx()
                 (void*)"X25519:P-256:P-384:P-521");
         }
 
+        // FIX 5 — iOS Safari TCP ALPN = ["h2","http/1.1"] exactly (2 entries, 12/12
+        // captures). h3 is QUIC-only and NEVER appears in a TCP ClientHello; advertising
+        // it here was a TLS-ALPN tell on this LibreSSL fallback path. (Dead in prod since
+        // DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1 routes through the custom builder's makeExtALPN,
+        // which already emits h2,http/1.1 — fixed here for safety on the fallback path.)
         static const uint8_t alpn[] = {
-            2, 'h', '3',
             2, 'h', '2',
             8, 'h', 't', 't', 'p', '/', '1', '.', '1'
         };
@@ -1159,9 +1163,15 @@ static String driftstackPathBAcceptEncoding()
 // already supplied a `priority` header, pass that through unchanged (handled at the call sites).
 static String driftstackPathBPriorityHeader(const String& secFetchDest, const String& accept)
 {
+    // RFC 9218 priority — per-resource-type u-value, byte-matching real iPhone Safari
+    // (gt-registry http2_priority_rfc9218; 4 real-device BS cells iOS 18.6–26.5, byte-identical).
     if (secFetchDest == "document"_s || accept.contains("text/html"_s))
         return "u=0, i"_s;  // navigation / document
-    return "u=3, i"_s;      // fetch / XHR / sub-resource (deferred per-type matrix → u=3)
+    if (secFetchDest == "style"_s || secFetchDest == "script"_s)
+        return "u=1, i"_s;  // CSS, classic script, ES module (module's sec-fetch-dest is "script")
+    if (secFetchDest == "image"_s)
+        return "u=5, i"_s;  // image
+    return "u=3, i"_s;      // font / fetch / xhr / empty / other
 }
 
 // W2341 (task #58, design W2323): cancel-aware read adapter for the PathB custom-TLS transports.
@@ -1266,7 +1276,7 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     return h2req;
 }
 
-bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse& response)
+bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse& response, const Vector<String>& rawSetCookies)
 {
     int statusCode = response.httpStatusCode();
     // 3xx except 304 Not Modified (conditional GET, not a redirect) and 305/306 (deprecated).
@@ -1280,6 +1290,22 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
     URL redirectURL { currentURL, location }; // resolves relative Location against the current URL
     if (!redirectURL.isValid() || !redirectURL.protocolIsInHTTPFamily())
         return false;
+
+    // PathB v2 egress (Set-Cookie WRITE): we've confirmed this is a redirect we WILL follow. Persist the
+    // 3xx response's Set-Cookie BEFORE the re-resume is marshalled, so an OneTrust/cookielaw consent gate's
+    // 302+Set-Cookie stores its cookie before the next hop re-reads the (otherwise empty) store and loops
+    // forever (the westernunion symptom). MAIN THREAD: tryFollowRedirect runs on loaderQueue (called from
+    // the response sites) but driftstackPersistSetCookies touches m_request/task ITP state — marshal it to
+    // the main runloop. callOnMainRunLoop is FIFO, and the re-resume below is also marshalled to the main
+    // runloop AFTER this, so the WRITE is ordered before the next hop's READ. m_request is still the
+    // PRE-redirect request here, so the consent cookie is stored first-party to the consent domain. Gate-off
+    // (DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST=0): driftstackPersistSetCookies is a no-op.
+    if (!rawSetCookies.isEmpty()) {
+        Ref<DriftstackNetworkLoader> cookieRef { *this };
+        callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(currentURL), rawSetCookies = Vector<String>(rawSetCookies)]() mutable {
+            cookieRef->driftstackPersistSetCookies(responseURL, rawSetCookies);
+        });
+    }
 
     // W2202 STEP 5: this runs on loaderQueue — never cache the raw client across the main-thread
     // hop. Use a task-existence early-out only; re-acquire the client inside the callOnMainRunLoop block.
@@ -1397,6 +1423,74 @@ static bool driftstackResolveRequestBody(WebCore::FormData& formData, Vector<uin
             return false;
     }
     return true;
+}
+
+// PathB v2 within-session Set-Cookie WRITE kill-switch. DEFAULT-ON: this is a correctness fix
+// (the egress READS cookies but never WROTE Set-Cookie, so a 302+Set-Cookie consent gate looped
+// forever — westernunion). Set DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST=0 to disable (restores the
+// broken drop-Set-Cookie behaviour). NetworkProcess-only => glyphHash-neutral.
+static bool driftstackEgressSetCookiePersistEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST");
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/SetCookie] DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST=%s (default ON)", e ?: "(null)");
+        return !e || e[0] != '0';   // default-ON: only "0" disables
+    }();
+    return enabled;
+}
+
+// Extract the RAW (un-folded) Set-Cookie header values from a protocol's header container.
+// Each Set-Cookie response header is ONE entry — they must NOT be comma-joined (an Expires=...
+// date contains a comma, and multiple Set-Cookie headers fold into one ambiguous value). We read
+// the raw [key,value] vector each transport already produces (NOT response.httpHeaderField(),
+// which setHTTPHeaderField has already comma-folded). One String per Set-Cookie header line.
+// Returns empty when the gate is OFF, so every downstream isEmpty()-guarded persist (final-response
+// hop AND the redirect persist inside tryFollowRedirect) is skipped → gate-off is a true no-op.
+static Vector<String> driftstackExtractRawSetCookies(const Vector<std::pair<String, String>>& rawHeaders)
+{
+    Vector<String> out;
+    if (!driftstackEgressSetCookiePersistEnabled())
+        return out;
+    for (auto& [k, v] : rawHeaders) {
+        if (equalIgnoringASCIICase(k, "set-cookie"_s) && !v.isEmpty())
+            out.append(v);
+    }
+    return out;
+}
+
+// PathB v2 within-session Set-Cookie WRITE. Persists each RAW Set-Cookie value through the SAME
+// 9-arg ITP context as the READ (driftstackITPCookieHeader). MAIN THREAD ONLY (touches m_request +
+// task ITP state — like the READ). Callers on loaderQueue marshal via callOnMainRunLoop BEFORE the
+// redirect/delivery hop (callOnMainRunLoop is FIFO, so the WRITE lands before the next-hop re-read).
+// Gate-off (DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST=0): no-op. NetworkProcess-only => glyphHash-neutral.
+void DriftstackNetworkLoader::driftstackPersistSetCookies(const URL& responseURL, const Vector<String>& setCookieValues)
+{
+    if (!driftstackEgressSetCookiePersistEnabled())
+        return;
+    if (setCookieValues.isEmpty())
+        return;
+    RefPtr task = protectedTask();
+    if (!task)
+        return;
+    WebKit::NetworkSession* session = task->networkSession();
+    if (!session)
+        return;
+    CheckedPtr<WebCore::NetworkStorageSession> storageSession = session->networkStorageSession();
+    if (!storageSession)
+        return;
+
+    // Same ITP args the READ uses (cookieRequestHeaderFieldValue above), so the WRITE inherits the
+    // SAME 3rd-party/partition decision — PathB stays byte-equivalent to NSURLSession ITP.
+    const URL& firstParty = m_request.firstPartyForCookies();
+    WebCore::SameSiteInfo sameSiteInfo = WebCore::SameSiteInfo::create(m_request);
+    for (const String& setCookieValue : setCookieValues) {
+        storageSession->driftstackSetCookiesFromHTTPResponse(
+            firstParty, sameSiteInfo, responseURL, task->frameID(), task->pageID(),
+            WebCore::ApplyTrackingPrevention::Yes,
+            session->networkProcess().shouldRelaxThirdPartyCookieBlockingForPage(task->webPageProxyID()),
+            WebKit::NetworkSession::isResourceFromKnownCrossSiteTracker(firstParty, responseURL),
+            setCookieValue);
+    }
 }
 
 // PathB v2 ITP: compute the EXACT Cookie header real Safari's NSURLSession would send for this request.
@@ -1921,10 +2015,21 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h3resp.statusCode);
                     for (auto& [k, v] : h3resp.headers)
                         response.setHTTPHeaderField(k, v);
-                    if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
+                    // PathB v2 egress Set-Cookie WRITE — extract RAW un-folded Set-Cookie from h3resp.headers
+                    // (NOT response.httpHeaderField, which folds duplicates with commas).
+                    Vector<String> h3SetCookies = driftstackExtractRawSetCookies(h3resp.headers);
+                    if (tryFollowRedirect(response, h3SetCookies)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
                     WebKit::driftstackDecodeContentEncoding(h3resp.body, h3resp.headers);  // .331 chokepoint
                     auto bodyBuffer = WebCore::SharedBuffer::create(h3resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+                    // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins
+                    // (so an overlapping re-delivery can't double-store). Main thread; ordered before delivery.
+                    if (!h3SetCookies.isEmpty()) {
+                        Ref<DriftstackNetworkLoader> cookieRef { *this };
+                        callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h3SetCookies = WTF::move(h3SetCookies)]() mutable {
+                            cookieRef->driftstackPersistSetCookies(responseURL, h3SetCookies);
+                        });
+                    }
                     callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
                         RefPtr task = protectedThis->protectedTask();
                         if (!task)
@@ -2008,12 +2113,21 @@ void DriftstackNetworkLoader::resume()
                     response.setHTTPStatusCode(h2resp.statusCode);
                     for (auto& [k, v] : h2resp.headers)
                         response.setHTTPHeaderField(k, v);
-                    if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
+                    // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from h2resp.headers.
+                    Vector<String> h2SetCookies = driftstackExtractRawSetCookies(h2resp.headers);
+                    if (tryFollowRedirect(response, h2SetCookies)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
                     WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
                     // Wave .346 DEBUG (removable) — dump decompressed fingerprint JSON for browserleaks
                     // probe endpoints so we can diff our TLS/QUIC family vs the real-iPhone reference.
                     auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
                     if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+                    // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins.
+                    if (!h2SetCookies.isEmpty()) {
+                        Ref<DriftstackNetworkLoader> cookieRef { *this };
+                        callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h2SetCookies = WTF::move(h2SetCookies)]() mutable {
+                            cookieRef->driftstackPersistSetCookies(responseURL, h2SetCookies);
+                        });
+                    }
                     callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
                         RefPtr task = protectedThis->protectedTask();
                         if (!task)
@@ -2623,6 +2737,8 @@ void DriftstackNetworkLoader::resume()
             response.setHTTPStatusCode(h2resp.statusCode);
             for (auto& [k, v] : h2resp.headers)
                 response.setHTTPHeaderField(k, v);
+            // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from h2resp.headers (h2 pool/main path).
+            Vector<String> h2PoolSetCookies = driftstackExtractRawSetCookies(h2resp.headers);
 
             // Wave 29-499.269 — dispatch response delivery via callOnMainRunLoop.
             // PathB v2's fetch runs on loaderQueue (concurrent dispatch queue);
@@ -2631,11 +2747,18 @@ void DriftstackNetworkLoader::resume()
             // parallel HTTP/2 dispatches corrupted CFRunLoop hash sets and
             // crashed NetworkProcess (SIGTRAP in CFCheckCFInfoPACSignature_Bridged)
             // when loading 10+ subresource Angular apps like Twilio NT.
-            if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
+            if (tryFollowRedirect(response, h2PoolSetCookies)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
             WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint — decode any encoding any h2 path missed
             auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
             auto deliveryResponse = WebCore::ResourceResponse(response);
             if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+            // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins.
+            if (!h2PoolSetCookies.isEmpty()) {
+                Ref<DriftstackNetworkLoader> cookieRef { *this };
+                callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h2PoolSetCookies = WTF::move(h2PoolSetCookies)]() mutable {
+                    cookieRef->driftstackPersistSetCookies(responseURL, h2PoolSetCookies);
+                });
+            }
             callOnMainRunLoop([protectedThis, response = std::move(deliveryResponse), bodyBuffer = std::move(bodyBuffer)]() mutable {
                 RefPtr task = protectedThis->protectedTask();
                 if (!task)
@@ -2919,8 +3042,12 @@ _Pragma("clang diagnostic pop")
         WebKit::driftstackDecodeContentEncoding(h1body, h1headers);  // .331 chokepoint — pure-h1 (W1517)
         for (auto& [k, v] : h1headers)
             response.setHTTPHeaderField(k, v);
+        // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from the h1 parsed header lines
+        // (each Set-Cookie: line is one h1headers entry; the content-encoding decode above strips only
+        // content-encoding/length, never Set-Cookie).
+        Vector<String> h1SetCookies = driftstackExtractRawSetCookies(h1headers);
 
-        if (tryFollowRedirect(response)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page
+        if (tryFollowRedirect(response, h1SetCookies)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
         // Dispatch callbacks. Use the DECODED body for SharedBuffer.
         auto bodyBuffer = WebCore::SharedBuffer::create(h1body.span());
         {
@@ -2932,6 +3059,13 @@ _Pragma("clang diagnostic pop")
         // Wave 29-499.269b — CFStream fallback also marshalled via main runloop
         auto deliveryResponse2 = WebCore::ResourceResponse(response);
         if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+        // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins.
+        if (!h1SetCookies.isEmpty()) {
+            Ref<DriftstackNetworkLoader> cookieRef { *this };
+            callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h1SetCookies = WTF::move(h1SetCookies)]() mutable {
+                cookieRef->driftstackPersistSetCookies(responseURL, h1SetCookies);
+            });
+        }
         callOnMainRunLoop([protectedThis, response = std::move(deliveryResponse2), bodyBuffer = std::move(bodyBuffer)]() mutable {
             RefPtr task = protectedThis->protectedTask();
             if (!task)

@@ -34,9 +34,16 @@
 namespace WebKit {
 
 // W2557 (#37): defined in DriftstackHttp3.mm — resolve a hostname to IPv4 OVER the SOCKS5 proxy
-// (DNS-over-SOCKS5), so the QUIC §7 pre-resolve does NOT leak the customer's destination to the host
-// resolver via local getaddrinfo. Returns a null String on failure (caller falls back to getaddrinfo).
+// (DNS-over-SOCKS5, dual-resolver), so the QUIC §7 pre-resolve does NOT leak the customer's
+// destination to the host resolver via local getaddrinfo. Returns a null String on failure.
 String driftstackResolveHostOverSocks5Proxy(const String& host);
+
+// W2890 (#37 DNS-leak fail-closed invariant): defined in DriftstackHttp3.mm (declared in
+// DriftstackHttp3.h). Hard guard for a would-be LOCAL getaddrinfo on the QUIC/h3 §7 framer path —
+// returns false (= abort, do NOT getaddrinfo) when fail-closed (DRIFTSTACK_H3_DNS_FAIL_CLOSED,
+// DEFAULT-ON); asserts + counts on the escape-hatch leaking path. Forward-declared here (mirrors the
+// resolver decl above) to avoid pulling the full DriftstackHttp3.h into this TU.
+bool driftstackH3LocalResolveAllowed(const char* site, const char* host);
 
 namespace DriftstackQuic {
 
@@ -318,10 +325,14 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
             if (!cached.isEmpty())
                 destination.host = cached;
             else {
-                // W2557 (#37): resolve OVER the SOCKS5 proxy first (DNS-over-SOCKS5 to 1.1.1.1) so the
-                // customer's destination hostname is NOT leaked to the fleet HOST resolver via a local
-                // getaddrinfo. Fall back to local getaddrinfo only if the proxy-resolve fails (SOCKS5
-                // off / no associate) — zero regression vs the prior behavior. Cached per host.
+                // W2557/W2890 (#37): resolve OVER the SOCKS5 proxy ONLY (DNS-over-SOCKS5, dual-resolver
+                // 1.1.1.1→8.8.8.8) so the customer's destination hostname is NOT leaked to the fleet HOST
+                // resolver via a local getaddrinfo. W2890 fail-closed (DEFAULT-ON): if the proxy-resolve
+                // fails we do NOT local-getaddrinfo (that was the #37 leak); we leave destination.host as
+                // the HOSTNAME → Socks5Framing::wrap emits ATYP=0x03 → gost drops it (Wave .95) → this h3
+                // attempt fails → CFNetwork falls through to h2/TCP (proxy-resolved via the CONNECT tunnel,
+                // no leak), matching a real iPhone's UDP-blocked → h2 behaviour. The hard guard asserts +
+                // counts the invariant. Cached per host. Legacy escape hatch: DRIFTSTACK_H3_DNS_FAIL_CLOSED=0.
                 String viaProxy = driftstackResolveHostOverSocks5Proxy(destinationHost);
                 if (!viaProxy.isEmpty()) {
                     destination.host = viaProxy;
@@ -331,6 +342,9 @@ BridgeResult wrapOutgoingQuicPacket(const String& destinationHost, uint16_t dest
                     }
                     WTFLogAlways("[Driftstack-EG-WK-1.10/W2557-#37] QUIC/UDP §7 pre-resolve via SOCKS5 proxy (no host-DNS leak): %s → %s",
                         hostUtf8.data(), viaProxy.utf8().data());
+                } else if (!driftstackH3LocalResolveAllowed("wrapOutgoingQuicPacket(§7 framer)", hostUtf8.data())) {
+                    // FAIL CLOSED: leave destination.host as the hostname → ATYP=0x03 → gost drops →
+                    // h3 fails → CFNetwork falls to h2/TCP. NO local getaddrinfo (no DNS leak).
                 } else {
                 struct addrinfo hints { };
                 hints.ai_family = AF_INET;
@@ -461,12 +475,17 @@ static void setPendingFramerDestination(const String& host, uint16_t port)
         auto hostUtf8 = host.utf8();
         struct in_addr probe { };
         if (!host.isEmpty() && inet_pton(AF_INET, hostUtf8.data(), &probe) != 1) {
-            // W2557 (#37): resolve OVER the SOCKS5 proxy first (no host-DNS leak); fall back to local
-            // getaddrinfo only on proxy-resolve failure (zero regression).
+            // W2557/W2890 (#37): resolve OVER the SOCKS5 proxy ONLY (DNS-over-SOCKS5, dual-resolver);
+            // no host-DNS leak. W2890 fail-closed (DEFAULT-ON): on proxy-resolve failure do NOT
+            // local-getaddrinfo (the #37 leak); leave resolvedHost as the HOSTNAME → ATYP=0x03 → gost
+            // drops → h3 fails → CFNetwork falls to h2/TCP (proxy-resolved, no leak). Legacy escape
+            // hatch: DRIFTSTACK_H3_DNS_FAIL_CLOSED=0.
             String viaProxy = driftstackResolveHostOverSocks5Proxy(host);
             if (!viaProxy.isEmpty())
                 resolvedHost = viaProxy;
-            else {
+            else if (!driftstackH3LocalResolveAllowed("setPendingFramerDestination(§7 framer)", hostUtf8.data())) {
+                // FAIL CLOSED: leave resolvedHost = host (ATYP=0x03 → gost drops → h2 fallback). NO leak.
+            } else {
             struct addrinfo hints { };
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_DGRAM;

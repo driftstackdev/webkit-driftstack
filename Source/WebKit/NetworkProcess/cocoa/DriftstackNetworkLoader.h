@@ -85,6 +85,19 @@ private:
     ThreadSafeWeakPtr<NetworkDataTaskCocoa> m_task;
     RefPtr<NetworkDataTaskCocoa> protectedTask() const;   // strong upgrade (null if the task is gone); defn in .mm (type complete there)
     WTF::String driftstackITPCookieHeader();   // PathB v2 ITP (task #14): the ITP-filtered Cookie header real Safari's NSURLSession would send (computed on the main thread in resume())
+
+    // PathB v2 within-session Set-Cookie WRITE (egress audit). The egress READS cookies
+    // (driftstackITPCookieHeader → cookieRequestHeaderFieldValue) but never WROTE Set-Cookie: PathB
+    // bypasses NSURLSession, so CFNetwork's auto-parse of every Set-Cookie (incl on 3xx) into
+    // HTTPCookieStorage is gone. httpOnly server-set cookies (session/auth/consent) were dropped →
+    // a 302+Set-Cookie consent gate (OneTrust/cookielaw = westernunion) looped forever. This persists
+    // each RAW (un-folded) Set-Cookie value through the SAME 9-arg ITP context as the READ. MAIN THREAD
+    // ONLY (touches m_request + the task's ITP state, like driftstackITPCookieHeader); the response
+    // sites run on loaderQueue and marshal the call via callOnMainRunLoop BEFORE the redirect/delivery
+    // hop, so the consent cookie is stored before the next hop re-reads the store. Gated by
+    // DRIFTSTACK_EGRESS_SET_COOKIE_PERSIST (default-ON; a correctness fix). NetworkProcess-only =>
+    // glyphHash-neutral. `setCookieValues` are the raw Set-Cookie lines, one entry per response header.
+    void driftstackPersistSetCookies(const URL& responseURL, const Vector<WTF::String>& setCookieValues);
     WebCore::ResourceRequest m_request;
     // W2341 (task #58): atomic — cancel() runs on another thread while the concurrent
     // dispatch block's read loops poll it (was a plain-bool data race; now also the
@@ -103,7 +116,11 @@ private:
     // dispatched (caller must NOT deliver the response); the client's
     // willPerformHTTPRedirection applies policy + updates the URL, then we re-resume()
     // on the returned request.
-    bool tryFollowRedirect(const WebCore::ResourceResponse&);
+    // `rawSetCookies` (PathB v2 egress audit) = the RAW un-folded Set-Cookie values from this response's
+    // transport header vector. When this IS a followed 3xx redirect, they're persisted (on the main thread)
+    // BEFORE the re-resume is marshalled, so a 302+Set-Cookie consent gate stores its cookie before the next
+    // hop re-reads the store. Empty/default for callers that don't carry cookies (or when the gate is off).
+    bool tryFollowRedirect(const WebCore::ResourceResponse&, const Vector<WTF::String>& rawSetCookies = { });
 
     // Wave 29-499.325 — single-completion guard. loaderQueue() is a CONCURRENT
     // dispatch queue and resume() has no re-entry guard, so overlapping attempts
