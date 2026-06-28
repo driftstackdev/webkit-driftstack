@@ -2085,7 +2085,13 @@ int DriftstackHttp2ConnectStream::readData(uint8_t* buf, size_t maxLen)
                 std::span<const uint8_t> ds = payload.span();
                 if (flags & kFlagPadded) { if (ds.size() < 1) break; uint8_t pl = ds[0]; if (size_t(pl) + 1 > ds.size()) break; ds = ds.subspan(1, ds.size() - 1 - pl); }
                 m_recvSinceUpdate += ds.size();
-                if (m_recvSinceUpdate >= (1u << 18)) {
+                // Coherence (A1-routed egress fp): the pooled path refilled the recv window at 256KiB
+                // (1u<<18) while the streaming path refills at 1MiB (1u<<20) — a server logging the h2
+                // frame timeline would see ONE client emit two different WINDOW_UPDATE cadences = a
+                // self-disagreement tell. Both paths now share the 1MiB refill so the cadence is coherent.
+                // The absolute iOS-faithful cadence is capture-gated (A1's fp call); change BOTH this and
+                // the streaming-path threshold together when the real-iPhone value lands.
+                if (m_recvSinceUpdate >= (1u << 20)) {
                     uint32_t inc = static_cast<uint32_t>(m_recvSinceUpdate);
                     Locker locker { m_writeLock };
                     uint8_t w[13]; encodeFrameHeader(w, 4, kFrameWindowUpdate, 0, kStreamId);
