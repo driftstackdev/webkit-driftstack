@@ -824,6 +824,35 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             //    Kefa-III Latin == iOS Kefa Latin NATURALLY (m 109.5625, etc.) so Latin needs no override.
             //    → simple/measureText + kefaPerChar incremental stay byte-exact (4340); canonical lands at
             //    its closest-achievable 4394 (the residual +27 is the un-closeable whole-run artifact above).
+            //
+            //  • THE EXACT CARRIER (2026-06-28 root trace — DO NOT re-attempt as a per-glyph fix).
+            //    The +27 is the per-font-run INITIAL ADVANCE that CoreText emits at every CTRun boundary
+            //    when the single CTLine for the whole string splits into multiple font-runs. The probe
+            //    string segments into: a "Kefa III" primary run (Latin m/M/l/L/i/I/w/W + ₹/₺/₸/ẞ, which
+            //    Kefa III renders in its own face) + a Devanagari fallback run for ॿ (U+097F) + a fallback
+            //    run for ▁ (U+2581). `ComplexTextRun::m_initialAdvance = CTRunGetInitialAdvance(ctRun)`
+            //    (ComplexTextControllerCoreText.mm:65) is added to the first glyph of each run at line ~875
+            //    of THIS file. That value is CoreText's cross-font inter-run positioning — it is NOT a glyph
+            //    advance and is invisible in any isolated per-char measurement (a single-run CTLine has
+            //    initialAdvance 0). Quantified from the SAME real iPhone 16 Pro Max capture: identical
+            //    per-glyph advances (sum 4340 on iOS AND fork) yield iOS canonical 4367 (= 4340 + iOS's
+            //    inter-run +27) but fork canonical 4394 (= 4340 + Mac CoreText's inter-run +54). iOS itself
+            //    produces 4367 (innerHTML/single-shot CTLine) vs 4340 (createTextNode/incremental) for the
+            //    SAME string — proving the +27 is a property of whole-line CoreText shaping, not the metrics.
+            //    The per-run baseAdvances are already iOS-corrected as a kerning-preserving delta
+            //    (ComplexTextControllerCoreText.mm V-583.F.2 :114-149); only m_initialAdvance is left native.
+            //
+            //    INTRACTABLE at the WebKit layer: matching iOS's inter-run total would require rewriting
+            //    CTRunGetInitialAdvance per run boundary to iOS's value. Those values are opaque CoreText
+            //    outputs that depend on the run-segmentation + the specific fallback faces Mac vs iOS choose;
+            //    there is no iOS-faithful formula to compute them, and a captured-per-string table keyed to
+            //    this one probe is a tune-to-pass lie (founder rule 5 — forbidden). 8-9 prior fix attempts
+            //    (CTRun advance ×K, Kohinoor resize, all-12 advance override) all gate-rejected (overshoot/
+            //    undershoot/regression). This is a Mac-CoreText-vs-iOS-CoreText complex-layout platform bound,
+            //    analogous to the fleet-chip GPU/audio-FMA bound — flag to the founder, do not unilaterally
+            //    defer and do not blanket -27. Only the browserleaks DISCRIMINATORS that ARE matchable matter
+            //    (detectedCount/uniqueMetrics/glyphHash all green); the group-VALUE residual is exposed solely
+            //    by reusing the browserleaks 3564-font offsetWidth technique — real sites are iPhone-identical.
 #endif
 
             // W554b (2026-06-03): emoji measureText. Multi-codepoint / ZWJ / VS emoji take THIS
