@@ -89,9 +89,23 @@ static const HashSet<String>& iphoneCanonicalSet()
     return set.get();
 }
 
+// Case-insensitive membership helper. getSupportedExtensions() only ever emits
+// canonical-case literals (so the list path is unaffected by casing), but
+// getExtension() dispatches via equalIgnoringASCIICase, so the per-name guard
+// must match any ASCII casing the same way real iOS does. Both sets are tiny
+// (51 + 6), so a linear case-fold scan is fine and avoids a second cased index.
+static bool containsIgnoringASCIICase(const HashSet<String>& set, const String& name)
+{
+    for (const auto& entry : set) {
+        if (equalIgnoringASCIICase(entry, name))
+            return true;
+    }
+    return false;
+}
+
 bool isWebGLExtensionInIphoneCanonical(const String& name)
 {
-    return iphoneCanonicalSet().contains(name);
+    return containsIgnoringASCIICase(iphoneCanonicalSet(), name);
 }
 
 // Per-chip-tier WebGL extension delta (2026-06-22, capture-grounded). The canonical set above is
@@ -138,15 +152,27 @@ static bool archetypeIsOlderGpuExtensionTier()
     return false; // iphone16* / iphone17* = A18 / A19 = newer-GPU tier
 }
 
+// Single source of truth shared by BOTH the list filter and getExtension()'s
+// per-name guard so the two paths can never drift: a name is exposed IFF it is
+// in the iPhone canonical set AND (on the older-GPU tier) it is not one of the
+// 6 desktop-class newer-GPU-only extensions. Case-insensitive to match
+// getExtension()'s equalIgnoringASCIICase dispatch (the list path only ever
+// feeds canonical-case literals, so this is a no-op widening there).
+bool isWebGLExtensionExposedForCurrentArchetype(const String& name)
+{
+    if (!containsIgnoringASCIICase(iphoneCanonicalSet(), name))
+        return false;
+    if (archetypeIsOlderGpuExtensionTier() && containsIgnoringASCIICase(newerGpuOnlyExtensions(), name))
+        return false;
+    return true;
+}
+
 void filterWebGLExtensionsToIphoneCanonical(Vector<String>& extensions)
 {
-    const bool olderTier = archetypeIsOlderGpuExtensionTier();
-    extensions.removeAllMatching([olderTier](const String& name) {
-        if (!iphoneCanonicalSet().contains(name))
-            return true;
-        if (olderTier && newerGpuOnlyExtensions().contains(name))
-            return true;
-        return false;
+    // Delegate per-name to the same predicate getExtension() uses so the
+    // visible list and the per-name accessor agree on every name.
+    extensions.removeAllMatching([](const String& name) {
+        return !isWebGLExtensionExposedForCurrentArchetype(name);
     });
 }
 

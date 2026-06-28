@@ -154,6 +154,20 @@ std::optional<WebGLExtensionAny> WebGLRenderingContext::getExtension(const Strin
         return *variable; \
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // §11.D Task #89 symmetry fix: getExtension() must agree with
+    // getSupportedExtensions(). Without this, an extension the Mac GPU
+    // supports but iPhone does not (e.g. WEBGL_compressed_texture_s3tc on an
+    // A15/A16 older-GPU archetype) would be enabled here yet omitted from the
+    // list — a trivial getExtension(X)!=null vs list.includes(X) cross-check
+    // would detect the fork. Gate on the SAME predicate the list filter uses
+    // (isWebGLExtensionExposedForCurrentArchetype) so the two paths never
+    // disagree. Non-canonical / older-tier-dropped names return the same
+    // "extension not available" std::nullopt the unsupported path returns.
+    if (!Driftstack::isWebGLExtensionExposedForCurrentArchetype(name))
+        return std::nullopt;
+#endif
+
     RefPtr graphicsContext = graphicsContextGL();
     ENABLE_IF_REQUESTED(ANGLEInstancedArrays, m_angleInstancedArrays, "ANGLE_instanced_arrays", ANGLEInstancedArrays::supported(*graphicsContext));
     ENABLE_IF_REQUESTED(EXTBlendMinMax, m_extBlendMinMax, "EXT_blend_minmax", EXTBlendMinMax::supported(*graphicsContext));

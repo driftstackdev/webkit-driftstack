@@ -32,6 +32,16 @@ namespace Driftstack {
 
 WEBCORE_EXPORT bool isWebGLExtensionInIphoneCanonical(const String&);
 
+// Per-name twin of filterWebGLExtensionsToIphoneCanonical: true IFF the named
+// extension would survive the list filter on the CURRENT archetype, i.e. it is
+// in the iPhone canonical set AND (if the archetype is the older-GPU tier) it
+// is not one of the desktop-class newer-GPU-only extensions. getExtension()
+// MUST gate on this so getExtension(X)!=null <=> getSupportedExtensions()
+// includes X (symmetric, matching real iOS which gates both on one predicate).
+// Comparison is ASCII-case-insensitive to match getExtension()'s
+// equalIgnoringASCIICase name dispatch.
+WEBCORE_EXPORT bool isWebGLExtensionExposedForCurrentArchetype(const String&);
+
 WEBCORE_EXPORT void filterWebGLExtensionsToIphoneCanonical(Vector<String>& extensions);
 
 } // namespace Driftstack
