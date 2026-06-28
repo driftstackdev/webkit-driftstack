@@ -22,6 +22,21 @@
  * Only the probe-string codepoints are listed (the only ones that drive the blfonts metricsHash);
  * every other glyph of Kefa III is left at its native macOS advance. Miss -> caller keeps the Mac CT
  * advance.
+ *
+ * 2026-06-27 re-derivation (capture blfonts-iPhone_16_Pro_Max-1782581084705.json + A3 daemon-73890
+ * fork-render): these LATIN advances are VERIFIED CORRECT and must NOT be lowered. The fork's WebKit
+ * span layout rounds per contiguous N-glyph run: offsetWidth += ceil(Σ run-glyph-floats), then +25
+ * whole-string inter-run. Under that model these genuine floats give fork-Latin == iOS-Latin == 3847
+ * (per-run: m=2303(7×ceil(3·109.5625)=329), M=323, l=114, L=202, i=115, I=133, w=306, W=351 — byte-
+ * identical to the captured iOS perChar advOw run subtotals). The +27 overshoot A3 saw (4394 vs iOS
+ * 4367) is NOT in the Latin glyphs — it is the GCPS chars (₹/₺/₸): A3's render had the
+ * DriftstackGcpsFallback.h Kefa entries INACTIVE (uncommitted), so ₹/₺/₸ used their raw Mac fallback
+ * face (78/78/78) instead of the captured iOS in-run advances (₹66.5/₺71.1875/₸71.1875 → 67/72/72).
+ * WITH those GcpsFallback Kefa entries active the fork lands ~4371 (residual +4 in ₺/₸ ceil-vs-iOS-
+ * round); the remaining close-out is GCPS-side (DriftstackGcpsFallback.h), NOT here. Lowering these
+ * Latin advances to absorb the GCPS error would corrupt the iOS-byte-exact Latin run subtotals (a
+ * tune-to-pass that would fail any per-char/mutation gate). The height half (offsetHeight 149) is the
+ * Kefa-III line-box, fixed in FontCoreText.cpp platformInit (NOT an advance).
  */
 
 #pragma once
@@ -52,9 +67,18 @@ static inline bool driftstackKefaAdvancesActive()
     return major > 0 && major < 26;
 }
 
-// Real iOS Kefa per-glyph advance @128px for the browserleaks 1:1 probe LATIN codepoints.
-// (The GCPS chars ₹▁₺₸ẞॿ have no glyph in Kefa III — they render through fallback faces and are
-// corrected in DriftstackGcpsFallback.h keyed by the PRIMARY "Kefa" family, NOT here.)
+// Real iOS Kefa per-glyph advance @128px for the browserleaks 1:1 probe codepoints.
+// 2026-06-27 (#4 matrix residual): A3 box-verified the Kefa group width is STILL 4394 (+27 over iOS
+// 4367) even with DriftstackGcpsFallback.h's Kefa ₹/₺/₸ entries active. Root cause: macOS "Kefa III"
+// HAS glyphs for ₹(U+20B9)/₺(U+20BA)/₸(U+20B8) IN ITS PRIMARY FACE (advance ~77.696 → ceil 78), so
+// they NEVER route to a fallback run — the GcpsFallback hooks (ComplexTextController:794,
+// FontCascade::widthForSimpleTextSlow) are FALLBACK-keyed and are bypassed. Real iOS "Kefa" LACKS
+// ₹/₺/₸ → they fall to Helvetica (₹66.5, ₺/₸71.1875). To match, intercept the PRIMARY Kefa-III glyph
+// here too: ₹/₺/₸ now live in this primary-face override (78→67/72/72, ≈ −27 → 4367). ẞ(U+1E9E) Kefa
+// III HAS too (≈86.272 → 87) vs iOS Kefa 86.9375 (→87) — same ceil, no-op, included for correctness.
+// ▁(U+2581)/ॿ(U+097F): Kefa III LACKS a glyph → they DO route to fallback → still handled by
+// DriftstackGcpsFallback.h (do NOT add here). The Kefa ₹/₺/₸ entries in GcpsFallback are now
+// redundant (never fire for Kefa) but harmless; left for documentation.
 // Returns true + outAdvance (scaled to sizePx) when cp is a Kefa-face probe codepoint, else false.
 static inline bool driftstackLookupKefaAdvance(char32_t cp, float sizePx, float& outAdvance)
 {
@@ -70,6 +94,12 @@ static inline bool driftstackLookupKefaAdvance(char32_t cp, float sizePx, float&
         { 0x0049, 44.25f },     // I
         { 0x0077, 101.8125f },  // w
         { 0x0057, 116.875f },   // W
+        // GCPS chars that Kefa III renders in its PRIMARY face (so they bypass the fallback-keyed
+        // GcpsFallback hook). Real iOS Kefa lacks these → Helvetica advances (@128px in-run floats):
+        { 0x20B9, 66.5f },      // ₹ INDIAN RUPEE SIGN (iOS Helvetica; Kefa III primary ~77.696)
+        { 0x20BA, 71.1875f },   // ₺ TURKISH LIRA SIGN  (iOS Helvetica; Kefa III primary ~77.696)
+        { 0x20B8, 71.1875f },   // ₸ TENGE SIGN         (iOS Helvetica; Kefa III primary ~77.696)
+        { 0x1E9E, 86.9375f },   // ẞ LATIN CAPITAL SHARP S (iOS Kefa 86.9375; Kefa III ~86.272 — both →ceil 87, no-op)
     };
     for (const auto& e : kKefaProbeAdvances) {
         if (e.cp == cp) {

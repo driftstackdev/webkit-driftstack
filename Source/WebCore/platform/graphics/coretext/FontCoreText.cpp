@@ -1159,10 +1159,16 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     // only (cheap; the override is a no-op for every other glyph/face → byte-neutral elsewhere).
     if (platformData().size() > 0.f && driftstackKefaAdvancesActive()
         && m_platformData.familyName() == "Kefa III"_s) {
-        // Latin probe codepoints only — the GCPS chars (₹▁₺₸ẞॿ) render via fallback faces (not
-        // Kefa III) and are corrected in DriftstackGcpsFallback.h keyed by the primary "Kefa".
+        // Latin probe codepoints PLUS the GCPS chars Kefa III renders in ITS OWN primary face
+        // (₹ U+20B9 / ₺ U+20BA / ₸ U+20B8 / ẞ U+1E9E). #4 matrix residual: these have Kefa-III
+        // glyphs, so they never route to a fallback run and the fallback-keyed GcpsFallback hook is
+        // bypassed → the +27 group overshoot. Resolve each cp → its Kefa-III glyph ID via
+        // CTFontGetGlyphsForCharacters here and override to the real iOS advance (Helvetica for ₹/₺/₸,
+        // see DriftstackKefaAdvances.h). ▁(U+2581)/ॿ(U+097F) are NOT here — Kefa III lacks those
+        // glyphs so they DO fall to a fallback face and stay in DriftstackGcpsFallback.h.
         static constexpr char32_t kKefaProbeCps[] = {
-            0x006D, 0x004D, 0x006C, 0x004C, 0x0069, 0x0049, 0x0077, 0x0057
+            0x006D, 0x004D, 0x006C, 0x004C, 0x0069, 0x0049, 0x0077, 0x0057,
+            0x20B9, 0x20BA, 0x20B8, 0x1E9E
         };
         RetainPtr kefaFont = ctFont();
         if (kefaFont) {

@@ -1341,15 +1341,40 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
         }
         // We don't have `encoded` yet; compute it lazily only if V-510
         // is enabled (else skip the early-encode cost).
-        static bool s_v510EnabledEarly = []() {
-            const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
-            return env && env[0] == '1';
-        }();
-        // On a Family-A archetype the family-blind V-510 atlas is SKIPPED entirely
-        // (the canonical table above is the family-correct serve; on its miss we
-        // proceed to the family-A text-run/per-glyph recompose + native paths
-        // below). Family-B keeps V-510 as the primary substitution.
-        if (s_v510EnabledEarly && !dsCanvasFamilyA) {
+        // V-790 Wave 3 static-cache-race fix (sibling of the PATH live-read
+        // below): read the ENABLE flag LIVE, not as a process-lifetime static.
+        // The 2026-06-27 audit (aadc54f15) made DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH
+        // a live read because a static caches "unset" if the first canvas paint
+        // races process init before the per-band env is applied — but the
+        // adjacent ENABLE static had the IDENTICAL race and was left unfixed: a
+        // Family-A session whose first canvas read preceded env application
+        // cached s_v510EnabledEarly=false PERMANENTLY → the atlas was never
+        // consulted → initV510AtlasOnce never ran → NO load marker + NO serve
+        // (exactly the V-790 FA symptom). A live getenv is byte-identical for the
+        // steady state (the flag is process-stable once set) and immune to the
+        // race. Family-B / the unset 26.4 launch are unaffected (same value).
+        const char* dsFuzzAtlasEnvEarly = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
+        const bool s_v510EnabledEarly = dsFuzzAtlasEnvEarly && dsFuzzAtlasEnvEarly[0] == '1';
+        // V-790 Wave 3 fork fallback-guard: a Family-A *canvas-fuzz atlas* now
+        // exists (driftstack-canvas-fuzz-atlas-family-a-18_6.bin, op-seq-keyed
+        // v4). A3 wires DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH per-band so a Family-A
+        // band loads its OWN FA bin into the V-510 state at init (~line 900-902);
+        // v510AtlasLookup then serves family-correct FA bytes. So when an explicit
+        // atlas path IS configured, a Family-A archetype may CONSULT the atlas
+        // (it's the FA bin, not the family-blind family-B default). When NO path
+        // is set the loaded atlas is the family-B-supplemented DEFAULT — serving
+        // it on Family-A would be a wrong-family (57186fab) serve, so Family-A
+        // STILL skips in that case and falls to the family-correct canonical /
+        // native paths. Read the env LIVE (not a static cache) — per the
+        // 2026-06-27 static-cache audit (aadc54f15) a static would cache "unset"
+        // if it races early process init before the per-band env is applied.
+        // Family-B (incl the UNSET 26.4 launch, dsCanvasFamilyA==false) keeps the
+        // original V-510-first order — this guard only widens the Family-A branch,
+        // the launch path is byte-for-byte UNCHANGED (no glyphHash c587ed44 risk).
+        const char* dsFuzzAtlasPathEarly = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+        const bool dsFAAtlasPathSetEarly = dsFuzzAtlasPathEarly && dsFuzzAtlasPathEarly[0];
+        const bool dsConsultAtlasEarly = !dsCanvasFamilyA || dsFAAtlasPathSetEarly;
+        if (s_v510EnabledEarly && dsConsultAtlasEarly) {
             dsPngEncoded = encodeDataURL(makeRenderingResultsAvailable(), encodingMIMEType, quality);
             auto substituteEarly = v510AtlasLookup(dsPngEncoded, opSeqSha_early);
             if (!substituteEarly.isNull()) {
@@ -1463,10 +1488,13 @@ ExceptionOr<UncachedString> HTMLCanvasElement::toDataURL(const String& mimeType,
             }
         }
     }
-    static bool s_canvasFuzzAtlasEnabled = []() {
-        const char* env = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
-        return env && env[0] == '1';
-    }();
+    // V-790 Wave 3 static-cache-race fix (sibling of the early-path enable read
+    // ~line 1344 + the PATH live-read): read the ENABLE flag LIVE so a first
+    // canvas read that races process init before the per-band env is applied does
+    // not cache "unset" for the process lifetime (the no-load / no-serve V-790 FA
+    // symptom). Byte-identical for the steady state; Family-B launch unaffected.
+    const char* dsFuzzAtlasEnv = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS");
+    const bool s_canvasFuzzAtlasEnabled = dsFuzzAtlasEnv && dsFuzzAtlasEnv[0] == '1';
     if (s_canvasFuzzAtlasEnabled) {
         auto substitute = v510AtlasLookup(encoded, opSeqSha);
         if (!substitute.isNull()) {
@@ -1695,9 +1723,20 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         // family-blind V-510 lookup. Family-B keeps V-510 primary (launch path
         // unchanged — helper is dsHasArch-guarded, false when env unset).
         const bool dsCanvasFamilyA = driftstackIsCanvasFamilyA();
+        // V-790 Wave 3 fork fallback-guard (mirror toDataURL ~line 1352): a
+        // Family-A archetype may CONSULT the V-510 atlas when an explicit
+        // DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH is configured (A3 wires the per-band
+        // FA bin → v510AtlasLookup serves family-correct FA bytes). With NO path
+        // set the loaded atlas is the family-B default, so Family-A still SKIPS
+        // V-510 (canonical-only) to avoid a wrong-family (57186fab) serve. Env
+        // read LIVE (not static) per the 2026-06-27 static-cache audit. Family-B
+        // (incl the unset 26.4 launch) is UNCHANGED — V-510-first as before.
+        const char* dsFuzzAtlasPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+        const bool dsFAAtlasPathSet = dsFuzzAtlasPath && dsFuzzAtlasPath[0];
+        const bool dsConsultAtlas = !dsCanvasFamilyA || dsFAAtlasPathSet;
         String substitute;
         bool fromV510 = false;
-        if (dsCanvasFamilyA) {
+        if (!dsConsultAtlas) {
             const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
             if (canonical)
                 substitute = String::fromUTF8(canonical);

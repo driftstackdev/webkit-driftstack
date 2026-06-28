@@ -22,6 +22,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include "DriftstackKefaAdvances.h" // driftstackKefaAdvancesActive() Family-A gate (Safari major<26)
 #include "FontCascade.h"
 #include <array>
 #include <wtf/text/ASCIILiteral.h>
@@ -64,7 +65,14 @@ static inline bool driftstackLookupGcpsFallbackAdvance(const FontCascade& fontCa
     // Mac CTLine metric-shrinks some fallbacks relative to the primary, which would mis-scale the @128px value.
     const float scale = sizePx / 128.0f;
     String fam = fontCascade.fontDescription().firstFamily().name.string();
+    // Kefa is present ONLY on Safari<26 (Family-A); on 26.4+ a "Kefa"-primary request falls back
+    // differently, so the iOS-18.6-Kefa GCPS advances are WRONG there. Gate the Kefa entries to
+    // Family-A only. The 5 non-Kefa families (Futura/Savoye LET/-apple-system/system-ui/Impact) are
+    // band-invariant iOS-correct and stay UNGATED.
+    const bool kefaActive = driftstackKefaAdvancesActive();
     for (auto& e : kGcpsNamed) {
+        if (e.family == "Kefa"_s && !kefaActive)
+            continue;
         if (e.cp == cp && fam == e.family) {
             outAdvance = e.adv128 * scale;
             return true;

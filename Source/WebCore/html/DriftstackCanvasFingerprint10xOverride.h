@@ -63894,6 +63894,54 @@ inline bool driftstackArchetypeIsFamilyB(const char* slug)
     return false;
 }
 
+// V-790 Wave 3 — Safari (major,minor) extractor, mirroring the parse in
+// driftstackArchetypeIsFamilyB. Encodes the Safari version as major*1000+minor
+// for cheap equality. Returns -1 for a slug with no parseable "_safari<M>_<m>"
+// (legacy slugs like "iphone16pro_ios18_6", or unset) — the sentinel makes the
+// same-minor comparator below treat two unparseable slugs as a MATCH (so the
+// legacy single-family launch path is unaffected — see the comment there).
+inline int driftstackArchetypeSafariVersionKey(const char* slug)
+{
+    if (!slug)
+        return -1;
+    std::string_view s { slug };
+    auto pos = s.rfind("_safari");
+    if (pos == std::string_view::npos)
+        return -1;
+    auto rest = s.substr(pos + 7); // skip past "_safari"
+    auto under = rest.find('_');
+    if (under == std::string_view::npos || under == 0 || under == rest.size() - 1)
+        return -1;
+    auto majSV = rest.substr(0, under);
+    auto minSV = rest.substr(under + 1);
+    int major = 0, minor = 0;
+    for (char c : majSV) {
+        if (c < '0' || c > '9') return -1;
+        major = major * 10 + (c - '0');
+    }
+    for (char c : minSV) {
+        if (c < '0' || c > '9') return -1;
+        minor = minor * 10 + (c - '0');
+    }
+    return major * 1000 + minor;
+}
+
+// V-790 Wave 3 — Safari-MINOR equality guard for the family-fallback path. Two
+// archetypes are "same minor" iff their Safari version keys are equal. STRUCTURAL
+// NO-OP today: within Family-A all of 18.6 / 26.0 / 26.1 / 26.2 / 26.3 produce
+// byte-identical fp10x canvas, so a 26.3 archetype borrowing an 18.6 canonical is
+// currently harmless — but it is a CROSS-MINOR LEAK in principle, and the moment
+// any intra-Family-A minor diverges (e.g. a future 26.x canvas tweak) the
+// borrow would mis-serve. This gate forbids the cross-minor borrow up front.
+// LAUNCH-SAFETY: when BOTH keys are -1 (legacy/unset slugs, the existing single-
+// family launch + V-185 back-compat path) the keys compare EQUAL, so the gate is
+// a pass-through there (the family check is the only constraint, exactly as
+// before — no 26.4 launch regression, no glyphHash c587ed44 risk).
+inline bool driftstackArchetypeSameSafariMinor(const char* a, const char* b)
+{
+    return driftstackArchetypeSafariVersionKey(a) == driftstackArchetypeSafariVersionKey(b);
+}
+
 // 2026-06-26 — canonical CANVAS-PIXEL family boundary helper (founder #1).
 // The browserleaks canvas FP family is ≤26.3 (Family A, md5 61b7a151) vs ≥26.4
 // (Family B, md5 57186fab). This is the CANVAS boundary ONLY — it is NOT the
@@ -63974,6 +64022,13 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
             continue;
         if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
             continue; // Family mismatch — skip to preserve canvas pipeline coherence
+        // V-790 Wave 3 minor-awareness guard: even within the same canvas family,
+        // forbid borrowing across Safari MINORS (e.g. a 26.3 archetype must not
+        // serve an 18.6 canonical) — a cross-minor leak. NO-OP today (all Family-A
+        // minors are byte-identical fp10x); structural. Legacy/unset slugs key to
+        // -1 on both sides → equal → pass-through (launch path unchanged).
+        if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
+            continue; // Cross-minor borrow — skip (V-790 Wave 3)
         return entry.dataURL;
     }
     return nullptr;
@@ -63994,6 +64049,11 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
             continue;
         if (driftstackArchetypeIsFamilyB(entry.archetype) != currentIsFamilyB)
             continue; // Family mismatch — skip per Wave 29-360 Item 5
+        // V-790 Wave 3 minor-awareness guard (mirror the WithText path): forbid
+        // cross-Safari-MINOR borrows within a family. NO-OP today; structural.
+        // Legacy/unset slugs key to -1 both sides → equal → pass-through.
+        if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
+            continue; // Cross-minor borrow — skip (V-790 Wave 3)
         return entry.dataURL;
     }
     return nullptr;

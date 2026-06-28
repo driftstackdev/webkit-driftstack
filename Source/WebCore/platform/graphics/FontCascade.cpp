@@ -38,6 +38,7 @@
 #include "TextShapingResultAndDisplayList.h"
 #include "WidthIterator.h"
 #if PLATFORM(DRIFTSTACK)
+#include "DriftstackGcpsFallback.h"
 #include "cg/DriftstackSoftwareBlend.h"
 #include "cg/DriftstackTelemetry.h"
 #include "cg/DriftstackPerGlyphAtlas.h"
@@ -429,6 +430,19 @@ NEVER_INLINE float FontCascade::widthForSimpleTextSlow(StringView text, TextDire
             auto glyph = font.glyphForCharacter(characters[i]);
             float adv = font.widthForGlyph(glyph);
 #if PLATFORM(DRIFTSTACK)
+            // #96 Kefa-18.6: the simplified-measuring path (widthForSimpleTextSlow, used for an
+            // all-primary-font Simple-codePath run — e.g. the blfonts kefaPerChar.floatPer x40
+            // isolation of a single GCPS char) calls Font::widthForGlyph directly and so MISSES the
+            // GCPS-char fallback-advance correction that WidthIterator (line ~475) and
+            // ComplexTextController (line ~794) apply at their call sites. Mac "Kefa III" HAS its own
+            // ₹/₺/₸/ẞ glyphs (CTadv 77.696/77.696/77.696/86.272 @128px) so these render in the PRIMARY
+            // face here (NOT a Mac fallback face) — but real iOS "Kefa" lacks ₹/₺/₸ and routes them to
+            // Helvetica (66.5/71.1875/71.1875). Apply the same keyed override here so all three text
+            // paths agree on the iOS value (else the x40-isolation floatPer disagrees with the full-
+            // string offsetWidth — itself a tell). The hook is internally (CSS-primary-family, cp)-keyed
+            // and Family-A-gated, so it is a no-op for every non-Kefa primary / non-GCPS codepoint.
+            if (float gcpsAdvance; driftstackLookupGcpsFallbackAdvance(*this, characters[i], fontDescription().computedSize(), gcpsAdvance))
+                adv = gcpsAdvance;
             // P-#48.K Wave 29-326: simplified-text-measuring path Mn override.
             // When characters[i] is one of our 10 V-433.Z target codepoints AND
             // primary font lacks it (glyph=0 notdef OR returned width doesn't

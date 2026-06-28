@@ -3093,6 +3093,18 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         // the native/AFP path (device-exact for uncovered content). dsHasArch-
         // guarded → false when env unset, so the 26.4 launch path is UNCHANGED.
         const bool dsCanvasFamilyA_GID = WebCore::driftstackIsCanvasFamilyA();
+        // V-790 Wave 3 fork fallback-guard (mirror HTMLCanvasElement.cpp toDataURL/
+        // toBlob ~line 1352/1721): a Family-A canvas-fuzz atlas now exists. When A3
+        // wires an explicit DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH per-band the loaded
+        // V-510 state IS the family-correct FA bin, so a Family-A getImageData read
+        // may CONSULT it (keeps toDataURL↔getImageData coherence — both serve the FA
+        // atlas). With NO path set the loaded atlas is the family-B default, so
+        // Family-A still SKIPS (canonical/native fallback) to avoid a wrong-family
+        // (57186fab) RGBA serve. Env read LIVE (not static) per the 2026-06-27
+        // static-cache audit. Family-B (incl the unset 26.4 launch) is UNCHANGED.
+        const char* dsFuzzAtlasPathGID = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+        const bool dsFAAtlasPathSetGID = dsFuzzAtlasPathGID && dsFuzzAtlasPathGID[0];
+        const bool dsConsultAtlasGID = !dsCanvasFamilyA_GID || dsFAAtlasPathSetGID;
         // W2481 — extend the V-510 getImageData serve to PARTIAL-rect (mirror the §90
         // V-373 path): look up the FULL-canvas V-510 RGBA by op-seq, then slice the
         // requested (sx,sy,sw,sh). Without this, a sub-region getImageData of a
@@ -3100,7 +3112,7 @@ ExceptionOr<Ref<ImageData>> CanvasRenderingContext2DBase::getImageData(int sx, i
         // full-canvas read + toDataURL serve the iPhone bytes — FPJS's sub-region
         // noise-sensitivity probe would detect that inconsistency.
         if (s_getImageDataAtlas
-            && !dsCanvasFamilyA_GID
+            && dsConsultAtlasGID
             && outputImageDataPixelFormat == ImageDataPixelFormat::RgbaUnorm8
             && sw > 0 && sh > 0 && sx >= 0 && sy >= 0
             // SEC-2026-06-18 (audit-w2 INFO): size_t bounds — avoid the signed-int `sx + sw` overflow UB (W2530 convention).
