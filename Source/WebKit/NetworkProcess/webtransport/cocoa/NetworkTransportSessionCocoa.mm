@@ -147,6 +147,14 @@ static void didReceiveServerTrustChallenge(NetworkConnectionToWebProcess& connec
         [[fallthrough]];
         case AuthenticationChallengeDisposition::RejectProtectionSpaceAndContinue:
         case AuthenticationChallengeDisposition::PerformDefaultHandling: {
+#if PLATFORM(DRIFTSTACK)
+            // Suppress the synchronous OCSP/CRL revocation network fetch during WebTransport
+            // server-trust evaluation: a real iPhone does not emit a live revocation fetch here,
+            // so the extra OCSP-responder hit is a network/detection tell iOS Safari never produces.
+            // Mirror the established fork pattern (DriftstackTLS13Client.mm:669/1380,
+            // NetworkSessionCocoa.mm:516, DriftstackHttp3.mm:1119).
+            SecTrustSetNetworkFetchAllowed(secTrust.get(), false);
+#endif
             OSStatus status = SecTrustEvaluateAsyncWithError(secTrust.get(), mainDispatchQueueSingleton(), makeBlockPtr([completion = completion](SecTrustRef trustRef, bool result, CFErrorRef error) {
                 completion(result);
             }).get());
