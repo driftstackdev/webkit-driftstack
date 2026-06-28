@@ -56,6 +56,7 @@
 #include <wtf/UUID.h>
 #include <wtf/text/Base64.h>
 #include <wtf/text/StringBuilder.h>
+#include <wtf/text/StringToIntegerConversion.h>
 
 #if USE(GSTREAMER_WEBRTC)
 #include "GStreamerWebRTCUtils.h"
@@ -255,6 +256,322 @@ void PeerConnectionBackend::handleLogMessage(const WTFLogChannel& channel, WTFLo
 }
 #endif // !RELEASE_LOG_DISABLED && (PLATFORM(WPE) || PLATFORM(GTK))
 
+#if PLATFORM(DRIFTSTACK)
+// ── Family-A (Safari ≤26.3) WebRTC createOffer dynamic payload-type remap ──
+// GT: reference/realdevice-bs/aio-iPhone_16_Pro_Max-1781873317444.json
+//     .vendor.v3-webrtc-sdp-probe-1-0 .webrtc.createOffer.sdp_structure_canonical
+//
+// On real iOS 18.6 the createOffer VIDEO m-line dynamic PTs differ from the Mac
+// fork's newer-libwebrtc (26.x) defaults. The codec SET + ORDER + rtcp-fb + fmtp
+// content + extmap are byte-identical 18.6-vs-26.x — ONLY the PT integers move.
+// This is a deterministic PT remap (NOT a libwebrtc version bound): the 26.x
+// layout was verified identical across iPhone 17 / iPhone 17 Pro Max captures.
+//
+// Fixed table (26.x default → 18.6 target), keyed by CODEC IDENTITY (the four
+// H264 + two VP9 entries share a codec name, so they are disambiguated by their
+// fmtp packetization-mode+profile-level-id / profile-id):
+//   H264 42e01f pm0 : 103→102 ; rtx 104→103
+//   H265            : 35→104  ; rtx 36→105
+//   VP8            : 107→106 ; rtx 108→107
+//   VP9 profile-id 0: 109→108 ; rtx 114→109
+//   VP9 profile-id 2: 115→127 ; rtx 116→125
+//   AV1            : 37→35   ; rtx 38→36
+//   red            : 117→112 ; rtx 118→113
+//   ulpfec         : 119→114
+// (H264 96/98/100 + their rtx 97/99/101 are unchanged 18.6-vs-26.x.)
+//
+// AUDIO m-line + datachannel m-line: UNTOUCHED. Answer SDP: the probe captures
+// createOffer only; createAnswer mirrors the negotiated remote PTs (echoes the
+// peer's offer), so it is NOT munged here — see createAnswerSucceeded note.
+//
+// Launch-safety: gated Family-A only (Safari ≤26.3). The 26.4 LAUNCH default and
+// 26.5 KEEP the 26.x PTs (no env, or major.minor > 26.3 → no remap). Live getenv
+// each call (NOT static-cached — silently-inert-gate sweep 2026-06-27).
+static bool driftstackIsFamilyARTC()
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    if (sv.empty() || sv[0] < '0' || sv[0] > '9')
+        return false;
+    int major = 0, minor = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
+    // Family A = Safari ≤ 26.3. 26.4 launch / 26.5 keep 26.x PTs.
+    if (major < 26)
+        return true;
+    if (major == 26)
+        return minor <= 3;
+    return false;
+}
+
+// Parse "<pt> <codec>/<rate>[/<ch>]" rtpmap value → (pt, lowercased codec name).
+// Identify a codec entry by name + (for H264) packetization-mode/profile-level-id
+// taken from its fmtp, (for VP9) profile-id. Returns the 18.6 target PT for a
+// given old PT, or the same PT when unmapped. Atomic: the table is built from the
+// ORIGINAL tokens, so SRC∩DST collisions (35,36,103,104,107,108,109,114) never
+// double-apply.
+static String driftstackRemapFamilyAVideoPTs(const String& sdp)
+{
+    StringView view(sdp);
+
+    // 1) Locate the video m-line section [videoStart, videoEnd).
+    size_t videoStart = notFound;
+    size_t videoEnd = sdp.length();
+    {
+        size_t cursor = 0;
+        while (cursor < sdp.length()) {
+            size_t lineEnd = sdp.find('\n', cursor);
+            size_t next = (lineEnd == notFound) ? sdp.length() : lineEnd + 1;
+            StringView line = view.substring(cursor, next - cursor);
+            if (line.startsWith("m="_s)) {
+                if (videoStart != notFound) { videoEnd = cursor; break; }
+                if (line.startsWith("m=video"_s))
+                    videoStart = cursor;
+            }
+            cursor = next;
+        }
+    }
+    if (videoStart == notFound)
+        return sdp;
+
+    // 2) Build oldPT → newPT table by codec identity from the video section.
+    HashMap<int, int> remap;
+    {
+        // First pass: collect rtpmap (pt → codec name) and fmtp (pt → params).
+        HashMap<int, String> codecName; // primary codec only (non-rtx)
+        HashMap<int, String> rtxApt;     // rtx pt → referenced apt pt (string-int)
+        HashMap<int, String> fmtpParams; // pt → fmtp params
+        size_t cursor = videoStart;
+        while (cursor < videoEnd) {
+            size_t lineEnd = sdp.find('\n', cursor);
+            size_t next = (lineEnd == notFound || lineEnd >= videoEnd) ? videoEnd : lineEnd + 1;
+            StringView line = view.substring(cursor, next - cursor);
+            auto parsePt = [&](StringView prefix, int& outPt, StringView& outRest) -> bool {
+                if (!line.startsWith(prefix))
+                    return false;
+                StringView body = line.substring(prefix.length());
+                size_t sp = body.find(' ');
+                StringView ptStr = (sp == notFound) ? body : body.substring(0, sp);
+                // strip trailing CR/LF for the pt token
+                while (ptStr.length() && (ptStr[ptStr.length() - 1] == '\r' || ptStr[ptStr.length() - 1] == '\n'))
+                    ptStr = ptStr.substring(0, ptStr.length() - 1);
+                auto v = parseInteger<int>(ptStr);
+                if (!v)
+                    return false;
+                outPt = *v;
+                outRest = (sp == notFound) ? StringView() : body.substring(sp + 1);
+                return true;
+            };
+            int pt = 0; StringView rest;
+            if (parsePt("a=rtpmap:"_s, pt, rest)) {
+                // rest = "codec/rate[/ch]"
+                size_t slash = rest.find('/');
+                StringView name = (slash == notFound) ? rest : rest.substring(0, slash);
+                codecName.set(pt, name.convertToASCIILowercase());
+            } else if (parsePt("a=fmtp:"_s, pt, rest)) {
+                fmtpParams.set(pt, rest.toString());
+                if (auto aptPos = rest.find("apt="_s); aptPos != notFound) {
+                    StringView aptVal = rest.substring(aptPos + 4);
+                    size_t semi = aptVal.find(';');
+                    StringView aptPt = (semi == notFound) ? aptVal : aptVal.substring(0, semi);
+                    while (aptPt.length() && (aptPt[aptPt.length() - 1] == '\r' || aptPt[aptPt.length() - 1] == '\n'))
+                        aptPt = aptPt.substring(0, aptPt.length() - 1);
+                    rtxApt.set(pt, aptPt.toString());
+                }
+            }
+            cursor = next;
+        }
+
+        // Identify the primary (non-rtx) codec PTs by name + disambiguator, assign
+        // the 18.6 target, then propagate to each rtx via apt.
+        auto fmtpOf = [&](int pt) -> String {
+            auto it = fmtpParams.find(pt);
+            return it != fmtpParams.end() ? it->value : String();
+        };
+        for (auto& entry : codecName) {
+            int oldPt = entry.key;
+            const String& name = entry.value;
+            String params = fmtpOf(oldPt);
+            int newPt = oldPt;
+            if (name == "h264"_s) {
+                bool pm0 = params.contains("packetization-mode=0"_s);
+                bool e01f = params.contains("profile-level-id=42e01f"_s);
+                if (pm0 && e01f)
+                    newPt = 102; // 103→102 (the only remapped H264 entry)
+                // pm1 (96/98) and 640c1f pm0 (100) keep their PTs.
+            } else if (name == "h265"_s)
+                newPt = 104;     // 35→104
+            else if (name == "vp8"_s)
+                newPt = 106;     // 107→106
+            else if (name == "vp9"_s) {
+                if (params.contains("profile-id=2"_s))
+                    newPt = 127; // 115→127
+                else
+                    newPt = 108; // profile-id=0 : 109→108
+            } else if (name == "av1"_s)
+                newPt = 35;      // 37→35
+            else if (name == "red"_s)
+                newPt = 112;     // 117→112
+            else if (name == "ulpfec"_s)
+                newPt = 114;     // 119→114
+            if (newPt != oldPt)
+                remap.set(oldPt, newPt);
+        }
+        // rtx PTs follow their apt-referenced primary's remap, per the fixed table.
+        for (auto& entry : rtxApt) {
+            int rtxPt = entry.key;
+            auto apt = parseInteger<int>(StringView(entry.value));
+            if (!apt)
+                continue;
+            // Only remap rtx whose primary is remapped; emit the spec target.
+            // (rtx target is uniquely determined by the primary it protects.)
+            int newRtx = rtxPt;
+            switch (*apt) {
+            case 102: case 103: newRtx = 103; break;  // H264 42e01f pm0 rtx 104→103 (apt may be old 103 or new 102)
+            case 104: case 35: newRtx = 105; break;   // H265 rtx 36→105
+            case 106: case 107: newRtx = 107; break;  // VP8 rtx 108→107
+            case 108: case 109: newRtx = 109; break;  // VP9 pid0 rtx 114→109
+            case 127: case 115: newRtx = 125; break;  // VP9 pid2 rtx 116→125
+            case 37: newRtx = 36; break;              // AV1 rtx 38→36
+            case 112: case 117: newRtx = 113; break;  // red rtx 118→113
+            default: break;
+            }
+            if (newRtx != rtxPt)
+                remap.set(rtxPt, newRtx);
+        }
+    }
+
+    if (remap.isEmpty())
+        return sdp;
+
+    // 3) Single-pass rewrite over the video section. Every PT reference is looked
+    // up in `remap` (built from the original tokens), so collisions never compound.
+    auto mapPt = [&](int pt) -> int {
+        auto it = remap.find(pt);
+        return it != remap.end() ? it->value : pt;
+    };
+
+    StringBuilder out;
+    out.append(view.substring(0, videoStart));
+
+    size_t cursor = videoStart;
+    while (cursor < videoEnd) {
+        size_t lineEnd = sdp.find('\n', cursor);
+        size_t next = (lineEnd == notFound || lineEnd >= videoEnd) ? videoEnd : lineEnd + 1;
+        StringView line = view.substring(cursor, next - cursor);
+
+        auto remapLeadingPt = [&](StringView prefix) -> bool {
+            if (!line.startsWith(prefix))
+                return false;
+            StringView body = line.substring(prefix.length());
+            size_t sp = body.find(' ');
+            StringView ptStr = (sp == notFound) ? body : body.substring(0, sp);
+            StringView trailer = (sp == notFound) ? StringView() : body.substring(sp);
+            // peel CR/LF off ptStr (only when no space, i.e. bare pt line — rare)
+            StringView crlf;
+            while (ptStr.length() && (ptStr[ptStr.length() - 1] == '\r' || ptStr[ptStr.length() - 1] == '\n')) {
+                crlf = ptStr.substring(ptStr.length() - 1);
+                ptStr = ptStr.substring(0, ptStr.length() - 1);
+            }
+            auto v = parseInteger<int>(ptStr);
+            if (!v) {
+                out.append(line);
+                return true;
+            }
+            out.append(prefix, mapPt(*v));
+            if (sp == notFound) out.append(crlf);
+            else out.append(trailer);
+            return true;
+        };
+
+        if (line.startsWith("m=video"_s)) {
+            // m=video 9 UDP/TLS/RTP/SAVPF <pt list...>
+            size_t hdrEnd = 0;
+            // skip 4 tokens: "m=video", port, proto, then the PT list
+            int spaces = 0;
+            for (size_t k = 0; k < line.length(); ++k) {
+                if (line[k] == ' ') {
+                    if (++spaces == 3) { hdrEnd = k + 1; break; }
+                }
+            }
+            out.append(line.substring(0, hdrEnd));
+            StringView ptList = line.substring(hdrEnd);
+            // peel trailing CR/LF off the PT list, remember how many to re-append.
+            size_t trailer = 0;
+            while (ptList.length() && (ptList[ptList.length() - 1] == '\r' || ptList[ptList.length() - 1] == '\n')) {
+                ++trailer;
+                ptList = ptList.substring(0, ptList.length() - 1);
+            }
+            bool first = true;
+            size_t tokStart = 0;
+            for (size_t k = 0; k <= ptList.length(); ++k) {
+                if (k == ptList.length() || ptList[k] == ' ') {
+                    StringView tok = ptList.substring(tokStart, k - tokStart);
+                    if (tok.length()) {
+                        if (!first) out.append(' ');
+                        first = false;
+                        if (auto v = parseInteger<int>(tok))
+                            out.append(mapPt(*v));
+                        else
+                            out.append(tok);
+                    }
+                    tokStart = k + 1;
+                }
+            }
+            out.append(line.substring(hdrEnd + ptList.length(), trailer));
+        } else if (remapLeadingPt("a=rtpmap:"_s)) {
+            // handled
+        } else if (remapLeadingPt("a=rtcp-fb:"_s)) {
+            // handled
+        } else if (line.startsWith("a=fmtp:"_s)) {
+            // a=fmtp:<pt> <params...>  — remap the leading pt AND any apt=<pt>.
+            StringView body = line.substring(7 /* "a=fmtp:" */);
+            size_t sp = body.find(' ');
+            StringView ptStr = (sp == notFound) ? body : body.substring(0, sp);
+            StringView params = (sp == notFound) ? StringView() : body.substring(sp + 1);
+            if (auto v = parseInteger<int>(ptStr))
+                out.append("a=fmtp:"_s, mapPt(*v));
+            else
+                out.append("a=fmtp:"_s, ptStr);
+            if (sp != notFound) {
+                out.append(' ');
+                // rewrite apt=<pt> if present, else copy params verbatim.
+                size_t aptPos = params.find("apt="_s);
+                if (aptPos != notFound) {
+                    out.append(params.substring(0, aptPos + 4));
+                    StringView aptVal = params.substring(aptPos + 4);
+                    size_t end = 0;
+                    while (end < aptVal.length() && aptVal[end] >= '0' && aptVal[end] <= '9')
+                        ++end;
+                    StringView aptPt = aptVal.substring(0, end);
+                    if (auto av = parseInteger<int>(aptPt))
+                        out.append(mapPt(*av));
+                    else
+                        out.append(aptPt);
+                    out.append(aptVal.substring(end));
+                } else
+                    out.append(params);
+            }
+        } else
+            out.append(line);
+
+        cursor = next;
+    }
+
+    out.append(view.substring(videoEnd));
+    return out.toString();
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 void PeerConnectionBackend::createOffer(RTCOfferOptions&& options, CreateCallback&& callback)
 {
     ASSERT(!m_offerAnswerCallback);
@@ -267,6 +584,16 @@ void PeerConnectionBackend::createOffer(RTCOfferOptions&& options, CreateCallbac
 void PeerConnectionBackend::createOfferSucceeded(String&& sdp)
 {
     ASSERT(isMainThread());
+
+#if PLATFORM(DRIFTSTACK)
+    // Family-A createOffer video-PT remap (26.x default → iOS 18.6). Live-gated,
+    // Family A only (Safari ≤26.3); 26.4 launch / 26.5 keep 26.x PTs. createOffer
+    // only (per the GT probe). The munged PTs are still valid for setLocalDescription
+    // (libwebrtc accepts caller-renumbered dynamic PTs). Mirrors the red-fmtp munge
+    // pattern at LibWebRTCProvider.cpp:485-510.
+    if (driftstackIsFamilyARTC())
+        sdp = driftstackRemapFamilyAVideoPTs(sdp);
+#endif
 
 #if !RELEASE_LOG_DISABLED
     logger().toObservers(LogWebRTC, WTFLogLevel::Always, { }, LOGIDENTIFIER, "SDP offer created:\n", sdp);

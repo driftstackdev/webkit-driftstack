@@ -317,6 +317,33 @@ void Font::platformInit()
         }
     }
 #endif
+#if PLATFORM(DRIFTSTACK)
+    // 2026-06-27 Kefa Family-A line-box height override (blfonts metricsHash c6bdb116, group "4367,149").
+    // CSS family "Kefa" aliases to the macOS face "Kefa III" (FontCacheCoreText, Safari<26 only). Mac
+    // "Kefa III" carries a TALLER line-box than real iOS "Kefa": at 128px Mac CoreText returns
+    // ascent=125.439453 (.97999*em) descent=28.160156 (.22000*em) leading=0 -> ceil(126)+ceil(29)+0 = 155,
+    // but real iOS Kefa's line-box is 149 (captured blfonts offsetHeight, kefaPerChar.fullKefaBcr.h=149,
+    // group key "4367,149"). This +6 is a genuine ascent/descent divergence between the two PHYSICAL faces
+    // (NOT the W2587 fp-noise-above-integer artifact: 125.439/28.160 are far from any integer) -> the
+    // W2587/Noto ascent-snap above CANNOT fix it. Override the resolved "Kefa III" FontMetrics to land the
+    // iOS line-box (ceil(ascent)+ceil(descent)+leading == 149). The captured ground truth gives only the
+    // line-box SUM (149), not iOS Kefa's ascent/descent SPLIT, so we scale Mac Kefa III's own asc/desc
+    // proportionally (preserves the Mac ratio = minimal baseline-position disturbance) to the smallest
+    // pair whose ceil-sum is 149: ascent .94206*em, descent .21148*em. Family-A ONLY (driftstackKefaAdvances
+    // Active) — on >=26 Kefa is absent so "Kefa III" never resolves; verified no 26.4/26.5 effect. The
+    // metricsHash group keys on (offsetWidth,offsetHeight); the width half is the genuine per-glyph advances
+    // (DriftstackKefaAdvances.h Latin + DriftstackGcpsFallback.h GCPS). Scale-by-pointSize: ratios * size.
+    // ⚠️ EMPIRICAL: the asc/desc SPLIT is ratio-preserved-from-Mac, not a captured iOS split (Rule 15: a BS
+    // capture of iOS Kefa's hhea ascent/descent would pin the exact split; the line-box SUM=149 closes the
+    // metricsHash group regardless, since blfonts groups on offsetHeight). A3 must re-render to confirm 149.
+    if (pointSize > 0.f && driftstackKefaAdvancesActive() && familyName
+        && String(familyName.get()) == "Kefa III"_s) {
+        // .94206*128 = 120.584 -> ceil 121 ; .21148*128 = 27.069 -> ceil 28 ; sum 149.
+        ascent = 0.94206f * pointSize;
+        descent = 0.21148f * pointSize;
+        lineGap = 0.f; // Mac Kefa III leading is already 0; pin it so the ceil-sum is exactly 149.
+    }
+#endif
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
     ascent = ceilf(ascent + adjustment);
     descent = ceilf(descent);
