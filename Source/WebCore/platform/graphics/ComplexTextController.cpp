@@ -793,6 +793,37 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             // primary, so font->size() would over-shrink the captured @128px iOS advance.
             if (float gcpsAdvance; driftstackLookupGcpsFallbackAdvance(m_fontCascade.get(), character, m_fontCascade->fontDescription().computedSize(), gcpsAdvance))
                 advance.setWidth(gcpsAdvance);
+
+            // #96 Kefa-18.6 WIDTH GROUP — NO per-glyph Kefa override here (deliberately removed 2026-06-28
+            // after the ground-truth canonical-path trace). Why no complex-path Kefa-III advance override:
+            //
+            //  • CANONICAL DRIVER. The browserleaks metricsHash group for Kefa is the WHOLE-STRING inline
+            //    `span.innerHTML="mmm…₹▁₺₸ẞॿ…"; span.style.fontFamily='Kefa'` single-shot offsetWidth.
+            //    That string contains ॿ (U+097F, Devanagari) so FontCascade::characterRangeCodePath forces
+            //    the WHOLE run to the Complex path → it IS measured here (m_totalAdvance). Real iPhone 16
+            //    Pro / 16 Pro Max canonical group = 4367,149 (metricsHash c6bdb116; aio-iPhone_16_Pro-
+            //    1781706872739 + blfonts-iPhone_16_Pro_Max-1782581084705 both 4367).
+            //
+            //  • THE +27 IS A WHOLE-RUN ARTIFACT, NOT AN ADVANCE. On the SAME real iPhone 16 Pro Max
+            //    capture, the canonical single-shot group = 4367 but the incremental createTextNode path
+            //    (kefaPerChar.fullKefa) = 4340/4338.264 bcr — a real +27 between the two DOM constructions,
+            //    INVISIBLE in any per-char decomposition (kefaadv perChar_prefix advOw sums to 4339, and the
+            //    isolated x40 advances ₹66.5/₺71.1875/₸71.1875 sum into 4339 too). So iOS yields BOTH 4367
+            //    AND 4339 from the IDENTICAL per-glyph advances — the +27 lives in the whole-run single-shot
+            //    offsetWidth, not the glyph metrics. A per-glyph advance edit therefore CANNOT make the
+            //    canonical group 4367 while keeping the incremental/x40 path at its iOS value 4340 — closing
+            //    one breaks the other. (The earlier all-12 override here LOWERED ₹/₺/₸ on the run where the
+            //    Kefa-III-face gate matched and RAISED Latin +9 → canonical regressed 4394→4403; the GCPS
+            //    −27 it intended never reached the canonical run because ₹/₺/₸ land in a non-"Kefa III"
+            //    fallback run there. Reverted: it was pure regression.)
+            //
+            //  • COVERAGE WITHOUT THIS HOOK. GCPS chars are already corrected on EVERY path by
+            //    driftstackLookupGcpsFallbackAdvance above (keyed on CSS primary family "Kefa" + codepoint,
+            //    so it fires irrespective of the resolved run face) and on the simple/x40 path by
+            //    Font::platformWidthForGlyph (FontCoreText.cpp:1160, all 12 cps on the "Kefa III" face).
+            //    Kefa-III Latin == iOS Kefa Latin NATURALLY (m 109.5625, etc.) so Latin needs no override.
+            //    → simple/measureText + kefaPerChar incremental stay byte-exact (4340); canonical lands at
+            //    its closest-achievable 4394 (the residual +27 is the un-closeable whole-run artifact above).
 #endif
 
             // W554b (2026-06-03): emoji measureText. Multi-codepoint / ZWJ / VS emoji take THIS
