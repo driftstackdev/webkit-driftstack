@@ -1632,6 +1632,45 @@ public:
     WTF::MonotonicTime m_driftstackCoastLastTick;           // MonotonicTime of the last coast tick (for dt) (W2961)
     std::unique_ptr<RunLoop::Timer> m_driftstackScrollCoastTimer; // lazily constructed on first coast (W2961)
     void driftstackScrollCoastTick();                       // one decel-glide step (W2961)
+    // W3020 (the 3-revert crux fix): the lift-off velocity PASSED from the harness (computed THERE from the
+    // REAL receive-timing of the moves), set by the SetDriftstackPendingScrollMomentum IPC just before the
+    // touchEnd, CONSUMED + cleared by the very next TouchEnd. The fork's own Δpos/dt EWMA (above) over-reads
+    // because the WD touch path delivers moves BURST, sub-ms apart (the W3C move `duration` is discarded) → a
+    // slow drag over-flings. So when a harness velocity is present the coast uses IT, not the EWMA. The
+    // std::optional distinguishes "no hint sent" (old harness / non-momentum caller → fall back to the EWMA,
+    // gated) from "explicit zero" (a slow drag the harness already classified as no-coast → no coast). px/s,
+    // content space — the same finger-Δ convention the drag's per-move scroll uses.
+    std::optional<WebCore::FloatSize> m_driftstackPendingLiftoffVelocity;
+    void setDriftstackPendingScrollMomentum(float vx, float vy); // W3020: harness lift-off velocity hint (IPC msg handler)
+    // W3010 (founder "behave exactly like iPhone" — rubber-band OVER-SCROLL bounce). The fork's native
+    // touch-drag / momentum-coast scroll HARD-CLAMPS at the content top/bottom boundary (view->scrollBy /
+    // scrollToPositionWithoutAnimation, both clamped) so a drag past the edge just stops dead — a real iPhone
+    // STRETCHES past the boundary then springs back (ScrollElasticity). On a boundary clamp this path now
+    // accumulates the leftover over-boundary delta into a STRETCH (iOS resistance curve, peak input-dependent)
+    // and pushes the FRAME VIEW past the edge via an UNCLAMPED scrollToPositionWithoutAnimation so the content
+    // visibly translates; on TouchEnd (and at the end of a coast that bottomed out) a ~60Hz relaxation timer
+    // decays the stretch back to the boundary as e(t)=e0*exp(-t/τ) with τ=191ms (the BS-captured engine
+    // constant — ground truth ae547cfd). ENTIRELY gated behind DRIFTSTACK_RUBBERBAND_IOS (env unset/0 → this
+    // state is never touched, the boundary stays hard-clamped, byte-identical to the prior behavior). This is a
+    // SCROLL-FEEL (behavioral) change, NOT a fingerprint surface — the stretch/relax scroll via the same
+    // trusted engine path the drag uses (no synthetic wheel, no JS, no isTrusted=false event). The relaxation
+    // math is the pure header Shared/DriftstackRubberBandMath.h (shared verbatim with the unit test).
+    double m_driftstackRubberStretchX { 0 };                // current over-boundary stretch, px (signed: + past max, - past min) (W3010)
+    double m_driftstackRubberStretchY { 0 };
+    WebCore::FloatPoint m_driftstackRubberBoundaryPos;      // the clamped boundary position the stretch is measured from (W3010)
+    bool m_driftstackRubberHadUnclamped { false };          // whether we toggled the view's unclamped flag (restore on settle) (W3010)
+    WTF::MonotonicTime m_driftstackRubberLastTick;          // MonotonicTime of the last relaxation tick (for dt) (W3010)
+    std::unique_ptr<RunLoop::Timer> m_driftstackRubberBandTimer; // lazily constructed on first bounce (W3010)
+    void driftstackRubberBandTick();                        // one relaxation step (W3010)
+    void driftstackBeginRubberBandRelax();                  // start the spring-back on lift-off / coast-end (W3010)
+    void driftstackEndRubberBand();                         // snap to boundary + restore clamping + stop (W3010)
+    static bool s_driftstackRubberBandCoast();              // DRIFTSTACK_RUBBERBAND_IOS gate, read once (W3010)
+    // Scroll the main FRAME VIEW by (dx,dy), consuming what stays in range; the px past the page's own
+    // top/bottom (or left/right) boundary that the view couldn't consume is, when rubberBandOn, absorbed into
+    // the over-scroll STRETCH (iOS resistance curve) and the content is pushed past the edge (unclamped) so it
+    // visibly translates. When rubberBandOn is false this is a plain clamped view->scrollBy (byte-identical to
+    // the prior behavior). (W3010)
+    void driftstackScrollMainFrameWithOverscroll(WebCore::LocalFrameView& view, int dx, int dy, bool rubberBandOn);
 #endif
 
     bool shouldUseCustomContentProviderForResponse(const WebCore::ResourceResponse&);

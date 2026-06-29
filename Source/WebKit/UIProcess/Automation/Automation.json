@@ -829,6 +829,16 @@
             "async": true
         },
         {
+            "name": "setScrollMomentum",
+            "description": "Driftstack W3020 (founder #1 behavioral ask 'slide like a new iPhone' — Step-B kinetic scroll coast): set the lift-off scroll velocity (content px/s) the NEXT touchEnd should coast with, computed HARNESS-SIDE from the real receive-timing of the live drag's moves. The crux the 3 prior fork-EWMA reverts missed: the WebProcess sees touchMoves burst-delivered sub-ms apart (the W3C move duration is discarded by the WD path) so its own Δpos/dt velocity over-reads → a slow drag over-flings. The harness is the only place that sees the genuine wall-clock spacing, so it computes the velocity and passes it here; the fork's TouchEnd consumes it (not its EWMA) and re-gates it at the flick threshold. Sent IMMEDIATELY BEFORE injectTouchStreamEnd. An explicit (0,0) means a slow drag/hold (no coast). Fully inert unless DRIFTSTACK_SCROLL_MOMENTUM is enabled in the WebProcess.",
+            "parameters": [
+                { "name": "browsingContextHandle", "$ref": "BrowsingContextHandle", "description": "Any handle in the session; used only to resolve the target page." },
+                { "name": "vx", "type": "number", "description": "Lift-off velocity X, content px/s (finger-delta convention, same as the drag scroll)." },
+                { "name": "vy", "type": "number", "description": "Lift-off velocity Y, content px/s." }
+            ],
+            "async": true
+        },
+        {
             "name": "deleteSingleCookie",
             "description": "Deletes a cookie with the given name if visible to the specified browsing context.",
             "parameters": [

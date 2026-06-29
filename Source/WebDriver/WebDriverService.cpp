@@ -293,6 +293,7 @@ const WebDriverService::Command WebDriverService::s_commands[] = {
     { HTTPMethod::Get, "/session/$sessionId/driftstack/cookies/all", &WebDriverService::driftstackGetAllCookiesAllDomains }, // Driftstack #48: whole-jar (all domains, httpOnly)
     { HTTPMethod::Post, "/session/$sessionId/driftstack/cookies/set", &WebDriverService::driftstackSetCookiesAllDomains }, // Driftstack #40 (A2 W2867): cookie-import — batch multi-domain WKHTTPCookieStore.setCookie, inverse of /all
     { HTTPMethod::Post, "/session/$sessionId/driftstack/profile/dump", &WebDriverService::driftstackProfileDumpNow }, // Driftstack W2985 (profile data-loss ROOT fix): synchronously FLUSH+WRITE a complete .driftstack-dump.json BEFORE the teardown SIGTERM, return the count as the ACK
+    { HTTPMethod::Post, "/session/$sessionId/driftstack/scroll_momentum", &WebDriverService::driftstackSetScrollMomentum }, // Driftstack W3020 ("slide like a new iPhone"): pass the harness receive-timing lift-off velocity (vx/vy px/s) so the next touchEnd coasts with it (not the fork's burst-corrupted EWMA)
     { HTTPMethod::Get, "/session/$sessionId/cookie/$name", &WebDriverService::getNamedCookie },
     { HTTPMethod::Post, "/session/$sessionId/cookie", &WebDriverService::addCookie },
     { HTTPMethod::Delete, "/session/$sessionId/cookie/$name", &WebDriverService::deleteCookie },
@@ -2164,6 +2165,28 @@ void WebDriverService::driftstackProfileDumpNow(RefPtr<JSON::Object>&& parameter
         return;
 
     m_session->driftstackProfileDumpNow(WTF::move(completionHandler));
+}
+
+void WebDriverService::driftstackSetScrollMomentum(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)
+{
+    // Driftstack W3020 (founder #1 behavioral ask "slide like a new iPhone" — Step-B kinetic coast): pass the
+    // harness-computed lift-off velocity (vx, vy, content px/s) to the WebProcess so the very next touchEnd
+    // coasts with it instead of the fork's burst-corrupted Δpos/dt EWMA. The harness computed it from the REAL
+    // receive-timing of the live drag's moves (the crux the 3 prior reverts missed — the WD path delivers
+    // moves sub-ms apart, so the fork's own dt is bogus). Body: { vx: number, vy: number } in px/s. No
+    // waitForNavigationToComplete (it's a fire-and-forget hint that must land before the touchEnd, never
+    // stalling behind a settling page). Inert in the WebProcess unless DRIFTSTACK_SCROLL_MOMENTUM is enabled.
+    if (!findSessionOrCompleteWithError(*parameters, completionHandler))
+        return;
+
+    auto vx = parameters->getDouble("vx"_s);
+    auto vy = parameters->getDouble("vy"_s);
+    if (!vx || !vy) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::InvalidArgument, "Missing or invalid 'vx'/'vy' number parameters"_s));
+        return;
+    }
+
+    m_session->driftstackSetScrollMomentum(*vx, *vy, WTF::move(completionHandler));
 }
 
 void WebDriverService::getNamedCookie(RefPtr<JSON::Object>&& parameters, Function<void (CommandResult&&)>&& completionHandler)

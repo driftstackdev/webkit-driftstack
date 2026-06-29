@@ -1482,6 +1482,9 @@ public:
     void cancelPointer(WebCore::PointerID, const WebCore::IntPoint&);
     void touchWithIdentifierWasRemoved(WebCore::PointerID);
     void resetPointerCapture();
+#if PLATFORM(DRIFTSTACK)
+    void driftstackSetPendingScrollMomentum(float vx, float vy); // W3020: forward the harness lift-off velocity to WebPage
+#endif
 
     void scrollBy(WebCore::ScrollDirection, WebCore::ScrollGranularity);
     void centerSelectionInVisibleArea();

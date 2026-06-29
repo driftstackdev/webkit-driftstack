@@ -2061,6 +2061,28 @@ void WebAutomationSession::profileDumpNow(const Inspector::Protocol::Automation:
 #endif // PLATFORM(DRIFTSTACK)
 }
 
+void WebAutomationSession::setScrollMomentum(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, double vx, double vy, CommandCallback<void>&& callback)
+{
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack W3020 (founder #1 behavioral ask "slide like a new iPhone" — Step-B kinetic coast,
+    // RECEIVE-TIMING velocity source): forward the harness-computed lift-off velocity to the WebProcess. The
+    // harness recorded the genuine wall-clock spacing of the live drag's moves (which the fork's burst-delivered
+    // WD touch path cannot see) and computed (vx, vy) from it; the very next TouchEnd consumes it for the
+    // momentum coast instead of the fork's burst-corrupted Δpos/dt EWMA — the crux the 3 prior reverts missed.
+    // Fire-and-forget (a hint, not a navigation): set the pending velocity then ACK immediately. Fully inert in
+    // the WebProcess unless DRIFTSTACK_SCROLL_MOMENTUM is enabled there. (0,0) ⇒ slow drag/hold = no coast.
+    RefPtr page = webPageProxyForHandle(browsingContextHandle);
+    ASYNC_FAIL_WITH_PREDEFINED_ERROR_IF(!page, WindowNotFound);
+    page->driftstackSetPendingScrollMomentum(static_cast<float>(vx), static_cast<float>(vy));
+    callback({ });
+#else
+    UNUSED_PARAM(browsingContextHandle);
+    UNUSED_PARAM(vx);
+    UNUSED_PARAM(vy);
+    callback({ });
+#endif
+}
+
 void WebAutomationSession::deleteSingleCookie(const Inspector::Protocol::Automation::BrowsingContextHandle& browsingContextHandle, const String& cookieName, CommandCallback<void>&& callback)
 {
     auto page = webPageProxyForHandle(browsingContextHandle);
