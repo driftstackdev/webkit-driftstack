@@ -1651,7 +1651,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
             int g1600Bucket = driftstackGlyphHashGenericBucket(g1600Element ? *g1600Element : element);
             struct G1600 { char16_t cp; int generic; float w; float h; };
             // generic: 0=default 1=sans 3=monospace 4=cursive (only the diverging cells; all others fall through).
-            static constexpr std::array<G1600, 10> g1600Table { {
+            static constexpr std::array<G1600, 17> g1600Table { {
                 // CLASS 1 — default +23 strut (width already correct, height 1933 -> 1910):
                 { 0x2581, 0, 1497, 1910 }, { 0x532D, 0, 1563, 1910 },
                 // CLASS 1+2 — default strut AND wrong-fallback-face WIDTH (both corrected to iOS):
@@ -1661,6 +1661,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
                 { 0x20E3, 0, 1740, 1910 },
                 // CLASS 3 — U+05C6 non-default (sans/cursive +1H sub-pixel strut, mono real-advance+line-box):
                 { 0x05C6, 1, 565, 2010 }, { 0x05C6, 4, 565, 2036 }, { 0x05C6, 3, 961, 1967 },
+                // CLASS 3 residual (a2efafcbcb +1px WIDTH; sub-pixel x-origin-straddle) — U+05C6 fantasy + U+0D02
+                // all 6 generics, served to the iOS GT width (565 / 617) so they are correct on EVERY context
+                // (recreation probe AND the live browserleaks page), heights == GT (already matched):
+                { 0x05C6, 5, 565, 5404 },
+                { 0x0D02, 0, 617, 2218 }, { 0x0D02, 1, 617, 2168 }, { 0x0D02, 2, 617, 2154 },
+                { 0x0D02, 3, 617, 2180 }, { 0x0D02, 4, 617, 2194 }, { 0x0D02, 5, 617, 5404 },
             } };
             for (const auto& e : g1600Table) {
                 if (e.cp == cp && e.generic == g1600Bucket) {
