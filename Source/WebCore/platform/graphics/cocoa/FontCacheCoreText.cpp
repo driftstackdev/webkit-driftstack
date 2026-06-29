@@ -2985,17 +2985,25 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         // W2585: iOS resolves to the SF Hebrew binary (Stage-B; advance 6.0625 -> width 6). The system-name
         // "Arial Hebrew" advances to width 6 (5.648) CONSISTENTLY; the Stage-B .SF Hebrew lookup gave inconsistent
         // 5/7 per generic (fell to Times in some). Route to Arial Hebrew first for the consistent w6.
-        // W2980b (#120 glyph-1600 cluster D, sub-pattern A): in a MONOSPACE base context the Arial-Hebrew route
-        // OVER-fires — at 1600px the faithful Unicode-Glyphs grid shows fork mono = 566 (Arial Hebrew) where a real
-        // iPhone 17 / Safari 26.4 keeps the natural COURIER notdef box = 961,1967 (iOS-mono cascade lets U+05C6 fall
-        // to the Courier missing-glyph box, advance 960.156 @1600px -> ceil 961). Return nullptr for a monospace base
-        // so the natural Courier notdef wins, exactly mirroring the W2597/W2601 baseFontIsMonospace pattern (U+2581
-        // :2961). 16px-SAFE: the 16px/13px mono glyphHash cells are served by the Element.cpp carve-out (cp==0x05C6
-        // && bucket==3 && size==16 -> 10,19 at Element.cpp:1688) + the bucket-3 13px table row {0x05C6,3,8,20} — both
-        // bypass this systemFallback path entirely, so c587ed44 is untouched; this guard only affects the off-serve
-        // 1600px mono render. The already-correct default(588)/serif(488) cells keep Arial Hebrew (non-mono base).
-        if (baseFontIsMonospace)
-            return nullptr;
+        // W2980b (#120 glyph-1600 cluster D, sub-pattern A — CORRECTED): in a MONOSPACE base context the Arial-Hebrew
+        // route OVER-fires — at 1600px the faithful Unicode-Glyphs grid shows fork mono = 566 (Arial Hebrew) where a
+        // real iPhone 17 / Safari 26.4 renders the MONOSPACE-GENERIC NOTDEF BOX = 961,1967 (mono notdef width 10@16 ->
+        // 961@1600, the per-generic missing-glyph box, NOT Arial Hebrew). The first attempt (return nullptr to let the
+        // natural cascade win) gave the COURIER notdef box 1761 on the A3 box-test (Courier's OWN missing-glyph advance,
+        // ~17.6@16 -> 1761@1600) — wrong, because the unguarded Mac mono cascade lands on Courier's notdef, not the
+        // uniform mono-generic notdef the iOS cascade produces. The W2636 NOTDEF mechanism fixes it: return MENLO (which
+        // also LACKS U+05C6) so WebKit falls to the REQUESTING mono generic's missing-glyph box at the per-generic
+        // constant (the returned font's identity is irrelevant — it only must lack the glyph; empirically proven in
+        // W2636), giving the iOS mono notdef box 961,1967. 16px-SAFE: the 16px/13px mono glyphHash cells are served by
+        // the Element.cpp carve-out (cp==0x05C6 && bucket==3 && size==16 -> 10,19 at Element.cpp:1688) + the bucket-3
+        // 13px table row {0x05C6,3,8,20} — both bypass this systemFallback path entirely, so c587ed44 is untouched; this
+        // route only affects the off-serve 1600px mono render. The already-correct default(588)/serif(488) cells keep
+        // Arial Hebrew (non-mono base). ⚠️ A3: build + render the faithful 1600px probe -> assert U+05C6 mono == 961,1967
+        // (NOT 566 Arial-Hebrew and NOT 1761 Courier-notdef); glyphHash c587ed44 held + cumrig 0-critical.
+        if (baseFontIsMonospace) {
+            static const std::array<ASCIILiteral, 1> c { "menlo"_s };
+            return driftstackLookupIOSFontByCandidates(c, description, size);
+        }
         static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
