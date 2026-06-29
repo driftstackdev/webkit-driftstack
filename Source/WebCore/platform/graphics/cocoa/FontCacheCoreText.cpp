@@ -3433,7 +3433,15 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
     // the proportional generics yet leave cursive/fantasy (and monospace) natural. Classify the base font by family.
     String driftstackBaseFamily = ctFont ? String(adoptCF(CTFontCopyFamilyName(ctFont.get())).get()) : String();
     bool driftstackBaseIsCursive = driftstackBaseFamily.startsWith("Snell"_s);
-    bool driftstackBaseIsFantasy = equalLettersIgnoringASCIICase(driftstackBaseFamily, "papyrus"_s);
+    // W2980g (#120 glyph-1600): the CSS `fantasy` generic resolves to ZAPFINO on this build, NOT Papyrus
+    // (proven by the faithful 1600px grid — the fantasy column's 5404 line-box == Zapfino@1600, and the dev-box
+    // CoreText scan). The old "papyrus"-only check left baseIsFantasy=FALSE for the real fantasy base, so
+    // fantasy-guarded routes mis-fired — e.g. the U+FBEE Damascus route's `if (...||baseIsFantasy) return
+    // nullptr` did NOT catch the Zapfino fantasy base, so fantasy got Damascus 955 where iOS keeps Geeza Pro
+    // 1100 (the grid's U+FBEE fantasy -145 regression). Match BOTH Zapfino (the real generic) and Papyrus
+    // (kept for any archetype that maps fantasy->Papyrus) so every baseIsFantasy guard fires correctly.
+    bool driftstackBaseIsFantasy = equalLettersIgnoringASCIICase(driftstackBaseFamily, "zapfino"_s)
+        || equalLettersIgnoringASCIICase(driftstackBaseFamily, "papyrus"_s);
     // W2607: the sans-serif generic resolves to Helvetica; some cps (U+05BE) need the sans/cursive/fantasy
     // fallback DIFFERENT from default/serif, so distinguish the Helvetica (sans-serif) base too.
     bool driftstackBaseIsSansSerif = equalLettersIgnoringASCIICase(driftstackBaseFamily, "helvetica"_s);
