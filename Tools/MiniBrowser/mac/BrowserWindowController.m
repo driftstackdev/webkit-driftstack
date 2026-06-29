@@ -55,6 +55,11 @@
 // invoke it SYNCHRONOUSLY for the content-only path + on the deferred fallback for chrome-shown.
 // Forward-declared (defined below windowDidLoad) to avoid an undeclared-selector warning.
 - (void)driftApplyLayoutViewportHeight:(int)layoutViewportHeight screenWidth:(int)screenWidth;
+// W3041 (#86-WIDTH analog): the layout-viewport WIDTH correction — deterministically pins the web
+// container/web-view WIDTH to the archetype width so documentElement.clientWidth == innerWidth and
+// matchMedia(max-width) matches a real iPhone (the WIDTH counterpart of driftApplyLayoutViewportHeight,
+// which only fixed HEIGHT). Forward-declared (defined below windowDidLoad) for the same reason.
+- (void)driftApplyLayoutViewportWidth:(int)screenWidth;
 @end
 
 @implementation BrowserWindowController
@@ -179,6 +184,23 @@
             if (zoomButton)
                 zoomButton.enabled = NO;
             [self.window setContentSize:vpSize];
+            // W3041 (#86-WIDTH analog — A1 verified clientWidth=776 while innerWidth=402,
+            // matchMedia('(max-width:640px)')=FALSE; a real iPhone has clientWidth==innerWidth==402
+            // and the query TRUE). The HEIGHT side (driftApplyLayoutViewportHeight) DETERMINISTICALLY
+            // pins the container/web-view height because the W1421 comment found autoresize did NOT
+            // propagate the window resize to the web container — the WIDTH side had the SAME latent
+            // bug but was never fixed, so the container kept the nib's 776 width (BrowserWindow.xib:29)
+            // and the CSS layout viewport (documentElement.clientWidth + the `width`/`max-width` media
+            // features, which read view->layoutWidth()) leaked 776 on EVERY page even though
+            // window.innerWidth is JS-overridden to 402. Pin the container/web-view WIDTH to the
+            // archetype screen width `w` (DRIFTSTACK_VIEWPORT_WIDTH: 390/402/430…; launch iphone17=402)
+            // the SAME deterministic way the height is pinned. There is NO horizontal chrome inset
+            // (the iOS Safari bars are top/bottom only), so the layout-viewport width == the window
+            // content width == screen width == innerWidth — no measured band to subtract (unlike
+            // height's barH/titleInset). Runs UNCONDITIONALLY (not gated on the layout-viewport-HEIGHT
+            // env / chrome-hidden predicate) so clientWidth is correct even when the height path is
+            // dormant. Fingerprint-SAFE: CLOSES a leak (matches the real iPhone), never opens one.
+            [self driftApplyLayoutViewportWidth:w];
             __weak NSWindow *weakWindow = self.window;
             // The web content view (mainContentView) sits below the URL bar, so
             // its height = window-content-height - chrome. A real iPhone reports
@@ -328,6 +350,50 @@
     }
     NSLog(@"[Driftstack-WindowSize] content=%.0f bar=%.0f title=%.0f hidden=%d -> window content=%.0f web-view=%d (target viewport=%d, screen-w=%d)",
         contentH, barH, titleInset, (int)chromeHidden, (double)targetContent, layoutViewportHeight, layoutViewportHeight, w);
+}
+
+// W3041 (#86-WIDTH analog): the layout-viewport WIDTH correction — the WIDTH counterpart of
+// driftApplyLayoutViewportHeight (which pinned ONLY height). A real iPhone reports
+// documentElement.clientWidth == window.innerWidth (== screen.width, e.g. 402 for iPhone 17); the
+// `width`/`max-width` CSS media features and clientWidth all read view->layoutWidth() (==
+// ScrollView::layoutSize().width()), which follows the WEB-VIEW's frame, NOT the JS-overridden
+// window.innerWidth. The W1421 comment proved autoresize did NOT propagate the window resize to the
+// web container, so without an explicit pin the container kept the nib's 776 width and leaked it.
+// Pin the container/web-view WIDTH to the archetype screen width DETERMINISTICALLY (the window is
+// non-resizable, so an explicit frame sticks). Unlike height there is NO horizontal chrome inset
+// (iOS Safari chrome is top/bottom only), so the target width == screenWidth EXACTLY — no measured
+// band to subtract. The HEIGHT (origin.y + frame height) is left UNTOUCHED here: driftApplyLayout-
+// ViewportHeight owns it and may run after this (it re-asserts width=w too, so the two agree). Result:
+// documentElement.clientWidth == innerWidth == screenWidth and matchMedia('(max-width:640px)') == TRUE,
+// byte-matching a real iPhone (CLOSES the leak, opens none). IDEMPOTENT: same input → same frame.
+- (void)driftApplyLayoutViewportWidth:(int)screenWidth
+{
+    NSWindow *win = self.window;
+    if (!win || screenWidth <= 0)
+        return;
+    // Window content width == the archetype screen width (no horizontal inset). Keep the current
+    // content height (the height path owns it) — change ONLY the width.
+    CGFloat curContentH = win.contentView.frame.size.height;
+    [win setContentSize:NSMakeSize(screenWidth, curContentH)];
+    // Deterministically pin the web container/web-view WIDTH to the archetype width so the CSS
+    // layout viewport (clientWidth + width/max-width media features) == screenWidth. Preserve the
+    // existing origin/height (the height path may not have run yet, or may run after); only the
+    // WIDTH is corrected here.
+    if (containerView) {
+        NSRect f = containerView.frame;
+        f.size.width = screenWidth;
+        f.origin.x = 0;
+        containerView.frame = f;
+        if (self.mainContentView)
+            self.mainContentView.frame = containerView.bounds;
+    } else if (self.mainContentView) {
+        NSRect f = self.mainContentView.frame;
+        f.size.width = screenWidth;
+        f.origin.x = 0;
+        self.mainContentView.frame = f;
+    }
+    NSLog(@"[Driftstack-WindowSize] layout-viewport WIDTH pinned -> web-view width=%d (clientWidth==innerWidth target=%d)",
+        screenWidth, screenWidth);
 }
 
 // W1378: the iOS-26 Safari BOTTOM bar. Re-homes the existing controls (IBOutlets = the real control
