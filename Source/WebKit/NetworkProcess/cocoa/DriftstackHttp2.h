@@ -142,7 +142,8 @@ private:
     Condition m_windowCond;            // signals send-window growth
     int64_t m_sendWindow { 65535 };    // our stream send window (guarded by m_writeLock)
     uint32_t m_peerInitialWindow { 65535 };
-    uint64_t m_recvSinceUpdate { 0 };  // bytes received since our last WINDOW_UPDATE
+    uint64_t m_recvSinceUpdate { 0 };      // bytes received since our last STREAM WINDOW_UPDATE (toward window/4)
+    uint64_t m_connRecvSinceUpdate { 0 };  // bytes received since our last CONNECTION WINDOW_UPDATE (toward window/2)
     Vector<uint8_t> m_dataLeftover;    // inbound DATA decoded but not yet returned by readData
     Vector<std::pair<String, String>> m_responseHeaders;  // CONNECT response headers (non-pseudo)
     bool m_serverEnabledConnectProtocol { false };

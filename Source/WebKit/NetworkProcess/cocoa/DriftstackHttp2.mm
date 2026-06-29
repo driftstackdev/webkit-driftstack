@@ -77,6 +77,30 @@ enum FrameFlag : uint8_t {
 // never rejects compliant traffic — only a non-compliant oversized frame).
 static constexpr uint32_t kMaxRecvFrameBytes = 1u << 20;
 
+// Mid-stream flow-control WINDOW_UPDATE cadence (iOS-faithful, gt-registry
+// http2_windowupdate_midstream_cadence). On a download LARGER than our receive
+// window, a real iPhone re-opens its windows on a WINDOW-FRACTION schedule, NOT
+// at a fixed byte count: it replenishes the STREAM window when ~1/4 of the
+// 2 MiB stream window is consumed, and the CONNECTION window when ~1/2 of the
+// ~10 MiB connection window is consumed (captured ×2 on iPhone 17/iOS 18.7/
+// Safari 26.5: first stream WINDOW_UPDATE at byte 2097152 then every ~507900 =
+// 2097152/4 minus one max-frame; connection every ~5259237 = 10485760/2). These
+// are DERIVED from our OWN advertised receive windows (kSettingInitialWindowSize
+// 2097152 + the +10420225 connection bump = 10485760 connection), so changing the
+// window also moves the cadence coherently. The previous fixed 1 MiB (1u<<20) on
+// BOTH stream and connection was an invented heuristic that matched neither.
+// NUANCE (captured, modeled as window/4 here): iOS fires its FIRST stream update
+// only after the full 2 MiB initial window is consumed (at byte 2097152), then
+// switches to the ~window/4 incremental cadence; emitting the first at window/4
+// is a slightly earlier first update. This window/4 constant captures the
+// dominant per-update increment fingerprint; first-at-full is a second-order
+// refinement (add a per-stream "first update fired" flag if a detector ever
+// scores the first-update offset specifically).
+static constexpr uint32_t kDriftstackStreamRecvWindow     = 2097152;  // our SETTINGS INITIAL_WINDOW_SIZE
+static constexpr uint32_t kDriftstackConnRecvWindow       = 10485760; // 65535 + the +10420225 connection bump
+static constexpr uint32_t kDriftstackStreamWUThreshold    = kDriftstackStreamRecvWindow / 4; // 524288 (~ iOS stream/4 cadence)
+static constexpr uint32_t kDriftstackConnWUThreshold      = kDriftstackConnRecvWindow / 2;   // 5242880 (~ iOS conn/2 cadence)
+
 // SETTINGS identifiers (RFC 7540 §6.5.2)
 enum SettingsId : uint16_t {
     kSettingHeaderTableSize       = 0x1,
@@ -1009,7 +1033,11 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
     // WINDOW_UPDATE so a long stream never stalls on the receive window.
     const bool streaming = static_cast<bool>(request.onBodyChunk);
     bool streamingHeadersFired = false;
-    uint64_t streamingBytesReceived = 0;
+    // iOS-faithful mid-stream WINDOW_UPDATE cadence (gt http2_windowupdate_midstream_cadence):
+    // STREAM and CONNECTION replenish on DIFFERENT window-fraction thresholds, so
+    // track received bytes for each independently (was one counter @ a fixed 1 MiB).
+    uint64_t streamRecvSinceUpdate = 0; // toward kDriftstackStreamWUThreshold (window/4)
+    uint64_t connRecvSinceUpdate   = 0; // toward kDriftstackConnWUThreshold   (window/2)
     // W2132: streaming bypasses the kMaxFrames TOTAL cap (a stream is unbounded), so the
     // flood guard must be a NO-PROGRESS bound instead — abort if this many frames arrive
     // with no DATA delivered (a malicious server spinning CONTINUATION/PING/control frames
@@ -1148,21 +1176,30 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                         return resp;
                     }
                     streamIdleFrames = 0; // W2132: body progress — reset the no-progress flood guard
-                    // RFC 7540 §6.9 — replenish our receive window so the server
-                    // keeps sending (a long stream would otherwise stall at the
-                    // 10MB connection window). ACK both stream + connection.
-                    streamingBytesReceived += dataSpan.size();
-                    if (streamingBytesReceived >= (1u << 20)) {
-                        uint32_t inc = static_cast<uint32_t>(streamingBytesReceived);
+                    // RFC 7540 §6.9 — replenish our receive windows so the server keeps
+                    // sending. iOS-faithful cadence (gt http2_windowupdate_midstream_cadence):
+                    // STREAM replenishes at window/4 (kDriftstackStreamWUThreshold),
+                    // CONNECTION at window/2 (kDriftstackConnWUThreshold) — different
+                    // thresholds, tracked separately (the old code emitted BOTH at a
+                    // fixed 1 MiB, matching neither). The increment == bytes consumed
+                    // since that window's last update (what a real iPhone sends).
+                    streamRecvSinceUpdate += dataSpan.size();
+                    connRecvSinceUpdate   += dataSpan.size();
+                    if (streamRecvSinceUpdate >= kDriftstackStreamWUThreshold) {
+                        uint32_t inc = static_cast<uint32_t>(streamRecvSinceUpdate);
                         uint8_t wu[13];
                         encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, streamId);
                         wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
                         sslWriteAll(ssl, transport, wu, 13);
+                        streamRecvSinceUpdate = 0;
+                    }
+                    if (connRecvSinceUpdate >= kDriftstackConnWUThreshold) {
+                        uint32_t inc = static_cast<uint32_t>(connRecvSinceUpdate);
                         uint8_t wuc[13];
                         encodeFrameHeader(wuc, 4, kFrameWindowUpdate, 0, 0);
                         wuc[9] = (inc >> 24) & 0xff; wuc[10] = (inc >> 16) & 0xff; wuc[11] = (inc >> 8) & 0xff; wuc[12] = inc & 0xff;
                         sslWriteAll(ssl, transport, wuc, 13);
-                        streamingBytesReceived = 0;
+                        connRecvSinceUpdate = 0;
                     }
                 } else {
                     resp.body.append(dataSpan);
@@ -2085,22 +2122,29 @@ int DriftstackHttp2ConnectStream::readData(uint8_t* buf, size_t maxLen)
                 std::span<const uint8_t> ds = payload.span();
                 if (flags & kFlagPadded) { if (ds.size() < 1) break; uint8_t pl = ds[0]; if (size_t(pl) + 1 > ds.size()) break; ds = ds.subspan(1, ds.size() - 1 - pl); }
                 m_recvSinceUpdate += ds.size();
-                // Coherence (A1-routed egress fp): the pooled path refilled the recv window at 256KiB
-                // (1u<<18) while the streaming path refills at 1MiB (1u<<20) — a server logging the h2
-                // frame timeline would see ONE client emit two different WINDOW_UPDATE cadences = a
-                // self-disagreement tell. Both paths now share the 1MiB refill so the cadence is coherent.
-                // The absolute iOS-faithful cadence is capture-gated (A1's fp call); change BOTH this and
-                // the streaming-path threshold together when the real-iPhone value lands.
-                if (m_recvSinceUpdate >= (1u << 20)) {
+                m_connRecvSinceUpdate += ds.size();
+                // iOS-faithful mid-stream WINDOW_UPDATE cadence (gt http2_windowupdate_midstream_cadence,
+                // real-iPhone captured ×2): the STREAM window replenishes at window/4
+                // (kDriftstackStreamWUThreshold) and the CONNECTION window at window/2
+                // (kDriftstackConnWUThreshold) — DIFFERENT thresholds, tracked separately.
+                // The earlier "coherence" fix made both a fixed 1 MiB; that was coherent
+                // but matched neither iOS cadence. Now both paths (streaming + this CONNECT
+                // path) share the SAME window-fraction rule so they're coherent AND correct.
+                if (m_recvSinceUpdate >= kDriftstackStreamWUThreshold) {
                     uint32_t inc = static_cast<uint32_t>(m_recvSinceUpdate);
                     Locker locker { m_writeLock };
                     uint8_t w[13]; encodeFrameHeader(w, 4, kFrameWindowUpdate, 0, kStreamId);
                     w[9] = (inc >> 24) & 0xff; w[10] = (inc >> 16) & 0xff; w[11] = (inc >> 8) & 0xff; w[12] = inc & 0xff;
                     sslWriteAll(nullptr, tp, w, 13);
-                    uint8_t wc[13]; encodeFrameHeader(wc, 4, kFrameWindowUpdate, 0, 0);
-                    wc[9] = w[9]; wc[10] = w[10]; wc[11] = w[11]; wc[12] = w[12];
-                    sslWriteAll(nullptr, tp, wc, 13);
                     m_recvSinceUpdate = 0;
+                }
+                if (m_connRecvSinceUpdate >= kDriftstackConnWUThreshold) {
+                    uint32_t inc = static_cast<uint32_t>(m_connRecvSinceUpdate);
+                    Locker locker { m_writeLock };
+                    uint8_t wc[13]; encodeFrameHeader(wc, 4, kFrameWindowUpdate, 0, 0);
+                    wc[9] = (inc >> 24) & 0xff; wc[10] = (inc >> 16) & 0xff; wc[11] = (inc >> 8) & 0xff; wc[12] = inc & 0xff;
+                    sslWriteAll(nullptr, tp, wc, 13);
+                    m_connRecvSinceUpdate = 0;
                 }
                 if (flags & kFlagEndStream) m_streamEnded = true;
                 if (ds.empty()) { if (m_streamEnded) return 0; continue; }
