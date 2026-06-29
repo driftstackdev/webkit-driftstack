@@ -1382,6 +1382,17 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
                     return;
                 }
                 m_request = WTF::move(finalRequest);
+                // W3011/egress FIX-C: the redirect TARGET is a distinct request and deserves a fresh
+                // retry budget. Without this, m_attempt + the per-request m_retryDeadline carried over
+                // from the PRE-redirect request, so a redirect chain that consumed attempts (or wall-
+                // clock) on the source URL could land on the target with little/no retry budget left,
+                // failing a flaky exit that a fresh request would have ridden out. Reset both: m_attempt
+                // = 0 so the next failure re-stamps the deadline as attempt 1 (the ++m_attempt==1 path),
+                // and clear m_retryDeadline to its unset (default MonotonicTime, the epoch) value so the
+                // stale within-budget check can't pass before that re-stamp. The chain stays bounded by
+                // m_redirectCount (cap 20). Additive + gate-independent.
+                m_attempt = 0;
+                m_retryDeadline = MonotonicTime();
                 resume(); // load the redirect target on a fresh connection (re-uses pool if applicable)
             });
     });
