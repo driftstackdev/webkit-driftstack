@@ -2985,6 +2985,17 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         // W2585: iOS resolves to the SF Hebrew binary (Stage-B; advance 6.0625 -> width 6). The system-name
         // "Arial Hebrew" advances to width 6 (5.648) CONSISTENTLY; the Stage-B .SF Hebrew lookup gave inconsistent
         // 5/7 per generic (fell to Times in some). Route to Arial Hebrew first for the consistent w6.
+        // W2980b (#120 glyph-1600 cluster D, sub-pattern A): in a MONOSPACE base context the Arial-Hebrew route
+        // OVER-fires — at 1600px the faithful Unicode-Glyphs grid shows fork mono = 566 (Arial Hebrew) where a real
+        // iPhone 17 / Safari 26.4 keeps the natural COURIER notdef box = 961,1967 (iOS-mono cascade lets U+05C6 fall
+        // to the Courier missing-glyph box, advance 960.156 @1600px -> ceil 961). Return nullptr for a monospace base
+        // so the natural Courier notdef wins, exactly mirroring the W2597/W2601 baseFontIsMonospace pattern (U+2581
+        // :2961). 16px-SAFE: the 16px/13px mono glyphHash cells are served by the Element.cpp carve-out (cp==0x05C6
+        // && bucket==3 && size==16 -> 10,19 at Element.cpp:1688) + the bucket-3 13px table row {0x05C6,3,8,20} — both
+        // bypass this systemFallback path entirely, so c587ed44 is untouched; this guard only affects the off-serve
+        // 1600px mono render. The already-correct default(588)/serif(488) cells keep Arial Hebrew (non-mono base).
+        if (baseFontIsMonospace)
+            return nullptr;
         static const std::array<ASCIILiteral, 2> candidates { "arial hebrew"_s, ".sf hebrew"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
@@ -3277,6 +3288,26 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         // here is behaviour-identical (the miss already fell through) and honest. ₾/301C height closure tracked as
         // the line-box-mechanism / minimal-principled-serve tail in project_geomserve_render_fix_arc.
         return nullptr;
+    }
+    case 0xFBEE: { // ﯮ ARABIC LIGATURE — W2980b (#120 glyph-1600 cluster D, sub-pattern B). The faithful
+        // Unicode-Glyphs grid @1600px shows ONLY the DEFAULT (-apple-system) generic diverges: fork default =
+        // 1100,2180 (GEEZA PRO) vs a real iPhone 17 / Safari 26.4 default = 955,2214 (DAMASCUS). The 5 explicit
+        // generics (sans/serif/mono/cursive 1100,2180) already MATCH ref — their cascade keeps Geeza Pro, which is
+        // correct there. iOS picks DAMASCUS for the isolated Arabic-ligature default form (the -apple-system cascade
+        // resolves it to Damascus, not Geeza Pro); the fork's host macOS cascade picks Geeza Pro. iosdirscan over the
+        // iOS-26.5 fonts dir confirms Damascus carries ﯮ at advance 955@1600px + a taller 2214 line-box (vs Geeza
+        // Pro's 1100,2180) — same iOS-specific-font render-fix class as W2639 (currency→Rockwell). Route the DEFAULT
+        // base ONLY (no explicit-generic flag set) → Damascus; the explicit generics return nullptr so their
+        // already-correct Geeza Pro is untouched. glyphHash-SAFE: U+FBEE is NOT one of the 5 isGlyphHashCp
+        // (1CDA/20E3/2581/05C6/2B06) and is NOT in the 43-cp glyphHash probe set → c587ed44 / metricsHash /
+        // uniqueMetrics cannot move (those are the 16/13px Element.cpp serve + atlas; this is the 1600px natural
+        // fallback path). ⚠️ A3: build + render the faithful 1600px probe → assert default == 955,2214 (and the 5
+        // explicit generics stay 1100,2180). If the Damascus lookup MISSES (DRIFTSTACK_FONTS_DIR lacks the face) the
+        // [V485-LOOKUP] log will show MISS → add the Damascus .ttc to the fonts dir or fall to ".sf arabic".
+        if (baseIsSerif || baseIsCursive || baseIsFantasy || baseIsSansSerif || baseFontIsMonospace)
+            return nullptr;
+        static const std::array<ASCIILiteral, 2> candidates { "damascus"_s, ".sf arabic"_s };
+        return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
     // W2636 NOTDEF CLASS: these cps are notdef in EVERY iOS font (no glyph anywhere). A real iPhone renders the
     // REQUESTING generic's missing-glyph box, whose advance + line-box is a per-generic CONSTANT (default/serif 13,20 /
