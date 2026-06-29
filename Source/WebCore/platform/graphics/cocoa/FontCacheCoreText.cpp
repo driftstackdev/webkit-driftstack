@@ -3245,11 +3245,38 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
         static const std::array<ASCIILiteral, 2> candidates { "hiragino mincho pron"_s, "hiragino sans"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
     }
-    case 0x301C: {
-        if (!(baseIsSerif || baseIsCursive))
+    case 0x20BE: { // ₾ GEORGIAN LARI SIGN — W2643 (#98). Real iPhone 17/iOS 26.5 (BS geomserve-table,
+        // 3 captures byte-agree): default/sans/serif/mono/system-ui = 12,21 · fantasy = 12,26 · CURSIVE = 9,22.
+        // Only the CURSIVE generic diverges (fork-natural 13,22): the other 6 already match — their natural
+        // cascade resolves ₾ to Helvetica (advance 11.86 → ceil 12 == iOS 12). The cursive cell wants width 9,
+        // which Helvetica can't give (its ₾ is 12-wide, unlike ₹ where Helvetica == 9). The width-9 ₾ glyph lives
+        // ONLY in the SF system faces (.SF UI / .SF Compact, advance 8.18 → ceil 9, iosdirscan-confirmed); their
+        // ceil-ascent 16 lifts the Snell-Roundhand cursive line box to 22 (same mechanism as 0x20B9→Helvetica
+        // lifting Snell to 22 — there Helvetica ceil-asc 13 sufficed; ₾ needs the higher SF-UI ascent). Route
+        // CURSIVE ONLY (the non-cursive return nullptr so their already-correct natural Helvetica is untouched).
+        // glyphHash-SAFE (₾ disjoint from the 5 GCPS cps + not in the glyphHash 43-cp probe). A3 builds + verifies
+        // the cursive cell == 9,22 on geomserve-table (DS_GEOM_SERVE=0 natural); if the SF-UI line box composes to
+        // 21 not 22 in-fork, fall back to "helvetica neue" / "carlito" (the W2638 cursive-strut candidates).
+        if (!baseIsCursive)
             return nullptr;
-        static const std::array<ASCIILiteral, 2> candidates { "pingfang sc"_s, "pingfangsc"_s };
+        static const std::array<ASCIILiteral, 3> candidates { ".sf ui"_s, ".sf compact"_s, "helvetica neue"_s };
         return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    }
+    case 0x301C: {
+        // W2643 (#98) — wave dash. Real iPhone 17/iOS 26.5 (BS geomserve-table, 3 captures byte-agree):
+        // default/sans/serif/mono/cursive = 16,23 · system-ui = 16,21 · fantasy = 16,27. Fork-natural diverges on
+        // serif/default/cursive at HEIGHT (16,25 not 16,23). ⛔ This is NOT FONT-SELECTABLE: iosdirscan over the
+        // iOS-26.5 fonts dir proves NO face gives U+301C at width 16 AND lineH 23 — EVERY width-16 wave-dash face
+        // (all Hiragino Kaku/Maru/Mincho variants) has lineH 25; the only lineH-23 face (.Hiragino Kaku Gothic
+        // Interface) is width 15. The iPhone's 16,23 is an iOS-vs-Mac SAME-FAMILY line-box divergence (the iOS
+        // Hiragino face composes a 23 box where the Mac-resident same-named face composes 25), which font-selection
+        // cannot reach — it needs a line-box/strut mechanism (W2575 integer-inline-layout class) OR the height stays
+        // DOM-served. The prior "pingfang sc" candidates were INEFFECTIVE: PingFang.ttc carries NO U+301C glyph in
+        // the iOS dir (iosdirscan: absent) → the lookup MISSED → natural Hiragino Mincho ProN (lineH 25) won, so the
+        // route never changed anything (the recurring "301C route LANDED but gives 25" confusion). Returning nullptr
+        // here is behaviour-identical (the miss already fell through) and honest. ₾/301C height closure tracked as
+        // the line-box-mechanism / minimal-principled-serve tail in project_geomserve_render_fix_arc.
+        return nullptr;
     }
     // W2636 NOTDEF CLASS: these cps are notdef in EVERY iOS font (no glyph anywhere). A real iPhone renders the
     // REQUESTING generic's missing-glyph box, whose advance + line-box is a per-generic CONSTANT (default/serif 13,20 /
