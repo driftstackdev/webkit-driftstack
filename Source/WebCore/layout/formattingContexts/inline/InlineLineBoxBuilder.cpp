@@ -752,12 +752,23 @@ void LineBoxBuilder::adjustInlineBoxHeightsForLineBoxContainIfApplicable(LineBox
                 // SCOPED PRECISELY (the grid is the ground truth — a blanket SF-default suppress would REGRESS
                 // ~14 genuinely-tall default cells the fork already matches, e.g. U+17DD 3179 / U+A830 2660 /
                 // U+0700 2302 that iOS DOES stretch): suppress ONLY when (a) the primary is the SF default
-                // base AND (b) the fallback enclosure is only MARGINALLY above the primary strut
+                // base AND (b) the RESULTING line-box strut would be only MARGINALLY above the primary strut
                 // (< kSfDefaultStrutKeepBelow). The 6 +23 cells land at exactly 1933 (Δ23 over 1910); the
                 // next-tallest KEEP cell is U+08E4/U+2425 at 1988 — so a 1960 cutoff cleanly separates them
                 // (the marginal Hiragino-W3-vs-Interface +23 is suppressed; the genuinely-tall scripts keep
                 // their iOS-matching stretch). Width is UNTOUCHED (this only caps height; U+21E4/20B0/2B06/20E3
                 // default WIDTH is a separate default-base-coverage problem handled in FontCacheCoreText).
+                //
+                // ⚠️ W2980i FIX (the W2980e gate never fired): the gate must compare the RESULTING strut
+                // (the asymmetric max(ascent, encl.ascent) + max(descent, encl.descent) this branch would
+                // ASSIGN) against kSfDefaultStrutKeepBelow — NOT the RAW fallback enclosure total. The raw
+                // `enclosingAscentAndDescent.ascent + descent` is the fallback font's FULL line-box (for the
+                // +23 cells the Mac cascade picks HiraginoSans-W3 whose root-inline-box enclosure folds in its
+                // 800-unit lineGap → 1808 + 593 = 2401 @1600px, on-box face-metrics-scan.txt confirmed). 2401
+                // is ALWAYS ≫ 1960, so the original `(encl.ascent+encl.descent) < 1960` clause was never true
+                // and the +23 persisted (lane1 hash 55676378 still shows 1933). The actual rendered box is
+                // only 1933 because the SF-Pro primary ascent already dominates the ascent side — the fallback
+                // only lifts the descent — so the RESULTING max-combine is 1933, not 2401. Gate on the result.
                 //
                 // 16px-SAFE: at 16px every generic column is a flat per-generic constant (24/24/25/25/26/28 —
                 // the body line-height:1.5 floor dominates, the font strut is hidden), so changing the 1600px
@@ -766,10 +777,15 @@ void LineBoxBuilder::adjustInlineBoxHeightsForLineBoxContainIfApplicable(LineBox
                 // probe band, NEVER the 16/13px glyphHash sizes — double-guarding 16px-safety even though the
                 // line-height:1.5 floor already hides the strut there.
                 constexpr float kSfDefaultStrutKeepBelow = 1960.f;
+                // The strut this branch WOULD assign if it took the stretch (the resulting, not the raw
+                // enclosure) — this is the quantity that surfaces as div.offsetHeight (1933 for the +23 cells).
+                float driftstackResultingAscent = std::max(ascent, enclosingAscentAndDescent.ascent);
+                float driftstackResultingDescent = std::max(descent, enclosingAscentAndDescent.descent);
+                float driftstackResultingStrut = driftstackResultingAscent + driftstackResultingDescent;
                 bool driftstackSuppressFallbackStretch = inlineBox.fontSize() >= 100.f
                     && driftstackPrimaryFontIsSfSystemBase(inlineBox)
-                    && (enclosingAscentAndDescent.ascent + enclosingAscentAndDescent.descent) < kSfDefaultStrutKeepBelow
-                    && (enclosingAscentAndDescent.ascent + enclosingAscentAndDescent.descent) > (ascent + descent);
+                    && driftstackResultingStrut < kSfDefaultStrutKeepBelow
+                    && driftstackResultingStrut > (ascent + descent);
                 if (!driftstackSuppressFallbackStretch)
 #endif
                 {
