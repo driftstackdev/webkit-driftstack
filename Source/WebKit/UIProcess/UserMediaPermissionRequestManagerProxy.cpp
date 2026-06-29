@@ -116,6 +116,17 @@ UserMediaPermissionRequestManagerProxy::UserMediaPermissionRequestManagerProxy(W
 {
 #if ENABLE(MEDIA_STREAM)
     proxies().add(*this);
+#if PLATFORM(DRIFTSTACK)
+    // GRANTED-state getUserMedia synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED=1): force the mock
+    // capture center ON for this page regardless of WKPreferences so syncWithWebCorePrefs() (below)
+    // enables MockRealtimeMediaSourceCenter in BOTH the UIProcess and the GPUProcess
+    // (setUseMockCaptureDevices) before any granted gUM resolves. mockCaptureDevicesEnabled() (the
+    // override-aware accessor) then reports true, driving the silent mock-grant in
+    // processUserMediaPermissionRequest. Default OFF → override unset → byte-identical to the clean
+    // W2854 path (no mock, deny → NotAllowedError).
+    if (driftstackGetUserMediaGranted())
+        m_mockDevicesEnabledOverride = true;
+#endif
 #endif
     syncWithWebCorePrefs();
 }
@@ -566,6 +577,17 @@ UserMediaPermissionRequestManagerProxy::RequestAction UserMediaPermissionRequest
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+bool UserMediaPermissionRequestManagerProxy::driftstackGetUserMediaGranted()
+{
+    static const bool granted = []() {
+        const char* env = getenv("DRIFTSTACK_GETUSERMEDIA_GRANTED");
+        return env && env[0] == '1';
+    }();
+    return granted;
+}
+#endif
+
 void UserMediaPermissionRequestManagerProxy::requestUserMediaPermissionForFrame(UserMediaRequestIdentifier userMediaID, FrameInfoData&& frameInfo, Ref<SecurityOrigin>&& userMediaDocumentOrigin, Ref<SecurityOrigin>&& topLevelDocumentOrigin, MediaStreamRequest&& userRequest)
 {
 #if ENABLE(MEDIA_STREAM)
@@ -583,8 +605,17 @@ void UserMediaPermissionRequestManagerProxy::requestUserMediaPermissionForFrame(
     // startProcessingUserMediaPermissionRequest → grantRequest → RealtimeMediaSourceCenter (host AVFoundation
     // capture). Device PRESENCE via enumerateDevices stays iPhone-correct elsewhere; only the live-capture grant
     // is denied here (a real iPhone user routinely declines camera/mic, so deny is a faithful, non-tell outcome).
-    request->deny(UserMediaPermissionRequestProxy::UserMediaAccessDenialReason::PermissionDenied);
-    return;
+    //
+    // GRANTED-state synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED=1): a real iPhone with the permission granted
+    // returns a live stream, so when the gate is ON we DON'T deny — we fall through to the normal flow which,
+    // with the mock center enabled (m_mockDevicesEnabledOverride set in the ctor when gated) + prompt disabled,
+    // grants against the synthetic iPhone capture set (real host AVFoundation/CoreAudio stays bypassed via the
+    // MockRealtimeMediaSourceCenter factory override — capture NEVER touches the shared worker hardware). The
+    // grant is silent (no iOS prompt UI on a driven session) — a future founder-bar choice (prompt vs silent).
+    if (!driftstackGetUserMediaGranted()) {
+        request->deny(UserMediaPermissionRequestProxy::UserMediaAccessDenialReason::PermissionDenied);
+        return;
+    }
 #endif
     if (m_currentUserMediaRequest) {
         if (m_currentUserMediaRequest->requiresDisplayCapture() && request->requiresDisplayCapture()) {
@@ -803,7 +834,20 @@ void UserMediaPermissionRequestManagerProxy::processUserMediaPermissionValidRequ
     // tell. Driftstack never grants the fleet Mac's real camera/mic regardless.)
 #endif
 
-    if (preferences->mockCaptureDevicesEnabled() && !preferences->mockCaptureDevicesPromptEnabled()) {
+    bool silentMockGrant = preferences->mockCaptureDevicesEnabled() && !preferences->mockCaptureDevicesPromptEnabled();
+#if PLATFORM(DRIFTSTACK)
+    // GRANTED-state synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED=1): the mock center is enabled via
+    // m_mockDevicesEnabledOverride (ctor), so mockCaptureDevicesEnabled() (the override-aware
+    // accessor) is true; the WKPreferences mockCaptureDevicesPromptEnabled() stays at its prod
+    // default (true) so the raw condition above is false. Treat the gate as "mock + no prompt" so
+    // the request is silently granted against the synthetic iPhone capture set instead of reaching
+    // requestSystemValidation (which headless-denies on the fleet → NotAllowedError). Silent grant
+    // (no iOS prompt UI) — a future founder-bar choice. The deny short-circuit at the top of
+    // requestUserMediaPermissionForFrame already ensured we only get here when the gate is ON.
+    if (driftstackGetUserMediaGranted())
+        silentMockGrant = mockCaptureDevicesEnabled();
+#endif
+    if (silentMockGrant) {
         ALWAYS_LOG(LOGIDENTIFIER, currentUserMediaRequest->userMediaID() ? currentUserMediaRequest->userMediaID()->toUInt64() : 0, ", mock devices don't require prompt");
         grantRequest(*currentUserMediaRequest);
         return;

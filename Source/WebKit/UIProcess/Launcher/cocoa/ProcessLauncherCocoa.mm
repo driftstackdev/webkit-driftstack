@@ -646,6 +646,22 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // null → the dsEnv loop's `if (kv.value)` skips it → byte-identical to the clean un-granted
             // path; WebProcess.cpp force-sets it "0" (overwrite=0) so an OMITTED flag is explicitly off.
             { "DRIFTSTACK_DEVICEMOTION_GRANTED", getenv("DRIFTSTACK_DEVICEMOTION_GRANTED") },
+            // GRANTED-state getUserMedia (camera/mic) synthesis gate. A real iPhone always
+            // has a camera+mic; a granted gUM on the headless Mac fleet must NOT touch the
+            // host's real (absent) camera/mic, so when this is "1" we route capture through
+            // WebCore's MockRealtimeMediaSourceCenter loaded with the iPhone 9-device set
+            // (1 mic + 5 cameras + 3 speakers). Read via static getenv() in BOTH sandboxed
+            // capture-host read sites that do not inherit the parent env nor the __XPC_ shadow:
+            // WebProcess WebContent (WebProcess::initializeWebProcess installs the mock center +
+            // iPhone device set so enumerateDevices/getUserMedia constraint matching resolve)
+            // and GPUProcess (GPUProcess::initializeGPUProcess does the same for the process that
+            // actually runs capture). The UIProcess grant decision
+            // (UserMediaPermissionRequestManagerProxy) reads it directly (UIProcess inherits the
+            // parent env, so it is not forwarded here for that site). Default OFF: unset →
+            // getenv() null → the dsEnv loop's `if (kv.value)` skips it → byte-identical to the
+            // clean un-granted W2854 NotAllowedError path; WebProcess.cpp force-sets it "0"
+            // (overwrite=0) so an OMITTED flag is explicitly off (mirrors DeviceMotion above).
+            { "DRIFTSTACK_GETUSERMEDIA_GRANTED", getenv("DRIFTSTACK_GETUSERMEDIA_GRANTED") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",

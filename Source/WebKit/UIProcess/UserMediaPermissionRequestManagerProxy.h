@@ -191,6 +191,15 @@ private:
 
     bool mockCaptureDevicesEnabled() const;
 
+#if PLATFORM(DRIFTSTACK)
+    // GRANTED-state getUserMedia gate (DRIFTSTACK_GETUSERMEDIA_GRANTED, default OFF). When OFF,
+    // gUM is denied (PermissionDenied → NotAllowedError, the W2854 iPhone-faithful "user declined"
+    // path) and the SHARED Mac worker's camera/mic are NEVER touched. When ON, gUM falls through
+    // to the silent mock-capture grant (mock center loaded with the iPhone 9-device set; real
+    // host AVFoundation/CoreAudio fully bypassed by the mock factory override).
+    static bool driftstackGetUserMediaGranted();
+#endif
+
     void watchdogTimerFired();
 
     void processNextUserMediaRequestIfNeeded();

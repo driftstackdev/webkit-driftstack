@@ -549,6 +549,12 @@ static void driftstackEnsureProductionFingerprintHooks()
     // byte-identical to the clean un-granted 6/6 path. Forced here so an OMITTED flag is
     // explicitly off rather than relying on absence (parallels the RAF clamps above).
     setenv("DRIFTSTACK_DEVICEMOTION_GRANTED", "0", 0);
+    // GRANTED-state getUserMedia (camera/mic) synthesis: default OFF (overwrite=0 respects an
+    // explicit per-session "1" from the harness when the customer grants the permission). When
+    // off, no mock capture center is installed and the gUM surface is byte-identical to the clean
+    // un-granted W2854 NotAllowedError path. Forced here so an OMITTED flag is explicitly off
+    // rather than relying on absence (parallels DeviceMotion above + the RAF clamps).
+    setenv("DRIFTSTACK_GETUSERMEDIA_GRANTED", "0", 0);
 }
 #endif
 
@@ -557,6 +563,15 @@ void WebProcess::initializeWebProcess(WebProcessCreationParameters&& parameters,
     TraceScope traceScope(InitializeWebProcessStart, InitializeWebProcessEnd);
 #if PLATFORM(DRIFTSTACK)
     driftstackEnsureProductionFingerprintHooks(); // before any lazy getenv-gated fingerprint init
+#if ENABLE(MEDIA_STREAM)
+    // GRANTED-state getUserMedia synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED, default OFF). The
+    // WebProcess hosts enumerateDevices() + getUserMedia constraint matching against the mock
+    // center's device list, so it must also enable the mock + load the iPhone 9-device set (the
+    // GPUProcess does the same for the capture run). Must run AFTER the force-set default above
+    // (driftstackEnsureProductionFingerprintHooks → setenv "0" overwrite=0) so an explicit "1"
+    // from the harness is honoured and an OMITTED flag reads off. Idempotent + no-op when off.
+    MockRealtimeMediaSourceCenter::driftstackEnableGetUserMediaSynthesis();
+#endif
 #endif
     // Reply immediately so that the identity is available as soon as possible.
     completionHandler(ProcessIdentity { ProcessIdentity::CurrentProcess });

@@ -42,6 +42,10 @@
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/StringView.h>
 
+#if PLATFORM(DRIFTSTACK)
+#include <cstdlib> // getenv for the DRIFTSTACK_GETUSERMEDIA_GRANTED gate
+#endif
+
 #if PLATFORM(COCOA)
 #include "CoreAudioCaptureSource.h"
 #include "DisplayCaptureSourceCocoa.h"
@@ -61,8 +65,130 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+// GRANTED-state getUserMedia iPhone 9-device set (DRIFTSTACK_GETUSERMEDIA_GRANTED). Real-device
+// captured by A1 (probe getusermedia-granted-full, iPhone 17 / iOS 18.7 / Safari 26.4): 1 mic +
+// 5 cameras + 3 speakers (the 3rd audiooutput is the system-default speaker re-exposed as the
+// literal-"default" entry by createDefaultSpeakerAsSpecificDevice). The native per-origin SHA-1
+// salt path (RealtimeMediaSourceCenter::hashStringWithSalt, applied in MediaDevices::exposeDevices)
+// produces the 40-hex deviceId/groupId, so we only set the PRE-hash persistentId + groupId here.
+//
+// groupId model (A1 2026-06-29 CORRECTION, gUM-G3): ALL 4 AUDIO devices (mic + 3 speakers) share
+// ONE pre-hash group; EACH of the 5 cameras has its OWN distinct group → 6 groups total. The mock
+// CaptureDevice ctor uses the 4th arg as groupId (MockMediaDevice::captureDevice): for microphones
+// it passes persistentId, for speakers it passes relatedMicrophoneId. So to coalesce all audio we
+// give the mic a persistentId that doubles as the shared audio group AND set every speaker's
+// relatedMicrophoneId to that SAME id; exposeDevices() then hashes that one pre-hash group →
+// one 40-hex audio groupId. Each camera passes its own persistentId as groupId → 5 distinct hashes.
+//
+// per-camera (A1 gUM-G1): all 5 = 640x480 / 30fps / aspectRatio 1.3333 (getSettings derives
+// width/height) / zoom 1 / wb continuous / bgBlur false / powerEff false. Front Ultra Wide + Front
+// = facingMode user, NO torch; Back Dual Wide + Back Ultra Wide + Back = facingMode environment,
+// torch:false (capability present, value false). Caps width/height {1,4032} aspectRatio
+// {1/4032,4032} frameRate {1,60} zoom {1,10} focusDistance {0.2,..} (all derived from the preset
+// set + the gated MockRealtimeVideoSource overrides). Presets reach 4032 in BOTH dimensions so
+// updateCapabilities() yields max width=max height=4032 (aspectRatio min = 1/4032 = ~0.000248).
+//
+// Default speaker: 'Default - Speaker' deviceId = literal "default" (NOT salted) — emitted by
+// createDefaultSpeakerAsSpecificDevice when ExposeDefaultSpeakerAsSpecificDeviceEnabled (default
+// true) sees a speaker whose group has a microphone. We make the first speaker the default
+// (label "Speaker", isDefault) so makeString("Default", " - ", "Speaker") == "Default - Speaker".
+static const String& driftstackSharedAudioGroupId()
+{
+    // One pre-hash group id shared by the mic + all speakers. Also serves as the mic persistentId
+    // (mic ctor passes persistentId as its groupId) and each speaker's relatedMicrophoneId.
+    static NeverDestroyed<String> id { "driftstack-iphone-audio-group"_s };
+    return id;
+}
+
+// iPhone camera preset set: settings size is 640x480 @30 (the iPhone gUM default the captured
+// settings show); the larger presets exist ONLY to widen the derived capabilities (width/height
+// up to 4032, frameRate up to 60, zoom 1..10). minZoom=1/maxZoom=10 makes zoom supported; NO
+// preset is isEfficient (so canBePowerEfficient()==false → settings.powerEfficient stays false +
+// caps powerEfficient==[false]). Frame-rate ranges include 60 so caps frameRate max==60.
+static Vector<VideoPresetData> driftstackIPhoneCameraPresets()
+{
+    return Vector<VideoPresetData> {
+        // 640x480 first → bestSupportedSizeFrameRateAndZoom default + setting size (aspectRatio 4:3 = 1.3333).
+        { { 640, 480 },   { { 1, 60 } }, 1, 10, false },
+        { { 1280, 720 },  { { 1, 60 } }, 1, 10, false },
+        { { 1920, 1080 }, { { 1, 60 } }, 1, 10, false },
+        { { 4032, 3024 }, { { 1, 30 } }, 1, 10, false }, // max width 4032
+        { { 3024, 4032 }, { { 1, 30 } }, 1, 10, false }, // max height 4032 → aspectRatio min = 1/4032
+    };
+}
+
+static MockCameraProperties driftstackCameraProps(VideoFacingMode facingMode, bool hasTorch)
+{
+    MockCameraProperties props;
+    props.defaultFrameRate = 30;
+    props.facingMode = facingMode;
+    props.presets = driftstackIPhoneCameraPresets();
+    props.fillColor = Color::black;
+    // whiteBalanceMode caps = ['manual','continuous'] (current value 'continuous' set in
+    // MockRealtimeVideoSource under the gate). Order matches the captured caps sequence.
+    props.whiteBalanceMode = { MeteringMode::Manual, MeteringMode::Continuous };
+    props.hasTorch = hasTorch;
+    props.hasBackgroundBlur = false;
+    return props;
+}
+
+static Vector<MockMediaDevice> driftstackIPhoneDevices()
+{
+    auto& audioGroup = driftstackSharedAudioGroupId();
+    return Vector<MockMediaDevice> {
+        // --- 1 microphone (sampleRate 48000, echoCancellation: nullopt → settings true + caps
+        // [t,f]; volume defaults to 1). Its persistentId IS the shared audio pre-hash group. ---
+        MockMediaDevice { audioGroup, "iPhone Microphone"_s, { }, true, MockMicrophoneProperties { 48000, std::nullopt, 1 } },
+
+        // --- 5 cameras, EACH its own pre-hash group (persistentId used as groupId by the ctor). ---
+        MockMediaDevice { "driftstack-iphone-cam-front-ultrawide"_s, "Front Ultra Wide Camera"_s, { }, true,
+            driftstackCameraProps(VideoFacingMode::User, false) },
+        MockMediaDevice { "driftstack-iphone-cam-front"_s, "Front Camera"_s, { }, false,
+            driftstackCameraProps(VideoFacingMode::User, false) },
+        MockMediaDevice { "driftstack-iphone-cam-back-dualwide"_s, "Back Dual Wide Camera"_s, { }, false,
+            driftstackCameraProps(VideoFacingMode::Environment, false) },
+        MockMediaDevice { "driftstack-iphone-cam-back-ultrawide"_s, "Back Ultra Wide Camera"_s, { }, false,
+            driftstackCameraProps(VideoFacingMode::Environment, false) },
+        MockMediaDevice { "driftstack-iphone-cam-back"_s, "Back Camera"_s, { }, false,
+            driftstackCameraProps(VideoFacingMode::Environment, false) },
+
+        // --- 3 speakers, ALL sharing the audio pre-hash group (relatedMicrophoneId == audioGroup).
+        // The first is the default → re-exposed as 'Default - Speaker' (deviceId literal "default")
+        // by createDefaultSpeakerAsSpecificDevice AND as 'Speaker' (40-hex). 'Receiver' is the 3rd. ---
+        MockMediaDevice { "driftstack-iphone-spk-speaker"_s, "Speaker"_s, { }, true, MockSpeakerProperties { audioGroup, 48000 } },
+        MockMediaDevice { "driftstack-iphone-spk-receiver"_s, "Receiver"_s, { }, false, MockSpeakerProperties { audioGroup, 48000 } },
+    };
+}
+
+bool MockRealtimeMediaSourceCenter::driftstackGetUserMediaGranted()
+{
+    static const bool granted = []() {
+        const char* env = getenv("DRIFTSTACK_GETUSERMEDIA_GRANTED");
+        return env && env[0] == '1';
+    }();
+    return granted;
+}
+
+void MockRealtimeMediaSourceCenter::driftstackEnableGetUserMediaSynthesis()
+{
+    if (!driftstackGetUserMediaGranted())
+        return;
+    // Load the iPhone set first so any device-list consumer activated by enabling the mock center
+    // sees the canonical 9 devices, then flip the capture-factory overrides on.
+    setDevices(driftstackIPhoneDevices());
+    setMockRealtimeMediaSourceCenterEnabled(true);
+}
+#endif // PLATFORM(DRIFTSTACK)
+
 static inline Vector<MockMediaDevice> defaultDevices()
 {
+#if PLATFORM(DRIFTSTACK)
+    // When the gUM-granted gate is on, the canonical default device list IS the iPhone set, so any
+    // process that enables the mock center (or calls resetDevices) gets it without extra plumbing.
+    if (MockRealtimeMediaSourceCenter::driftstackGetUserMediaGranted())
+        return driftstackIPhoneDevices();
+#endif
     return Vector<MockMediaDevice> {
         MockMediaDevice { "239c24b0-2b15-11e3-8224-0800200c9a66"_s, "Mock audio device 1"_s, { }, true, MockMicrophoneProperties { 44100 , { }, 1 } },
         MockMediaDevice { "239c24b1-2b15-11e3-8224-0800200c9a66"_s, "Mock audio device 2"_s, { }, false, MockMicrophoneProperties { 48000, { false }, 2 } },

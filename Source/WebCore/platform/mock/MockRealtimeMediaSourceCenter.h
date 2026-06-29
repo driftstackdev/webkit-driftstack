@@ -43,6 +43,19 @@ public:
     WEBCORE_EXPORT static void setMockRealtimeMediaSourceCenterEnabled(bool);
     WEBCORE_EXPORT static bool NODELETE mockRealtimeMediaSourceCenterEnabled();
 
+#if PLATFORM(DRIFTSTACK)
+    // GRANTED-state getUserMedia synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED). When the env gate
+    // is "1", a real-iPhone always has a camera+mic but the headless Mac fleet must never touch
+    // the host's (absent) real devices; we route ALL capture + enumeration through the mock
+    // center loaded with the iPhone 9-device set. driftstackGetUserMediaGranted() reads the env
+    // once (static, default OFF). driftstackEnableGetUserMediaSynthesis() loads the iPhone set
+    // (setDevices) then enables the mock center; idempotent + safe to call once per capture-host
+    // process at init. Default OFF leaves the clean un-granted W2854 NotAllowedError path
+    // byte-identical (no mock, no device list change).
+    WEBCORE_EXPORT static bool NODELETE driftstackGetUserMediaGranted();
+    WEBCORE_EXPORT static void driftstackEnableGetUserMediaSynthesis();
+#endif
+
     WEBCORE_EXPORT static void setDevices(Vector<MockMediaDevice>&&);
     WEBCORE_EXPORT static void addDevice(const MockMediaDevice&);
     WEBCORE_EXPORT static void removeDevice(const String&);

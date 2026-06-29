@@ -239,6 +239,15 @@ void GPUProcess::initializeGPUProcess(GPUProcessCreationParameters&& parameters,
 
 #if ENABLE(MEDIA_STREAM)
     setMockCaptureDevicesEnabled(parameters.useMockCaptureDevices);
+#if PLATFORM(DRIFTSTACK)
+    // GRANTED-state getUserMedia synthesis (DRIFTSTACK_GETUSERMEDIA_GRANTED, default OFF). The
+    // GPUProcess runs capture, so it must have the mock center enabled + the iPhone 9-device set
+    // loaded BEFORE any granted gUM resolves into a capture source. useMockCaptureDevices above is
+    // driven by the WKPreferences/automation path (false in prod); the env gate makes the iPhone
+    // capture set unconditional for granted sessions WITHOUT depending on the harness toggling the
+    // preference. Idempotent + no-op when the gate is off (byte-identical to the clean path).
+    WebCore::MockRealtimeMediaSourceCenter::driftstackEnableGetUserMediaSynthesis();
+#endif
 #if PLATFORM(MAC)
     SandboxExtension::consumePermanently(parameters.microphoneSandboxExtensionHandle);
 #endif
