@@ -2353,6 +2353,8 @@ platform/DateComponents.cpp
 platform/Decimal.cpp
 platform/DragData.cpp
 platform/DragImage.cpp
+platform/driftstack/DriftstackDeviceMotionClient.cpp
+platform/driftstack/DriftstackDeviceOrientationClient.cpp
 platform/EventTrackingRegions.cpp
 platform/FileChooser.cpp
 platform/FileMonitor.cpp

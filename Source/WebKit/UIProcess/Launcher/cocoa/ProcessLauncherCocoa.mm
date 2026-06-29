@@ -636,6 +636,16 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // no-UDP latch can reflect the customer proxy's TRUE UDP capability.
             { "DRIFTSTACK_EGRESS_RELIABILITY", getenv("DRIFTSTACK_EGRESS_RELIABILITY") },
             { "DRIFTSTACK_SOCKS5_UDP_PROXY", getenv("DRIFTSTACK_SOCKS5_UDP_PROXY") },
+            // GRANTED-state DeviceMotion/DeviceOrientation synthesis gate. Read via static
+            // getenv() in BOTH sandboxed-WebContent read sites — WebCore Page::Page (installs
+            // the synthetic clients) and WebKit WebPage::shouldAllowDeviceOrientationAndMotionAccess
+            // (the grant short-circuit) — neither of which inherits the parent env nor the __XPC_
+            // shadow (same class as TRACKER_PRIVACY / CANVAS_TEXT_RECOMPOSE / PASTEBOARD_NAME). Without
+            // this entry the getenv() returns null in production → the synthetic stream never installs
+            // and a granted page sees 0 events (the very tell this closes). Default OFF: unset → getenv()
+            // null → the dsEnv loop's `if (kv.value)` skips it → byte-identical to the clean un-granted
+            // path; WebProcess.cpp force-sets it "0" (overwrite=0) so an OMITTED flag is explicitly off.
+            { "DRIFTSTACK_DEVICEMOTION_GRANTED", getenv("DRIFTSTACK_DEVICEMOTION_GRANTED") },
         };
         WTFLogAlways("[Driftstack] ProcessLauncher forwarding env: TZ=%s LANG=%s LC_ALL=%s "
                      "LOG_IBG=%s LOG_LBH=%s V602=%s LAYER_B=%s LAYER_B_V2=%s ARCHETYPE=%s",

@@ -543,6 +543,12 @@ static void driftstackEnsureProductionFingerprintHooks()
     // contradicting #102. FORCE them off here (overwrite=0 still lets a test opt in with an explicit "1").
     setenv("DRIFTSTACK_RAF_DELTA_CLAMP", "0", 0);
     setenv("DRIFTSTACK_RAF_FIRST_FRAME_CLAMP", "0", 0);
+    // GRANTED-state DeviceMotion/DeviceOrientation synthesis: default OFF (overwrite=0
+    // respects an explicit per-session "1" from the harness when the customer grants the
+    // permission). When off, no synthetic clients are installed and the sensor surface is
+    // byte-identical to the clean un-granted 6/6 path. Forced here so an OMITTED flag is
+    // explicitly off rather than relying on absence (parallels the RAF clamps above).
+    setenv("DRIFTSTACK_DEVICEMOTION_GRANTED", "0", 0);
 }
 #endif
 

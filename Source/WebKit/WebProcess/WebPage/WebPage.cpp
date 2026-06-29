@@ -9766,7 +9766,30 @@ const HashSet<WebCore::RegistrableDomain>& WebPage::loadedSubresourceDomains() c
 #if ENABLE(DEVICE_ORIENTATION)
 void WebPage::shouldAllowDeviceOrientationAndMotionAccess(FrameIdentifier frameID, FrameInfoData&& frameInfo, bool mayPrompt, CompletionHandler<void(DeviceOrientationOrMotionPermissionState)>&& completionHandler)
 {
+#if PLATFORM(DRIFTSTACK)
+    // A real iPhone with a granted DeviceOrientation/Motion permission returns
+    // Granted without any UIProcess prompt round-trip. When the synthetic-sensor
+    // gate (DRIFTSTACK_DEVICEMOTION_GRANTED, the SAME flag that installs the
+    // synthetic clients in Page::Page) is on, short-circuit to Granted so the
+    // grant->listen chain (DeviceOrientationAndMotionAccessController -> LocalDOMWindow
+    // -> DeviceController::addDeviceEventListener -> client.startUpdating) actually
+    // starts the synthetic stream. Read the env once.
+    // ⚠️ -Werror=unreachable-code (the LEAK-1/2 lesson): the upstream
+    // sendWithAsyncReply fall-through MUST be #else-wrapped, NOT left after an
+    // unconditional return, so a build with the gate compiled-in does not see dead
+    // code after a constant-true branch.
+    static const bool s_driftstackDeviceMotionGranted = []() {
+        const char* env = getenv("DRIFTSTACK_DEVICEMOTION_GRANTED");
+        return env && env[0] == '1';
+    }();
+    if (s_driftstackDeviceMotionGranted) {
+        completionHandler(DeviceOrientationOrMotionPermissionState::Granted);
+        return;
+    }
     sendWithAsyncReply(Messages::WebPageProxy::ShouldAllowDeviceOrientationAndMotionAccess(frameID, WTF::move(frameInfo), mayPrompt), WTF::move(completionHandler));
+#else
+    sendWithAsyncReply(Messages::WebPageProxy::ShouldAllowDeviceOrientationAndMotionAccess(frameID, WTF::move(frameInfo), mayPrompt), WTF::move(completionHandler));
+#endif
 }
 #endif
 

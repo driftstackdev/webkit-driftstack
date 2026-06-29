@@ -54,6 +54,9 @@
 #include "ContextMenuController.h"
 #include "CookieJar.h"
 #include "CredentialRequestCoordinator.h"
+#if PLATFORM(DRIFTSTACK) && ENABLE(DEVICE_ORIENTATION)
+#include "DriftstackDeviceMotionClient.h"
+#endif
 #include "CryptoClient.h"
 #include "DOMRect.h"
 #include "DOMRectList.h"
@@ -567,6 +570,24 @@ Page::Page(PageConfiguration&& pageConfiguration)
 #if ENABLE(IMAGE_ANALYSIS)
     if (pageConfiguration.imageTranslationLanguageIdentifiers)
         imageAnalysisQueue().setTranslationLanguageIdentifiers(WTF::move(*pageConfiguration.imageTranslationLanguageIdentifiers));
+#endif
+
+#if PLATFORM(DRIFTSTACK) && ENABLE(DEVICE_ORIENTATION)
+    // GRANTED-state DeviceMotion/DeviceOrientation synthesis. A real iPhone always
+    // has motion sensors; a Mac fleet host has none, so DeviceMotionController::from(page)
+    // would be null and a permission-GRANTED page would receive 0 devicemotion/
+    // deviceorientation events — a detectable iOS divergence. When
+    // DRIFTSTACK_DEVICEMOTION_GRANTED=1 we install synthetic clients that feed a
+    // stationary-iPhone 60 Hz stream (see DriftstackDeviceMotionClient). Default OFF
+    // (un-granted clean path stays byte-identical): read the env once. The grant
+    // short-circuit in WebPage::shouldAllowDeviceOrientationAndMotionAccess is gated
+    // on the SAME flag so the two read sites always agree.
+    static const bool s_driftstackDeviceMotionGranted = []() {
+        const char* env = getenv("DRIFTSTACK_DEVICEMOTION_GRANTED");
+        return env && env[0] == '1';
+    }();
+    if (s_driftstackDeviceMotionGranted)
+        driftstackProvideSyntheticSensorsTo(*this);
 #endif
 }
 
