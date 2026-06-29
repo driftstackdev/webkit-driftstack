@@ -37,6 +37,36 @@ namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(PointerEvent);
 
+#if PLATFORM(DRIFTSTACK)
+// Real-iPhone touch contact size (PointerEvent.width == height == 2 x Touch.radiusX, in CSS px).
+// On a real iPhone the contact footprint VARIES continuously per tap (the live fingertip area —
+// observed radiusX 23.60 / 24.28 / 36.42 -> width 47.20 / 48.56 / 72.83, NOT a fixed set) yet is
+// CONSTANT within a single contact (the pointerover/enter/down of one tap share a pointerId).
+// We reproduce that: a continuous value in the captured iOS radius band, deterministically derived
+// from the pointerId so it is stable across one tap's sequence but differs across taps. Modelling
+// it as a fixed or 2-value table (keyed on pointerId&1, as the previous fork code did) is itself a
+// synthetic tell — the captured BS-synthetic radius 23.60 falls outside any 2-value gold set, proving
+// the real distribution is continuous.
+static double driftstackTouchContactSize(PointerID pointerId)
+{
+    // Mix the pointerId to a uniform fraction in [0,1) (full-width avalanche so consecutive,
+    // monotonically-incrementing iOS pointerIds do not collapse to a few buckets).
+    uint32_t x = static_cast<uint32_t>(static_cast<uint64_t>(pointerId) & 0xFFFFFFFFULL);
+    x ^= x >> 16;
+    x *= 0x45d9f3bU;
+    x ^= x >> 16;
+    x *= 0x45d9f3bU;
+    x ^= x >> 16;
+    double frac = static_cast<double>(x) / 4294967296.0;
+
+    // Radius band brackets the captured iOS contact radii (23.60, 24.28, 36.42 CSS px).
+    constexpr double radiusMin = 23.5;
+    constexpr double radiusMax = 36.5;
+    double radius = radiusMin + frac * (radiusMax - radiusMin);
+    return 2.0 * radius; // width == height
+}
+#endif
+
 AtomString PointerEvent::typeFromMouseEventType(const AtomString& mouseEventType)
 {
     auto& names = eventNames();
@@ -243,16 +273,27 @@ PointerEvent::PointerEvent(
     , m_predictedEvents(createPredictedPointerEvents(type, button, mouseEvent, pointerId, pointerType))
 {
 #if PLATFORM(DRIFTSTACK)
-    // Real iPhone touch pointerdown reports a finger-contact width/height (= 2 x Touch.radiusX, ~48-73 CSS px),
-    // NOT the 1x1 mouse default — a width/height==1 touch pointer is a synthetic-input tell. Captured from a real
-    // iPhone 17 / iOS 26.5 (2026-06-24 tap-pointer gold-truth): width==height in {48.5556, 72.8333}, varying per
-    // contact but constant within a single tap. Derive deterministically from pointerId so the value is identical
-    // across one tap's event sequence (over/enter/down/up/out/leave) yet varies across taps. (pressure is already
-    // clamp(force,0,1)==0 for a no-force tap; isPrimary already true.)
+    // Real-iPhone touch-pointer contact geometry (width == height == 2 x Touch.radiusX, in CSS px).
+    // Captured from real iPhone 17 / iOS 26.5 (tap-pointer gold tap-pointer-ios265-manual.json +
+    // BS-synthetic tapeventseq-iPhone_17-*.json):
+    //   - CONTACT events (pointerover/enter/down, buttons==1): a finger-contact size that VARIES
+    //     continuously per tap (observed radiusX 23.60 / 24.28 / 36.42 -> width 47.20 / 48.56 / 72.83,
+    //     NOT a fixed set) yet is CONSTANT within one tap (the over/enter/down of a single contact
+    //     all share one pointerId). A fixed or 2-value contact size is a synthetic tell — the contact
+    //     radius is the live fingertip footprint and differs every tap. So we derive a continuous
+    //     value in the captured iOS radius band from the pointerId (stable within a tap, varied across
+    //     taps), NOT a lookup table.
+    //   - LIFT events (pointerup, buttons==0): the iPhone reports width == height == 0 (no contact on
+    //     finger-up). The mouse-derived default (1) is a tell here.
+    // (pressure is already clamp(force,0,1)==0 for a no-force tap above; isPrimary already true.)
     if (pointerType != mousePointerEventType()) {
-        double driftstackContact = (pointerId & 1) ? 72.83333550393581 : 48.555555917322636;
-        m_width = driftstackContact;
-        m_height = driftstackContact;
+        if (type == eventNames().pointerupEvent) {
+            m_width = 0;
+            m_height = 0;
+        } else {
+            m_width = driftstackTouchContactSize(pointerId);
+            m_height = m_width;
+        }
     }
 #endif
 }
@@ -285,6 +326,21 @@ PointerEvent::PointerEvent(const AtomString& type, PointerID pointerId, const St
     , m_isPrimary(isPrimary == IsPrimary::Yes)
     , m_fractionalCoordinatesAllowed(fractionalCoordinatesAllowedForType(type))
 {
+#if PLATFORM(DRIFTSTACK)
+    // The fork emits the touch-LIFT boundary pair (pointerout then pointerleave) for a synthetic
+    // tap through this 3-arg create-by-type ctor (PointerCaptureController::dispatchEvent,
+    // PLATFORM(DRIFTSTACK) touch-pointerup branch). On a real iPhone the lifted contact reports
+    // width == height == 0 (no contact after finger-up) — the default 1x1 is a synthetic tell.
+    // Scope strictly to the touch lift events; got/lostpointercapture (also this ctor) report 1x1
+    // on a real iPhone (gold tap-pointer-ios265-manual.json) so are left at the default.
+    if (pointerType != mousePointerEventType()
+        && (type == eventNames().pointeroutEvent
+            || type == eventNames().pointerleaveEvent
+            || type == eventNames().pointerupEvent)) {
+        m_width = 0;
+        m_height = 0;
+    }
+#endif
 }
 
 PointerEvent::~PointerEvent() = default;
