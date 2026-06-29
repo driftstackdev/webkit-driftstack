@@ -185,6 +185,29 @@ private:
     String m_v185AtlasKey;
 };
 
+// ── Shared MSE codec pin (one source of truth) ───────────────────────────────
+// Family-A archetypes (pre-26 Safari, s_isFamilyAArchetype convention) gate VP9
+// OFF in the MSE/ManagedMediaSource codec verdict — verified real iPhone 16 Pro /
+// Safari 18.6 = MediaSource.isTypeSupported('…vp09…')=FALSE vs iPhone 17 / 26.4 =
+// TRUE (VP9-in-MMS shipped after 18.6). The fleet Mac decodes VP9 so the raw OS
+// verdict LEAKS true for BOTH; this predicate pins the Family-A verdict to the
+// real device.
+//
+// This is the ONE predicate every MSE entry point shares so they cannot drift:
+//   - MediaSource::isTypeSupported  (Modules/mediasource/MediaSource.cpp)
+//   - SourceBufferParser::isContentTypeSupported  (platform/graphics/cocoa/…)
+//     ← the lower-level path canSwitchToType → supportsTypeAndCodecs routes
+//       through, i.e. SourceBuffer::changeType. Routing the pin here makes
+//       changeType(vp09) COHERENT with isTypeSupported(vp09)=false (spec:
+//       isTypeSupported(X)=false ⟹ changeType(X) MUST throw NotSupportedError).
+//
+// `codecs` is the ContentType "codecs" parameter string (may carry several
+// comma-separated codecs). Returns true ⟺ this is a Family-A archetype AND the
+// codec string names vp09. Live getenv (NOT static-cached — silently-inert-gate
+// sweep 2026-06-27); matches the family check used in CSSParserContext /
+// LibWebRTCProvider.
+bool driftstackFamilyAVP9MSEUnsupported(const String& codecs);
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

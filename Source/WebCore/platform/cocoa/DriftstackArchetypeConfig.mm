@@ -41,6 +41,28 @@ void DriftstackArchetypeConfig::reload()
     loadFromEnv();
 }
 
+// Shared MSE VP9 pin — the ONE source of truth (see header). Predicate is
+// byte-identical to the historical MediaSource::isTypeSupported gate it replaces:
+// live getenv("DRIFTSTACK_ARCHETYPE") (NOT static-cached) + the safari17..25_
+// Family-A family check + codecs.contains("vp09"). MediaSource::isTypeSupported
+// AND SourceBufferParser::isContentTypeSupported both delegate here so the
+// changeType / canSwitchToType route stays coherent with isTypeSupported.
+bool driftstackFamilyAVP9MSEUnsupported(const String& codecs)
+{
+    if (!codecs.contains("vp09"_s))
+        return false;
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a)
+        return false;
+    auto arch = String::fromLatin1(a);
+    const bool isFamilyA = arch.contains("safari17_"_s) || arch.contains("safari18_"_s)
+        || arch.contains("safari19_"_s) || arch.contains("safari20_"_s)
+        || arch.contains("safari21_"_s) || arch.contains("safari22_"_s)
+        || arch.contains("safari23_"_s) || arch.contains("safari24_"_s)
+        || arch.contains("safari25_"_s);
+    return isFamilyA;
+}
+
 void DriftstackArchetypeConfig::loadFromEnv()
 {
     // Wave 29-393 → 29-394 → 29-395 RETRY → 29-395 REVERTED again:

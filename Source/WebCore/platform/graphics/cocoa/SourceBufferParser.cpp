@@ -33,6 +33,9 @@
 #include "SharedBuffer.h"
 #include "SourceBufferParserAVFObjC.h"
 #include "SourceBufferParserWebM.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeConfig.h"
+#endif
 #include <pal/spi/cocoa/MediaToolboxSPI.h>
 #include <wtf/text/WTFString.h>
 
@@ -42,6 +45,18 @@ namespace WebCore {
 
 MediaPlayerEnums::SupportsType SourceBufferParser::isContentTypeSupported(const ContentType& type)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Shared Family-A VP9 pin — the SINGLE convergence point for both parsers (mp4 via
+    // SourceBufferParserAVFObjC, webm via SourceBufferParserWebM) and the lower-level path that
+    // SourceBuffer::changeType reaches via canSwitchToType → supportsTypeAndCodecs. Pinning here
+    // (rather than re-inlining the predicate) makes changeType(vp09)→NotSupportedError coherent with
+    // MediaSource::isTypeSupported(vp09)=false on Family A, using the SAME helper so they cannot drift.
+    // The raw OS parsers below (AVStreamDataParserMIMETypeCache / isVP9DecoderAvailable) carry no
+    // version gate — the Mac decodes VP9 so they LEAK IsSupported for Family A; this restores the
+    // real iPhone 18.6 verdict. Family B (launch 26.4) has no pin → unchanged (both accept).
+    if (driftstackFamilyAVP9MSEUnsupported(type.parameter(ContentType::codecsParameter())))
+        return MediaPlayerEnums::SupportsType::IsNotSupported;
+#endif
     MediaPlayerEnums::SupportsType supports = SourceBufferParserWebM::isContentTypeSupported(type);
     if (supports == MediaPlayerEnums::SupportsType::IsSupported)
         return supports;
