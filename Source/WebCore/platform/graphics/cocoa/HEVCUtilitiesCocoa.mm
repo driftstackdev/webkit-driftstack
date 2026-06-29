@@ -173,6 +173,17 @@ std::optional<PlatformMediaCapabilitiesInfo> validateDoViParameters(const DoViPa
     if (hasAlphaChannel)
         return std::nullopt;
 
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack: the real iPhone (17 / iOS 18.7 / Safari 26.x) MediaCapabilities.decodingInfo reports
+    // Dolby Vision supported ONLY for the dvh1 (HVC1) brand at profile 5. BS-captured (decinfo-iPhone_17,
+    // 5 configs): dvh1.05.06 + dvh1.05.09 = {supported,smooth,powerEfficient} all true; dvhe.05.06 /
+    // dvhe.08.07 / dvh1.08.07 = all false. The fleet Mac's VideoToolbox supports the broader DoVi set
+    // (dvhe brand + profile 8), so without this gate the fork over-reports those = a DoVi decodingInfo
+    // fingerprint tell (A3-confirmed live on daemon 48920: fork dvhe.08.07=true vs iPhone false).
+    if (!(parameters.codec == DoViParameters::Codec::HVC1 && parameters.bitstreamProfileID == 5))
+        return std::nullopt;
+#endif
+
     if (hdrSupport) {
         // Platform supports HDR playback of HEVC Main10 Profile, which is signalled by DoVi profiles 4, 5, 7, & 8.
         switch (parameters.bitstreamProfileID) {
