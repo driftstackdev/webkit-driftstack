@@ -34,9 +34,106 @@
 #import <wtf/StdLibExtras.h>
 #import <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(DRIFTSTACK)
+#import <cstdlib>
+#import <string_view>
+#endif
+
 namespace WebGPU {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(Adapter);
+
+#if PLATFORM(DRIFTSTACK)
+// DEFENSE-IN-DEPTH mirror of the WebCore requestDevice validation (GPUAdapter.cpp). The WebCore
+// path runs in WebContent and already rejects against the driftstack-filtered/pinned adapter
+// values BEFORE this IPC fires, so this gate is the redundant second wall: it caps the reference
+// limits + filters the reference features to the SAME advertised values, so a requiredLimit above
+// the pinned buffer cap or a filtered-out requiredFeature is rejected here too even if some caller
+// reaches the GPU process directly. Kept byte-coherent with GPUSupportedLimits.cpp
+// (driftstackWebGPUBufferCap = 644245092 on 26.0, else 1GiB; ISV pinned to 124) and
+// GPUSupportedFeatures.cpp (clip-distances always; BC family + float32-filterable on older-GPU
+// tier; texture-formats-tier1 on 26.0).
+static uint64_t driftstackWebGPUBufferCap()
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return 1073741824ULL;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return 1073741824ULL;
+    sv.remove_prefix(pos + 6);
+    int maj = 0, min = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+    return (maj == 26 && min == 0) ? 644245092ULL : 1073741824ULL;
+}
+
+static bool driftstackArchetypeIsOlderGpuTier()
+{
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype)
+        return false;
+    std::string_view a(archetype);
+    if (a.find("iphone13") != std::string_view::npos)
+        return true;
+    if (a.find("iphone14") != std::string_view::npos)
+        return true;
+    if (a.find("iphone15pro") != std::string_view::npos)
+        return false;
+    if (a.find("iphone15") != std::string_view::npos)
+        return true;
+    return false;
+}
+
+static bool driftstackArchetypeIsSafari26_0()
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    std::string_view sv(a);
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    sv.remove_prefix(pos + 6);
+    int maj = 0, min = 0;
+    size_t i = 0;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { maj = maj * 10 + (sv[i] - '0'); ++i; }
+    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
+        ++i;
+    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
+    return maj == 26 && min == 0;
+}
+
+// Returns a copy of the reference limits capped to the advertised (pinned) driftstack values, so
+// anyLimitIsBetterThan rejects an over-cap requiredLimit but ACCEPTS the advertised ISV (124).
+static WGPULimits driftstackPinnedReferenceLimits(const WGPULimits& raw)
+{
+    WGPULimits pinned = raw;
+    const uint64_t cap = driftstackWebGPUBufferCap();
+    pinned.maxBufferSize = std::min<uint64_t>(pinned.maxBufferSize, cap);
+    pinned.maxUniformBufferBindingSize = std::min<uint64_t>(pinned.maxUniformBufferBindingSize, cap);
+    pinned.maxStorageBufferBindingSize = std::min<uint64_t>(pinned.maxStorageBufferBindingSize, cap);
+    pinned.maxInterStageShaderVariables = 124; // pinned advertised value (raw Mac backing = 31)
+    return pinned;
+}
+
+static bool driftstackFeatureIsFilteredOut(WGPUFeatureName feature)
+{
+    if (feature == WGPUFeatureName_ClipDistances)
+        return true;
+    if (driftstackArchetypeIsOlderGpuTier() && (feature == WGPUFeatureName_TextureCompressionBC
+        || feature == WGPUFeatureName_TextureCompressionBCSliced3D
+        || feature == WGPUFeatureName_Float32Filterable))
+        return true;
+    if (driftstackArchetypeIsSafari26_0() && feature == WGPUFeatureName_TextureFormatsTier1)
+        return true;
+    return false;
+}
+#endif
 
 Adapter::Adapter(id<MTLDevice> device, Instance& instance, bool xrCompatible, HardwareCapabilities&& capabilities)
     : m_device(device)
@@ -94,6 +191,15 @@ void Adapter::requestDevice(const WGPUDeviceDescriptor& descriptor, CompletionHa
 
     WGPULimits limits { };
 
+#if PLATFORM(DRIFTSTACK)
+    // Defense-in-depth: validate against the PINNED reference (the advertised adapter.limits), not
+    // the raw Mac caps — so an over-cap requiredLimit is rejected and the advertised ISV (124, raw
+    // backing 31) is accepted. WebCore already enforces this before the IPC; this is the redundant wall.
+    const WGPULimits referenceLimits = driftstackPinnedReferenceLimits(m_capabilities.limits);
+#else
+    const WGPULimits& referenceLimits = m_capabilities.limits;
+#endif
+
     if (descriptor.requiredLimits) {
 
         if (!WebGPU::isValid(descriptor.requiredLimits->limits)) {
@@ -101,7 +207,7 @@ void Adapter::requestDevice(const WGPUDeviceDescriptor& descriptor, CompletionHa
             return;
         }
 
-        if (anyLimitIsBetterThan(descriptor.requiredLimits->limits, m_capabilities.limits)) {
+        if (anyLimitIsBetterThan(descriptor.requiredLimits->limits, referenceLimits)) {
             callback(WGPURequestDeviceStatus_Error, Device::createInvalid(*this), "Device does not support requested limits"_s);
             return;
         }
@@ -111,6 +217,16 @@ void Adapter::requestDevice(const WGPUDeviceDescriptor& descriptor, CompletionHa
         limits = defaultLimits();
 
     Vector<WGPUFeatureName> features(descriptor.requiredFeaturesSpan());
+#if PLATFORM(DRIFTSTACK)
+    // Reject (mirror of GPUSupportedFeatures filter) any requiredFeature the fork hides from
+    // adapter.features for this archetype, regardless of raw Mac support.
+    for (auto feature : features) {
+        if (driftstackFeatureIsFilteredOut(feature)) {
+            callback(WGPURequestDeviceStatus_Error, Device::createInvalid(*this), "Device does not support requested features"_s);
+            return;
+        }
+    }
+#endif
     if (includesUnsupportedFeatures(features, m_capabilities.features)) {
         callback(WGPURequestDeviceStatus_Error, Device::createInvalid(*this), "Device does not support requested features"_s);
         return;

@@ -86,28 +86,37 @@ static bool driftstackArchetypeIsSafari26_0()
     while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { min = min * 10 + (sv[i] - '0'); ++i; }
     return maj == 26 && min == 0;
 }
+
+// Single source of truth for the driftstack adapter.features filter. Returns true when a feature
+// must be DROPPED from the exposed feature set for the current archetype. BOTH initializeSetLike
+// (the adapter.features list) AND GPUAdapter::requestDevice (the requiredFeatures validation)
+// delegate here, so a requiredFeature can never be accepted when the list omits it (the
+// accessor-vs-list asymmetry the WebGL getExtension fix closed, applied to WebGPU). Each drop is
+// capture-grounded against the real-iPhone adapter.features inventory:
+//   - clip-distances: ALWAYS dropped (Mac exposes it; no iPhone archetype does — V-072).
+//   - BC compression family + float32-filterable: dropped on older-GPU (A15/A16) tiers.
+//   - texture-formats-tier1: dropped on Safari 26.0 (a 26.1+ addition).
+bool GPUSupportedFeatures::isFeatureFilteredOutForCurrentArchetype(const String& feature)
+{
+    if (feature == "clip-distances"_s)
+        return true;
+    if (driftstackArchetypeIsOlderGpuTier() && (feature == "texture-compression-bc"_s
+        || feature == "texture-compression-bc-sliced-3d"_s
+        || feature == "float32-filterable"_s))
+        return true;
+    if (driftstackArchetypeIsSafari26_0() && feature == "texture-formats-tier1"_s)
+        return true;
+    return false;
+}
 #endif
 
 void GPUSupportedFeatures::initializeSetLike(DOMSetAdapter& set) const
 {
-#if PLATFORM(DRIFTSTACK)
-    const bool olderGpuTier = driftstackArchetypeIsOlderGpuTier();
-    const bool stripTier1 = driftstackArchetypeIsSafari26_0();
-#endif
     for (const auto& feature : m_backing->features()) {
 #if PLATFORM(DRIFTSTACK)
-        // V-072 cumulative rig finding: Mac exposes "clip-distances" in
-        // the GPU adapter feature set; iPhone 16 Pro / iOS 26.4 does not.
-        // Filter it out on Driftstack to match the iPhone feature list.
-        if (feature == "clip-distances"_s)
-            continue;
-        // Older-GPU-tier (A15/A16) iPhones lack the desktop BC compression family + float32-filterable.
-        if (olderGpuTier && (feature == "texture-compression-bc"_s
-            || feature == "texture-compression-bc-sliced-3d"_s
-            || feature == "float32-filterable"_s))
-            continue;
-        // Safari 26.0 predates texture-formats-tier1.
-        if (stripTier1 && feature == "texture-formats-tier1"_s)
+        // Delegate to the shared predicate so the exposed list and the requestDevice
+        // requiredFeatures validation can never drift (the getExtension no-drift pattern).
+        if (isFeatureFilteredOutForCurrentArchetype(feature))
             continue;
 #endif
         set.add<IDLDOMString>(feature);

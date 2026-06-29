@@ -43,6 +43,15 @@ public:
 
     void initializeSetLike(DOMSetAdapter&) const;
 
+#if PLATFORM(DRIFTSTACK)
+    // Single source of truth for the driftstack feature filter: returns true when the named
+    // GPU feature is DROPPED from the exposed adapter.features for the current archetype (the
+    // same drop-logic initializeSetLike applies). GPUAdapter::requestDevice reuses this so the
+    // requiredFeatures validation can never drift from the advertised feature list. (clip-distances
+    // always; the BC family + float32-filterable on older-GPU tiers; texture-formats-tier1 on 26.0.)
+    static bool isFeatureFilteredOutForCurrentArchetype(const String& featureName);
+#endif
+
     WebGPU::SupportedFeatures& backing() { return m_backing; }
     const WebGPU::SupportedFeatures& backing() const { return m_backing; }
 
