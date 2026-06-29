@@ -28,73 +28,162 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+// N1 defensive fleet-invariance pin (Driftstack 2026-06-29): every JS-facing
+// GPUSupportedLimits accessor that previously passed the host Metal backing value
+// straight through is now pinned to the captured iPhone gold-truth. The backing
+// values come from WebGPU/HardwareCapabilities.mm, which selects a GPU-FAMILY
+// profile (apple7/apple8/mac2/...) by the host MTLDevice feature set + a few
+// device-scaled values (maxBufferSize from device.maxBufferLength). On today's
+// all-M3-Ultra fleet these coincide with the A-series iPhone, but they are
+// host-VARIABLE: an M2/M4/Intel Mac (or a future Metal revision) could select a
+// different profile and leak the host chip. Rather than rely on the fleet staying
+// M3, pin the JS surface to the iPhone values captured across A15..A19 / Safari
+// 17.1.1..26.5 (driftstack reference/realdevice-bs/aio-iPhone_* webgpu.adapter.limits
+// — byte-identical across all 8 device models; see captures/v1/webgpu-supported-limits-gate.sh).
+// The 3 buffer-size limits (version-keyed clamp) + maxInterStageShaderVariables (124)
+// keep their existing dedicated overrides below; these constants cover the rest.
+//
+// CHIP/VERSION-INVARIANT iPhone gold-truth (27 of 31; the other 4 = the 3 buffer
+// caps + interStage handled separately):
+static constexpr uint32_t kDriftstackGPULimit_maxTextureDimension1D = 16384;
+static constexpr uint32_t kDriftstackGPULimit_maxTextureDimension2D = 16384;
+static constexpr uint32_t kDriftstackGPULimit_maxTextureDimension3D = 2048;
+static constexpr uint32_t kDriftstackGPULimit_maxTextureArrayLayers = 2048;
+static constexpr uint32_t kDriftstackGPULimit_maxBindGroups = 11;
+static constexpr uint32_t kDriftstackGPULimit_maxBindGroupsPlusVertexBuffers = 30;
+static constexpr uint32_t kDriftstackGPULimit_maxBindingsPerBindGroup = 65535;
+static constexpr uint32_t kDriftstackGPULimit_maxDynamicUniformBuffersPerPipelineLayout = 65535;
+static constexpr uint32_t kDriftstackGPULimit_maxDynamicStorageBuffersPerPipelineLayout = 65535;
+static constexpr uint32_t kDriftstackGPULimit_maxSampledTexturesPerShaderStage = 44;
+static constexpr uint32_t kDriftstackGPULimit_maxSamplersPerShaderStage = 22;
+static constexpr uint32_t kDriftstackGPULimit_maxStorageBuffersPerShaderStage = 44;
+static constexpr uint32_t kDriftstackGPULimit_maxStorageTexturesPerShaderStage = 44;
+static constexpr uint32_t kDriftstackGPULimit_maxUniformBuffersPerShaderStage = 44;
+static constexpr uint32_t kDriftstackGPULimit_minUniformBufferOffsetAlignment = 32;
+static constexpr uint32_t kDriftstackGPULimit_minStorageBufferOffsetAlignment = 32;
+static constexpr uint32_t kDriftstackGPULimit_maxVertexBuffers = 12;
+static constexpr uint32_t kDriftstackGPULimit_maxVertexAttributes = 30;
+static constexpr uint32_t kDriftstackGPULimit_maxVertexBufferArrayStride = 65532;
+static constexpr uint32_t kDriftstackGPULimit_maxColorAttachments = 8;
+static constexpr uint32_t kDriftstackGPULimit_maxColorAttachmentBytesPerSample = 64;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeWorkgroupStorageSize = 32768;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeInvocationsPerWorkgroup = 1024;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeWorkgroupSizeX = 1024;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeWorkgroupSizeY = 1024;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeWorkgroupSizeZ = 1024;
+static constexpr uint32_t kDriftstackGPULimit_maxComputeWorkgroupsPerDimension = 65535;
+#endif
+
 uint32_t GPUSupportedLimits::maxTextureDimension1D() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxTextureDimension1D;
+#endif
     return m_backing->maxTextureDimension1D();
 }
 
 uint32_t GPUSupportedLimits::maxTextureDimension2D() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxTextureDimension2D;
+#endif
     return m_backing->maxTextureDimension2D();
 }
 
 uint32_t GPUSupportedLimits::maxTextureDimension3D() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxTextureDimension3D;
+#endif
     return m_backing->maxTextureDimension3D();
 }
 
 uint32_t GPUSupportedLimits::maxTextureArrayLayers() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxTextureArrayLayers;
+#endif
     return m_backing->maxTextureArrayLayers();
 }
 
 uint32_t GPUSupportedLimits::maxBindGroups() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxBindGroups;
+#endif
     return m_backing->maxBindGroups();
 }
 
 uint32_t GPUSupportedLimits::maxBindGroupsPlusVertexBuffers() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxBindGroupsPlusVertexBuffers;
+#endif
     return m_backing->maxBindGroupsPlusVertexBuffers();
 }
 
 uint32_t GPUSupportedLimits::maxBindingsPerBindGroup() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxBindingsPerBindGroup;
+#endif
     return m_backing->maxBindingsPerBindGroup();
 }
 
 uint32_t GPUSupportedLimits::maxDynamicUniformBuffersPerPipelineLayout() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxDynamicUniformBuffersPerPipelineLayout;
+#endif
     return m_backing->maxDynamicUniformBuffersPerPipelineLayout();
 }
 
 uint32_t GPUSupportedLimits::maxDynamicStorageBuffersPerPipelineLayout() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxDynamicStorageBuffersPerPipelineLayout;
+#endif
     return m_backing->maxDynamicStorageBuffersPerPipelineLayout();
 }
 
 uint32_t GPUSupportedLimits::maxSampledTexturesPerShaderStage() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxSampledTexturesPerShaderStage;
+#endif
     return m_backing->maxSampledTexturesPerShaderStage();
 }
 
 uint32_t GPUSupportedLimits::maxSamplersPerShaderStage() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxSamplersPerShaderStage;
+#endif
     return m_backing->maxSamplersPerShaderStage();
 }
 
 uint32_t GPUSupportedLimits::maxStorageBuffersPerShaderStage() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxStorageBuffersPerShaderStage;
+#endif
     return m_backing->maxStorageBuffersPerShaderStage();
 }
 
 uint32_t GPUSupportedLimits::maxStorageTexturesPerShaderStage() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxStorageTexturesPerShaderStage;
+#endif
     return m_backing->maxStorageTexturesPerShaderStage();
 }
 
 uint32_t GPUSupportedLimits::maxUniformBuffersPerShaderStage() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxUniformBuffersPerShaderStage;
+#endif
     return m_backing->maxUniformBuffersPerShaderStage();
 }
 
@@ -142,16 +231,25 @@ uint64_t GPUSupportedLimits::maxStorageBufferBindingSize() const
 
 uint32_t GPUSupportedLimits::minUniformBufferOffsetAlignment() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_minUniformBufferOffsetAlignment;
+#endif
     return m_backing->minUniformBufferOffsetAlignment();
 }
 
 uint32_t GPUSupportedLimits::minStorageBufferOffsetAlignment() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_minStorageBufferOffsetAlignment;
+#endif
     return m_backing->minStorageBufferOffsetAlignment();
 }
 
 uint32_t GPUSupportedLimits::maxVertexBuffers() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxVertexBuffers;
+#endif
     return m_backing->maxVertexBuffers();
 }
 
@@ -165,11 +263,17 @@ uint64_t GPUSupportedLimits::maxBufferSize() const
 
 uint32_t GPUSupportedLimits::maxVertexAttributes() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxVertexAttributes;
+#endif
     return m_backing->maxVertexAttributes();
 }
 
 uint32_t GPUSupportedLimits::maxVertexBufferArrayStride() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxVertexBufferArrayStride;
+#endif
     return m_backing->maxVertexBufferArrayStride();
 }
 
@@ -204,41 +308,65 @@ uint32_t GPUSupportedLimits::maxInterStageShaderComponents() const
 
 uint32_t GPUSupportedLimits::maxColorAttachments() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxColorAttachments;
+#endif
     return m_backing->maxColorAttachments();
 }
 
 uint32_t GPUSupportedLimits::maxColorAttachmentBytesPerSample() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxColorAttachmentBytesPerSample;
+#endif
     return m_backing->maxColorAttachmentBytesPerSample();
 }
 
 uint32_t GPUSupportedLimits::maxComputeWorkgroupStorageSize() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeWorkgroupStorageSize;
+#endif
     return m_backing->maxComputeWorkgroupStorageSize();
 }
 
 uint32_t GPUSupportedLimits::maxComputeInvocationsPerWorkgroup() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeInvocationsPerWorkgroup;
+#endif
     return m_backing->maxComputeInvocationsPerWorkgroup();
 }
 
 uint32_t GPUSupportedLimits::maxComputeWorkgroupSizeX() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeWorkgroupSizeX;
+#endif
     return m_backing->maxComputeWorkgroupSizeX();
 }
 
 uint32_t GPUSupportedLimits::maxComputeWorkgroupSizeY() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeWorkgroupSizeY;
+#endif
     return m_backing->maxComputeWorkgroupSizeY();
 }
 
 uint32_t GPUSupportedLimits::maxComputeWorkgroupSizeZ() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeWorkgroupSizeZ;
+#endif
     return m_backing->maxComputeWorkgroupSizeZ();
 }
 
 uint32_t GPUSupportedLimits::maxComputeWorkgroupsPerDimension() const
 {
+#if PLATFORM(DRIFTSTACK)
+    return kDriftstackGPULimit_maxComputeWorkgroupsPerDimension;
+#endif
     return m_backing->maxComputeWorkgroupsPerDimension();
 }
 
