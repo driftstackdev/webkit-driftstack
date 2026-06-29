@@ -1995,46 +1995,42 @@ static JSArray* availableNumberingSystems(JSGlobalObject* globalObject)
     }
 
 #if PLATFORM(DRIFTSTACK)
-    // wave-c-2: iPhone Safari (iOS 26.4) lists the 'tols' numbering system
-    // (Toto/Tolung digits) which Mac WebKit's bundled ICU doesn't include.
-    // V-074 cumulative-rig set diff: only 'tols' is on iPhone-only side.
-    // Append on Driftstack so supportedValuesOf("numberingSystem") matches
-    // iPhone exactly (verified W2557: fork Family-B = 78 entries incl 'tols',
-    // single — no duplicate — matching the real iPhone-17 /aio capture's 78;
-    // Family-A correctly = 77 w/o 'tols').
+    // 'tols' (Tolong-Siki / Toto digits) numbering system: iPhone Safari lists it
+    // on iOS 26.4+ (Family B = 78 entries incl 'tols'), and does NOT list it on
+    // iOS Safari 18.x / 26.0-26.3 (Family A = 77 w/o 'tols'). Boundary per
+    // operations/boundary-registry.json (B = ">=26.4", A = "<=26.3").
+    // Real-device ground truth (reference/realdevice-bs/, 2026-06-29):
+    //   Family B 78-list  = aio-iPhone_17-1782256826126 (Safari 26.4)  incl 'tols'
+    //   Family A 77-list  = aio-iPhone_16_Pro-1781706872739 (Safari 18.6) w/o 'tols'
+    //   The 77-list is byte-identical to the 78-list minus exactly {'tols'}
+    //   (verified across 5 Family-A captures: 16 Pro / 16 Pro Max / 14 Pro / 15).
     //
-    // ⚠️ W2557 CORRECTION of a stale claim: the old comment said calling
-    // Intl.NumberFormat(..., {numberingSystem:'tols'}) "will throw RangeError".
-    // That is empirically FALSE on the current libicucore.A.dylib 78.1.0:
-    // 'tols' is a well-formed Unicode locale type, so IntlNumberFormat does NOT
-    // throw — it accepts the option, ICU's numberingSystemsForLocale() (via
-    // unumsys_openAvailableNames) does NOT list 'tols' on macOS, so ResolveLocale
-    // falls back and resolvedOptions().numberingSystem === 'latn' (formats Latin
-    // digits). RESIDUAL (build-ahead, BS-gated, LOW/exotic): whether a REAL iPhone
-    // RESOLVES {nu:'tols'} to 'tols' (Tolong-Siki digits U+1E4F0-9) or ALSO
-    // falls back to 'latn' is UNCAPTURED — /aio never probed the resolution, only
-    // the LIST. Both outcomes are plausible (ICU can register a name in
-    // openAvailableNames yet lack formatting data → latn fallback on iPhone too).
-    // Per verify-first (JA4/VP8 lesson) we do NOT inject a speculative Tolong-Siki
-    // formatter: if the iPhone also latn-falls-back, the fork ALREADY matches and a
-    // formatter would CREATE a divergence. The intl /aio probe now captures the
-    // tols resolution (added W2557) so the next routine BS run resolves this; only
-    // then (if iPhone='tols') do we add the resolved-options + digit override here.
-    // The LIST surface — the value fingerprinters actually enumerate — is matched.
+    // ⚠️ HOST-ICU-INDEPENDENCE (the V-2026-06-28 wro6fr90n +1 bug, fixed here):
+    // the host Mac's bundled ICU varies whether unumsys_openAvailableNames() ITSELF
+    // lists 'tols' — macOS 26.2 (dev box) does NOT (raw set = 77), but macOS 26.4
+    // (the fleet box, libicucore 78.1.0) DOES (raw set = 78, already incl 'tols').
+    // The prior code unconditionally APPENDED 'tols' for Family B, which on a
+    // macOS-26.4 host produced a DUPLICATE 'tols' → 79, and on Family A left the
+    // host's native 'tols' in → 78. Both = +1 over the real iPhone (78 / 77).
+    // Fix: NORMALIZE 'tols' presence to the archetype, regardless of what the host
+    // ICU enumerated — remove any host-listed 'tols' first, then add it back exactly
+    // once iff the archetype is Family B. This makes the served set host-ICU-skew-
+    // proof (closure rule 10: no host-version leak) on 26.2 and 26.4 fleet boxes alike.
     //
-    // Wave 29-499 §91.I (2026-05-20): Family A archetypes (iOS Safari 18.6
-    // BS REF) do NOT list 'tols' — that's iOS 26.4+ only. Gate the append
-    // on Family B (safari26_+) archetypes.
-    static const bool s_appendTols = []() {
-        // 'tols' numbering system was added at Safari 26.4 — real iPhone Safari 18.x AND
-        // 26.0/26.3 do NOT list it (numberingSystem count 77; 26.4 = 78). The prior gate
-        // appended for ALL non-Family-A (safari26_*), wrongly giving 26.0/26.3 'tols'.
+    // NOTE (W2557, unchanged): Intl.NumberFormat(..., {numberingSystem:'tols'}) does
+    // NOT throw — 'tols' is a well-formed Unicode type; resolution falls back to
+    // 'latn' on hosts whose ICU lacks tols formatting data (the iPhone tols→'tols'
+    // resolution is captured in intl.numberingResolve; the list surface is what
+    // fingerprinters enumerate and is what this normalization matches).
+    const bool wantTols = []() {
+        // unset = 26.4 launch default = Family B = lists 'tols'.
         int maj = 0, min = 0;
         if (!driftstackArchetypeSafariVersion(maj, min))
-            return true; // unset = 26.4 launch default = lists 'tols'.
+            return true;
         return maj > 26 || (maj == 26 && min >= 4);
     }();
-    if (s_appendTols)
+    elements.removeAll("tols"_s);
+    if (wantTols)
         elements.append("tols"_s);
 #endif
 
