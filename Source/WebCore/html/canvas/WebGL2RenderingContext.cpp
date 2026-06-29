@@ -3148,10 +3148,84 @@ void WebGL2RenderingContext::renderbufferStorageImpl(GCGLenum target, GCGLsizei 
 
 void WebGL2RenderingContext::renderbufferStorageHelper(GCGLenum target, GCGLsizei samples, GCGLenum internalformat, GCGLsizei width, GCGLsizei height)
 {
+    RefPtr context = m_context;
+#if PLATFORM(DRIFTSTACK)
+    // W2851 rbsm API-intercept (validate-against-raw-host MED fp leak). The fork pins
+    // MAX_SAMPLES=8 + getInternalformatParameter(RGBA8,SAMPLES)=[8,4,2] to match the real A-series
+    // iPhone (driftstackArchetypeMaxSamples() above), but the ACTUAL multisample storage hits the Mac
+    // TBDR ANGLE backend, which only supports 4x RGBA8 → renderbufferStorageMultisample(8, RGBA8)
+    // raises glError 1282 (INVALID_OPERATION) on the Mac while the iPhone ACCEPTS it (real-device GT
+    // reference/realdevice-bs/msaapipe-iPhone_17-*.json: rbsm(8,RGBA8)→getError 0 + RENDERBUFFER_SAMPLES
+    // 8). A detector doing rbsm(8,RGBA8)+getError catches the fork (1282 vs 0). Intercept ONLY the
+    // API surface: when the page requests samples that the pinned MAX_SAMPLES claims to support but the
+    // Mac driver rejects, CLAMP the underlying GL call to the Mac's highest supported count (so it
+    // SUCCEEDS), SUPPRESS the synthesized GL error, and RECORD the REQUESTED samples on the renderbuffer
+    // so getRenderbufferParameter(RENDERBUFFER_SAMPLES) echoes the requested value. The resolved render
+    // genuinely stays the Mac's max (the named fleet-chip-GPU defer — Mac TBDR lacks A-series 8x RGBA8
+    // MSAA); this is the API-surface intercept only, never a faked render.
+    // CRITICAL boundaries:
+    //   (a) over-cap (requested > pinned MAX_SAMPLES, e.g. 12) must STILL error 1282 — the iPhone
+    //       rejects over-cap too (validatehost-iPhone_17 gl_rbsm_overSample_err=1282). NOT suppressed.
+    //   (b) only intercept when the unmodified call would FAIL — the already-working 4x case is
+    //       untouched (its GL error set is empty → the suppress branch never runs).
+    if (samples && m_renderbufferBinding) {
+        const GCGLsizei pinnedMaxSamples = driftstackArchetypeMaxSamples();
+        // Isolate the rbsm call's errors: drain any pre-existing ANGLE error first and stash it in
+        // m_errors (getErrors() both returns AND clears the underlying GL error queue), so the set we
+        // pull after the rbsm call reflects ONLY the rbsm call.
+        if (GCGLErrorCodeSet preExisting = context->getErrors())
+            m_errors.add(preExisting);
+        context->renderbufferStorageMultisample(target, samples, internalformat, width, height);
+        GCGLErrorCodeSet rbsmErrors = context->getErrors();
+        const bool rejectedByDriver = rbsmErrors.containsAny({ GCGLErrorCode::InvalidOperation, GCGLErrorCode::InvalidValue });
+        // Only rescue requests WITHIN the pinned cap (over-cap must keep failing — boundary (a)).
+        // INVALID_ENUM (bad format/target) is NOT rescued — that's a real WebGL spec error to surface.
+        if (rejectedByDriver && samples <= pinnedMaxSamples) {
+            // Determine the Mac's highest supported sample count <= requested by retrying with a
+            // plain decrement until the underlying GL call SUCCEEDS — this finds the EXACT Mac max
+            // (a halving could skip the true max, e.g. 7→3 missing 6/5/4). Bounded: requested <=
+            // pinnedMaxSamples (<=8), so at most ~7 retries. Each retry's error set is drained +
+            // discarded so it can't reach getError().
+            bool clampSucceeded = false;
+            for (GCGLsizei trySamples = samples - 1; trySamples >= 1; --trySamples) {
+                context->renderbufferStorageMultisample(target, trySamples, internalformat, width, height);
+                if (!context->getErrors()) {
+                    clampSucceeded = true;
+                    break;
+                }
+            }
+            if (clampSucceeded) {
+                // Suppress: the rbsm error stays OUT of m_errors → getError() returns NO_ERROR.
+                // Record the REQUESTED count so getRenderbufferParameter(RENDERBUFFER_SAMPLES) echoes it.
+                m_renderbufferBinding->setRequestedSamples(samples);
+                return;
+            }
+            // Clamp failed entirely (no MSAA at all for this format): re-establish single-sample
+            // storage so the renderbuffer is in a defined state, then surface the original error.
+            context->renderbufferStorage(target, internalformat, width, height);
+            context->getErrors();
+        }
+        // Not intercepted (success, over-cap, INVALID_ENUM, or clamp-failed): preserve original
+        // behavior — push the rbsm errors back into m_errors and clear any stale intercept marker.
+        if (rbsmErrors)
+            m_errors.add(rbsmErrors);
+        m_renderbufferBinding->clearRequestedSamples();
+        return;
+    }
+    if (samples && !m_renderbufferBinding) {
+        context->renderbufferStorageMultisample(target, samples, internalformat, width, height);
+        return;
+    }
+    context->renderbufferStorage(target, internalformat, width, height);
+    if (m_renderbufferBinding)
+        m_renderbufferBinding->clearRequestedSamples();
+    return;
+#else
     if (samples)
-        graphicsContextGL()->renderbufferStorageMultisample(target, samples, internalformat, width, height);
+        context->renderbufferStorageMultisample(target, samples, internalformat, width, height);
     else
-        graphicsContextGL()->renderbufferStorage(target, internalformat, width, height);
+        context->renderbufferStorage(target, internalformat, width, height);
+#endif
 }
 
 GCGLuint WebGL2RenderingContext::maxTransformFeedbackSeparateAttribs() const

@@ -2451,6 +2451,16 @@ WebGLAny WebGLRenderingContextBase::getRenderbufferParameter(GCGLenum target, GC
             synthesizeGLError(GraphicsContextGL::INVALID_ENUM, "getRenderbufferParameter"_s, "invalid parameter name"_s);
             return nullptr;
         }
+#if PLATFORM(DRIFTSTACK)
+        // W2851 rbsm API-intercept: when renderbufferStorageHelper clamped the underlying GL rbsm
+        // (the Mac TBDR rejected the page's requested sample count for this format, e.g. 8x RGBA8),
+        // echo the REQUESTED count the page asked for — NOT the Mac-clamped GL value — so the surface
+        // matches the real iPhone (rbsm(8,RGBA8) → RENDERBUFFER_SAMPLES 8). hasInterceptedSamples()
+        // is true ONLY on a clamped call; every unperturbed renderbuffer falls through to the live GL
+        // value below (clearRequestedSamples on any non-intercepted storage call).
+        if (m_renderbufferBinding->hasInterceptedSamples())
+            return m_renderbufferBinding->requestedSamples();
+#endif
         [[fallthrough]];
     case GraphicsContextGL::RENDERBUFFER_WIDTH:
     case GraphicsContextGL::RENDERBUFFER_HEIGHT:

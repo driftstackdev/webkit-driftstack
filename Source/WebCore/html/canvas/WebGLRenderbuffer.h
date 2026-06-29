@@ -56,6 +56,19 @@ public:
     void setIsValid(bool isValid) { m_isValid = isValid; }
     bool isValid() const { return m_isValid; }
 
+#if PLATFORM(DRIFTSTACK)
+    // W2851 rbsm-API-intercept (MED fp leak): the API-surface sample count the page REQUESTED in
+    // renderbufferStorageMultisample, which getRenderbufferParameter(RENDERBUFFER_SAMPLES) MUST echo.
+    // It diverges from the GL-clamped count ONLY when the Mac TBDR driver rejected the requested
+    // sample count for this internalformat (e.g. 8x RGBA8 — A-series accepts, Mac doesn't) and we
+    // clamped the underlying GL call down to keep the page from seeing glError 1282. Default -1 = not
+    // intercepted → getRenderbufferParameter falls back to the live GL value (the unperturbed path).
+    void setRequestedSamples(GCGLsizei samples) { m_requestedSamples = samples; }
+    GCGLsizei requestedSamples() const { return m_requestedSamples; }
+    void clearRequestedSamples() { m_requestedSamples = -1; }
+    bool hasInterceptedSamples() const { return m_requestedSamples >= 0; }
+#endif
+
     void didBind() { m_hasEverBeenBound = true; }
     bool hasEverBeenBound() const { return m_hasEverBeenBound; }
 
@@ -73,6 +86,9 @@ private:
     GCGLsizei m_height { 0 };
     bool m_isValid { true }; // This is only false if internalFormat is DEPTH_STENCIL and packed_depth_stencil is not supported.
     bool m_hasEverBeenBound { false };
+#if PLATFORM(DRIFTSTACK)
+    GCGLsizei m_requestedSamples { -1 }; // W2851: -1 = not intercepted (see setRequestedSamples).
+#endif
 };
 
 } // namespace WebCore
