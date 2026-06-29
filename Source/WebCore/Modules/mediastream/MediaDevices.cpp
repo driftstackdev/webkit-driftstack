@@ -64,6 +64,10 @@
 #include <wtf/CryptographicallyRandomNumber.h>
 #include <wtf/TZoneMallocInlines.h>
 
+#if PLATFORM(DRIFTSTACK)
+#include "MockRealtimeMediaSourceCenter.h" // driftstackGetUserMediaGranted() — the gUM granted-state signal (commit 54ceee130b)
+#endif
+
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(MediaDevices);
@@ -445,7 +449,20 @@ void MediaDevices::enumerateDevices(EnumerateDevicesPromise&& promise)
     // (both all-empty strings, verified W2344), so no regression. getUserMedia is a separate path
     // (UserMediaRequest, line ~204), unaffected. Order audioinput-then-videoinput = the dev-Mac-verified
     // order (exact real-device order is a BS-gated refinement per task #62; kind+count is the tell).
-    {
+    //
+    // GRANTED-state (DRIFTSTACK_GETUSERMEDIA_GRANTED=1, commit 54ceee130b): this #62 pre-grant
+    // placeholder is the PRE-permission shape. Once camera/mic are granted, a real iPhone exposes
+    // the full 9-device list (5 cameras + mic + 3 speakers, salted labels/deviceId/groupId). The
+    // granted-state signal is the env gate itself, read via the SAME predicate the mock center uses
+    // to expose its 9 devices — MockRealtimeMediaSourceCenter::driftstackGetUserMediaGranted() — so
+    // enumerateDevices and getUserMedia agree exactly (gate ON ⇒ both go through the mock center;
+    // diverging here would be a tell). When the gate is ON we DON'T short-circuit: we fall through
+    // to the controller path below, which (with the mock center enabled in the capture host) routes
+    // through exposeDevices() and yields the mock's 9 devices with native per-origin SHA-1-salted
+    // 40-hex deviceId/groupId (audio coalesced to one group, cameras distinct). Pre-grant (gate OFF)
+    // keeps the #62 {1 audioinput, 1 videoinput, empty labels} placeholder UNCHANGED — the common
+    // case stays #62-correct and host-independent.
+    if (!MockRealtimeMediaSourceCenter::driftstackGetUserMediaGranted()) {
         auto makeInput = [](CaptureDevice::DeviceType type) {
             CaptureDeviceWithCapabilities cdwc { CaptureDevice(""_s, type, ""_s), { } };
             return InputDeviceInfo::create(WTF::move(cdwc), ""_s, ""_s);
