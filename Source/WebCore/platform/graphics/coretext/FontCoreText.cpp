@@ -376,35 +376,48 @@ void Font::platformInit()
     // so pixels are untouched too. A3: re-render the faithful 1600px probe → assert all 43 fantasy cells ==
     // …5404 (NOT 5405) AND 16px fantasy still 28 (c587ed44 held).
     //
-    // GENERALIZED (W2980d + W2980f cluster C): this is the W2587 LEADING fp-noise snap applied to the
-    // ASCENT and DESCENT too, at large size only. The same CoreText fp-noise-just-above-integer that W2587
-    // snaps out of the leading also appears in the ascent/descent of MANY faces, and at 1600px it ceils +1/+2
-    // where iOS's exact integer ceils flat. CoreText-probed (captures/v3 zapfino.m/kohinoor.m/bleed.m) and
-    // each is a genuine W2587-class fp-noise (|Δ| < 0.01 ONLY at 1600px), NOT a Kefa-III genuine divergence:
+    // CURATED ALLOWLIST (W2980d cluster A + W2980f cluster C): the W2587 LEADING fp-noise snap, applied to the
+    // ASCENT and DESCENT of a VERIFIED set of faces at large size only. The same CoreText fp-noise-just-above-
+    // integer that W2587 snaps out of the leading also appears in the ascent/descent of these faces, and at
+    // 1600px it ceils +1/+2 where iOS's exact integer ceils flat. CoreText-probed (captures/v3 zapfino.m/
+    // kohinoor.m/bleed.m/a830.m), each is a genuine W2587-class fp-noise (|Δ| < 0.01 ONLY at 1600px), NOT a
+    // Kefa-III genuine divergence:
     //   - Zapfino       (fantasy)       desc 2404.0039 → 2404  → fantasy 5405→5404  (cluster A, 43 cells)
     //   - Kohinoor Dev. (U+097F)        asc 1680.0034 / desc 560.0011 → 2402→2400   (cluster C +2, 6 cells)
     //   - Hiragino Sans (U+2581/3095)   asc 1408.0029 / desc 192.0004 → 2402→2400   (cluster C +2 bleed, 8 cells)
-    // Snapping moves the fork strictly TOWARD iOS: iOS CoreText metrics are exact integers (no Mac fp-noise),
-    // so the snap can only correct a Mac-ceil-inflation, never push away from a correct value. Applied to ALL
-    // faces (not a per-name list) because the fp-noise is a host-CoreText artifact, not face-specific — but it
-    // is a NO-OP for any face whose asc/desc are ≥0.01 from an integer (the overwhelming majority), so the 178
-    // identical cells are untouched.
+    //   - Mukta Mahee   (U+A830)        asc 1808.0078              → 2661→2660       (cluster C +1, 5 cells)
+    //
+    // ⛔ NOT GENERALIZED to all faces (the V-493 lesson + a regression caught this session): APPLE COLOR EMOJI
+    // also has the fp-noise (asc 1600.0001 / desc 500.00003 @1600) BUT iOS produces the SAME ceiled-up value
+    // (the emoji-presentation cells U+2B06/U+20E3 sans/serif/mono are CORRECT at 2102 in the fork == ref) —
+    // i.e. iOS's Apple-Color-Emoji line-box is NOT exact-integer there, so snapping it would REGRESS 6+
+    // currently-identical cells 2102→2100. The "iOS metrics are exact integers" premise holds per-face, not
+    // universally → snap ONLY the faces verified to close the grid TOWARD iOS, never a blanket asc/desc snap.
     //
     // 16px-SAFE BY DOUBLE GUARD: (1) pointSize >= 100 → fires ONLY at the 1600px probe band, NEVER at the
     // 16/13px glyphHash sizes or 128px detection size; (2) the snap is a no-op unless |Δ| < 0.01, and every
-    // probed face's fp-noise residue is >0.01 at 16px AND 128px (Zapfino 0.040/0.320, Kohinoor 0.20/0.40,
-    // Hiragino 0.080/0.360) — so 16/128 are untouched even without the size gate. The glyphHash c587ed44
-    // surface is the 16/13px Element.cpp serve (size-gated). Canvas/measureText are atlas-served. A3:
-    // re-render the faithful 1600px probe → assert fantasy …5404 + U+097F all-gen 2400 + U+2581/3095
-    // sans/serif/mono/cursive 2400; 16px fantasy still 28 + glyphHash c587ed44 held.
-    if (pointSize >= 100.f) {
-        constexpr float kMetricFpEpsilon = 0.01f;
-        float dsRoundedAscent = std::round(ascent);
-        if (std::abs(ascent - dsRoundedAscent) < kMetricFpEpsilon)
-            ascent = dsRoundedAscent;
-        float dsRoundedDescent = std::round(descent);
-        if (std::abs(descent - dsRoundedDescent) < kMetricFpEpsilon)
-            descent = dsRoundedDescent;
+    // allowlisted face's fp-noise residue is >0.01 at 16px AND 128px (Zapfino 0.040/0.320, Kohinoor 0.20/0.40,
+    // Hiragino 0.080/0.360, Mukta 0.080/0.359) — so 16/128 are untouched even without the size gate. The
+    // glyphHash c587ed44 surface is the 16/13px Element.cpp serve (size-gated). Canvas/measureText are
+    // atlas-served. A3: re-render the faithful 1600px probe → assert fantasy …5404 + U+097F all-gen 2400 +
+    // U+2581/3095 sans/serif/mono/cursive 2400 + U+A830 all-gen 2660; 16px fantasy still 28 + c587ed44 held +
+    // the emoji cells U+2B06/U+20E3 sans/serif/mono UNCHANGED at 2102.
+    if (pointSize >= 100.f && familyName) {
+        String dsSnapFn = String(familyName.get());
+        if (equalLettersIgnoringASCIICase(dsSnapFn, "zapfino"_s)
+            || equalLettersIgnoringASCIICase(dsSnapFn, "papyrus"_s)
+            || equalLettersIgnoringASCIICase(dsSnapFn, "kohinoor devanagari"_s)
+            || equalLettersIgnoringASCIICase(dsSnapFn, "itf devanagari"_s)
+            || equalLettersIgnoringASCIICase(dsSnapFn, "hiragino sans"_s)
+            || equalLettersIgnoringASCIICase(dsSnapFn, "mukta mahee"_s)) {
+            constexpr float kMetricFpEpsilon = 0.01f;
+            float dsRoundedAscent = std::round(ascent);
+            if (std::abs(ascent - dsRoundedAscent) < kMetricFpEpsilon)
+                ascent = dsRoundedAscent;
+            float dsRoundedDescent = std::round(descent);
+            if (std::abs(descent - dsRoundedDescent) < kMetricFpEpsilon)
+                descent = dsRoundedDescent;
+        }
     }
 #endif
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
