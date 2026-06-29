@@ -1622,7 +1622,20 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // COMMON General Punctuation (dashes/curly-quotes/ellipsis/bullet) already matches and is NOT in range/table.
     // The range gates the function; the exact (cp,bucket) table below gates which actually serve (others fall to
     // natural). None of these cps are in the glyphHash 43-cp set, so c587ed44 is untouched.
+    // W2646 (#98 tail) U+20B9 ₹ INDIAN RUPEE — the system-ui WIDTH residual. Real iPhone 17 / iOS 26.5 (BS
+    // geomserve-table, 3 captures byte-agree): system-ui = 10,21 (fork-natural 9,21); the OTHER 6 generics
+    // (default/sans/serif/mono = 9,21 · cursive = 9,22 · fantasy = 9,26) already match natural. ⚠️ U+20B9 IS the
+    // first cp of the 43-cp glyphHash probe set (browserleaks-glyphs-codepoints.json) — but that probe measures
+    // only the 6 NON-system-ui generics, so a system-ui-ONLY serve is glyphHash-SAFE (c587ed44 untouched). The
+    // bucket gate just below restricts the serve to bucket 6; every other bucket returns false → natural (the
+    // glyphHash cells render exactly as before). Mechanism: the system-ui primary (.AppleSystemUIFont) carries ₹
+    // at advance 9.77 → ceil 10 (the iOS target), where the W2583 U+20B9→Helvetica route (adv 8.31 → 9, correct for
+    // the other 6 generics) is the one diverging cell. A render-fix alternative (return nullptr in the 0x20B9
+    // FontCacheCoreText route for the system-ui base so it falls to the natural .AppleSystemUIFont primary → 10) is
+    // preferred but needs an in-fork render to confirm the natural primary really yields 10; A3 to test that path —
+    // if it closes, this serve row is deletable. The serve is the verifiable minimal-principled closure meanwhile.
     bool isSymbolServeCp = (cp == 0x20B6 || cp == 0x20B7 || cp == 0x20BB || cp == 0x20BF || cp == 0x25CA
+        || cp == 0x20B9
         || cp == 0x1CF5 || (cp >= 0x2002 && cp <= 0x205D) || (cp >= 0x2E1A && cp <= 0x2E31) || (cp >= 0x3003 && cp <= 0x303F) || (cp >= 0xFE50 && cp <= 0xFE6B));
     if (!isGlyphHashCp && !isSymbolServeCp) {
         // W2619: codepoint not in the hardcoded (verified, glyphHash-locked) table — consult the
@@ -1653,6 +1666,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     RefPtr<Element> fontElement = element.firstElementChild();
     int bucket = driftstackGlyphHashGenericBucket(fontElement ? *fontElement : element);
 
+    // W2646 (#98 tail): U+20B9 serves the system-ui (bucket 6) width-10 cell ONLY. Every other bucket is a glyphHash
+    // GCPS cell that already renders correctly (9) — return false so it falls to natural layout and c587ed44 is
+    // untouched. (The table below carries the single {0x20B9, 6, 10, 21} row.)
+    if (cp == 0x20B9 && bucket != 6)
+        return false;
+
     // Size-gate (W2589b): the table holds the iOS values ONLY at the browserleaks glyphHash
     // sizes — 16px for the non-mono generics, 13px for the monospace medium-size quirk. Serving
     // them at any OTHER font-size would be a gross lie (a 72px U+20E3 is ~94px wide, not 21) and
@@ -1676,7 +1695,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
         return false;
 
     struct Entry { char16_t cp; int generic; float w; float h; };
-    static constexpr std::array<Entry, 70> table { {
+    static constexpr std::array<Entry, 75> table { {
  { 0x1CDA, 0, 7, 24 }, { 0x1CDA, 1, 7, 25 }, { 0x1CDA, 2, 7, 24 },
  { 0x1CDA, 3, 5, 23 }, { 0x1CDA, 4, 7, 24 }, { 0x1CDA, 5, 7, 26 },
  { 0x20E3, 0, 21, 27 }, { 0x20E3, 1, 21, 27 }, { 0x20E3, 2, 21, 27 },
@@ -1749,6 +1768,27 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // Some CJK tone marks (U+302A-302D/3037-303A) are .notdef tofu value-set. iOS-sim values:
 
  { 0x301A, 6, 10, 23 }, { 0x301B, 6, 10, 23 },
+ // W2646 (#98 tail) U+20B9 ₹ rupee — system-ui ONLY (bucket 6); width 10 (.AppleSystemUIFont primary, ceil 9.77),
+ // height 21. Gated to bucket 6 by the early `cp == 0x20B9 && bucket != 6 -> return false` above, so the 6 glyphHash
+ // generics never reach here → c587ed44 safe.
+ { 0x20B9, 6, 10, 21 },
+ // W2645 (#98 tail) U+301C 〜 WAVE DASH — the serif/default/cursive HEIGHT residual. Real iPhone 17 / iOS 26.5
+ // (BS geomserve-table, 3 captures byte-agree, reference/realdevice-bs/geomserve-table-iPhone_17-{1781777231025,
+ // 1781807498451,1782720873158}.json): default 16,23 · serif 16,23 · cursive 16,23 (fork-natural 16,25) ·
+ // sans/mono 16,23 (already match natural) · system-ui 16,21 · fantasy 16,27 (match natural). NOT FONT-SELECTABLE:
+ // iosdirscan over the iOS-26.5 fonts dir proves EVERY width-16 wave-dash face is a Hiragino variant whose line box
+ // composes to 25/26 (the only lineH-23 face is width 15); the iPhone's 16,23 is an iOS-vs-Mac SAME-FACE line-box
+ // divergence (the iOS Hiragino face composes 23 where the Mac-resident same-named face composes 25). The line-box
+ // mechanism (W2575/W2587) is FACE-level, not per-cp, so it cannot lower 301C's box to 23 without also lowering the
+ // W2635 CJK punctuation U+3003/3005/3006/3007/3012/3013 (which CORRECTLY want 25 from the SAME Hiragino Mincho ProN
+ // face — verified: identical face asc/desc/lead for 301C and 3003). Genuinely deeper than an epsilon-snap → the
+ // minimal-principled DOM serve is the documented #98-tail fallback. Serve ONLY the 3 diverging buckets (default/
+ // serif/cursive) at the gt height 23; sans(1)/mono(3) already render 23 naturally (left unserved). glyphHash-SAFE:
+ // U+301C is NOT in the 43-cp glyphHash probe set (browserleaks-glyphs-codepoints.json) nor an isGlyphHashCp.
+ { 0x301C, 0, 16, 23 }, { 0x301C, 2, 16, 23 }, { 0x301C, 4, 16, 23 },
+ // The fantasy generic already renders 16,27 naturally (Papyrus); system-ui 16,21. Serve system-ui explicitly so the
+ // bucket-6 → bucket-0 fallback below does NOT wrongly serve it the default 16,23 (gt system-ui height is 21).
+ { 0x301C, 6, 16, 21 },
 
 
 
