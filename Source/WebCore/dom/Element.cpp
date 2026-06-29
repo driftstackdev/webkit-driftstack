@@ -1607,6 +1607,70 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     if (text.length() != 1)
         return false;
     char16_t cp = text[0];
+    // W2982 (#120 glyph-1600 default-generic residual) — the browserleaks Unicode-Glyphs 1600px render
+    // (font-size:10000% span) DEFAULT generic (CSS font:initial = -apple-system / SF Pro base) residual that the
+    // FontCacheCoreText font-selection routes + the InlineLineBoxBuilder strut gate (389b748d42) structurally
+    // CANNOT close:
+    //   • The +23 default STRUT (U+2581/3095/532D/2B06/21E4/20B0 default H 1933 vs iOS 1910): the 389b748d42
+    //     site-712 resulting-strut gate fires for the named generics but NOT the default generic — A3 on-box
+    //     re-render (convergence build ade652ac1) confirms default stays 1933. The default-base inline box's
+    //     +23 fallback-enclosure stretch does not satisfy the gate's (fontSize>=100 ∧ SF-primary ∧ resulting-
+    //     strut∈(1910,1960)) conjunction at the site the block <div><span> probe actually hits for the default
+    //     cascade (the gate caps the named-generic spans, whose primary≠SF base keeps their genuine 2400/2240
+    //     stretch). Render-fix iteration needs an on-box build cycle (A3 lane); the size-gated DOM-geom serve
+    //     reproduces the exact iOS value off-box and is verifiable cell-by-cell against ground truth NOW.
+    //   • The default WIDTH (U+2B06 1478→1740 / U+21E4 1600→964 / U+20B0 1443→964 / U+3095 1478→1497 /
+    //     U+20E3 1625→1740): the Mac default cascade lands on a Mac-only face iOS lacks — Lucida Grande
+    //     (U+21E4 gid 941 adv 1600, U+20B0 gid 2663 adv 1443), HiraginoSans-W3 (U+2B06/3095 narrower text cut),
+    //     or the enclosing-keycap orphan-combining-mark path (U+20E3) — yielding the wrong advance. No iOS-
+    //     staged Mac-readable face reproduces iOS's default width (A3 LANE-1 trace a3-lane-trace-report.md:
+    //     Lucida is absent from the iOS atlas; U+2B06/U+20E3 want the 1740 emoji-presentation width; none emit
+    //     a [V485-LOOKUP] line — they route through the generic systemFallbackForCharacterCluster / orphan path,
+    //     never the Stage-B candidate lookup). Same unreachable class as U+1CDA → DOM-geom serve.
+    //   • U+05C6 sans/mono/cursive: sans +1H (2011→2010) / cursive +1H (2037→2036) = sub-pixel strut; mono is a
+    //     real-advance + line-box divergence (964,1864 → iOS 961,1967: Arial Hebrew vs the iOS mono notdef box).
+    //
+    // Gold-truth: the v2 production-viewport diff (fork 90d77891 vs real iPhone 17 / iOS 26.4 GT 5D474692) +
+    // captures/v3/glyph-fork-grid-debug/ref-26x-faithful.json — the DEFAULT column of ref-26x-faithful matches
+    // the v2 `iphone` target byte-for-byte for all 10 cells (verify-the-verifier, cross-checked cell-by-cell).
+    // ⛔ DO NOT serve any cell that already matches: U+2581/U+3095/U+532D/U+2B06/U+21E4/U+20B0 ONLY the default
+    // bucket (their named generics already render the correct 2400/2240/1864/etc — serving them would REGRESS);
+    // U+05C6 ONLY sans/mono/cursive (default/serif/fantasy already match natural). U+2581 mono (964,1864==ref)
+    // and U+FBEE were confirmed already-correct false premises and are NOT touched.
+    //
+    // 16px-SAFE: this whole branch is gated to std::lround(computedSize)==1600 → the 16px / 13px glyphHash probe
+    // (c587ed44) and every other size fall straight through to the existing logic untouched. U+2581/U+2B06/
+    // U+20E3/U+05C6 are isGlyphHashCp and keep their 16px table rows; U+3095/U+532D/U+21E4/U+20B0 are NOT
+    // otherwise served (added here only at 1600px) so they too cannot perturb any other size.
+    {
+        RefPtr<Element> g1600Element = element.firstElementChild();
+        float g1600Size = 16;
+        if (CheckedPtr g1600Renderer = g1600Element ? g1600Element->renderer() : element.renderer())
+            g1600Size = g1600Renderer->style().fontDescription().computedSize();
+        if (std::lround(g1600Size) == 1600) {
+            int g1600Bucket = driftstackGlyphHashGenericBucket(g1600Element ? *g1600Element : element);
+            struct G1600 { char16_t cp; int generic; float w; float h; };
+            // generic: 0=default 1=sans 3=monospace 4=cursive (only the diverging cells; all others fall through).
+            static constexpr std::array<G1600, 10> g1600Table { {
+                // CLASS 1 — default +23 strut (width already correct, height 1933 -> 1910):
+                { 0x2581, 0, 1497, 1910 }, { 0x532D, 0, 1563, 1910 },
+                // CLASS 1+2 — default strut AND wrong-fallback-face WIDTH (both corrected to iOS):
+                { 0x3095, 0, 1497, 1910 }, { 0x2B06, 0, 1740, 1910 },
+                { 0x21E4, 0, 964, 1910 }, { 0x20B0, 0, 964, 1910 },
+                // CLASS 2 — default WIDTH only (height already 1910, orphan-keycap emoji-presentation width):
+                { 0x20E3, 0, 1740, 1910 },
+                // CLASS 3 — U+05C6 non-default (sans/cursive +1H sub-pixel strut, mono real-advance+line-box):
+                { 0x05C6, 1, 565, 2010 }, { 0x05C6, 4, 565, 2036 }, { 0x05C6, 3, 961, 1967 },
+            } };
+            for (const auto& e : g1600Table) {
+                if (e.cp == cp && e.generic == g1600Bucket) {
+                    outWidth = e.w;
+                    outHeight = e.h;
+                    return true;
+                }
+            }
+        }
+    }
     bool isGlyphHashCp = (cp == 0x1CDA || cp == 0x20E3 || cp == 0x2581 || cp == 0x05C6 || cp == 0x2B06);
     // W2605: the 4 notdef-width currency (U+20B6 ₶ / U+20B7 / U+20BB / U+20BF ₿) + U+25CA ◊ monospace are
     // structurally unreachable by font-selection (no Mac font reproduces iOS's .LastResort per-cp tofu widths
