@@ -27,6 +27,7 @@
 #include "ImageUtilities.h"
 
 #include "BitmapImage.h"
+#include "ColorSpaceCG.h"
 #include "FloatRect.h"
 #include "GraphicsContext.h"
 #include "ImageBuffer.h"

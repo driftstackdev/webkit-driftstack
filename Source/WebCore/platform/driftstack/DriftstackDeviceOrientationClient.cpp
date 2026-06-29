@@ -24,13 +24,13 @@
  */
 
 #include "config.h"
-#include "DriftstackDeviceOrientationClient.h"
+#include "platform/driftstack/DriftstackDeviceOrientationClient.h"
 
 #if PLATFORM(DRIFTSTACK) && ENABLE(DEVICE_ORIENTATION)
 
 #include "DeviceOrientationController.h"
 #include "DeviceOrientationData.h"
-#include "DriftstackSensorSession.h"
+#include "platform/driftstack/DriftstackSensorSession.h"
 #include <cmath>
 #include <numbers>
 #include <wtf/TZoneMallocInlines.h>

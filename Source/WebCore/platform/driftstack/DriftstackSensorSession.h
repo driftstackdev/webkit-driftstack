@@ -29,6 +29,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <wtf/Compiler.h>
 
 namespace WebCore {
 
@@ -46,10 +47,12 @@ inline unsigned driftstackSensorSessionSeed()
         if (sessionId && sessionId[0]) {
             // FNV-1a over the session id → a stable per-session 32-bit seed.
             unsigned hash = 2166136261u;
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
             for (const char* p = sessionId; *p; ++p) {
                 hash ^= static_cast<unsigned char>(*p);
                 hash *= 16777619u;
             }
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
             return hash ? hash : 1u;
         }
         // No session id (dev/MiniBrowser): a fixed non-zero fallback keeps the

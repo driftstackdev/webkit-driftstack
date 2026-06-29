@@ -55,7 +55,7 @@
 #include "CookieJar.h"
 #include "CredentialRequestCoordinator.h"
 #if PLATFORM(DRIFTSTACK) && ENABLE(DEVICE_ORIENTATION)
-#include "DriftstackDeviceMotionClient.h"
+#include "platform/driftstack/DriftstackDeviceMotionClient.h"
 #endif
 #include "CryptoClient.h"
 #include "DOMRect.h"

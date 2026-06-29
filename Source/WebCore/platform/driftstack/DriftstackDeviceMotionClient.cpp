@@ -24,15 +24,15 @@
  */
 
 #include "config.h"
-#include "DriftstackDeviceMotionClient.h"
+#include "platform/driftstack/DriftstackDeviceMotionClient.h"
 
 #if PLATFORM(DRIFTSTACK) && ENABLE(DEVICE_ORIENTATION)
 
 #include "DeviceMotionController.h"
 #include "DeviceMotionData.h"
 #include "DeviceOrientationController.h"
-#include "DriftstackDeviceOrientationClient.h"
-#include "DriftstackSensorSession.h"
+#include "platform/driftstack/DriftstackDeviceOrientationClient.h"
+#include "platform/driftstack/DriftstackSensorSession.h"
 #include "Page.h"
 #include "Supplementable.h"
 #include <cmath>
