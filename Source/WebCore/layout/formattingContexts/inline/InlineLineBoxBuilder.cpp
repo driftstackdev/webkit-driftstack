@@ -145,6 +145,33 @@ static bool NODELETE isLineFitEdgeLeading(const InlineLevelBox& inlineBox)
     return inlineBox.lineFitEdge().isLeading();
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W2980e (#120 glyph-1600 cluster B): is the inline box's PRIMARY font the SF system font (the CSS
+// `default`/-apple-system base)? On a real iPhone the -apple-system line-box strut is glyph-INDEPENDENT —
+// it stays the SF-Pro strut (1910 @1600px) even when a TALL fallback glyph (CJK / block element / CJK
+// ideograph) is rendered into the box. The faithful 1600px Unicode-Glyphs grid proves this exactly: for the
+// default generic, EVERY cp whose SF-Pro cascade falls to a taller fallback (U+2581/U+3095/U+532D → a
+// 2240-2400-tall face) STILL reads 1910, while the explicit generics (sans=Helvetica / serif=Times / etc.)
+// DO stretch to the fallback enclosure (2400/2240) and the fork already matches those. So the strut
+// suppression must be scoped to the SF default base ONLY — a blanket suppress would collapse the
+// explicit-generic 2400 cells back to 1910 (REGRESSION). Cps where SF-Pro carries the glyph NATIVELY at a
+// tall line-box (e.g. U+097F default 2400 = SF-Pro's own Devanagari strut, no fallback) are unaffected:
+// there is no fallback font, so the suppressed branch never runs for them. Matches CTFontCopyFamilyName's
+// SF system-font names (the same set FontCoreText.cpp shouldUseSfProConstantOnePixelAdjustment pins).
+static bool NODELETE driftstackPrimaryFontIsSfSystemBase(const InlineLevelBox& inlineBox)
+{
+    auto& primaryFont = inlineBox.layoutBox().style().fontCascade().primaryFont();
+    auto family = primaryFont.platformData().familyName();
+    return family == ".AppleSystemUIFont"_s
+        || family == ".SF NS"_s
+        || family == ".SF NS Display"_s
+        || family == ".SF NS Text"_s
+        || family == "SF Pro"_s
+        || family == "SF Pro Display"_s
+        || family == "SF Pro Text"_s;
+}
+#endif
+
 static InlineLevelBox::AscentAndDescent layoutBoundstWithEdgeAdjustmentForInlineBox(const InlineLevelBox& inlineBox, const FontMetrics& fontMetrics, FontBaseline fontBaseline)
 {
     ASSERT(inlineBox.isInlineBox());
@@ -710,8 +737,45 @@ void LineBoxBuilder::adjustInlineBoxHeightsForLineBoxContainIfApplicable(LineBox
             descent += halfLeading;
             if (auto fallbackFonts = m_fallbackFontsForInlineBoxes.get(&inlineBox); !fallbackFonts.isEmptyIgnoringNullReferences()) {
                 auto enclosingAscentAndDescent = enclosingAscentDescentWithFallbackFonts(inlineBox, fallbackFonts, lineBox.baselineType());
+#if PLATFORM(DRIFTSTACK)
+                // W2980e (#120 glyph-1600 cluster B — the +23 default-strut, the UNGUARDED site the
+                // browserleaks <div><span> block-default probe hits). This is the `lineBoxContain=Font`
+                // (ensureFontMetricsBasedHeight) path; the W2980 guard at the Alphabetic/Ideographic sites
+                // (559/847) never covered it, so the fork stretched the default-generic strut to a MARGINALLY
+                // taller fallback enclosure (U+2581/U+2B06/U+21E4/U+20B0/U+3095/U+532D default 1933) where a
+                // real iPhone keeps the primary SF-Pro strut (1910) — the 6 "+23" cells. On iOS the -apple-
+                // system cascade routes these CJK-symbol/arrow cps to a fallback whose metrics FIT WITHIN the
+                // SF-Pro strut (the .Hiragino Kaku Gothic Interface / CJK-symbols-fallback cut, lineH within
+                // SF-Pro's box on iOS), so no stretch; the Mac host cascade picks Hiragino-Sans-W3 (lineH
+                // 2401) whose enclosure marginally exceeds 1910 → spurious +23.
+                //
+                // SCOPED PRECISELY (the grid is the ground truth — a blanket SF-default suppress would REGRESS
+                // ~14 genuinely-tall default cells the fork already matches, e.g. U+17DD 3179 / U+A830 2660 /
+                // U+0700 2302 that iOS DOES stretch): suppress ONLY when (a) the primary is the SF default
+                // base AND (b) the fallback enclosure is only MARGINALLY above the primary strut
+                // (< kSfDefaultStrutKeepBelow). The 6 +23 cells land at exactly 1933 (Δ23 over 1910); the
+                // next-tallest KEEP cell is U+08E4/U+2425 at 1988 — so a 1960 cutoff cleanly separates them
+                // (the marginal Hiragino-W3-vs-Interface +23 is suppressed; the genuinely-tall scripts keep
+                // their iOS-matching stretch). Width is UNTOUCHED (this only caps height; U+21E4/20B0/2B06/20E3
+                // default WIDTH is a separate default-base-coverage problem handled in FontCacheCoreText).
+                //
+                // 16px-SAFE: at 16px every generic column is a flat per-generic constant (24/24/25/25/26/28 —
+                // the body line-height:1.5 floor dominates, the font strut is hidden), so changing the 1600px
+                // line-box strut is structurally invisible at 16px → glyphHash c587ed44 cannot move.
+                // Large-size gate (matches the cluster-A pointSize>=100 discipline): fires only at the 1600px
+                // probe band, NEVER the 16/13px glyphHash sizes — double-guarding 16px-safety even though the
+                // line-height:1.5 floor already hides the strut there.
+                constexpr float kSfDefaultStrutKeepBelow = 1960.f;
+                bool driftstackSuppressFallbackStretch = inlineBox.fontSize() >= 100.f
+                    && driftstackPrimaryFontIsSfSystemBase(inlineBox)
+                    && (enclosingAscentAndDescent.ascent + enclosingAscentAndDescent.descent) < kSfDefaultStrutKeepBelow
+                    && (enclosingAscentAndDescent.ascent + enclosingAscentAndDescent.descent) > (ascent + descent);
+                if (!driftstackSuppressFallbackStretch)
+#endif
+                {
                 ascent = std::max(ascent, enclosingAscentAndDescent.ascent);
                 descent = std::max(descent, enclosingAscentAndDescent.descent);
+                }
             }
             inlineBoxBoundsMap.set(&inlineBox, TextUtil::EnclosingAscentDescent { ascent, descent });
         };
