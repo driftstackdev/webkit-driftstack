@@ -245,7 +245,7 @@ public:
     WEBCORE_EXPORT HandleUserInputEventResult handleMousePressEvent(const PlatformMouseEvent&, OptionSet<HitTestRequest::Type> additionalHitTestTypes = { });
     WEBCORE_EXPORT OptionSet<HitTestRequest::Type> getHitTypeForMouseMoveEvent(const PlatformMouseEvent&, bool onlyUpdateScrollbars = false);
     WEBCORE_EXPORT HitTestResult getHitTestResultForMouseEvent(const PlatformMouseEvent&);
-    HandleUserInputEventResult handleMouseMoveEvent(const PlatformMouseEvent&, HitTestResult* = nullptr, bool onlyUpdateScrollbars = false, OptionSet<HitTestRequest::Type> additionalHitTestTypes = { });
+    WEBCORE_EXPORT HandleUserInputEventResult handleMouseMoveEvent(const PlatformMouseEvent&, HitTestResult* = nullptr, bool onlyUpdateScrollbars = false, OptionSet<HitTestRequest::Type> additionalHitTestTypes = { });
     WEBCORE_EXPORT HandleUserInputEventResult handleMouseReleaseEvent(const PlatformMouseEvent&, OptionSet<HitTestRequest::Type> additionalHitTestTypes = { });
     WEBCORE_EXPORT bool handleMouseForceEvent(const PlatformMouseEvent&);
 
