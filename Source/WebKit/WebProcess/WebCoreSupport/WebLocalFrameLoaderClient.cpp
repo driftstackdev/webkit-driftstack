@@ -659,8 +659,9 @@ void WebLocalFrameLoaderClient::didSameDocumentNavigationForFrameViaJS(SameDocum
     // gate-guarded (default-OFF -> byte-identical). State `loaded` (the document is already live; there
     // is no load to await). NON-fingerprint: stderr observability channel only.
     if (m_frame->isMainFrame() && driftstackNavPageStateEnabled()) {
-        Ref doc = protect(localFrame->document());
-        driftstackEmitNavState("loaded"_s, doc->url().string(), doc->title(), ASCIILiteral());
+        RefPtr doc = protect(localFrame->document());
+        if (doc)
+            driftstackEmitNavState("loaded"_s, doc->url().string(), doc->title(), ASCIILiteral());
     }
 #endif
 }
