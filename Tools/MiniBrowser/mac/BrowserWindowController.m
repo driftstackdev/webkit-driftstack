@@ -309,9 +309,20 @@
     [win setContentSize:NSMakeSize(w, targetContent)];
     // Pin the web view to EXACTLY the layout viewport, above the bottom bar (origin.y
     // == barH; barH == 0 in content-only mode → the web-view fills the full content).
+    // W3011 (#1 TOP black band): the web container was BOTTOM-anchored at origin.y == barH
+    // (0 in content-only mode). When the live window's contentView is taller than the freshly
+    // -committed layoutViewportHeight for a turn (the [setContentSize:] / display race), a
+    // residual macOS title strut sits ABOVE the web-view and is captured BLACK at the top of
+    // the frame. TOP-ANCHOR the container so any residual slack falls BELOW the web-view (it is
+    // already covered by the bottom-bar / off-frame), never above it. The web-view HEIGHT stays
+    // EXACTLY layoutViewportHeight — only origin.y moves, so clientHeight == innerHeight (the
+    // file-99 layout-viewport signal) is UNCHANGED (fingerprint-safe). Chrome-SHOWN keeps the
+    // bottom-anchored barH origin (the bar is real visible chrome below the page).
     if (containerView) {
         containerView.autoresizingMask = NSViewNotSizable;
-        containerView.frame = NSMakeRect(0, barH, w, layoutViewportHeight);
+        CGFloat contentNow = win.contentView.frame.size.height;
+        CGFloat originY = chromeHidden ? MAX(0.0, contentNow - layoutViewportHeight) : barH;
+        containerView.frame = NSMakeRect(0, originY, w, layoutViewportHeight);
         if (self.mainContentView)
             self.mainContentView.frame = containerView.bounds;
     }
@@ -435,8 +446,24 @@
     // Shrink the web content to sit ABOVE the bar (the nib's containerView is the webView's parent).
     // W2972: reservedBarH == 0 in content-only mode → the web container fills the FULL window content
     // (no freed-bar black band), == barH when the bar is drawn.
+    // W3011 (#1 TOP black band): in content-only mode do NOT stretch the container to the full
+    // contentView height (cb.size.height) — that bottom-anchors it at y=0 and, when the live
+    // contentView is momentarily taller than the layout viewport (the windowDidLoad size race), a
+    // residual macOS title strut sits ABOVE the web-view and is captured BLACK. Pin a FIXED-height
+    // (layoutViewportHeight) container, TOP-ANCHORED, so any residual slack falls BELOW it (covered /
+    // off-frame), never above. The web-view height stays EXACTLY layoutViewportHeight, so
+    // clientHeight == innerHeight (file-99) is UNCHANGED. layoutViewportHeight is read the same way
+    // windowDidLoad reads it (DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT); <= 0 → fall back to the prior
+    // full-content stretch (no behavior change). Chrome-SHOWN keeps the barH bottom inset (real bar).
     if (containerView) {
-        containerView.frame = NSMakeRect(0, reservedBarH, W, cb.size.height - reservedBarH);
+        const char* lvhEnvBar = getenv("DRIFTSTACK_LAYOUT_VIEWPORT_HEIGHT");
+        int layoutViewportHeightBar = lvhEnvBar ? atoi(lvhEnvBar) : 0;
+        if (driftChromeHidden && layoutViewportHeightBar > 0) {
+            CGFloat lvh = (CGFloat)layoutViewportHeightBar;
+            containerView.frame = NSMakeRect(0, MAX(0.0, cb.size.height - lvh), W, lvh);
+        } else {
+            containerView.frame = NSMakeRect(0, reservedBarH, W, cb.size.height - reservedBarH);
+        }
         containerView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     }
     if (self.mainContentView && containerView) {
