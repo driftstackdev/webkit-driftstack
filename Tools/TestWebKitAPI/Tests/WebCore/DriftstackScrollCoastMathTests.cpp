@@ -125,16 +125,17 @@ TEST(DriftstackScrollCoastMath, CoastStopsAtRestThreshold)
     EXPECT_NEAR(ticks * tickMs, analyticRestMs, tickMs); // within one tick of the analytic crossing
 }
 
-// (c) A lift-off speed below kMinLiftoffSpeed (80 px/s) does NOT start a coast -- e.g. 50 < 80 is
-//     rejected, while a flick at/above 80 starts one. iOS does not fling a slow release.
+// (c) A lift-off speed below kMinLiftoffSpeed (205 px/s -- raised 80->205 in 903a839879 from A1's
+//     BS real-device fling-begin capture) does NOT start a coast -- e.g. 150 < 205 is rejected,
+//     while a flick at/above 205 starts one. iOS does not fling a slow release.
 TEST(DriftstackScrollCoastMath, SubThresholdLiftoffDoesNotCoast)
 {
-    EXPECT_DOUBLE_EQ(kMinLiftoffSpeed, 80.0);
+    EXPECT_DOUBLE_EQ(kMinLiftoffSpeed, 205.0);
 
-    EXPECT_FALSE(shouldStartCoast(50.0));  // the task's 50 < 80 case
-    EXPECT_FALSE(shouldStartCoast(79.999));
-    EXPECT_TRUE(shouldStartCoast(80.0));   // boundary: >= starts a coast
-    EXPECT_TRUE(shouldStartCoast(80.001));
+    EXPECT_FALSE(shouldStartCoast(150.0));  // below the 205 threshold
+    EXPECT_FALSE(shouldStartCoast(204.999));
+    EXPECT_TRUE(shouldStartCoast(205.0));   // boundary: >= starts a coast
+    EXPECT_TRUE(shouldStartCoast(205.001));
     EXPECT_TRUE(shouldStartCoast(2000.0));
 
     // A speed below the lift-off threshold is also below the rest threshold's larger gate, so even
