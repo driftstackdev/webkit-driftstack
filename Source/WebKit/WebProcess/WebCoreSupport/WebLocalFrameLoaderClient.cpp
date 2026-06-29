@@ -651,6 +651,18 @@ void WebLocalFrameLoaderClient::didSameDocumentNavigationForFrameViaJS(SameDocum
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidSameDocumentNavigationForFrameViaJS(navigationType, protect(localFrame->document())->url(), navigationActionData, UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get())));
 
+#if PLATFORM(DRIFTSTACK)
+    // W3011 (#2 stale URL/title): a same-document navigation (history.pushState/replaceState/popstate
+    // — SPA route changes the harness never mediated) changes the URL (and often the title) WITHOUT a
+    // provisional/commit/finish cycle, so the page_state URL bar went STALE on SPA navigation. Emit the
+    // current document URL/title so the GUI's live bar tracks SPA route changes. MAIN FRAME ONLY +
+    // gate-guarded (default-OFF -> byte-identical). State `loaded` (the document is already live; there
+    // is no load to await). NON-fingerprint: stderr observability channel only.
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled()) {
+        Ref doc = protect(localFrame->document());
+        driftstackEmitNavState("loaded"_s, doc->url().string(), doc->title(), ASCIILiteral());
+    }
+#endif
 }
 
 void WebLocalFrameLoaderClient::dispatchDidPushStateWithinPage()
@@ -756,6 +768,17 @@ void WebLocalFrameLoaderClient::dispatchDidReceiveTitle(const StringWithDirectio
 
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidReceiveTitleForFrame(m_frame->frameID(), truncatedTitle.string, UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get())));
+
+#if PLATFORM(DRIFTSTACK)
+    // W3011 (#2 stale title): the page's <title> can change AFTER the load finishes (a deferred
+    // document.title = ... assignment, or a title arriving on a same-document route) without a fresh
+    // provisional/commit/finish cycle, leaving the GUI's live bar showing a stale title. Emit the new
+    // title (with the frame's current URL) so the page_state title tracks it. MAIN FRAME ONLY + gate-
+    // guarded (default-OFF -> byte-identical). State `loaded` (the document is already live). NON-
+    // fingerprint: stderr observability channel only.
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled())
+        driftstackEmitNavState("loaded"_s, m_frame->url().string(), truncatedTitle.string, ASCIILiteral());
+#endif
 }
 
 void WebLocalFrameLoaderClient::dispatchDidCommitLoad(std::optional<HasInsecureContent> hasInsecureContent, std::optional<UsedLegacyTLS> usedLegacyTLSFromPageCache, std::optional<WasPrivateRelayed> wasPrivateRelayedFromPageCache)
