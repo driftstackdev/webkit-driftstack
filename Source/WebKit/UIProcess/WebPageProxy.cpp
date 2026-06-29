@@ -5111,6 +5111,18 @@ void WebPageProxy::resetPointerCapture()
     send(Messages::WebPage::ResetPointerCapture());
 }
 
+#if PLATFORM(DRIFTSTACK)
+// W3020 ("slide like a new iPhone" — Step-B kinetic coast, receive-timing velocity): forward the harness-
+// computed lift-off velocity to the WebProcess. Sent (via the setScrollMomentum WD ext → WebAutomationSession)
+// immediately before the touchEnd; the next TouchEnd in WebPage consumes it instead of its burst-corrupted EWMA.
+void WebPageProxy::driftstackSetPendingScrollMomentum(float vx, float vy)
+{
+    if (!hasRunningProcess())
+        return;
+    send(Messages::WebPage::SetDriftstackPendingScrollMomentum(vx, vy));
+}
+#endif
+
 void WebPageProxy::scrollBy(ScrollDirection direction, ScrollGranularity granularity)
 {
     if (!hasRunningProcess())

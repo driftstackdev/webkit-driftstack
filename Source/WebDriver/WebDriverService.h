@@ -139,6 +139,7 @@ private:
     void driftstackGetAllCookiesAllDomains(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack #48: whole-jar (all domains)
     void driftstackSetCookiesAllDomains(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack #40: batch multi-domain cookie-import
     void driftstackProfileDumpNow(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack W2985: flush+write a complete .driftstack-dump.json + ACK (teardown handshake)
+    void driftstackSetScrollMomentum(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&); // Driftstack W3020: harness receive-timing lift-off velocity → next touchEnd coast
     void getNamedCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void addCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);
     void deleteCookie(RefPtr<JSON::Object>&&, Function<void (CommandResult&&)>&&);

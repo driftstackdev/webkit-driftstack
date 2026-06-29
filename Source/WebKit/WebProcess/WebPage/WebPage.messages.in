@@ -184,6 +184,12 @@ messages -> WebPage WantsAsyncDispatchMessage {
 #endif
 #if !ENABLE(IOS_TOUCH_EVENTS) && (ENABLE(TOUCH_EVENTS) || ENABLE(DRIFTSTACK_TOUCH_STUBS))
     TouchEvent(WebKit::WebTouchEvent event) -> (enum:uint32_t std::optional<WebKit::WebEventType> eventType, bool handled)
+#if PLATFORM(DRIFTSTACK)
+    // Driftstack W3020 ("slide like a new iPhone" — Step-B kinetic coast, receive-timing velocity): the
+    // harness-computed lift-off velocity (content px/s), sent just before the touchEnd; the next TouchEnd
+    // consumes it for the momentum coast instead of the fork's burst-corrupted Δpos/dt EWMA (the 3-revert crux).
+    SetDriftstackPendingScrollMomentum(float vx, float vy)
+#endif
 #endif
 
     CancelPointer(WebCore::PointerID pointerId, WebCore::IntPoint documentPoint)

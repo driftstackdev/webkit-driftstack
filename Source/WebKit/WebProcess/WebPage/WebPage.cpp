@@ -43,6 +43,7 @@
 #include "DrawingArea.h"
 #include "DrawingAreaMessages.h"
 #include "Shared/DriftstackScrollCoastMath.h"
+#include "Shared/DriftstackRubberBandMath.h"
 #include "EditorState.h"
 #include "EventDispatcher.h"
 #include "FindController.h"
@@ -4272,6 +4273,13 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         const char* e = getenv("DRIFTSTACK_SCROLL_MOMENTUM");
         return e && e[0] && e[0] != '0'; // unset / "" / "0…" → off (fork env idiom; avoids -Wunsafe strcmp)
     }();
+    // W3010 (founder "behave exactly like iPhone" — rubber-band over-scroll). Gate the ENTIRE over-scroll
+    // bounce behind DRIFTSTACK_RUBBERBAND_IOS. Unset or "0" → the boundary stays HARD-CLAMPED (byte-identical
+    // to the prior behavior); only when set does a drag/coast past the edge stretch + spring back (τ=191ms).
+    static const bool s_driftstackRubberBand = [] {
+        const char* e = getenv("DRIFTSTACK_RUBBERBAND_IOS");
+        return e && e[0] && e[0] != '0';
+    }();
     auto pos = touchEvent.position();
     auto now = WTF::MonotonicTime::now();
     switch (touchEvent.type()) {
@@ -4292,7 +4300,13 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             if (m_driftstackScrollCoastTimer && m_driftstackScrollCoastTimer->isActive())
                 m_driftstackScrollCoastTimer->stop();
             m_driftstackScrollVelocity = { };
+            m_driftstackPendingLiftoffVelocity = std::nullopt; // W3020: a fresh press drops any stale lift-off hint.
         }
+        // W3010: a new finger down catches an in-flight rubber-band spring-back (iOS: touching the bouncing
+        // content stops it where it is so the new drag continues from there). Stop the relaxation timer but
+        // KEEP the current stretch — the new drag's moves continue stretching from it / pulling it back.
+        if (s_driftstackRubberBand && m_driftstackRubberBandTimer && m_driftstackRubberBandTimer->isActive())
+            m_driftstackRubberBandTimer->stop();
         return;
     case WebEventType::TouchMove: {
         // W2770 (founder "scrolls me back up"): ignore a TouchMove with no finger down (a stray/orphan move
@@ -4417,10 +4431,16 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
                             int clampY = std::max(minP.y(), std::min(maxP.y(), wantY));
                             area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(clampX, clampY));
                             int leftX = wantX - clampX, leftY = wantY - clampY;
-                            if (leftX || leftY)
-                                view->scrollBy(WebCore::IntSize(leftX, leftY));   // chain the over-scroll to the page
+                            if (leftX || leftY) {
+                                // W3010: scroll the chained leftover into the PAGE, capturing the page's own
+                                // unconsumed over-boundary delta (if the page is also at its edge) for the
+                                // rubber-band stretch. driftstackScrollMainFrameWithOverscroll consumes what it
+                                // can and returns the px the page couldn't (over its boundary); when the gate is
+                                // off it's a plain view->scrollBy and returns 0.
+                                driftstackScrollMainFrameWithOverscroll(*view, leftX, leftY, s_driftstackRubberBand);
+                            }
                         } else
-                            view->scrollBy(WebCore::IntSize(sdx, sdy));   // W1453: native MAIN-frame scroll (A3's behavior — no inner scroller under the locked start point)
+                            driftstackScrollMainFrameWithOverscroll(*view, sdx, sdy, s_driftstackRubberBand); // W1453 native MAIN-frame scroll + W3010 over-scroll
                     }
                 }
             }
@@ -4466,12 +4486,29 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
         // last touch point; a slow drag (low lift-off velocity) does NOT fling. Cancelled on the next
         // TouchStart. Entirely gated — no momentum when DRIFTSTACK_SCROLL_MOMENTUM is unset/0.
         if (s_driftstackScrollMomentum) {
+            // W3020 (the 3-revert CRUX fix): the lift-off velocity SOURCE. Prefer the harness-PASSED velocity
+            // (m_driftstackPendingLiftoffVelocity, set by SetDriftstackPendingScrollMomentum just before this
+            // touchEnd) over the fork's own Δpos/dt EWMA. The EWMA over-reads because the WD touch path delivers
+            // moves BURST (sub-ms apart, the W3C move `duration` discarded) → its dt is bogus → a SLOW drag
+            // over-flings (the failure that bit 3 reverts; the 8ms dt-floor + 205 gate were band-aids on a
+            // corrupt dt). The harness is the ONLY place that sees the REAL wall-clock spacing of the moves, so
+            // it computes the velocity from the genuine receive-timing and (already) zeroes it below the flick
+            // threshold. CONSUME + CLEAR the hint here so it can never bleed into a later gesture. When NO hint
+            // was sent (old harness / non-momentum WD caller) fall back to the EWMA — gated, byte-identical to
+            // the prior W3000 behavior — so this is strictly additive.
+            WebCore::FloatSize liftoff = m_driftstackScrollVelocity; // EWMA fallback
+            if (m_driftstackPendingLiftoffVelocity) {
+                liftoff = *m_driftstackPendingLiftoffVelocity;       // harness receive-timing velocity (the truth)
+                m_driftstackPendingLiftoffVelocity = std::nullopt;   // consume — never carries to the next gesture
+            }
             // Lift-off gate: below ~205 px/s the release is a slow drag, not a flick; starting a coast
             // would add a detectable micro-creep / fling on a deliberate slow drag. iOS likewise does
-            // not fling a slow release.
+            // not fling a slow release. (The harness ALSO gates at 205 and sends 0 below it; this is the
+            // fork-side re-gate so a near-threshold passed value, or an EWMA fallback, can't sneak a coast.)
             // W2995/W3000: thresholds/decay live in Shared/DriftstackScrollCoastMath.h so the live coast
             // and its unit test share one source of truth (kMinLiftoffSpeed = 205 px/s — raised from 80
             // on A1's real-device fling-begin capture to separate slow-drag ~190 from flick ~1187).
+            m_driftstackScrollVelocity = liftoff; // the coast tick reads m_driftstackScrollVelocity as the live velocity
             double speed = std::hypot(m_driftstackScrollVelocity.width(), m_driftstackScrollVelocity.height());
             if (WebKit::DriftstackScrollCoast::shouldStartCoast(speed)) {
                 if (!m_driftstackScrollCoastTimer) {
@@ -4486,6 +4523,13 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             } else
                 m_driftstackScrollVelocity = { };
         }
+        // W3010: if the finger lifted while the page was over-scrolled past its boundary (a stretch is
+        // accumulated), spring it back to the edge with the iOS τ=191ms exponential relaxation. A new
+        // TouchStart-started coast does NOT pre-empt this (the coast re-resolves the boundary each tick and
+        // re-feeds the stretch); but a pure drag-to-edge-and-release lands here. Gated — no-op when the gate is
+        // off (the stretch is never accumulated, so this is dead state).
+        if (s_driftstackRubberBand && (m_driftstackRubberStretchX || m_driftstackRubberStretchY))
+            driftstackBeginRubberBandRelax();
         break;
     case WebEventType::TouchCancel:
         // W1418: a cancelled touch (system gesture / scroll-takeover) is definitively NOT a tap —
@@ -4498,7 +4542,12 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             if (m_driftstackScrollCoastTimer && m_driftstackScrollCoastTimer->isActive())
                 m_driftstackScrollCoastTimer->stop();
             m_driftstackScrollVelocity = { };
+            m_driftstackPendingLiftoffVelocity = std::nullopt; // W3020: a cancelled sequence drops the lift-off hint.
         }
+        // W3010: a cancelled sequence (system gesture / scroll-takeover) springs any accumulated stretch back
+        // to the boundary (don't leave the page parked off-edge). Same relaxation as a normal lift-off.
+        if (s_driftstackRubberBand && (m_driftstackRubberStretchX || m_driftstackRubberStretchY))
+            driftstackBeginRubberBandRelax();
         return;
     default:
         return;
@@ -4621,9 +4670,197 @@ void WebPage::driftstackScrollCoastTick()
         area->scrollToPositionWithoutAnimation(WebCore::FloatPoint(clampX, clampY));
         int leftX = wantX - clampX, leftY = wantY - clampY;
         if (leftX || leftY)
-            view->scrollBy(WebCore::IntSize(leftX, leftY)); // chain the over-scroll to the page
+            driftstackScrollMainFrameWithOverscroll(*view, leftX, leftY, s_driftstackRubberBandCoast()); // W3010: chain + bounce
     } else
-        view->scrollBy(WebCore::IntSize(sdx, sdy));
+        driftstackScrollMainFrameWithOverscroll(*view, sdx, sdy, s_driftstackRubberBandCoast()); // W3010
+
+    // W3010: a momentum coast that drove the page past its boundary leaves a stretch; once that happens, end
+    // the velocity coast and let the τ=191ms relaxation spring it back (iOS: a flick into the edge bounces).
+    if (s_driftstackRubberBandCoast() && (m_driftstackRubberStretchX || m_driftstackRubberStretchY)) {
+        if (m_driftstackScrollCoastTimer)
+            m_driftstackScrollCoastTimer->stop();
+        m_driftstackScrollVelocity = { };
+        driftstackBeginRubberBandRelax();
+    }
+}
+
+// W3020 (the 3-revert crux fix — RECEIVE-TIMING lift-off velocity): IPC handler for the harness's
+// SetDriftstackPendingScrollMomentum. The harness, having recorded the REAL wall-clock spacing of the
+// drag's touchMoves (which the fork's burst-delivered WD path cannot see), computes the lift-off velocity
+// and sends it here IMMEDIATELY BEFORE the touchEnd. We simply STASH it; the very next TouchEnd consumes +
+// clears it (and re-gates it at kMinLiftoffSpeed). An explicit (0,0) is a valid value (a slow drag the
+// harness classified as no-coast) and correctly arms no coast. Fully gated: when DRIFTSTACK_SCROLL_MOMENTUM
+// is off, TouchEnd never reads this field — so even a stray hint is inert. NaN/Inf-guarded so a malformed
+// IPC value can't seed a runaway coast.
+void WebPage::setDriftstackPendingScrollMomentum(float vx, float vy)
+{
+    if (!std::isfinite(vx) || !std::isfinite(vy)) {
+        m_driftstackPendingLiftoffVelocity = std::nullopt;
+        return;
+    }
+    m_driftstackPendingLiftoffVelocity = WebCore::FloatSize(vx, vy);
+}
+
+// W3010: read the DRIFTSTACK_RUBBERBAND_IOS gate once (the coast tick is not the touch handler, so it can't
+// see the touch handler's static). Same env idiom; default-OFF.
+bool WebPage::s_driftstackRubberBandCoast()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_RUBBERBAND_IOS");
+        return e && e[0] && e[0] != '0';
+    }();
+    return enabled;
+}
+
+// W3010: scroll the main FRAME VIEW by (dx,dy); when rubberBandOn, the px past the page's own boundary that
+// the view couldn't consume is absorbed into the over-scroll STRETCH and the content is pushed past the edge
+// (unclamped) so it visibly translates (the iOS rubber-band). When off, this is a plain clamped view->scrollBy
+// (byte-identical to the prior behavior). The stretch is signed per-axis (+ past max, - past min) and is
+// relaxed back to the boundary by driftstackRubberBandTick on lift-off / coast-end.
+void WebPage::driftstackScrollMainFrameWithOverscroll(WebCore::LocalFrameView& view, int dx, int dy, bool rubberBandOn)
+{
+    if (!rubberBandOn) {
+        view.scrollBy(WebCore::IntSize(dx, dy)); // unchanged hard-clamped behavior
+        return;
+    }
+
+    // ── 1) If a stretch is already accumulated, a delta in the OPPOSITE direction cancels it FIRST (the
+    //       finger pulling the stretched content back toward the boundary), before any real-content scroll.
+    //       Per-axis, sign-aware. scrollBy uses screen-delta convention (finger up → positive delta → content
+    //       up → scrollPosition increases), so a stretch past max (positive) is reduced by a positive delta's
+    //       opposite, i.e. a NEGATIVE dx/dy reduces a positive stretch. We treat dx/dy in scroll-position
+    //       space (same as scrollBy): positive grows a positive (past-max) stretch.
+    auto applyAxisToStretch = [](double& stretch, int& delta) {
+        if (!stretch || !delta)
+            return;
+        // Opposite-sign delta shrinks the stretch toward 0; same-sign grows it (handled in step 3).
+        if ((stretch > 0 && delta < 0) || (stretch < 0 && delta > 0)) {
+            double absorb = std::min(std::abs(static_cast<double>(delta)), std::abs(stretch));
+            stretch += (stretch > 0 ? -absorb : absorb);
+            delta -= (delta > 0 ? static_cast<int>(absorb) : -static_cast<int>(absorb));
+        }
+    };
+    int dX = dx, dY = dy;
+    applyAxisToStretch(m_driftstackRubberStretchX, dX);
+    applyAxisToStretch(m_driftstackRubberStretchY, dY);
+
+    // ── 2) Move the real content by whatever delta remains, clamped to range; capture the px past the page's
+    //       own boundary (the over-boundary leftover) — signed.
+    auto minP = view.minimumScrollPosition();
+    auto maxP = view.maximumScrollPosition();
+    auto cur = view.scrollPosition();
+    int baseX = std::max(minP.x(), std::min(maxP.x(), cur.x())); // strip any current stretch overshoot
+    int baseY = std::max(minP.y(), std::min(maxP.y(), cur.y()));
+    int wantX = baseX + dX, wantY = baseY + dY;
+    int clampX = std::max(minP.x(), std::min(maxP.x(), wantX));
+    int clampY = std::max(minP.y(), std::min(maxP.y(), wantY));
+    int overX = wantX - clampX; // px past the page boundary this delta wants (signed)
+    int overY = wantY - clampY;
+    view.scrollToPositionWithoutAnimation(WebCore::FloatPoint(clampX, clampY), WebCore::ScrollClamping::Clamped);
+    m_driftstackRubberBoundaryPos = WebCore::FloatPoint(clampX, clampY);
+
+    // ── 3) Grow the stretch with the over-boundary leftover via the iOS resistance curve (diminishing return).
+    if (overX || overY) {
+        auto visible = view.visibleSize();
+        double incX = WebKit::DriftstackRubberBand::resistedStretchIncrement(std::abs(overX), std::abs(m_driftstackRubberStretchX), visible.width());
+        double incY = WebKit::DriftstackRubberBand::resistedStretchIncrement(std::abs(overY), std::abs(m_driftstackRubberStretchY), visible.height());
+        m_driftstackRubberStretchX += (overX < 0 ? -incX : incX);
+        m_driftstackRubberStretchY += (overY < 0 ? -incY : incY);
+    }
+
+    // ── 4) Render: if any stretch remains, push the view past the edge (unclamped); else snap to the boundary
+    //       and drop the unclamped override. setAllowsUnclampedScrollPositionForTesting is the supported hook
+    //       that lets scrollToPositionWithoutAnimation(..., Unclamped) keep an off-edge offset for a frame.
+    if (m_driftstackRubberStretchX || m_driftstackRubberStretchY) {
+        if (!m_driftstackRubberHadUnclamped) {
+            view.setAllowsUnclampedScrollPositionForTesting(true);
+            m_driftstackRubberHadUnclamped = true;
+        }
+        view.scrollToPositionWithoutAnimation(
+            WebCore::FloatPoint(clampX + std::lround(m_driftstackRubberStretchX), clampY + std::lround(m_driftstackRubberStretchY)),
+            WebCore::ScrollClamping::Unclamped);
+    } else if (m_driftstackRubberHadUnclamped) {
+        view.setAllowsUnclampedScrollPositionForTesting(false);
+        m_driftstackRubberHadUnclamped = false;
+    }
+}
+
+// W3010: start the τ=191ms exponential spring-back of the current over-boundary stretch to the boundary.
+void WebPage::driftstackBeginRubberBandRelax()
+{
+    if (!m_driftstackRubberStretchX && !m_driftstackRubberStretchY) {
+        driftstackEndRubberBand();
+        return;
+    }
+    if (!m_driftstackRubberBandTimer) {
+        m_driftstackRubberBandTimer = makeUnique<RunLoop::Timer>(RunLoop::mainSingleton(),
+            "WebPage::DriftstackRubberBandTimer"_s, this, &WebPage::driftstackRubberBandTick);
+    }
+    m_driftstackRubberLastTick = WTF::MonotonicTime::now();
+    // ~60 Hz relaxation ticks (display refresh). The decay is frame-rate-normalized in the tick via
+    // exp(-dt/τ), so an occasional late tick relaxes proportionally (never a discontinuity).
+    m_driftstackRubberBandTimer->startRepeating(WTF::Seconds(1.0 / 60.0));
+}
+
+// W3010: clean up the rubber-band state — snap the view exactly to the boundary, restore the unclamped flag,
+// stop the timer, zero the stretch. Idempotent.
+void WebPage::driftstackEndRubberBand()
+{
+    if (m_driftstackRubberBandTimer && m_driftstackRubberBandTimer->isActive())
+        m_driftstackRubberBandTimer->stop();
+    if (RefPtr localMainFrame = this->localMainFrame()) {
+        if (RefPtr view = localMainFrame->view()) {
+            // Snap exactly to the boundary the stretch was measured from (clamped), then drop the unclamped
+            // override so subsequent normal scrolls stay hard-clamped.
+            view->scrollToPositionWithoutAnimation(m_driftstackRubberBoundaryPos, WebCore::ScrollClamping::Clamped);
+            if (m_driftstackRubberHadUnclamped)
+                view->setAllowsUnclampedScrollPositionForTesting(false);
+        }
+    }
+    m_driftstackRubberHadUnclamped = false;
+    m_driftstackRubberStretchX = 0;
+    m_driftstackRubberStretchY = 0;
+}
+
+// W3010: one relaxation step of the rubber-band spring-back, fired at ~60Hz from driftstackBeginRubberBandRelax
+// until the stretch settles below kRestPx. Relaxes the stretch as e(t)=e0*exp(-t/τ) with τ=191ms (the
+// BS-captured iOS engine constant), pushing the view to boundary+stretch (unclamped) each tick. Behavioral
+// (scroll-feel) only — scrolls via the same trusted engine path the drag uses.
+void WebPage::driftstackRubberBandTick()
+{
+    auto now = WTF::MonotonicTime::now();
+    WTF::Seconds rawDt = now - m_driftstackRubberLastTick;
+    m_driftstackRubberLastTick = now;
+    if (rawDt <= 0_s)
+        return;
+    double dtSeconds = WebKit::DriftstackRubberBand::clampTickSeconds(rawDt.seconds());
+
+    // Relax the stretch toward zero: stretch *= exp(-dt/τ). Frame-rate-normalized.
+    double factor = WebKit::DriftstackRubberBand::relaxFactorForTick(dtSeconds);
+    m_driftstackRubberStretchX *= factor;
+    m_driftstackRubberStretchY *= factor;
+
+    double mag = std::hypot(m_driftstackRubberStretchX, m_driftstackRubberStretchY);
+    if (WebKit::DriftstackRubberBand::isAtRest(mag)) {
+        driftstackEndRubberBand(); // settled — snap to the boundary, restore clamping
+        return;
+    }
+
+    RefPtr localMainFrame = this->localMainFrame();
+    if (!localMainFrame) {
+        driftstackEndRubberBand();
+        return;
+    }
+    RefPtr view = localMainFrame->view();
+    if (!view) {
+        driftstackEndRubberBand();
+        return;
+    }
+    // Push the view to boundary + the relaxed stretch (unclamped so it can stay past the edge this frame).
+    view->scrollToPositionWithoutAnimation(
+        WebCore::FloatPoint(m_driftstackRubberBoundaryPos.x() + std::lround(m_driftstackRubberStretchX),
+            m_driftstackRubberBoundaryPos.y() + std::lround(m_driftstackRubberStretchY)),
+        WebCore::ScrollClamping::Unclamped);
 }
 #endif // PLATFORM(DRIFTSTACK)
 #endif

@@ -2963,6 +2963,34 @@ void Session::driftstackProfileDumpNow(Function<void(CommandResult&&)>&& complet
     });
 }
 
+void Session::driftstackSetScrollMomentum(double vx, double vy, Function<void(CommandResult&&)>&& completionHandler)
+{
+    // Driftstack W3020 (founder #1 behavioral ask "slide like a new iPhone" — Step-B kinetic coast,
+    // RECEIVE-TIMING velocity): forward the harness-computed lift-off velocity (content px/s) to the UIProcess
+    // backend, which sets it on the page so the very next TouchEnd coasts with IT instead of the fork's own
+    // burst-corrupted Δpos/dt EWMA (the crux the 3 prior reverts missed: the WD touch path delivers moves
+    // sub-ms apart, so the fork's dt is bogus). The harness sends this on the live WD bridge IMMEDIATELY BEFORE
+    // injectTouchStreamEnd. No handleUserPrompts/navigation wrapper — it's a fire-and-forget hint that must land
+    // before the touchEnd, never stalling behind a settling page. Inert in the WebProcess unless
+    // DRIFTSTACK_SCROLL_MOMENTUM is enabled there; an explicit (0,0) means a slow drag/hold (no coast).
+    if (!m_currentBrowsingContext) {
+        completionHandler(CommandResult::fail(CommandResult::ErrorCode::NoSuchWindow));
+        return;
+    }
+
+    auto parameters = JSON::Object::create();
+    parameters->setString("browsingContextHandle"_s, uncheckedTopLevelBrowsingContext());
+    parameters->setDouble("vx"_s, vx);
+    parameters->setDouble("vy"_s, vy);
+    m_host->sendCommandToBackend("setScrollMomentum"_s, WTF::move(parameters), [protectedThis = Ref { *this }, completionHandler = WTF::move(completionHandler)](SessionHost::CommandResponse&& response) mutable {
+        if (response.isError) {
+            completionHandler(CommandResult::fail(WTF::move(response.responseObject)));
+            return;
+        }
+        completionHandler(CommandResult::success());
+    });
+}
+
 void Session::getNamedCookie(const String& name, Function<void(CommandResult&&)>&& completionHandler)
 {
     getAllCookies([name, completionHandler = WTF::move(completionHandler)](CommandResult&& result) mutable {
