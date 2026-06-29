@@ -345,43 +345,51 @@ void Font::platformInit()
     }
 #endif
 #if PLATFORM(DRIFTSTACK)
-    // W2980b (#120 glyph-1600 cluster A — the fantasy/Papyrus +1 strut, 43 of 79 divergent cells).
+    // W2980d (#120 glyph-1600 cluster A — the fantasy +1 strut, 43 of 78 divergent cells). RE-ROOT-CAUSED.
     // The browserleaks /fonts Unicode-Glyphs FP renders each cp's span at font-size:10000% of the
     // font:initial 16px box = 1600px, line-height:normal (the testbox `font:initial` resets line-height
     // to normal — verified empirically: the 1600px default strut is 1910 = 1.19*size, BELOW the body's
     // 1.5*1600=2400 floor, so the floor is NOT in play; the font line-box IS the measured offsetHeight).
-    // The CSS `fantasy` generic resolves to Papyrus. At 1600px the fork's Papyrus line-box ceils to 5405
-    // where a real iPhone 17 / Safari 26.4 returns 5404 — a UNIFORM +1 on ALL 43 fantasy cells (fallback-
-    // INDEPENDENT: it is the PRIMARY Papyrus strut, identical regardless of which glyph/fallback renders,
-    // proven by the grid — every fantasy cp is exactly 5405 vs 5404). The W2587 fp-noise snap above covers
-    // the leading only, and the Noto ascent snap covers 2 named faces; Mac Papyrus's ascent/descent are NOT
-    // snapped, so one of them carries the same CoreText fp-noise-just-above-integer that ceilf() at the
-    // lineSpacing line below rounds UP +1 (where iOS's exact integer ceils flat). Snap Papyrus ascent AND
-    // descent to their nearest integer when within kMetricFpEpsilon of it (same targeted pattern as the
-    // Noto-2-face ascent snap), so the ceilf lands the iOS line-box 5404.
     //
-    // 16px-SAFE BY CONSTRUCTION (HARD CONSTRAINT): gated to pointSize >= 100 -> fires ONLY at the 1600px
-    // probe band, NEVER at the 16px/13px glyphHash sizes or the 128px font-detection size. Empirically the
-    // 16px fantasy cell is a flat per-generic constant (28) and the glyphHash c587ed44 surface is the 16/13px
-    // Element.cpp serve (size-gated, untouched at 1600px) — so this snap is structurally invisible to
-    // c587ed44 / metricsHash / uniqueMetrics / the 178 identical cells (all 16px or atlas-served). It is a
-    // pure large-size line-LAYOUT correction; canvas/measureText are atlas-served (DRIFTSTACK_MEASURE_TEXT_
-    // OVERRIDE) so pixels are untouched too.
+    // ⛔ CORRECTION of W2980b (251b13bf73): the CSS `fantasy` generic on this build resolves to ZAPFINO,
+    // NOT Papyrus. The earlier Papyrus snap was a no-op because (a) Papyrus is the wrong font and (b)
+    // Mac Papyrus's lineSpacing@1600 is 2469 (asc 1503.906 desc 964.844), nowhere near the fantasy column's
+    // 5404/5405. CoreText probe (Apple-Silicon dev box, captures/v3 strut_scan.m) proves Zapfino@1600 gives
+    // asc=3000.000000, desc=2404.003906, lead=0 → ceil(3000)+ceil(2404.0039)+0 = 3000+2405 = 5405 (the fork
+    // value, every fantasy cp), where a real iPhone 17 / Safari 26.4 returns 5404. The +1 is the descent's
+    // CoreText fp-noise-just-above-integer: Zapfino's true descent ratio is exactly 1.5025*em, and
+    // 1.5025*1600 = 2404.0 + 0.0039 — ceilf() rounds that to 2405 where iOS's exact 2404.0 ceils flat. The
+    // W2587 leading snap covers the leading only (Zapfino lead=0) and the Noto/Papyrus ascent snaps cover
+    // other faces; Zapfino's descent is NOT snapped, so the lineSpacing line below ceils it +1. Snap Zapfino
+    // ascent AND descent to their nearest integer when within kMetricFpEpsilon (the W2587/Noto pattern), so
+    // the ceilf lands the iOS line-box 5404. This is the W2587 fp-noise class (the |Δ| at 1600 is 0.0039),
+    // NOT the Kefa-III genuine-divergence class — verified: snapping reproduces iOS's exact 5404.
     //
-    // ⚠️ EMPIRICAL (Rule 15): this snap assumes the +1 is CoreText fp-noise-above-integer (the W2587 class),
-    // NOT a genuine sub-integer Mac-vs-iOS Papyrus metric divergence (the Kefa-III class). If a real-iPhone
-    // Papyrus line-box capture at 1600px shows the snap does NOT land 5404 (i.e. the +1 survives because
-    // ascent/descent are >0.01 from an integer), replace this with a proportional asc/desc override pinned to
-    // the iOS sum 5404 (the Kefa-III pattern at FontCoreText.cpp Kefa block). A3 must re-render the faithful
-    // 1600px probe and confirm fantasy == 5404 (and 16px fantasy still 28).
-    if (pointSize >= 100.f && familyName && equalLettersIgnoringASCIICase(String(familyName.get()), "papyrus"_s)) {
+    // 16px-SAFE BY CONSTRUCTION (DOUBLE GUARD): (1) gated to pointSize >= 100 → fires ONLY at the 1600px
+    // probe band, NEVER at the 16/13px glyphHash sizes or the 128px font-detection size; (2) the snap is a
+    // no-op except where |Δ| < 0.01 — and CoreText probe shows Zapfino's desc fraction is 0.040 @16px /
+    // 0.320 @128px (both >0.01, so even WITHOUT the pointSize gate the 16/128 values are untouched: 55 / 433
+    // unchanged). The 16px fantasy cell is a flat per-generic constant (28, line-height floored) and the
+    // glyphHash c587ed44 surface is the 16/13px Element.cpp serve (size-gated, untouched at 1600px) — so this
+    // is structurally invisible to c587ed44 / metricsHash / uniqueMetrics / the 178 identical cells. Pure
+    // large-size line-LAYOUT correction; canvas/measureText are atlas-served (DRIFTSTACK_MEASURE_TEXT_OVERRIDE)
+    // so pixels are untouched too. A3: re-render the faithful 1600px probe → assert all 43 fantasy cells ==
+    // …5404 (NOT 5405) AND 16px fantasy still 28 (c587ed44 held).
+    //
+    // Papyrus snap RETAINED below as well (it was a no-op for the probe but harmless + correct-in-principle
+    // for any future Papyrus-resolved fantasy; the Zapfino path is the one that closes the grid).
+    if (pointSize >= 100.f && familyName) {
         constexpr float kMetricFpEpsilon = 0.01f;
-        float dsRoundedAscent = std::round(ascent);
-        if (std::abs(ascent - dsRoundedAscent) < kMetricFpEpsilon)
-            ascent = dsRoundedAscent;
-        float dsRoundedDescent = std::round(descent);
-        if (std::abs(descent - dsRoundedDescent) < kMetricFpEpsilon)
-            descent = dsRoundedDescent;
+        String dsFantasyFn = String(familyName.get());
+        if (equalLettersIgnoringASCIICase(dsFantasyFn, "zapfino"_s)
+            || equalLettersIgnoringASCIICase(dsFantasyFn, "papyrus"_s)) {
+            float dsRoundedAscent = std::round(ascent);
+            if (std::abs(ascent - dsRoundedAscent) < kMetricFpEpsilon)
+                ascent = dsRoundedAscent;
+            float dsRoundedDescent = std::round(descent);
+            if (std::abs(descent - dsRoundedDescent) < kMetricFpEpsilon)
+                descent = dsRoundedDescent;
+        }
     }
 #endif
     float lineSpacing = std::ceil(ascent) + adjustment + std::ceil(descent) + lineGap;
