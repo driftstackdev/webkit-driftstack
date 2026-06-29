@@ -31,6 +31,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <wtf/CryptographicallyRandomNumber.h>
 #include <wtf/NeverDestroyed.h>
@@ -91,11 +92,23 @@ void advanceDriftstackVirtualSkew(Seconds delta)
 }
 
 // --- engine: per-archetype op-cost sampling (default = iPhone-17/A19, from reference/timing-params) ---
+//
+// M8 RE-FIT 2026-06-29 (param-table residual closure, grounded in all 71 BS iPhone-17-line timingraw captures —
+// reference/timing-params/iphone17-warm-by-size-regime.json):
+//   (1) toDataURL warm is STRONGLY SIZE-DEPENDENT (size 64 -> mostly 0ms, 256 -> ~mixed, 512 -> mostly 2+ms);
+//       the previous single warm_p {0.207,0.726,0.066} was the REGIME-L @ size-256 cell only -> wrong at any
+//       other size (a clock-on fork would emit the 256 mix at 64/512 = a tell). sampleCostMs now buckets
+//       toDataURL by the `pixels` arg (sideLen = sqrt(px)) into the captured 64/256/512 warm rows.
+//   (2) The captures are BIMODAL by a BS-pool TEMPORAL regime (verify-first: P0@256 ~0.20 before ~08:30 UTC,
+//       ~0.52 after — a pool/device-assignment shift, NOT per-call variance and NOT a device model). A real
+//       iPhone holds ONE regime for life (audit wckmdkws4 #5) -> pick the regime ONCE per session at reset
+//       (CSPRNG) and hold it, so the per-call mix is internally consistent (never flips 0<->mode call-to-call).
+//   getImageData/render are size- and regime-STABLE -> single warm row each (unchanged, already correct).
 namespace {
+enum class DSRegime : uint8_t { L = 0, H = 1, Count = 2 };
 struct DSArchetypeTimingParams {
     struct ColdDist { double mean; double jitter; };   // jitter <= mean so cold draws stay >= 0 (no clamp bias)
     // Defaults fit to reference/timing-params/by-chip-generation.json (iPhone17-line_A19).
-    // jitter <= mean keeps cold draws >= 0; warm = the iPhone marginal 0/1/2 multinomial.
     std::array<ColdDist, static_cast<size_t>(DriftstackTimedOp::Count)> cold { {
         { 1.85, 0.88 },   // ToDataURL   (ref cold_mean 1.85, cold_sd 0.88)
         { 0.82, 0.51 },   // GetImageData (ref cold_mean 0.82, cold_sd 0.51)
@@ -103,12 +116,34 @@ struct DSArchetypeTimingParams {
         { 0.1,  0.1  },   // MeasureText
         { 2.0,  1.0  },   // WasmCompile
     } };
+    // Render is size-stable (~99.8/0.2 at every size). MeasureText/WasmCompile kept for index alignment.
     std::array<std::array<double, 3>, static_cast<size_t>(DriftstackTimedOp::Count)> warmP { {
-        { { 0.207, 0.726, 0.066 } },   // ToDataURL    (ref warm_p 0/1/2)
-        { { 0.836, 0.164, 0.000 } },   // GetImageData (ref warm_p — was 0.95/0.05, under-charged vs iPhone 84/16)
-        { { 0.998, 0.002, 0.000 } },   // Render       (ref warm_p)
+        { { 0.000, 0.000, 0.000 } },   // ToDataURL    — UNUSED (size+regime-bucketed below)
+        { { 0.000, 0.000, 0.000 } },   // GetImageData — UNUSED (size-bucketed below)
+        { { 0.998, 0.002, 0.000 } },   // Render       (size-stable; ref 99.8/0.2)
         { { 0.98,  0.02,  0.00  } },   // MeasureText
         { { 0.00,  0.00,  0.00  } },   // WasmCompile
+    } };
+    // toDataURL warm 0/1/2+ per [regime][sizeBucket]; sizeBucket 0=64, 1=256, 2=512 (clamped at the ends).
+    // From iphone17-warm-by-size-regime.json (L: n=33 captures, H: n=38 captures). STRONGLY size-dependent.
+    std::array<std::array<std::array<double, 3>, 3>, static_cast<size_t>(DSRegime::Count)> toDataURLWarm { {
+        { {   // REGIME L
+            { { 0.5145, 0.4533, 0.0322 } },   // 64
+            { { 0.2034, 0.7276, 0.0690 } },   // 256
+            { { 0.0000, 0.0295, 0.9705 } },   // 512
+        } },
+        { {   // REGIME H
+            { { 0.8634, 0.1366, 0.0000 } },   // 64
+            { { 0.5236, 0.4764, 0.0000 } },   // 256
+            { { 0.0000, 0.4566, 0.5434 } },   // 512
+        } },
+    } };
+    // getImageData warm 0/1/2+ per sizeBucket — also size-dependent (P0: 64~0.94, 256~0.82, 512~0.58), but
+    // regime-INSENSITIVE (L~=H per size) -> one row per size, the L/H mean. From iphone17-warm-by-size-regime.json.
+    std::array<std::array<double, 3>, 3> getImageDataWarm { {
+        { { 0.9387, 0.0612, 0.0001 } },   // 64
+        { { 0.8230, 0.1770, 0.0000 } },   // 256
+        { { 0.5830, 0.4166, 0.0004 } },   // 512
     } };
 };
 DSArchetypeTimingParams& dsParams() { static NeverDestroyed<DSArchetypeTimingParams> p; return p.get(); }
@@ -119,12 +154,38 @@ double dsRnd() { return cryptographicallyRandomNumber<uint32_t>() / (static_cast
 // thermal in v1: the warm 0/1/2 multinomial IS the iPhone marginal; autocorrelation (a latent continuous cost
 // perturbed before quantization) is a documented refinement, never a divisor on a probability (#1).
 thread_local std::array<bool, static_cast<size_t>(DriftstackTimedOp::Count)> s_dsCharged { };
+// Per-session toDataURL warm regime (L/H). Picked ONCE at session reset, held for the session so the per-call
+// mix is internally consistent (a real iPhone sits in one BS-pool regime for life — audit wckmdkws4 #5). The L/H
+// split is the captured pool's two-mode prior; mid-point pick is unbiased (the two regimes are ~equal-weight in
+// the capture set: L n=33, H n=38). NOT per-document (a single page must not flip regime across navigations).
+thread_local DSRegime s_dsRegime { DSRegime::L };
+thread_local bool s_dsRegimePicked { false };
+
+DSRegime dsRegime()
+{
+    if (!s_dsRegimePicked) {
+        s_dsRegime = dsRnd() < 0.5 ? DSRegime::L : DSRegime::H;
+        s_dsRegimePicked = true;
+    }
+    return s_dsRegime;
+}
+
+// Map toDataURL pixel count -> the nearest captured size bucket (64/256/512). Boundaries at the geometric means
+// (128, 362 px side) so 4096px->64, 65536px->256, 262144px->512; larger canvases clamp to 512.
+size_t dsSizeBucket(double pixels)
+{
+    double side = pixels > 0 ? std::sqrt(pixels) : 0;
+    if (side < 128.0) return 0;   // ~64
+    if (side < 362.0) return 1;   // ~256
+    return 2;                     // >=512
+}
 } // anonymous namespace
 
 void resetDriftstackVirtualClockSession()
 {
     g_driftstackVirtualSkew = 0_s;
     s_dsCharged = { };
+    s_dsRegimePicked = false;   // re-pick the per-session regime on the next charged toDataURL (held thereafter)
 }
 
 DriftstackVirtualClock& DriftstackVirtualClock::singleton()
@@ -142,7 +203,7 @@ DriftstackVirtualClock::DriftstackVirtualClock()
     m_enabled = v && v[0] == '1';
 }
 
-double DriftstackVirtualClock::sampleCostMs(DriftstackTimedOp op, double, bool isCold)
+double DriftstackVirtualClock::sampleCostMs(DriftstackTimedOp op, double pixels, bool isCold)
 {
     auto i = static_cast<size_t>(op);
     if (i >= static_cast<size_t>(DriftstackTimedOp::Count))
@@ -152,11 +213,19 @@ double DriftstackVirtualClock::sampleCostMs(DriftstackTimedOp op, double, bool i
         double j = c.jitter < c.mean ? c.jitter : c.mean;   // keep the draw >= 0 (no zero-clamp bias)
         return c.mean + (dsRnd() - 0.5) * 2.0 * j;
     }
-    // warm: discrete 0/1/2 multinomial straight from the fitted proportions (NO thermal divisor)
-    auto& p = dsParams().warmP[i];
+    // warm: discrete 0/1/2+ multinomial from the fitted proportions (NO thermal divisor). toDataURL AND
+    // getImageData are SIZE-dependent -> bucket by the canvas pixel count (toDataURL also per-session regime);
+    // render/measureText are size-stable -> the single warmP row.
+    const std::array<double, 3>* p;
+    if (op == DriftstackTimedOp::ToDataURL)
+        p = &dsParams().toDataURLWarm[static_cast<size_t>(dsRegime())][dsSizeBucket(pixels)];
+    else if (op == DriftstackTimedOp::GetImageData)
+        p = &dsParams().getImageDataWarm[dsSizeBucket(pixels)];
+    else
+        p = &dsParams().warmP[i];
     double u = dsRnd();
-    if (u < p[0]) return 0.0;
-    if (u < p[0] + p[1]) return 1.0;
+    if (u < (*p)[0]) return 0.0;
+    if (u < (*p)[0] + (*p)[1]) return 1.0;
     return 2.0;
 }
 
