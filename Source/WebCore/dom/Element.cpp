@@ -1672,6 +1672,43 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     if (cp == 0x20B9 && bucket != 6)
         return false;
 
+    // W2619b (#120 glyph-1600): U+1CDA (Vedic Tone Mark Double Svarita) at the browserleaks Unicode-Glyphs
+    // 1600px render (font-size:10000% span). This is a LEGIT notdef-fundamental serve — render-fix is
+    // structurally impossible: the on-box face-metrics scan (driftstack captures/v3 face-metrics-scan.txt)
+    // PROVES no iOS-staged, Mac-readable face renders U+1CDA at the iPhone 604-wide value — NotoSansKannada
+    // carries the glyph at advance 0 (gid 460, zero-advance), every iOS-staged Devanagari face (Kohinoor,
+    // DevanagariSangamMN) lacks the glyph entirely (hasGlyph=0), so the Mac CoreText cascade can only fall to
+    // a notdef-strut quintet (1015,1842 / 1245,1841 / 964,1864 / 800,2019 / 1248,5405). The real iPhone's
+    // 604-wide ~2300-2400-tall glyph comes from an iOS-internal Vedic cascade the Mac stack cannot reproduce
+    // from the staged files. Per the founder's "serve ONLY where render-fix can't work" principle, the
+    // DOM-geometry serve is the only mechanism (the same class as U+1CF5 / the orphan-mark advance atlas).
+    // U+1CDA IS an isGlyphHashCp, so the 16px slice (in the table below) is glyphHash-load-bearing and stays
+    // untouched; this branch is gated to the 1600px render ONLY, so c587ed44 (the 16px probe) cannot move.
+    // The default generic (bucket 0) already renders 604,2388 naturally (notdef path), so it is NOT served
+    // here — only the 5 diverging generics (sans/serif/mono/cursive/fantasy) get the iPhone value. Real-iPhone
+    // gold-truth: captures/v3/glyph-fork-grid-debug/ref-26x-faithful.json (glyphHash 5D474692, byte-faithful
+    // 1600px grid). Values cross-checked against that grid cell-by-cell (verify-the-verifier, not assumed).
+    {
+        float computedSize1600 = 16;
+        if (CheckedPtr sr = fontElement ? fontElement->renderer() : element.renderer())
+            computedSize1600 = sr->style().fontDescription().computedSize();
+        if (cp == 0x1CDA && std::lround(computedSize1600) == 1600) {
+            struct Entry1600 { int generic; float w; float h; };
+            // bucket: 1=sans-serif 2=serif 3=monospace 4=cursive 5=fantasy (0=default omitted, already correct).
+            static constexpr std::array<Entry1600, 5> table1600 { {
+                { 1, 604, 2338 }, { 2, 604, 2324 }, { 3, 604, 2350 }, { 4, 604, 2364 }, { 5, 604, 5404 },
+            } };
+            for (const auto& e : table1600) {
+                if (e.generic == bucket) {
+                    outWidth = e.w;
+                    outHeight = e.h;
+                    return true;
+                }
+            }
+            return false; // bucket 0 (default) already correct at 1600px -> natural
+        }
+    }
+
     // Size-gate (W2589b): the table holds the iOS values ONLY at the browserleaks glyphHash
     // sizes — 16px for the non-mono generics, 13px for the monospace medium-size quirk. Serving
     // them at any OTHER font-size would be a gross lie (a 72px U+20E3 is ~94px wide, not 21) and
