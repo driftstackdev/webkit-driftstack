@@ -99,22 +99,36 @@ static constexpr bool verbose = false;
 // (America/Asuncion = permanent UTC-03:00). But every captured real iPhone still
 // ships the OLDER bundled tzdata that OBSERVES Paraguay DST — verified byte-identical
 // on iPhone 16 Pro/Safari 18.6 AND iPhone 17/Safari 26.5 (reference/realdevice-bs/
-// tzoffset-iPhone_*): winter(Jul) = -03:00 (offsetMin 180), summer(Jan) = -04:00
-// (offsetMin 240), transitions at 2026-03-22T03:00Z (DST->std) and 2026-10-04T04:00Z
-// (std->DST). Without this override the fork would report no-DST for Asuncion = a
-// per-session getTimezoneOffset()/DST host-leak for any America/Asuncion session.
+// tzoffset-iPhone_17 + tzoffset-iPhone_16_Pro).
 //
-// The historical (pre-abolition) Paraguay rule, which the bundled iOS tzdata applies:
-//   DST (summer, UTC-04:00) from 1st Sunday of October 00:00 local to 4th Sunday of
-//   March 00:00 local. Standard (UTC-03:00) otherwise. Transitions occur at 00:00 in
-//   the NEW offset frame (Oct -> 04:00Z, Mar -> 03:00Z), matching the captured GTs.
+// ⚠️ GROUND-TRUTH WINDOW (the captured GTs are authoritative — an earlier version of
+// this function had the window INVERTED): the real-device GTs read Asuncion as
+//   Jan 15 (probe "winter") = -03:00 (offsetMin 180) -> STANDARD
+//   Jul 15 (probe "summer") = -04:00 (offsetMin 240) -> DST
+// i.e. the DST(-04:00) window is Paraguay's SOUTHERN-hemisphere WINTER, the CONTIGUOUS
+// 4th-Sunday-of-March .. 1st-Sunday-of-October interval, with transitions at
+// 2026-03-22T03:00Z (std->DST, 180->240) and 2026-10-04T04:00Z (DST->std, 240->180).
+// (The bundled tzdata's rule is thus the SOUTHERN-WINTER one, NOT the textbook
+// southern-summer Oct..Mar rule — match the GT, not the textbook.) Without this override
+// the fork would report no-DST for Asuncion = a per-session getTimezoneOffset()/DST
+// host-leak for any America/Asuncion session.
+//
 // Returns the DST component in milliseconds (0 or -3600000) to ADD to the -03:00 raw
 // offset; the caller folds it into rawOffset+dstOffset and the !!dstOffset DST flag.
+//
+// ⚠️ COHERENCE (binding): this window MUST stay bit-for-bit in lockstep with
+// IntlDateTimeFormat.cpp::driftstackAsuncionIntlDstOffsetMs() — that function fixes the
+// SAME Asuncion DST host-leak on the Intl/ICU formatting path (Intl.DateTimeFormat keyed
+// on timeZone:"America/Asuncion"), which is what the tzoffset probe + real detectors read.
+// The two are deliberately duplicated (separate translation units; a shared header symbol
+// would be heavier than the math) — if you change one window you MUST change the other, or
+// a Paraguay session becomes INCOHERENT (getTimezoneOffset DST-window != Intl DST-window),
+// a tell real iPhones do not have.
 //
 // NOTE: this is band-INVARIANT across all currently captured iOS bands (18.6 + 26.5
 // both observe it). If a future iOS adopts the upstream abolition it will need a band
 // gate; until a capture shows that, the override applies on every archetype (matching
-// the only real-device truth we have). Returns INT32_MIN to signal "not Asuncion".
+// the only real-device truth we have).
 static constexpr int32_t kAsuncionStdOffsetMs = -10800000; // -03:00
 static int32_t driftstackAsuncionDstOffsetMs(double millisecondsFromEpoch)
 {
@@ -149,14 +163,16 @@ static int32_t driftstackAsuncionDstOffsetMs(double millisecondsFromEpoch)
     while (utcMidnightMs(y + 1, 1, 1) <= utcMs)
         ++y;
 
-    // DST starts 1st Sun Oct at 00:00 local DST(-04:00): UTC = localMidnight + 04:00.
-    int64_t startUTC = utcMidnightMs(y, 10, nthSunday(y, 10, 1)) - (kAsuncionStdOffsetMs - kHourMs);
-    // DST ends 4th Sun Mar at 00:00 local STD(-03:00): UTC = localMidnight + 03:00.
-    int64_t endUTC = utcMidnightMs(y, 3, nthSunday(y, 3, 4)) - kAsuncionStdOffsetMs;
+    // GT window (lockstep with driftstackAsuncionIntlDstOffsetMs): DST(-04:00) is the
+    // CONTIGUOUS 4th-Sun-Mar .. 1st-Sun-Oct interval (Paraguay's southern WINTER).
+    // DST STARTS 4th Sun Mar at 00:00 local STD(-03:00): UTC = localMidnight + 03:00.
+    int64_t dstStartUTC = utcMidnightMs(y, 3, nthSunday(y, 3, 4)) - kAsuncionStdOffsetMs;
+    // DST ENDS 1st Sun Oct at 00:00 local DST(-04:00): UTC = localMidnight + 04:00.
+    int64_t dstEndUTC = utcMidnightMs(y, 10, nthSunday(y, 10, 1)) - (kAsuncionStdOffsetMs - kHourMs);
 
-    // Southern-hemisphere summer wraps the year boundary: DST is active at/after the
-    // October start (through year end) OR before the March end (from the prior October).
-    if (utcMs >= startUTC || utcMs < endUTC)
+    // DST(-04:00) active in the contiguous Mar..Oct interval (does NOT wrap the year
+    // boundary): Jan is STANDARD (-03:00/180), Jul is DST (-04:00/240) — matches the GT.
+    if (utcMs >= dstStartUTC && utcMs < dstEndUTC)
         return -static_cast<int32_t>(kHourMs);
     return 0;
 }
@@ -225,7 +241,8 @@ LocalTimeOffset DateCache::calculateLocalTimeOffset(double millisecondsFromEpoch
         if (iana == "America/Asuncion"_s) {
             // Asuncion raw (standard) offset is -03:00 on both host ICU and iOS; only the
             // DST component differs. For UTC-instant input we recompute the DST window
-            // directly from the historical Paraguay rule. (LocalTime input is rare here —
+            // directly from the GT-matched Paraguay rule (see driftstackAsuncionDstOffsetMs:
+            // DST/-04:00 in the southern-winter Mar..Oct interval). (LocalTime input is rare here —
             // getTimezoneOffset() / Date display always take the UTC-instant branch — but
             // we apply the same rule for coherence; the standard offset is unchanged so the
             // local-wall instant maps to the same window save the ~1h transition seam.)
