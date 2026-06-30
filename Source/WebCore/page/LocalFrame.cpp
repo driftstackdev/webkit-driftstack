@@ -48,7 +48,7 @@
 #include "DocumentPrefetcher.h"
 #include "DocumentQuirks.h"
 #include "DriftstackArchetypeConfig.h"
-#include "DriftstackCrWebBootstrap.h"
+#include "platform/cocoa/DriftstackCrWebBootstrap.h" // SRCROOT-relative: not registered in pbxproj Headers phase, so the bare name is not in the project header-map; resolves via HEADER_SEARCH_PATHS $(SRCROOT)
 #include "DOMWrapperWorld.h"
 #include "DocumentResourceLoader.h"
 #include "DocumentSecurityPolicy.h"

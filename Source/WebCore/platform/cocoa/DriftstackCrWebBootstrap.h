@@ -22,7 +22,7 @@
  *   gcrweb            = { gCrWebLegacy: <alias to __gCrWeb> }   (enumerable)
  *   _injected_gcrweb  = true   (boolean)
  *   __gCrWeb          = {                                       (enumerable)
- *     autofill_form_features: { 16 fns: is*/set* feature toggles },
+ *     autofill_form_features: { 16 fns: is* / set* feature toggles },
  *     common:  { JSONSafeObject: fn, JSONStringify: fn },
  *     fill:    { ID_SYMBOL: symbol, value: fn, + 28 fns },
  *     form:    { 10 fns + wasEditedByUser: object },
