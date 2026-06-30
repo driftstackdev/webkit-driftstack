@@ -31,8 +31,10 @@
 #import <sys/time.h>
 #import <wtf/Scope.h>
 #import <unistd.h>
+#import <span>
 #import <wtf/Assertions.h>
 #import <wtf/cocoa/SpanCocoa.h>
+#import <wtf/text/CString.h>
 #import <wtf/text/MakeString.h>
 
 namespace WebKit {
@@ -226,8 +228,121 @@ Socks5Result DriftstackSocks5Client::performHandshake()
     return Socks5Result::ProtocolError;
 }
 
-// RFC 1928 §4 + §6: TCP CONNECT with ATYP=0x03 (DOMAINNAME). Per EG-WK-1.9
-// Slice 1 default — never sends pre-resolved IPv4 (no local DNS leak).
+// W2900 (#46) — classify a destination host string. Most dests are HOSTNAMES
+// (ATYP=0x03 domain, proxy-side resolution, no local DNS leak). But the WebKit
+// loader can also hand us an IP LITERAL (e.g. a page that references a resource
+// by raw IP — browserleaks' IPv6 connectivity probes do exactly this with
+// [2604:a880:…] literals). Sending a literal as ATYP=0x03 makes the proxy try to
+// resolve the dotted/colon string as a DNS name → REP=0x03. Send the matching
+// ATYP for literals so a real IPv4-literal dest connects, and so we can tell a
+// hostname (retry-eligible) apart from a literal (genuinely unreachable on an
+// IPv4-only proxy, no retry — preserves W2868 fail-fast).
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+static DestAddrKind classifyDest(const CString& hostUtf8)
+{
+    struct in_addr a4 { };
+    if (inet_pton(AF_INET, hostUtf8.data(), &a4) == 1)
+        return DestAddrKind::IPv4Literal;
+    struct in6_addr a6 { };
+    if (inet_pton(AF_INET6, hostUtf8.data(), &a6) == 1)
+        return DestAddrKind::IPv6Literal;
+    return DestAddrKind::Hostname;
+}
+
+// W2900 (#46) — send one RFC 1928 §4 CONNECT request on `fd` with the ATYP that
+// matches the destination kind, then read the §6 reply header [VER, REP, RSV,
+// ATYP] and drain the BND.ADDR/BND.PORT. On success fills `outBndHost`/`outBndPort`.
+// Returns the reply REP byte via `outRep` so the caller can distinguish the
+// IPv4-fallback-eligible 0x03/0x04 from a hard protocol/transport failure
+// (signalled by a false return). Pure transport helper — no retry policy here.
+bool DriftstackSocks5Client::sendConnectAndReadReply(int fd, const Socks5Endpoint& destination, DestAddrKind kind,
+    uint8_t& outRep, String& outBndHost, uint16_t& outBndPort)
+{
+    auto destUtf8 = destination.host.utf8();
+    Vector<uint8_t> req;
+    req.append(Socks5::kVersion5);
+    req.append(Socks5::kCmdConnect);
+    req.append(Socks5::kReserved);
+    if (kind == DestAddrKind::IPv4Literal) {
+        // [ATYP=0x01, 4-byte IPv4 in network order]
+        req.append(Socks5::kAtypIpv4);
+        struct in_addr a4 { };
+        inet_pton(AF_INET, destUtf8.data(), &a4);
+        uint32_t net = a4.s_addr;  // already network byte order
+        req.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(&net), 4 });
+    } else if (kind == DestAddrKind::IPv6Literal) {
+        // [ATYP=0x04, 16-byte IPv6]
+        req.append(Socks5::kAtypIpv6);
+        struct in6_addr a6 { };
+        inet_pton(AF_INET6, destUtf8.data(), &a6);
+        req.append(std::span<const uint8_t> { a6.s6_addr, 16 });
+    } else {
+        // [ATYP=0x03 DOMAIN, DLEN, DOMAIN...] — default, proxy-side DNS, no local leak.
+        req.append(Socks5::kAtypDomain);
+        req.append(static_cast<uint8_t>(destUtf8.length()));
+        req.append(destUtf8.span());
+    }
+    uint16_t portBE = htons(destination.port);
+    req.append(static_cast<uint8_t>(portBE & 0xFF));
+    req.append(static_cast<uint8_t>((portBE >> 8) & 0xFF));
+    if (!sendAll(fd, req.span().data(), req.size()))
+        return false;
+
+    // [VER=5, REP, RSV=0, ATYP, BND.ADDR..., BND.PORT_BE]
+    uint8_t hdr[4];
+    if (!recvAll(fd, hdr, 4))
+        return false;
+    if (hdr[0] != Socks5::kVersion5)
+        return false;
+    outRep = hdr[1];
+    if (hdr[1] != Socks5::kReplySucceeded)
+        return true;  // a valid reply frame, but non-success — caller inspects outRep
+
+    uint8_t replyAtyp = hdr[3];
+    if (replyAtyp == Socks5::kAtypIpv4) {
+        uint8_t addr[4];
+        if (!recvAll(fd, addr, 4)) return false;
+        outBndHost = makeString(unsigned(addr[0]), '.', unsigned(addr[1]), '.', unsigned(addr[2]), '.', unsigned(addr[3]));
+    } else if (replyAtyp == Socks5::kAtypDomain) {
+        uint8_t dlen;
+        if (!recvAll(fd, &dlen, 1)) return false;
+        Vector<uint8_t> domainBuf;
+        domainBuf.grow(dlen);
+        if (!recvAll(fd, domainBuf.mutableSpan().data(), dlen)) return false;
+        outBndHost = String::fromUTF8(domainBuf.span());
+    } else if (replyAtyp == Socks5::kAtypIpv6) {
+        uint8_t addr[16];
+        if (!recvAll(fd, addr, 16)) return false;
+        outBndHost = "[ipv6]"_s;
+    } else
+        return false;
+    uint8_t portBytes[2];
+    if (!recvAll(fd, portBytes, 2)) return false;
+    outBndPort = (static_cast<uint16_t>(portBytes[0]) << 8) | portBytes[1];
+    return true;
+}
+WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+// RFC 1928 §4 + §6: TCP CONNECT. Hostname dests use ATYP=0x03 (DOMAINNAME) —
+// proxy-side resolution, never a pre-resolved address (no local DNS leak), the
+// EG-WK-1.9 Slice 1 default. IP-literal dests use the matching ATYP (0x01/0x04).
+//
+// W2900 (#46 — westernunion + heavy dual-stack sites): some SOCKS5 proxies
+// (the founder's nodemaven gate is IPv4-only-egress) resolve a dual-stack
+// hostname to its AAAA record on their side and then can't route it → REP=0x03
+// (network unreachable). That selection is NON-DETERMINISTIC per resolution
+// (verified: 80/80 ATYP=domain CONNECTs to westernunion.com succeed on IPv4,
+// but the founder's live load hit a transient AAAA pick → REP=0x03). W2868 made
+// 0x03/0x04 fail FAST with NO retry to stop the 7× nav-budget-burning retry
+// storm — correct for an IP-literal dest, but it also permanently dropped a
+// hostname that a single fresh re-resolution would have routed over IPv4. So:
+// for a HOSTNAME dest that REP=0x03/0x04s, tear down the proxy socket and retry
+// the CONNECT exactly ONCE on a fresh connection+handshake. The proxy re-resolves
+// (independent A/AAAA pick), so the retry lands on a reachable IPv4 with
+// overwhelming probability — still ATYP=0x03 (no local DNS leak), still bounded
+// (one extra round-trip, not the 7× loader storm W2868 killed). An IP-LITERAL
+// dest is NOT retried (an IPv6 literal on an IPv4-only proxy is genuinely
+// unreachable, exactly as it is on a real IPv4-only iPhone — preserves W2868).
 Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destination, Socks5Endpoint& out)
 {
     if (!m_impl->handshakeOk) {
@@ -235,75 +350,76 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
         if (h != Socks5Result::Success)
             return h;
     }
-    int fd = m_impl->socketFd;
 
     auto destUtf8 = destination.host.utf8();
     if (destUtf8.length() > 255)
         return Socks5Result::DomainTooLong;
+    DestAddrKind kind = classifyDest(destUtf8);
 
-    // [VER=5, CMD=CONNECT, RSV=0, ATYP=DOMAIN, DLEN, DOMAIN..., PORT_BE_HI, PORT_BE_LO]
-    Vector<uint8_t> req;
-    req.append(Socks5::kVersion5);
-    req.append(Socks5::kCmdConnect);
-    req.append(Socks5::kReserved);
-    req.append(Socks5::kAtypDomain);
-    req.append(static_cast<uint8_t>(destUtf8.length()));
-    req.append(destUtf8.span());
-    uint16_t portBE = htons(destination.port);
-    req.append(static_cast<uint8_t>(portBE & 0xFF));
-    req.append(static_cast<uint8_t>((portBE >> 8) & 0xFF));
-    if (!sendAll(fd, req.span().data(), req.size()))
-        return Socks5Result::ConnectFailed;
+    const int kMaxConnectAttempts = (kind == DestAddrKind::Hostname) ? 2 : 1;
+    for (int attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
+        int fd = m_impl->socketFd;
+        uint8_t rep = Socks5::kReplyGeneralFailure;
+        String bndHost;
+        uint16_t bndPort = 0;
+        bool replyOk = sendConnectAndReadReply(fd, destination, kind, rep, bndHost, bndPort);
 
-    // [VER=5, REP, RSV=0, ATYP, BND.ADDR..., BND.PORT_BE]
-    uint8_t hdr[4];
-    if (!recvAll(fd, hdr, 4))
-        return Socks5Result::ConnectFailed;
-    if (hdr[0] != Socks5::kVersion5)
-        return Socks5Result::ProtocolError;
-    if (hdr[1] != Socks5::kReplySucceeded) {
-        WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: SOCKS5 reply REP=0x%02x (non-success) for %s:%u",
-            unsigned(hdr[1]), destUtf8.data(), unsigned(destination.port));
-        // W2868 (#39): REP=0x03 (network unreachable) / 0x04 (host unreachable) is PERMANENT for this proxy+dest
-        // (classically an IPv6-literal dest reached via an IPv4-only proxy — the founder's UDP-proxy page-load
-        // case). Surface it distinctly so the loader fails FAST instead of retry-storming a destination that can
-        // never connect (the 7× retry burned the 45s nav budget → -1001 page-load timeout).
-        if (hdr[1] == Socks5::kReplyNetworkUnreachable || hdr[1] == Socks5::kReplyHostUnreachable)
+        if (replyOk && rep == Socks5::kReplySucceeded) {
+            out.host = bndHost;
+            out.port = bndPort;
+            m_impl->tcpConnected = true;
+            WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: success — dest=%s:%u via proxy, BND=%s:%u, ATYP=0x%02x sent%s (attempt %d/%d, no local DNS leak)",
+                destUtf8.data(), unsigned(destination.port),
+                bndHost.utf8().data(), unsigned(bndPort),
+                unsigned(kind == DestAddrKind::IPv4Literal ? Socks5::kAtypIpv4 : kind == DestAddrKind::IPv6Literal ? Socks5::kAtypIpv6 : Socks5::kAtypDomain),
+                kind == DestAddrKind::Hostname ? " (domain)" : " (literal)",
+                attempt, kMaxConnectAttempts);
+            return Socks5Result::Success;
+        }
+
+        if (!replyOk) {
+            // transport/protocol failure reading the reply — not a routing REP.
+            WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: send/recv failure for %s:%u (attempt %d/%d)",
+                destUtf8.data(), unsigned(destination.port), attempt, kMaxConnectAttempts);
+            return Socks5Result::ConnectFailed;
+        }
+
+        // Valid SOCKS5 reply, non-success REP.
+        WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: SOCKS5 reply REP=0x%02x (non-success) for %s:%u (attempt %d/%d)",
+            unsigned(rep), destUtf8.data(), unsigned(destination.port), attempt, kMaxConnectAttempts);
+
+        bool unreachable = (rep == Socks5::kReplyNetworkUnreachable || rep == Socks5::kReplyHostUnreachable);
+        bool canRetry = unreachable && kind == DestAddrKind::Hostname && attempt < kMaxConnectAttempts;
+        if (canRetry) {
+            // W2900: the proxy's per-resolution AAAA-vs-A pick failed this time. Drop the proxy
+            // socket and re-handshake so the next CONNECT triggers a fresh proxy-side resolution
+            // (overwhelmingly IPv4 on an IPv4-only-egress proxy). Still ATYP=0x03 — no local DNS leak.
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x via proxy — re-resolving over a FRESH proxy connection (one IPv4-forcing retry, ATYP=0x03, no leak)",
+                destUtf8.data(), unsigned(rep));
+            if (m_impl->socketFd >= 0) {
+                ::close(m_impl->socketFd);
+                m_impl->socketFd = -1;
+            }
+            m_impl->handshakeOk = false;
+            auto h = performHandshake();
+            if (h != Socks5Result::Success) {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] re-handshake to proxy failed (%d) on IPv4-forcing retry for %s",
+                    static_cast<int>(h), destUtf8.data());
+                return h;
+            }
+            continue;
+        }
+
+        // No retry: an IP-literal dest, or the hostname retry already failed. Surface the
+        // distinct fail-fast result so the loader does NOT retry-storm (W2868).
+        if (unreachable) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2868] SOCKS5 dest %s UNREACHABLE via proxy (network/host-unreachable, %s) — fail fast, NO further retry",
+                destUtf8.data(), kind == DestAddrKind::Hostname ? "hostname after IPv4-forcing retry" : "IP literal");
             return Socks5Result::DestinationUnreachable;
+        }
         return Socks5Result::ConnectFailed;
     }
-    uint8_t replyAtyp = hdr[3];
-    String bndHost;
-    if (replyAtyp == Socks5::kAtypIpv4) {
-        uint8_t addr[4];
-        if (!recvAll(fd, addr, 4)) return Socks5Result::ConnectFailed;
-        bndHost = makeString(unsigned(addr[0]), '.', unsigned(addr[1]), '.', unsigned(addr[2]), '.', unsigned(addr[3]));
-    } else if (replyAtyp == Socks5::kAtypDomain) {
-        uint8_t dlen;
-        if (!recvAll(fd, &dlen, 1)) return Socks5Result::ConnectFailed;
-        Vector<uint8_t> domainBuf;
-        domainBuf.grow(dlen);
-        if (!recvAll(fd, domainBuf.mutableSpan().data(), dlen)) return Socks5Result::ConnectFailed;
-        bndHost = String::fromUTF8(domainBuf.span());
-    } else if (replyAtyp == Socks5::kAtypIpv6) {
-        uint8_t addr[16];
-        if (!recvAll(fd, addr, 16)) return Socks5Result::ConnectFailed;
-        bndHost = "[ipv6]"_s;
-    } else {
-        return Socks5Result::ProtocolError;
-    }
-    uint8_t portBytes[2];
-    if (!recvAll(fd, portBytes, 2)) return Socks5Result::ConnectFailed;
-    uint16_t bndPort = (static_cast<uint16_t>(portBytes[0]) << 8) | portBytes[1];
-
-    out.host = bndHost;
-    out.port = bndPort;
-    m_impl->tcpConnected = true;
-
-    WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: success — dest=%s:%u via proxy, BND=%s:%u, ATYP=0x03 (domain) sent (no local DNS leak)",
-        destUtf8.data(), unsigned(destination.port),
-        bndHost.utf8().data(), unsigned(bndPort));
-    return Socks5Result::Success;
+    return Socks5Result::ConnectFailed;
 }
 
 // RFC 1928 §4 + §6 UDP ASSOCIATE (CMD=0x03). Sends request over the

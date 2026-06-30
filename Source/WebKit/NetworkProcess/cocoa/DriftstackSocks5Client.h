@@ -104,6 +104,13 @@ struct Socks5UdpRelayChannel {
     uint16_t relayPort { 0 };  // BND.PORT — datagrams sent here, wrapped per §7
 };
 
+// W2900 (#46) — kind of a CONNECT destination host. Hostnames go ATYP=0x03
+// (domain; proxy-side DNS, no local leak) and are eligible for a single
+// IPv4-forcing re-resolution on REP=0x03/0x04; IP literals use ATYP=0x01/0x04
+// and are never retried (an IPv6 literal on an IPv4-only proxy is genuinely
+// unreachable — preserves the W2868 fail-fast).
+enum class DestAddrKind : uint8_t { Hostname, IPv4Literal, IPv6Literal };
+
 // Phase A (Wave 29-368): interface only. Phase B/C land actual networking.
 class DriftstackSocks5Client {
 public:
@@ -146,6 +153,13 @@ public:
                                                  Socks5Endpoint& source);
 
 private:
+    // W2900 (#46) — send one CONNECT with the ATYP matching `kind`, read the §6
+    // reply header + drain BND.ADDR/PORT. `outRep` returns the reply REP byte so
+    // tcpConnect can distinguish a retry-eligible 0x03/0x04 from a hard failure
+    // (false return). No retry policy here — that lives in tcpConnect.
+    bool sendConnectAndReadReply(int fd, const Socks5Endpoint& destination, DestAddrKind kind,
+        uint8_t& outRep, String& outBndHost, uint16_t& outBndPort);
+
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
