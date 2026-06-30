@@ -510,10 +510,11 @@ String DateCache::timeZoneDisplayName(bool isDST)
             { "Pacific/Midway"_s,       "Samoa Standard Time", "American Samoa Standard Time" },
             { "Pacific/Pago_Pago"_s,    "Samoa Standard Time", "American Samoa Standard Time" },
             { "Pacific/Ponape"_s,       "Ponape Time", "Pohnpei Time" },
-            // Türkiye: OLD = bare "GMT+03:00" (empty → fall through to macOS ICU, which produces it) →
-            // NEW = "Türkiye Standard Time". Asia/Istanbul = alias of Europe/Istanbul.
-            { "Europe/Istanbul"_s,      "", "T\xC3\xBCrkiye Standard Time" },
-            { "Asia/Istanbul"_s,        "", "T\xC3\xBCrkiye Standard Time" },
+            // Türkiye: OLD = explicit "GMT+03:00" — macOS ICU's new CLDR WRONGLY produces "Türkiye
+            // Standard Time" pre-26.4, so serve the offset explicitly (real 26.3 GT = "GMT+03:00";
+            // verified wl6mgnqcy). NEW = "Türkiye Standard Time". Asia/Istanbul = alias of Europe/Istanbul.
+            { "Europe/Istanbul"_s,      "GMT+03:00", "T\xC3\xBCrkiye Standard Time" },
+            { "Asia/Istanbul"_s,        "GMT+03:00", "T\xC3\xBCrkiye Standard Time" },
         };
         // Archetype Safari version (from DRIFTSTACK_ARCHETYPE "safariNN_M" token; e.g. "safari26_4").
         // Parse major and minor (underscore-separated). 0/0 if unset → defaults to the NEW-CLDR band

@@ -1341,9 +1341,11 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
         { "Pacific/Midway"_s,            "Samoa Standard Time", "American Samoa Standard Time" },
         { "Pacific/Pago_Pago"_s,         "Samoa Standard Time", "American Samoa Standard Time" },
         { "Pacific/Ponape"_s,            "Ponape Time", "Pohnpei Time" },
-        // Türkiye: OLD = bare "GMT+03:00" (nullptr → macOS ICU fallback) → NEW = "Türkiye Standard Time".
-        { "Europe/Istanbul"_s,           nullptr, "T\xC3\xBCrkiye Standard Time" },
-        { "Asia/Istanbul"_s,             nullptr, "T\xC3\xBCrkiye Standard Time" },
+        // Türkiye: OLD = explicit "GMT+03:00" — macOS ICU's new CLDR WRONGLY produces "Türkiye Standard
+        // Time" pre-26.4, so serve the offset explicitly (real 26.3 iPhone_14 GT longName = "GMT+03:00";
+        // verified wl6mgnqcy). NEW (>=26.4) = "Türkiye Standard Time".
+        { "Europe/Istanbul"_s,           "GMT+03:00", "T\xC3\xBCrkiye Standard Time" },
+        { "Asia/Istanbul"_s,             "GMT+03:00", "T\xC3\xBCrkiye Standard Time" },
     };
     bool isNew = driftstackSafariIsNewCLDR();
     for (auto& entry : entries) {
