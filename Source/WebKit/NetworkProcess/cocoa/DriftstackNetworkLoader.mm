@@ -1735,7 +1735,11 @@ void DriftstackNetworkLoader::resume()
     // drivable. First-party requests keep the full 20s W2750 budget. Gate-off: always 20s.
     if (currentAttempt == 1) {
         Seconds perRequestBudget = Seconds(20);
-        if (driftstackAdmissionPacingEnabled() && requestIsThirdParty)
+        // #46: the 8s 3p fast-fail STAYS on EGRESS_RELIABILITY (NOT the new concurrency gate) — W2994
+        // disabled it because too-tight deadlines crashed pages on real residential NodeMaven RTT. The new
+        // EGRESS_CONCURRENCY gate ships ONLY the pure-pacing caps (admission + handshake), the proven RANK-1
+        // hang fix with no crash history; the deadlines re-enable separately after a wider NodeMaven verify.
+        if (driftstackEgressReliabilityEnabled() && requestIsThirdParty)
             perRequestBudget = driftstackThirdPartyRetryBudget();
         m_retryDeadline = MonotonicTime::now() + perRequestBudget;
     }
@@ -1746,7 +1750,9 @@ void DriftstackNetworkLoader::resume()
     // budget (the cause of the WD navigate timeout on heavy multi-origin sites). The
     // first request for a page stamps the deadline; all later requests + retries honour
     // it. Gate-off no-op: driftstackPageDeadlineFor is only consulted when the gate is on.
-    if (driftstackAdmissionPacingEnabled() && pageKey) {
+    // #46: the per-page deadline STAYS on EGRESS_RELIABILITY (NOT the new concurrency gate) — same W2994
+    // crash-risk reasoning as the 3p fast-fail above; only the admission/handshake caps ship under EGRESS_CONCURRENCY.
+    if (driftstackEgressReliabilityEnabled() && pageKey) {
         MonotonicTime pageDeadline = driftstackPageDeadlineFor(pageKey);
         if (pageDeadline && MonotonicTime::now() >= pageDeadline) {
             withinRetryBudget = false;
