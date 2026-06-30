@@ -231,6 +231,14 @@ bool driftstackFamilyAVP9MSEUnsupported(const String& codecs);
 // AV1UtilitiesCocoa / WebRTCProvider.
 bool driftstackArchetypeMP4AV1MSESupported(const String& codecs);
 
+// ── Chrome-on-iOS (CriOS) browser-archetype predicate ────────────────────────
+// True ⟺ the active archetype is a browser:chrome (Chrome-on-iOS) profile
+// (iphone17_ios18_7_chrome148/149/150). Gates the page-world __gCrWeb injection
+// in LocalFrame::injectUserScripts so the Chrome-iOS globals appear ONLY for
+// Chrome archetypes and stay byte-absent on every Safari archetype. Live getenv
+// (NOT static-cached); same shape as the VP9/AV1 MSE pins.
+WEBCORE_EXPORT bool driftstackArchetypeIsChromeBrowser();
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)

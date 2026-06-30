@@ -48,6 +48,8 @@
 #include "DocumentPrefetcher.h"
 #include "DocumentQuirks.h"
 #include "DriftstackArchetypeConfig.h"
+#include "DriftstackCrWebBootstrap.h"
+#include "DOMWrapperWorld.h"
 #include "DocumentResourceLoader.h"
 #include "DocumentSecurityPolicy.h"
 #include "DocumentSyncClient.h"
@@ -791,6 +793,22 @@ void LocalFrame::injectUserScripts(UserScriptInjectionTime injectionTime)
 {
     if (loader().stateMachine().creatingInitialEmptyDocument() && !settings().shouldInjectUserScriptsInInitialEmptyDocument())
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    // Chrome-on-iOS (CriOS) page-world __gCrWeb injection. Real Chrome-iOS injects
+    // a __gCrWeb object tree into the page's MAIN content world at document-start
+    // (page-JS-visible, enumerable on window) via the identical WKUserScript
+    // mechanism; a real Safari session exposes none. For browser:chrome archetypes
+    // (iphone17_ios18_7_chrome148/149/150) the fork emits the same surface so the
+    // Chrome archetype is not detectable as not-real-Chrome. Gated on the chrome
+    // archetype predicate so EVERY Safari archetype stays byte-absent. Injected at
+    // DocumentStart into all frames (real Chrome injects all frames), before the
+    // page's own scripts run. Idempotent (the bootstrap no-ops if __gCrWeb exists).
+    if (injectionTime == UserScriptInjectionTime::DocumentStart && driftstackArchetypeIsChromeBrowser()) {
+        if (RefPtr document = this->document(); document && document->page())
+            protect(this->script())->executeScriptInWorldIgnoringException(mainThreadNormalWorldSingleton(), driftstackCrWebBootstrapScript(), JSC::SourceTaintedOrigin::Untainted);
+    }
+#endif
 
     RefPtr userContentProvider = this->userContentProvider();
     if (!userContentProvider)

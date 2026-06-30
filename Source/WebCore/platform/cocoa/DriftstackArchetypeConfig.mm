@@ -84,6 +84,27 @@ bool driftstackArchetypeMP4AV1MSESupported(const String& codecs)
     return arch.startsWith("iphone15pro"_s) || arch.startsWith("iphone16"_s) || arch.startsWith("iphone17"_s);
 }
 
+// ── Chrome-on-iOS (CriOS) browser-archetype predicate (one source of truth) ──
+// Gates the page-world __gCrWeb injection (LocalFrame::injectUserScripts) so it
+// fires ONLY for browser:chrome archetypes (iphone17_ios18_7_chrome148/149/150)
+// and is byte-absent on every Safari archetype — real iPhone Safari exposes NO
+// __gCrWeb (verified GT: aio-iPhone_17 has zero gCrWeb keys; the criosdelta GT
+// has the full enumerable tree). Same live-getenv (NOT static-cached) +
+// string-check shape as driftstackFamilyAVP9MSEUnsupported /
+// driftstackArchetypeMP4AV1MSESupported so the gate cannot drift.
+//
+// Chrome archetype ids carry "_chrome" (chrome148/149/150); a JSON "browser":
+// "chrome" field exists too but the env id is the always-set, parse-independent
+// signal (the config-path load is env-gated). Real-device GT:
+// reference/realdevice-bs/criosdelta-iPhone_17-1782822507714.json (deep, 2026-06-30).
+bool driftstackArchetypeIsChromeBrowser()
+{
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    return String::fromLatin1(a).contains("_chrome"_s);
+}
+
 void DriftstackArchetypeConfig::loadFromEnv()
 {
     // Wave 29-393 → 29-394 → 29-395 RETRY → 29-395 REVERTED again:
