@@ -1355,6 +1355,48 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
     return nullptr;
 }
 
+// G3 (tz-lang audit wponds5b1) — NON-LONG timeZoneName variant overrides. The LONG override
+// above fixes only TimeZoneName::Long; the short / shortGeneric / longGeneric / shortOffset /
+// longOffset variants fall through to macOS ICU, which diverges from a real iPhone on a handful
+// of (zone, variant) cells. Captured BAND-INVARIANT on real iPhone 16 Pro/Safari 18.6 AND
+// iPhone 17/Safari 26.5 (reference/realdevice-bs/tznamevariants-iPhone_*):
+//   - GMT / Etc/GMT, short        : macOS "GMT"                 -> iPhone "UTC"
+//   - GMT / Etc/GMT, longGeneric  : macOS "Greenwich Mean Time" -> iPhone "GMT"
+//   - Pacific/Honolulu, longGeneric : macOS "Honolulu Time"     -> iPhone "Hawaii-Aleutian Standard Time"
+//   - Asia/Anadyr, longGeneric    : macOS "Petropavlovsk-Kamchatski Standard Time" -> iPhone "Anadyr Standard Time"
+// (All other variant cells for all probed zones already match macOS ICU.) Returns nullptr →
+// fall through to macOS ICU (the common case for every other zone/variant).
+//
+// `variant` is the raw IntlDateTimeFormat::TimeZoneName enumerator value (uint8_t underlying) —
+// passed as the underlying type because the enum is a private class member and this free function
+// can't name it. The members map to the IntlDateTimeFormat.h enum: None=0, Short=1, Long=2,
+// ShortOffset=3, LongOffset=4, ShortGeneric=5, LongGeneric=6. Mirrored here for the dispatch.
+enum class DriftstackTZNameVariant : uint8_t { None = 0, Short = 1, Long = 2, ShortOffset = 3, LongOffset = 4, ShortGeneric = 5, LongGeneric = 6 };
+static const char* driftstackIPhoneZoneNameForVariant(const String& resolvedTimeZone, uint8_t variant)
+{
+    auto v = static_cast<DriftstackTZNameVariant>(variant);
+    if (v == DriftstackTZNameVariant::Long)
+        return driftstackIPhoneLongZoneName(resolvedTimeZone);
+
+    bool isGMT = (resolvedTimeZone == "GMT"_s || resolvedTimeZone == "Etc/GMT"_s);
+    switch (v) {
+    case DriftstackTZNameVariant::Short:
+        if (isGMT)
+            return "UTC";
+        return nullptr;
+    case DriftstackTZNameVariant::LongGeneric:
+        if (isGMT)
+            return "GMT";
+        if (resolvedTimeZone == "Pacific/Honolulu"_s)
+            return "Hawaii-Aleutian Standard Time";
+        if (resolvedTimeZone == "Asia/Anadyr"_s)
+            return "Anadyr Standard Time";
+        return nullptr;
+    default:
+        return nullptr;
+    }
+}
+
 // True for the UDateFormatField values that partTypeString() maps to "timeZoneName".
 static bool driftstackIsTimeZoneField(UDateFormatField field)
 {
@@ -1384,11 +1426,19 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
         return throwRangeError(globalObject, scope, "date value is not finite in DateTimeFormat format()"_s);
 
 #if PLATFORM(DRIFTSTACK)
-    // For the LONG zone style on one of the 26 iOS/macOS-divergent zones, locate the time-zone field
-    // via the field-position iterator and splice in the iPhone-correct display name. Zero overhead for
-    // every other format() call (common case): the udat_format path below is unchanged.
-    if (m_timeZoneName == TimeZoneName::Long) {
-        if (const char* iosName = driftstackIPhoneLongZoneName(m_timeZoneForResolvedOptions)) {
+    // Lock the DriftstackTZNameVariant mirror to the (private) IntlDateTimeFormat::TimeZoneName enum
+    // values used by driftstackIPhoneZoneNameForVariant — fail the build if upstream reorders them.
+    static_assert(static_cast<uint8_t>(TimeZoneName::None) == static_cast<uint8_t>(DriftstackTZNameVariant::None));
+    static_assert(static_cast<uint8_t>(TimeZoneName::Short) == static_cast<uint8_t>(DriftstackTZNameVariant::Short));
+    static_assert(static_cast<uint8_t>(TimeZoneName::Long) == static_cast<uint8_t>(DriftstackTZNameVariant::Long));
+    static_assert(static_cast<uint8_t>(TimeZoneName::LongGeneric) == static_cast<uint8_t>(DriftstackTZNameVariant::LongGeneric));
+    // For the iOS/macOS-divergent zones, locate the time-zone field via the field-position iterator
+    // and splice in the iPhone-correct display name. Covers the LONG style (the 26 #106 zones) plus
+    // the G3 non-LONG variant overrides (GMT/Etc/GMT short+longGeneric, Honolulu/Anadyr longGeneric).
+    // Zero overhead for every other format() call (common case): driftstackIPhoneZoneNameForVariant
+    // returns nullptr and the udat_format path below is unchanged.
+    if (m_timeZoneName != TimeZoneName::None) {
+        if (const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName))) {
             UErrorCode fstatus = U_ZERO_ERROR;
             auto fields = std::unique_ptr<UFieldPositionIterator, UFieldPositionIteratorDeleter>(ufieldpositer_open(&fstatus));
             if (U_SUCCESS(fstatus)) {
@@ -1536,10 +1586,11 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
         if (fieldType >= 0) {
             auto type = jsNontrivialString(vm, partTypeString(UDateFormatField(fieldType)));
 #if PLATFORM(DRIFTSTACK)
-            // Override the LONG zone-name part for the 26 iOS/macOS-divergent zones (see format()).
+            // Override the zone-name part for the iOS/macOS-divergent zones (see format()): LONG (#106
+            // 26 zones) + the G3 non-LONG variants (GMT short+longGeneric, Honolulu/Anadyr longGeneric).
             const char* iosZoneName = nullptr;
-            if (m_timeZoneName == TimeZoneName::Long && driftstackIsTimeZoneField(UDateFormatField(fieldType)))
-                iosZoneName = driftstackIPhoneLongZoneName(m_timeZoneForResolvedOptions);
+            if (m_timeZoneName != TimeZoneName::None && driftstackIsTimeZoneField(UDateFormatField(fieldType)))
+                iosZoneName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
             auto value = iosZoneName
                 ? jsString(vm, String::fromUTF8(iosZoneName))
                 : jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
