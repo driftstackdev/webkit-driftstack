@@ -1245,48 +1245,110 @@ static void NODELETE replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(Contain
 
 // https://tc39.es/ecma402/#sec-formatdatetime
 #if PLATFORM(DRIFTSTACK)
-// The 26 IANA zones whose en-US LONG (specific non-location, "zzzz") display name differs between
-// iOS ICU (real iPhone) and the fork's host macOS ICU. All have std==dst (none currently observe
-// DST), so a single name per zone. Built from the iOS-26.5 simulator (== real iPhone) vs the fork's
-// macOS ICU across all 448 IANA zones (alltz + tzresolve probes, fp-divergence-sweep 2026-06-21).
-// Keyed on the resolved-options identifier: resolvedOptions().timeZone preserves the *input* id, so
-// "GMT" stays "GMT" — distinct from "UTC", which is NOT divergent on Safari 26.x. Mirrors the
-// JSDateMath.cpp Date.prototype.toString() table; kept separate because the Intl path needs no
-// version gating here (only the LONG style and only these canonical ids are touched).
+// PER-SAFARI-VERSION-BAND timezone-display-name override, mirroring JSDateMath.cpp's
+// Date.prototype.toString() table. The iOS CLDR data version ships per Safari release, so the en-US
+// LONG ("zzzz", specific non-location) display name for these zones FLIPS across version bands:
+//   - Safari <26.4  (verified real-device GTs 18.6 iPhone_16_Pro/Plus, 26.2 iPhone_14): OLD-CLDR
+//     metropolitan names (Lagos="West Africa Standard Time", Taipei="Taipei Standard Time",
+//     Kamchatka="Petropavlovsk-Kamchatski Standard Time", Apia="Apia Standard Time", ...).
+//   - Safari >=26.4 (verified 26.4 iPhone_17/14/15PM, 27.0 iPhone_16PM): NEW-CLDR metropolitan names
+//     (Lagos="West Africa Time", Taipei="Taiwan Standard Time", ...) — the launch (#106) values.
+// GMT/Etc/GMT oscillate independently: "Coordinated Universal Time" on 18.6 (<26), "Greenwich Mean
+// Time" on 26.0-26.x, reverting to "Coordinated Universal Time" on 27.0. Keyed on the
+// resolved-options identifier (resolvedOptions().timeZone preserves the *input* id, so "GMT" stays
+// "GMT" — distinct from "UTC", which resolves to "Coordinated Universal Time" via macOS ICU on every
+// band). All zones have std==dst (none currently observe DST) → single name per zone.
+// Bands characterized from real-device BrowserStack tzResolve GTs, NOT the booted simulator (whose
+// ICU lags — the Asia/Anadyr / Asia/Kamchatka split lesson). Returns nullptr → fall through to ICU.
+static bool driftstackSafariIsNewCLDR()
+{
+    // NEW-CLDR band = Safari >= 26.4. Unset (no archetype) → NEW (launch default). Token format is
+    // DRIFTSTACK_ARCHETYPE "...safari<major>_<minor>..." e.g. "safari26_4".
+    int major = 0;
+    int minor = 0;
+    if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE")) {
+        std::string_view sv { dsArch };
+        auto pos = sv.find("safari");
+        if (pos != std::string_view::npos) {
+            sv.remove_prefix(pos + 6);
+            size_t i = 0;
+            for (; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+                major = major * 10 + (sv[i] - '0');
+            if (i < sv.size() && sv[i] == '_') {
+                ++i;
+                for (; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+                    minor = minor * 10 + (sv[i] - '0');
+            }
+        }
+    }
+    return major == 0 || major > 26 || (major == 26 && minor >= 4);
+}
+
+static const char* driftstackGMTName()
+{
+    // "Greenwich Mean Time" on Safari 26.0-26.x; "Coordinated Universal Time" on 18.6 (<26) and on
+    // 27.0+ (revert). Unset → "Greenwich Mean Time" (launch 26.4 default).
+    int major = 0;
+    if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE")) {
+        std::string_view sv { dsArch };
+        auto pos = sv.find("safari");
+        if (pos != std::string_view::npos) {
+            sv.remove_prefix(pos + 6);
+            for (char c : sv.substr(0, sv.find('_'))) {
+                if (c < '0' || c > '9')
+                    break;
+                major = major * 10 + (c - '0');
+            }
+        }
+    }
+    return (major == 0 || major == 26) ? "Greenwich Mean Time" : "Coordinated Universal Time";
+}
+
 static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
 {
-    struct Entry { ASCIILiteral zone; const char* name; };
+    // GMT / Etc/GMT: band-selected name (oscillates CUT->GMT->CUT). UTC/Etc/UTC are NOT overridden —
+    // they resolve to "Coordinated Universal Time" via macOS ICU on every captured band.
+    if (resolvedTimeZone == "GMT"_s || resolvedTimeZone == "Etc/GMT"_s)
+        return driftstackGMTName();
+
+    // newName/oldName == same string for zones iOS never changed (Anadyr, Honolulu). A nullptr
+    // band-value means: serve NO override (fall through to macOS ICU) — used for Istanbul pre-26.4,
+    // where the real device returns a bare "GMT+03:00" that macOS ICU already produces.
+    struct Entry { ASCIILiteral zone; const char* oldName; const char* newName; };
     static constexpr Entry entries[] = {
-        { "Africa/Bangui"_s,             "West Africa Time" },
-        { "Africa/Brazzaville"_s,        "West Africa Time" },
-        { "Africa/Douala"_s,             "West Africa Time" },
-        { "Africa/Kinshasa"_s,           "West Africa Time" },
-        { "Africa/Lagos"_s,              "West Africa Time" },
-        { "Africa/Libreville"_s,         "West Africa Time" },
-        { "Africa/Luanda"_s,             "West Africa Time" },
-        { "Africa/Malabo"_s,             "West Africa Time" },
-        { "Africa/Ndjamena"_s,           "West Africa Time" },
-        { "Africa/Niamey"_s,             "West Africa Time" },
-        { "Africa/Porto-Novo"_s,         "West Africa Time" },
-        { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time" }, // U+2019 (macOS uses a hyphen)
-        { "Asia/Anadyr"_s,               "Anadyr Standard Time" }, // iOS-26 CLDR splits Anadyr from Kamchatka; macOS ICU collapses to "Kamchatka Standard Time" (real-device GT iPhone 14/15PM/17 Saf26.4)
-        { "Asia/Brunei"_s,               "Brunei Time" },
-        { "Asia/Dili"_s,                 "Timor-Leste Time" },
-        { "Asia/Hovd"_s,                 "Khovd Standard Time" },
-        { "Asia/Kamchatka"_s,            "Kamchatka Standard Time" },
-        { "Asia/Taipei"_s,               "Taiwan Standard Time" },
-        { "Pacific/Apia"_s,              "Samoa Standard Time" },
-        { "Pacific/Honolulu"_s,          "Hawaii-Aleutian Standard Time" }, // macOS: "GMT-10:00"
-        { "Pacific/Midway"_s,            "American Samoa Standard Time" },
-        { "Pacific/Pago_Pago"_s,         "American Samoa Standard Time" },
-        { "Pacific/Ponape"_s,            "Pohnpei Time" },
-        { "Europe/Istanbul"_s,           "T\xC3\xBCrkiye Standard Time" }, // macOS: bare "GMT+03:00"
-        { "GMT"_s,                       "Greenwich Mean Time" }, // macOS: "Coordinated Universal Time"
-        { "Etc/GMT"_s,                   "Greenwich Mean Time" },
+        { "Africa/Bangui"_s,             "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Brazzaville"_s,        "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Douala"_s,             "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Kinshasa"_s,           "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Lagos"_s,              "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Libreville"_s,         "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Luanda"_s,             "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Malabo"_s,             "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Ndjamena"_s,           "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Niamey"_s,             "West Africa Standard Time", "West Africa Time" },
+        { "Africa/Porto-Novo"_s,         "West Africa Standard Time", "West Africa Time" },
+        // OLD: ASCII hyphen "Dumont-d’Urville" → NEW: space "Dumont d’Urville". Both U+2019.
+        { "Antarctica/DumontDUrville"_s, "Dumont-d\xE2\x80\x99Urville Time", "Dumont d\xE2\x80\x99Urville Time" },
+        // Asia/Anadyr: INVARIANT across all bands (distinct metazone from Kamchatka; macOS ICU collapses).
+        { "Asia/Anadyr"_s,               "Anadyr Standard Time", "Anadyr Standard Time" },
+        { "Asia/Brunei"_s,               "Brunei Darussalam Time", "Brunei Time" },
+        { "Asia/Dili"_s,                 "East Timor Time", "Timor-Leste Time" },
+        { "Asia/Hovd"_s,                 "Hovd Standard Time", "Khovd Standard Time" },
+        { "Asia/Kamchatka"_s,            "Petropavlovsk-Kamchatski Standard Time", "Kamchatka Standard Time" },
+        { "Asia/Taipei"_s,               "Taipei Standard Time", "Taiwan Standard Time" },
+        { "Pacific/Apia"_s,              "Apia Standard Time", "Samoa Standard Time" },
+        { "Pacific/Honolulu"_s,          "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" }, // macOS: "GMT-10:00"; INVARIANT
+        { "Pacific/Midway"_s,            "Samoa Standard Time", "American Samoa Standard Time" },
+        { "Pacific/Pago_Pago"_s,         "Samoa Standard Time", "American Samoa Standard Time" },
+        { "Pacific/Ponape"_s,            "Ponape Time", "Pohnpei Time" },
+        // Türkiye: OLD = bare "GMT+03:00" (nullptr → macOS ICU fallback) → NEW = "Türkiye Standard Time".
+        { "Europe/Istanbul"_s,           nullptr, "T\xC3\xBCrkiye Standard Time" },
+        { "Asia/Istanbul"_s,             nullptr, "T\xC3\xBCrkiye Standard Time" },
     };
+    bool isNew = driftstackSafariIsNewCLDR();
     for (auto& entry : entries) {
         if (resolvedTimeZone == entry.zone)
-            return entry.name;
+            return isNew ? entry.newName : entry.oldName;
     }
     return nullptr;
 }

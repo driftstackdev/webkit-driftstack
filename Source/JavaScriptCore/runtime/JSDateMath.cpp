@@ -454,84 +454,118 @@ String DateCache::timeZoneDisplayName(bool isDST)
         // Display-name entries can contain non-ASCII (e.g. "Türkiye"); use
         // UTF-8 char* and convert via String::fromUTF8 at lookup time so
         // multi-byte sequences land as Unicode rather than Latin1-mojibake.
-        // maxSafariMajorExclusive: 0 = apply on all archetypes; N = apply ONLY when the archetype's
-        // Safari major < N (a version-specific row).
-        struct TZDisplayName { ASCIILiteral canonical; const char* standard; const char* dst; uint8_t maxSafariMajorExclusive; };
+        //
+        // PER-SAFARI-VERSION GATING (the CLDR-version bands): the iOS CLDR data version ships per
+        // Safari release, so the en-US LONG display name for these zones FLIPS across version bands.
+        // The override therefore carries BOTH the OLD-CLDR name (pre-26.4) and the NEW-CLDR name
+        // (>=26.4); the band selector below picks the one the archetype's Safari version really
+        // returns. Bands are characterized from real-device BrowserStack GTs (NOT the booted sim,
+        // whose ICU lags — the Asia/Anadyr / Asia/Kamchatka split lesson):
+        //   - Safari <26.4  (verified 18.6 iPhone_16_Pro/Plus; 26.2 iPhone_14): OLD-CLDR metropolitan
+        //     names (Lagos/Kinshasa="West Africa Standard Time", Taipei="Taipei Standard Time",
+        //     Kamchatka="Petropavlovsk-Kamchatski Standard Time", Apia="Apia Standard Time", ...).
+        //   - Safari >=26.4 (verified 26.4 iPhone_17/14/15PM; 27.0 iPhone_16PM): NEW-CLDR metropolitan
+        //     names (Lagos="West Africa Time", Taipei="Taiwan Standard Time", Kamchatka="Kamchatka
+        //     Standard Time", Apia="Samoa Standard Time", ...) — the current launch (#106) values.
+        // GMT/Etc/GMT oscillate INDEPENDENTLY of the metropolitan flip and are handled separately
+        // below: 18.6="Coordinated Universal Time", 26.0-26.x="Greenwich Mean Time", 27.0 reverts to
+        // "Coordinated Universal Time" (real-device GTs).
+        //
+        // newName==oldName for a zone where iOS never changed it (Anadyr, Honolulu) — invariant rows.
+        // An empty oldName/newName ("") means: serve NO override in that band (fall through to macOS
+        // ICU). Used for Istanbul on pre-26.4, where the real device returns a bare "GMT+03:00" that
+        // the macOS ICU fallback already produces.
+        struct TZDisplayName { ASCIILiteral canonical; const char* oldName; const char* newName; };
         // COMPLETE iOS-vs-macOS ICU timezone-display-name divergence table (prod-ready: ALL zones, not
         // a hardcoded few). Built from the iOS-26.5 simulator (== real iPhone) vs the fork's macOS ICU
-        // across all 448 IANA zones (alltz probe, fp-divergence-sweep 2026-06-21): exactly 26 zones'
-        // en-US LONG display name differs. macOS ICU returns a different metazone name (or a bare
-        // GMT±HH:MM offset) for these; iOS returns the names below. Zones NOT listed already match
-        // macOS ICU → handled by the ucal fallback below, so ANY process timezone is iPhone-correct.
+        // across all 448 IANA zones (alltz probe, fp-divergence-sweep 2026-06-21) for the NEW-CLDR
+        // names, and from the real-device tzResolve GTs for the OLD-CLDR names. Zones NOT listed
+        // already match macOS ICU → handled by the ucal fallback below.
         static constexpr TZDisplayName iPhoneTZDisplayNames[] = {
-            // West Africa (macOS "West Africa Standard Time" → iOS "West Africa Time")
-            { "Africa/Bangui"_s,        "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Brazzaville"_s,   "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Douala"_s,        "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Kinshasa"_s,      "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Lagos"_s,         "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Libreville"_s,    "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Luanda"_s,        "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Malabo"_s,        "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Ndjamena"_s,      "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Niamey"_s,        "West Africa Time", "West Africa Time", 0 },
-            { "Africa/Porto-Novo"_s,    "West Africa Time", "West Africa Time", 0 },
-            { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time", "Dumont d\xE2\x80\x99Urville Time", 0 }, // U+2019 apostrophe (macOS uses a hyphen)
-            // Asia/Anadyr is a DISTINCT metazone from Asia/Kamchatka on iOS-26 (CLDR split): iOS
-            // returns "Anadyr Standard Time" (real-device GT, iPhone 14/15PM/17 Safari 26.4), NOT
-            // "Kamchatka Standard Time" — which is what macOS ICU (and the older CLDR) collapses it to.
-            // The #106 row mistakenly carried the macOS/Kamchatka value (a no-op host leak). UTC+12,
-            // no DST → std==dst single name.
-            { "Asia/Anadyr"_s,          "Anadyr Standard Time", "Anadyr Standard Time", 0 },
-            { "Asia/Brunei"_s,          "Brunei Time", "Brunei Time", 0 },
-            { "Asia/Dili"_s,            "Timor-Leste Time", "Timor-Leste Time", 0 },
-            { "Asia/Hovd"_s,            "Khovd Standard Time", "Khovd Standard Time", 0 },
-            { "Asia/Kamchatka"_s,       "Kamchatka Standard Time", "Kamchatka Standard Time", 0 },
-            { "Asia/Taipei"_s,          "Taiwan Standard Time", "Taiwan Standard Time", 0 },
-            { "Pacific/Apia"_s,         "Samoa Standard Time", "Samoa Standard Time", 0 },
-            { "Pacific/Honolulu"_s,     "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time", 0 }, // macOS: "GMT-10:00"
-            { "Pacific/Midway"_s,       "American Samoa Standard Time", "American Samoa Standard Time", 0 },
-            { "Pacific/Pago_Pago"_s,    "American Samoa Standard Time", "American Samoa Standard Time", 0 },
-            { "Pacific/Ponape"_s,       "Pohnpei Time", "Pohnpei Time", 0 },
-            // Türkiye (macOS: bare "GMT+03:00" → iOS: named). Asia/Istanbul = alias of Europe/Istanbul.
-            { "Europe/Istanbul"_s,      "T\xC3\xBCrkiye Standard Time", "T\xC3\xBCrkiye Standard Time", 0 },
-            { "Asia/Istanbul"_s,        "T\xC3\xBCrkiye Standard Time", "T\xC3\xBCrkiye Standard Time", 0 },
-            // GMT / Etc/GMT: iOS = "Greenwich Mean Time" on ALL Safari versions (incl 26.x — verified
-            // iOS-26.5 sim); macOS ICU = "Coordinated Universal Time". NOT version-gated.
-            { "GMT"_s,                  "Greenwich Mean Time", "Greenwich Mean Time", 0 },
-            { "Etc/GMT"_s,              "Greenwich Mean Time", "Greenwich Mean Time", 0 },
-            // UTC / Etc/UTC: VERSION-DEPENDENT — Family-A (Safari 18.x) = "Greenwich Mean Time" (FA ref);
-            // Safari 26.x = "Coordinated Universal Time" (== macOS ICU, verified iOS-26.5 sim + aio
-            // capture). So gate these to Safari<26; on 26.x they skip the table → ICU → correct.
-            { "UTC"_s,                  "Greenwich Mean Time", "Greenwich Mean Time", 26 },
-            { "Etc/UTC"_s,              "Greenwich Mean Time", "Greenwich Mean Time", 26 },
+            // West Africa: OLD "West Africa Standard Time" → NEW "West Africa Time"
+            { "Africa/Bangui"_s,        "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Brazzaville"_s,   "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Douala"_s,        "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Kinshasa"_s,      "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Lagos"_s,         "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Libreville"_s,    "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Luanda"_s,        "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Malabo"_s,        "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Ndjamena"_s,      "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Niamey"_s,        "West Africa Standard Time", "West Africa Time" },
+            { "Africa/Porto-Novo"_s,    "West Africa Standard Time", "West Africa Time" },
+            // OLD: "Dumont-d’Urville Time" (ASCII hyphen) → NEW: "Dumont d’Urville Time" (space). Both U+2019.
+            { "Antarctica/DumontDUrville"_s, "Dumont-d\xE2\x80\x99Urville Time", "Dumont d\xE2\x80\x99Urville Time" },
+            // Asia/Anadyr: INVARIANT "Anadyr Standard Time" across all bands (real-device GT 18.6/26.2/
+            // 26.4/27.0 all agree). A DISTINCT metazone from Kamchatka on iOS; macOS ICU collapses it.
+            { "Asia/Anadyr"_s,          "Anadyr Standard Time", "Anadyr Standard Time" },
+            { "Asia/Brunei"_s,          "Brunei Darussalam Time", "Brunei Time" },
+            { "Asia/Dili"_s,            "East Timor Time", "Timor-Leste Time" },
+            { "Asia/Hovd"_s,            "Hovd Standard Time", "Khovd Standard Time" },
+            { "Asia/Kamchatka"_s,       "Petropavlovsk-Kamchatski Standard Time", "Kamchatka Standard Time" },
+            { "Asia/Taipei"_s,          "Taipei Standard Time", "Taiwan Standard Time" },
+            { "Pacific/Apia"_s,         "Apia Standard Time", "Samoa Standard Time" },
+            // Pacific/Honolulu: INVARIANT "Hawaii-Aleutian Standard Time" (macOS: bare "GMT-10:00").
+            { "Pacific/Honolulu"_s,     "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" },
+            { "Pacific/Midway"_s,       "Samoa Standard Time", "American Samoa Standard Time" },
+            { "Pacific/Pago_Pago"_s,    "Samoa Standard Time", "American Samoa Standard Time" },
+            { "Pacific/Ponape"_s,       "Ponape Time", "Pohnpei Time" },
+            // Türkiye: OLD = bare "GMT+03:00" (empty → fall through to macOS ICU, which produces it) →
+            // NEW = "Türkiye Standard Time". Asia/Istanbul = alias of Europe/Istanbul.
+            { "Europe/Istanbul"_s,      "", "T\xC3\xBCrkiye Standard Time" },
+            { "Asia/Istanbul"_s,        "", "T\xC3\xBCrkiye Standard Time" },
         };
-        // Archetype Safari major (from DRIFTSTACK_ARCHETYPE "safariNN" token); 0 if unset → all rows.
+        // Archetype Safari version (from DRIFTSTACK_ARCHETYPE "safariNN_M" token; e.g. "safari26_4").
+        // Parse major and minor (underscore-separated). 0/0 if unset → defaults to the NEW-CLDR band
+        // (preserves the current launch behaviour when the env var is absent).
         int dsSafariMajor = 0;
+        int dsSafariMinor = 0;
         if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE")) {
             std::string_view sv { dsArch };
             auto pos = sv.find("safari");
             if (pos != std::string_view::npos) {
                 sv.remove_prefix(pos + 6);
-                for (char c : sv) {
-                    if (c < '0' || c > '9')
-                        break;
-                    dsSafariMajor = dsSafariMajor * 10 + (c - '0');
+                size_t i = 0;
+                for (; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+                    dsSafariMajor = dsSafariMajor * 10 + (sv[i] - '0');
+                if (i < sv.size() && sv[i] == '_') {
+                    ++i;
+                    for (; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+                        dsSafariMinor = dsSafariMinor * 10 + (sv[i] - '0');
                 }
             }
         }
+        // NEW-CLDR metropolitan band: Safari >= 26.4 (major>26, or 26.x with minor>=4). Unset (0.0)
+        // → NEW (launch default). Below 26.4 (incl 18.6 and 26.0-26.2) → OLD-CLDR.
+        bool dsNewCLDR = dsSafariMajor == 0
+            || dsSafariMajor > 26
+            || (dsSafariMajor == 26 && dsSafariMinor >= 4);
+        // GMT/Etc/GMT name oscillation (independent of the metropolitan flip): "Greenwich Mean Time"
+        // on Safari 26.0-26.x; "Coordinated Universal Time" on 18.6 (<26) and on 27.0+ (revert).
+        // Unset (0.0) → "Greenwich Mean Time" (launch 26.4 default).
+        const char* dsGmtName = (dsSafariMajor == 0 || (dsSafariMajor == 26))
+            ? "Greenwich Mean Time"
+            : "Coordinated Universal Time";
         String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
         StringView canonicalView(canonicalString);
+        // GMT / Etc/GMT: band-selected (oscillates CUT→GMT→CUT). UTC/Etc/UTC are NOT in this table —
+        // they resolve to "Coordinated Universal Time" via macOS ICU on every band here.
+        if (canonicalView == "GMT"_s || canonicalView == "Etc/GMT"_s) {
+            m_timeZoneStandardDisplayNameCache = String::fromLatin1(dsGmtName);
+            m_timeZoneDSTDisplayNameCache = m_timeZoneStandardDisplayNameCache;
+            return m_timeZoneStandardDisplayNameCache;
+        }
         for (const auto& entry : iPhoneTZDisplayNames) {
-            if (entry.maxSafariMajorExclusive && dsSafariMajor >= entry.maxSafariMajorExclusive)
+            if (canonicalView != StringView(entry.canonical))
                 continue;
-            if (canonicalView == StringView(entry.canonical)) {
-                m_timeZoneStandardDisplayNameCache = String::fromUTF8(entry.standard);
-                m_timeZoneDSTDisplayNameCache = String::fromUTF8(entry.dst);
-                if (isDST)
-                    return m_timeZoneDSTDisplayNameCache;
-                return m_timeZoneStandardDisplayNameCache;
-            }
+            const char* name = dsNewCLDR ? entry.newName : entry.oldName;
+            if (!name[0]) // empty band value → fall through to macOS ICU (e.g. Istanbul pre-26.4)
+                break;
+            m_timeZoneStandardDisplayNameCache = String::fromUTF8(name);
+            m_timeZoneDSTDisplayNameCache = m_timeZoneStandardDisplayNameCache;
+            if (isDST)
+                return m_timeZoneDSTDisplayNameCache;
+            return m_timeZoneStandardDisplayNameCache;
         }
         CString language { "en_US" };
 #else
