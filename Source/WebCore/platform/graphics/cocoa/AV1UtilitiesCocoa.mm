@@ -83,6 +83,19 @@ static bool driftstackArchetypeExplicitlyA17ProPlus()
     std::string_view sv { env };
     return sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0;
 }
+
+// Public wrapper: callers on the canPlayType/isTypeSupported (supportsTypeAndCodecs) path must FORCE AV1
+// IsSupported host-independently for an explicit A17Pro+ archetype. The subtractive av1HardwareDecoderAvailable()
+// gate only removes AV1 for non-A17Pro+; the A17Pro+ path then falls through to the host
+// AVAssetMIMETypeCache.canDecodeType(), which on an AV1-hardware-LACKING fleet box reports av01 unsupported →
+// canPlayType="" + the decodingInfo line-80 supportsType precondition fails (av1DecInfoMatrix s=false), diverging
+// from the real A17Pro+ iPhone (canPlayType='probably', decodingInfo 4K60 true). Force supported here so the
+// canPlayType/decodingInfo AV1 surface is fleet-invariant + device-exact. (Mirrors the av1HardwareDecoderAvailableInProcess
+// host-independent pin that already makes WebCodecs correct.) project_codec_capability_perchip_hostderived_w2560.
+bool driftstackArchetypeForceAV1Supported()
+{
+    return driftstackArchetypeExplicitlyA17ProPlus();
+}
 #endif
 
 #if !PLATFORM(DRIFTSTACK)

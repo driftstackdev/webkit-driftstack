@@ -2101,11 +2101,26 @@ MediaPlayer::SupportsType MediaPlayerPrivateAVFoundationObjC::supportsTypeAndCod
     // archetypes (av1HardwareDecoderAvailable() is the per-archetype gate). decodingInfo is already
     // false for AV1 on EVERY iPhone (API-split, host-correct), so only this lenient surface diverges
     // per-chip. project_codec_capability_perchip_hostderived_w2560.
-    if (parameters.type.raw().contains("av01"_s) && !av1HardwareDecoderAvailable())
+    bool isAV1Type = parameters.type.raw().contains("av01"_s);
+    if (isAV1Type && !av1HardwareDecoderAvailable())
         return MediaPlayer::SupportsType::IsNotSupported;
 #endif
     if (parameters.platformType != PlatformMediaDecodingType::FileOrHLS)
         return MediaPlayer::SupportsType::IsNotSupported;
+#if PLATFORM(DRIFTSTACK) && ENABLE(AV1)
+    // av1_canplaytype boundary (A17Pro+): the real A17Pro+ iPhone reports canPlayType('…av01…')='probably'
+    // (and the navigator.mediaCapabilities.decodingInfo line-80 supportsType precondition passes, so the
+    // 4K60-class av01 config validates true). But the AV1-incapable fleet box's AVAssetMIMETypeCache
+    // (queried below at canDecodeType) reports av01 UNSUPPORTED → canPlayType="" + decodingInfo s=false,
+    // diverging from the real device. WebCodecs is already correct via the host-independent in-process pin;
+    // mirror that here for canPlayType/isTypeSupported so the AV1 surface is fleet-invariant + device-exact.
+    // Forced only for the AV1-capable FileOrHLS av01 content type (MSE av01 stays on the SourceBufferParser
+    // pin, da426646f2). project_codec_capability_perchip_hostderived_w2560.
+    if (isAV1Type && driftstackArchetypeForceAV1Supported()
+        && contentTypeMeetsContainerAndCodecTypeRequirements(parameters.type, parameters.allowedMediaContainerTypes, parameters.allowedMediaCodecTypes)
+        && contentTypeMeetsHardwareDecodeRequirements(parameters.type, parameters.contentTypesRequiringHardwareSupport))
+        return MediaPlayer::SupportsType::IsSupported;
+#endif
 #if ENABLE(WIRELESS_PLAYBACK_TARGET)
     if (parameters.playbackTargetType != MediaPlaybackTargetType::None && !playbackTargetTypes().contains(parameters.playbackTargetType))
         return MediaPlayer::SupportsType::IsNotSupported;

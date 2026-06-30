@@ -38,6 +38,12 @@ std::optional<PlatformMediaCapabilitiesInfo> validateAV1Parameters(const AV1Code
 WEBCORE_EXPORT bool av1HardwareDecoderAvailable();
 WEBCORE_EXPORT void NODELETE setAV1HardwareDecoderAvailable(bool);
 WEBCORE_EXPORT bool av1HardwareDecoderAvailableInProcess();
+#if PLATFORM(DRIFTSTACK)
+// True ONLY when an A17Pro+ archetype is EXPLICITLY set. Callers force AV1 canPlayType/isTypeSupported
+// IsSupported host-independently (the AV1-incapable fleet box's AVAssetMIMETypeCache would otherwise
+// report av01 unsupported even for the AV1-capable archetype). project_codec_capability_perchip_hostderived_w2560.
+WEBCORE_EXPORT bool driftstackArchetypeForceAV1Supported();
+#endif
 }
 
 #endif
