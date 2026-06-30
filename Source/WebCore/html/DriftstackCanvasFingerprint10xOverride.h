@@ -64049,20 +64049,41 @@ inline int driftstackArchetypeSafariVersionKey(const char* slug)
     return major * 1000 + minor;
 }
 
-// V-790 Wave 3 — Safari-MINOR equality guard for the family-fallback path. Two
-// archetypes are "same minor" iff their Safari version keys are equal. STRUCTURAL
-// NO-OP today: within Family-A all of 18.6 / 26.0 / 26.1 / 26.2 / 26.3 produce
-// byte-identical fp10x canvas, so a 26.3 archetype borrowing an 18.6 canonical is
-// currently harmless — but it is a CROSS-MINOR LEAK in principle, and the moment
-// any intra-Family-A minor diverges (e.g. a future 26.x canvas tweak) the
-// borrow would mis-serve. This gate forbids the cross-minor borrow up front.
-// LAUNCH-SAFETY: when BOTH keys are -1 (legacy/unset slugs, the existing single-
-// family launch + V-185 back-compat path) the keys compare EQUAL, so the gate is
-// a pass-through there (the family check is the only constraint, exactly as
-// before — no 26.4 launch regression, no glyphHash c587ed44 risk).
-inline bool driftstackArchetypeSameSafariMinor(const char* a, const char* b)
+// V-790 Wave 3 — Safari-MINOR equality guard for the family-fallback path.
+// Call sites pass (entry.archetype = donor, current archetype = requester); the
+// family check upstream has already proven both are the SAME canvas family.
+//
+// Two archetypes are "same minor" iff their Safari version keys are equal — BUT a
+// donor whose key is the -1 sentinel (a slug with no parseable "_safari<M>_<m>",
+// i.e. the legacy pre-26.4 Family-A captures like "iphone16pro_ios18_6") is a
+// BAND-UNIFORM donor: it was captured before the 26.4 Family split when all of
+// Family-A's minors (18.6 / 26.0 / 26.1 / 26.2 / 26.3) render byte-identical fp10x
+// canvas. So a -1 donor is a valid source for ANY same-family requester, regardless
+// of the requester's parsed minor. Without this, the 580 legacy Family-A canonical
+// entries (all keyed -1) are UNREACHABLE for a modern Family-A slug like
+// iphone15_ios18_7_safari26_3 (key 26003) — they hit -1 != 26003 → SKIP → native
+// fallback → WRONG host-pipeline canvas (the A16/Family-A daa87d6c-vs-0a71e599 gap,
+// verified band-uniform across A15…A19 ≤26.3 by the 2026-06-30 real-device renders).
+//
+// What is STILL forbidden: a borrow between two DIFFERENT PARSEABLE minors (e.g. a
+// hypothetical future safari26_5-only Family-B canonical lent to a safari26_4
+// archetype) — the moment two parseable minors diverge, the keys differ and the
+// guard rejects, exactly as before. The relaxation is narrow: a sentinel(-1) donor
+// only (which is, by construction, the band-uniform capture).
+//
+// LAUNCH-SAFETY: the 26.4 launch path is unchanged. A launch (Family-B) requester
+// is keyed 26004; a -1 donor is Family-A and is rejected upstream by the FAMILY
+// check before this guard runs, so the launch glyphHash c587ed44 / 26.4 canvas is
+// never sourced from a -1 Family-A entry. Two -1 keys still compare equal (the old
+// single-family back-compat path). No 26.4 regression.
+inline bool driftstackArchetypeSameSafariMinor(const char* donor, const char* requester)
 {
-    return driftstackArchetypeSafariVersionKey(a) == driftstackArchetypeSafariVersionKey(b);
+    int donorKey = driftstackArchetypeSafariVersionKey(donor);
+    // A sentinel(-1) donor = band-uniform legacy capture → valid for any
+    // same-family requester (the family check upstream already constrained it).
+    if (donorKey < 0)
+        return true;
+    return donorKey == driftstackArchetypeSafariVersionKey(requester);
 }
 
 // 2026-06-26 — canonical CANVAS-PIXEL family boundary helper (founder #1).
