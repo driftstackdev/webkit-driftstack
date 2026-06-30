@@ -56,6 +56,16 @@ MediaPlayerEnums::SupportsType SourceBufferParser::isContentTypeSupported(const 
     // real iPhone 18.6 verdict. Family B (launch 26.4) has no pin → unchanged (both accept).
     if (driftstackFamilyAVP9MSEUnsupported(type.parameter(ContentType::codecsParameter())))
         return MediaPlayerEnums::SupportsType::IsNotSupported;
+    // A17Pro+ av01 MP4 MMS pin — coherence fix for the cross-API gap where the raw
+    // AVFObjC MSE parser (AVStreamDataParser) does NOT advertise av01 for MP4 even
+    // on the AV1-capable fleet Mac, so it would LEAK IsNotSupported while the real
+    // iPhone 17 reports ManagedMediaSource.isTypeSupported(av01 mp4)=true (matching
+    // its canPlayType('av01')='probably' / decodingInfo / WebCodecs AV1 path).
+    // Scoped to mp4 av01 on an explicit A17Pro+ archetype; routed here (the single
+    // convergence point) so changeType(av01) stays coherent with isTypeSupported.
+    if (type.containerType() == "video/mp4"_s
+        && driftstackArchetypeMP4AV1MSESupported(type.parameter(ContentType::codecsParameter())))
+        return MediaPlayerEnums::SupportsType::IsSupported;
 #endif
     MediaPlayerEnums::SupportsType supports = SourceBufferParserWebM::isContentTypeSupported(type);
     if (supports == MediaPlayerEnums::SupportsType::IsSupported)

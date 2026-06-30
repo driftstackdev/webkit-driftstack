@@ -63,6 +63,27 @@ bool driftstackFamilyAVP9MSEUnsupported(const String& codecs)
     return isFamilyA;
 }
 
+// Shared MSE AV1 pin — the ONE source of truth (see header). The A17Pro+ family
+// boundary (iphone15pro / iphone16* / iphone17*) is byte-identical to the AV1-HW
+// gate in AV1UtilitiesCocoa.mm (driftstackArchetypeHasAV1Decode /
+// driftstackArchetypeExplicitlyA17ProPlus) and WebRTCProvider.cpp, so the MMS
+// av01 verdict stays coherent with canPlayType / decodingInfo / WebCodecs /
+// WebRTC AV1. SourceBufferParser::isContentTypeSupported delegates here so the
+// changeType / canSwitchToType route stays coherent with isTypeSupported.
+bool driftstackArchetypeMP4AV1MSESupported(const String& codecs)
+{
+    if (!codecs.contains("av01"_s))
+        return false;
+    const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!a || !a[0])
+        return false;
+    auto arch = String::fromLatin1(a);
+    // A17Pro+: "iphone15pro" matches iphone15pro AND iphone15promax (NOT
+    // iphone15 / iphone15plus, which have no "pro"); "iphone16" / "iphone17"
+    // match all of those families. Same prefix set as the AV1-HW gate.
+    return arch.startsWith("iphone15pro"_s) || arch.startsWith("iphone16"_s) || arch.startsWith("iphone17"_s);
+}
+
 void DriftstackArchetypeConfig::loadFromEnv()
 {
     // Wave 29-393 → 29-394 → 29-395 RETRY → 29-395 REVERTED again:

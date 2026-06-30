@@ -208,6 +208,29 @@ private:
 // LibWebRTCProvider.
 bool driftstackFamilyAVP9MSEUnsupported(const String& codecs);
 
+// ── Shared MSE AV1 pin (one source of truth) ─────────────────────────────────
+// A17Pro+ archetypes (iphone15pro / iphone16* / iphone17*, the same hardware
+// boundary as driftstackArchetypeHasAV1Decode) expose av01 in the MP4
+// ManagedMediaSource codec verdict — verified real iPhone 17 / Safari 26.4
+// (aio-iPhone_17-1782256826126): ManagedMediaSource.isTypeSupported(
+// 'video/mp4; codecs="av01.0.04M.08"')=TRUE, coherent with canPlayType('av01')=
+// 'probably' and the WebCodecs/decodingInfo AV1 path (av1HardwareDecoderAvailable
+// pinned TRUE for A17Pro+). But the raw AVFObjC MSE parser (AVStreamDataParser /
+// AVStreamDataParserMIMETypeCache) does NOT advertise av01 for MP4 even on the
+// AV1-capable fleet Mac, so SourceBufferParserAVFObjC::isContentTypeSupported
+// LEAKS IsNotSupported → the fork reports av01 MMS=false while the real iPhone 17
+// = true (a cross-API coherence gap: only the MMS path diverged). This predicate
+// pins the A17Pro+ verdict to the real device.
+//
+// Routed through the SAME convergence point as the VP9 pin
+// (SourceBufferParser::isContentTypeSupported) so SourceBuffer::changeType(av01)
+// (via canSwitchToType → supportsTypeAndCodecs) stays coherent with
+// isTypeSupported(av01)=true. `codecs` is the ContentType "codecs" parameter.
+// Returns true ⟺ an explicit A17Pro+ archetype is set AND the codec string names
+// av01. Live getenv (NOT static-cached); same family check as the AV1 gate in
+// AV1UtilitiesCocoa / WebRTCProvider.
+bool driftstackArchetypeMP4AV1MSESupported(const String& codecs);
+
 } // namespace WebCore
 
 #endif // PLATFORM(DRIFTSTACK)
