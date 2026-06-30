@@ -472,6 +472,64 @@ static RetainPtr<CGImageRef> createTintedAlphaMaskImage(
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// #79 / W40 GPU-process color-emoji canvas fix. Mirrors the V-COLOR serve's per-glyph hit
+// detection (line ~1286) WITHOUT drawing, so the line-481 GPU-process early-return can decide
+// whether the V-COLOR atlas serve will FULLY cover this run's complex-color glyphs. Returns true
+// iff every complex-color glyph in the run has a color-atlas hit (→ it will be blit via
+// drawNativeImage, which is valid in the GPU process). On ANY miss → false (the early-return must
+// hold, so a missed color glyph never reaches native CTFontDrawGlyphs in the GPU process — the
+// exact case the upstream guard protects). Canvas-text-draw scope + atlas-enabled only; otherwise
+// false (default upstream behavior preserved).
+static bool driftstackCanvasColorEmojiFullyServable(const Font& font, std::span<const GlyphBufferGlyph> glyphs)
+{
+    static const bool s_colorEmojiAtlasEnabled = std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")
+        && std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")[0] == '1';
+    if (!s_colorEmojiAtlasEnabled || !driftstackInCanvasTextDraw() || glyphs.empty())
+        return false;
+    auto& colorAtlas = DriftstackPerGlyphColorAtlas::singleton();
+    if (!colorAtlas.isLoaded())
+        return false;
+    const float ptSize = font.platformData().size();
+    const uint16_t ptSizeQ4 = static_cast<uint16_t>(std::lround(ptSize * 16.0f));
+    const bool seqKeyed = colorAtlas.version() >= 2;
+    uint32_t sourceSeqHash = 0;
+    bool haveSourceSeqHash = false;
+    if (seqKeyed) {
+        StringView src = driftstackCurrentTextSource();
+        if (!src.isEmpty()) {
+            sourceSeqHash = driftstackSeqHashForUtf8(src);
+            haveSourceSeqHash = true;
+        }
+    }
+    bool sourceConsumed = false; // the whole-source cluster hash serves at most one glyph (mirrors V-COLOR)
+    for (size_t i = 0; i < glyphs.size(); ++i) {
+        Glyph g = glyphs[i];
+        if (font.colorGlyphType(g) != ColorGlyphType::Color)
+            continue; // non-color glyphs go through the normal path; only color glyphs matter for the guard
+        std::optional<DriftstackPerGlyphColorAtlasEntry> hit;
+        if (seqKeyed) {
+            if (haveSourceSeqHash && !sourceConsumed)
+                hit = colorAtlas.lookup(0, ptSizeQ4, sourceSeqHash, 0);
+            if (hit)
+                sourceConsumed = true;
+            else {
+                char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
+                if (codepoint)
+                    hit = colorAtlas.lookup(0, ptSizeQ4, driftstackSeqHashForCodepoint(codepoint), 0);
+            }
+        } else {
+            char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
+            if (codepoint)
+                hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
+        }
+        if (!hit)
+            return false; // a complex-color glyph the atlas can't serve → keep the early-return
+    }
+    return true; // every complex-color glyph is atlas-servable → safe to fall through to the V-COLOR serve
+}
+#endif
+
 void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)
 {
     const auto& platformData = font.platformData();
@@ -479,8 +537,21 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         return;
 
     if (isInGPUProcess() && font.hasAnyComplexColorFormatGlyphs(glyphs)) {
-        ASSERT_NOT_REACHED();
-        return;
+#if PLATFORM(DRIFTSTACK)
+        // #79 / W40: in a canvas-text-draw scope, color emoji are the FINGERPRINT surface (getImageData
+        // reads them) and the GPU/accelerated default 2D canvas routes their drawGlyphs HERE in the GPU
+        // process — where the upstream guard drops them, leaving a BLANK canvas (matrix w2ssumkay: the 3
+        // emoji32 scenes all collapsed to the empty-canvas hash, ink=0, while measureText was correct).
+        // When the V-COLOR per-glyph color-emoji atlas will FULLY serve the run (every complex-color
+        // glyph hits → blit via drawNativeImage, valid in the GPU process), fall through to that serve
+        // instead of dropping. Any atlas miss → guard HOLDS (no native CTFontDrawGlyphs of a color glyph
+        // in the GPU process). Non-canvas / atlas-off / partial-coverage → unchanged upstream behavior.
+        if (!driftstackCanvasColorEmojiFullyServable(font, glyphs))
+#endif
+        {
+            ASSERT_NOT_REACHED();
+            return;
+        }
     }
 
 #if PLATFORM(DRIFTSTACK)
