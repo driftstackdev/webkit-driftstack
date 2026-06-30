@@ -1649,6 +1649,84 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
             g1600Size = g1600Renderer->style().fontDescription().computedSize();
         if (std::lround(g1600Size) == 1600) {
             int g1600Bucket = driftstackGlyphHashGenericBucket(g1600Element ? *g1600Element : element);
+
+            // ── PER-SAFARI-VERSION-BAND default-generic override (W2982 follow-up: glyph-1600 is
+            //    per-Safari-version-band, MODEL-INVARIANT — VERDICT.md, BS real-device byte-truth) ──
+            // The browserleaks Unicode-Glyphs FP is keyed to the Safari/system-font VERSION, not the
+            // model: every model on one version prints the same byte (proven 14/15PM/17 @26.x all
+            // 5D474692). The ONLY per-band divergences are in the DEFAULT generic (generic 0 =
+            // CSS font:initial = Times/SF base); all 5 other generics + the other 39-41 codepoints are
+            // band-INVARIANT (so the launch g1600Table below stays the single source for them on EVERY
+            // band). Three bands (real-device on-page GT, glyph-unicode-fp-matrix-2026-06-29):
+            //   • Safari >= 26   → 26.x Family-B LAUNCH = 5D474692 (NO override; serve the launch table).
+            //   • Safari 18.5-<26→ 18.6 Family-A        = 95F11EFD (override U+532D + ADD U+097F).
+            //   • Safari  < 18.5 → 18.4 sub-band        = 96A9B7F2 (18.6 set + ADD U+08E4 + U+1C50).
+            // Verified airtight off-box: captures/v1/glyph-per-band-lcg-verify.py applies these gen-0
+            // overrides to the 26.x faithful grid, runs the EXACT browserleaks LCG, and reproduces all
+            // three on-page bytes byte-exact AND the overridden grid == each band's own faithful GT grid
+            // cell-for-cell (0 diffs). 26.x unchanged (override map empty) → launch byte preserved.
+            //
+            // Band read: live getenv("DRIFTSTACK_ARCHETYPE") "safari<major>_<minor>" token — the SAME
+            // production-faithful, always-set source the timezone/#106 per-band gates (JSDateMath /
+            // IntlDateTimeFormat) + the VP9/AV1 MSE pins + CSSParserContext's s_isFamilyAArchetype use
+            // (DriftstackArchetypeConfig is NOT default-on — its loader is gated on
+            // DRIFTSTACK_ARCHETYPE_CONFIG_PATH and intentionally inert otherwise, so the env token is the
+            // reliable signal). Unset / unparseable → 26.x launch default (preserves the verified byte).
+            int g1600SafariMajor = 0;
+            int g1600SafariMinor = 0;
+            if (const char* g1600Arch = getenv("DRIFTSTACK_ARCHETYPE")) {
+                std::string_view sv { g1600Arch };
+                auto pos = sv.find("safari");
+                if (pos != std::string_view::npos) {
+                    size_t i = pos + 6;
+                    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9')
+                        g1600SafariMajor = g1600SafariMajor * 10 + (sv[i++] - '0');
+                    if (i < sv.size() && sv[i] == '_') {
+                        ++i;
+                        while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9')
+                            g1600SafariMinor = g1600SafariMinor * 10 + (sv[i++] - '0');
+                    }
+                }
+            }
+            // Band classification (>=26 → 0 = launch, no override). 0/unparseable → launch default.
+            // 18.5-<26 → 18.6 set; <18.5 → 18.4 set. (>=27 reverts to launch family per the matrix.)
+            enum class G1600Band { Launch26x, V186, V184 };
+            G1600Band g1600Band = G1600Band::Launch26x;
+            if (g1600SafariMajor != 0 && g1600SafariMajor < 26) {
+                bool below185 = (g1600SafariMajor < 18) || (g1600SafariMajor == 18 && g1600SafariMinor < 5);
+                g1600Band = below185 ? G1600Band::V184 : G1600Band::V186;
+            }
+            if (g1600Band != G1600Band::Launch26x) {
+                // DEFAULT generic (bucket 0) ONLY — all other generics fall through to the launch table.
+                struct G1600BandOv { char16_t cp; float w; float h; };
+                // 18.6 set (2 cells): override U+532D gen-0 1563,1910 → 1510,1910 ; ADD U+097F → 893,2455.
+                static constexpr std::array<G1600BandOv, 2> ov186 { {
+                    { 0x532D, 1510, 1910 }, { 0x097F, 893, 2455 },
+                } };
+                // 18.4 set (4 cells): 18.6 set + ADD U+08E4 → 0,2098 ; U+1C50 → 928,2455.
+                static constexpr std::array<G1600BandOv, 4> ov184 { {
+                    { 0x532D, 1510, 1910 }, { 0x097F, 893, 2455 },
+                    { 0x08E4, 0, 2098 }, { 0x1C50, 928, 2455 },
+                } };
+                if (g1600Bucket == 0) {
+                    auto serveBand = [&](const auto& ov) -> bool {
+                        for (const auto& e : ov) {
+                            if (e.cp == cp) {
+                                outWidth = e.w;
+                                outHeight = e.h;
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    if (g1600Band == G1600Band::V184) {
+                        if (serveBand(ov184))
+                            return true;
+                    } else if (serveBand(ov186))
+                        return true;
+                }
+            }
+
             struct G1600 { char16_t cp; int generic; float w; float h; };
             // generic: 0=default 1=sans 3=monospace 4=cursive (only the diverging cells; all others fall through).
             static constexpr std::array<G1600, 17> g1600Table { {
