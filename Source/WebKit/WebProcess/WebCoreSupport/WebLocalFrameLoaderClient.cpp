@@ -922,6 +922,21 @@ void WebLocalFrameLoaderClient::dispatchDidFailLoad(const ResourceError& error)
 
     // Notify the UIProcess.
     webPage->send(Messages::WebPageProxy::DidFailLoadForFrame(m_frame->frameID(), m_frame->info(), documentLoader->request(), documentLoader->navigationID(), error, UserData(WebProcess::singleton().transformObjectsToHandles(userData.get()).get())));
+
+#if PLATFORM(DRIFTSTACK)
+    // W3019 (#4): a top-level load FAILED AFTER commit (mid-load connection drop / abort, common on a flaky-slow
+    // proxy — relates to #46) -> emit `errored` so the GUI surfaces a failure overlay instead of leaving the
+    // customer on a partial/blank page. Main-frame ONLY (a subframe/iframe failure is not a customer-visible
+    // page failure) and skip a cancellation (user stop / navigation supersede). Mirrors the
+    // dispatchDidFailProvisionalLoad emit (W2962); together they cover both pre-commit (provisional) and
+    // post-commit (this) main-frame nav failures. driftstackEmitNavState handles the unsafe-buffer-wrapped fprintf.
+    if (m_frame->isMainFrame() && driftstackNavPageStateEnabled() && !error.isCancellation()) {
+        String failURL = error.failingURL().string();
+        if (failURL.isEmpty())
+            failURL = m_frame->url().string();
+        driftstackEmitNavState("errored"_s, failURL, String(), driftstackNavErrorKind(error));
+    }
+#endif
 }
 
 void WebLocalFrameLoaderClient::dispatchDidFinishDocumentLoad()
