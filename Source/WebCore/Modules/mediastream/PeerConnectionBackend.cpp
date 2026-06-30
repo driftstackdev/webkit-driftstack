@@ -257,11 +257,14 @@ void PeerConnectionBackend::handleLogMessage(const WTFLogChannel& channel, WTFLo
 #endif // !RELEASE_LOG_DISABLED && (PLATFORM(WPE) || PLATFORM(GTK))
 
 #if PLATFORM(DRIFTSTACK)
-// ── Family-A (Safari ≤26.3) WebRTC createOffer dynamic payload-type remap ──
-// GT: reference/realdevice-bs/aio-iPhone_16_Pro_Max-1781873317444.json
-//     .vendor.v3-webrtc-sdp-probe-1-0 .webrtc.createOffer.sdp_structure_canonical
+// ── Family-A (Safari 18.x) WebRTC createOffer dynamic payload-type remap ──
+// GT (OLD layout, Safari 18.6): reference/realdevice-bs/
+//     aio-iPhone_16_Pro_Max-1781873317444.json (also 16_Pro-1781706872739 /
+//     -1782285557087, 16_Plus-1782163508400) .vendor.v3-webrtc-sdp-probe-1-0
+//     .webrtc.createOffer.sdp_structure_canonical
 //
-// On real iOS 18.6 the createOffer VIDEO m-line dynamic PTs differ from the Mac
+// On real iOS 18.6 Safari 18.x the createOffer VIDEO m-line dynamic PTs differ
+// from the Mac
 // fork's newer-libwebrtc (26.x) defaults. The codec SET + ORDER + rtcp-fb + fmtp
 // content + extmap are byte-identical 18.6-vs-26.x — ONLY the PT integers move.
 // This is a deterministic PT remap (NOT a libwebrtc version bound): the 26.x
@@ -284,9 +287,23 @@ void PeerConnectionBackend::handleLogMessage(const WTFLogChannel& channel, WTFLo
 // createOffer only; createAnswer mirrors the negotiated remote PTs (echoes the
 // peer's offer), so it is NOT munged here — see createAnswerSucceeded note.
 //
-// Launch-safety: gated Family-A only (Safari ≤26.3). The 26.4 LAUNCH default and
-// 26.5 KEEP the 26.x PTs (no env, or major.minor > 26.3 → no remap). Live getenv
-// each call (NOT static-cached — silently-inert-gate sweep 2026-06-27).
+// Launch-safety: gated to Safari MAJOR < 26 only (the genuine "Family-A" 18.x
+// WebRTC band). The boundary for the createOffer video-PT layout is the Safari
+// 18→26 libwebrtc bump, NOT the canvas ≤26.3/≥26.4 split. Empirically grounded
+// 2026-06-30 across 40 real-device GT captures (reference/realdevice-bs/aio-*):
+// TWO and only two distinct video PT lists —
+//   VARIANT 2 (OLD, this remap's target): Safari 18.6 ONLY — iPhone 16 Plus /
+//     16 Pro / 16 Pro Max (n=4: aio-iPhone_16_Pro-1781706872739, -1782285557087,
+//     16_Pro_Max-1781873317444, 16_Plus-1782163508400).
+//   VARIANT 1 (NEW, the fork's native 26.x default — DO NOT REMAP): ALL Safari
+//     26.x, INCLUDING Safari 26.0 on iOS 18.6 (iPhone 17 Pro / 17 Pro Max,
+//     n=36; e.g. aio-iPhone_17_Pro-1781437796571 = the iphone17pro_ios18_6_
+//     safari26_0 GT). Safari 26.0/26.1/26.2/26.3 = NEW too (verified 17 Pro/26.3,
+//     17 Pro Max/26.2). So 26.0–26.3 MUST keep the fork's native PTs.
+// PRIOR BUG (commit f67f09234f): gated "≤26.3" (borrowed the canvas boundary) →
+// wrongly remapped iphone17pro_ios18_6_safari26_0 (and 26.1/26.2/26.3) to the OLD
+// numbering, diverging from the real device. Narrowed to major<26 here.
+// Live getenv each call (NOT static-cached — silently-inert-gate sweep 2026-06-27).
 static bool driftstackIsFamilyARTC()
 {
     const char* a = getenv("DRIFTSTACK_ARCHETYPE");
@@ -299,18 +316,12 @@ static bool driftstackIsFamilyARTC()
     sv.remove_prefix(pos + 6);
     if (sv.empty() || sv[0] < '0' || sv[0] > '9')
         return false;
-    int major = 0, minor = 0;
+    int major = 0;
     size_t i = 0;
     while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
-    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.'))
-        ++i;
-    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
-    // Family A = Safari ≤ 26.3. 26.4 launch / 26.5 keep 26.x PTs.
-    if (major < 26)
-        return true;
-    if (major == 26)
-        return minor <= 3;
-    return false;
+    // OLD video PT layout (VARIANT 2) = Safari MAJOR < 26 only. ALL 26.x
+    // (26.0 → 26.5+) keep the fork's native NEW layout (VARIANT 1).
+    return major < 26;
 }
 
 // Parse "<pt> <codec>/<rate>[/<ch>]" rtpmap value → (pt, lowercased codec name).
