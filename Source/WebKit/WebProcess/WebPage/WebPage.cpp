@@ -8709,6 +8709,25 @@ static bool shouldExitFullscreenAfterFocusingElement(const WebCore::Element& ele
 }
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+// #6 (founder keyboard auto-show, W3019) — emit a dedicated stderr focus token when an
+// editable element gains/loses focus, so the harness stamps inputFocused on the page_state
+// frame and the GUI auto-shows/hides the iOS keyboard (this is the exact point WebKit
+// decides to raise/dismiss the on-screen keyboard). Gated by DRIFTSTACK_NAV_PAGESTATE
+// (default-OFF → byte-identical). stderr only — never the page/JS surface — fingerprint-safe.
+static void driftstackEmitInputFocus(bool focused)
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_NAV_PAGESTATE");
+        return e && e[0] == '1';
+    }();
+    if (!enabled)
+        return;
+    fprintf(stderr, "DRIFTSTACK_INPUT_FOCUS {\"focused\":%s}\n", focused ? "true" : "false");
+    fflush(stderr);
+}
+#endif
+
 void WebPage::elementDidFocus(Element& element, const FocusOptions& options)
 {
 #if PLATFORM(IOS_FAMILY)
@@ -8728,6 +8747,12 @@ void WebPage::elementDidFocus(Element& element, const FocusOptions& options)
 #endif
         m_focusedElement = element;
         m_hasPendingInputContextUpdateAfterBlurringAndRefocusingElement = false;
+#if PLATFORM(DRIFTSTACK)
+        // #6 keyboard: an editable text field gained focus → the GUI raises the iOS keyboard.
+        // Exclude <select> (this block also handles it, but it raises a picker, not a keyboard).
+        if (isTextFormControlOrEditableContent(element))
+            driftstackEmitInputFocus(true);
+#endif
 
 #if PLATFORM(IOS_FAMILY)
 
@@ -8768,6 +8793,10 @@ void WebPage::elementDidFocus(Element& element, const FocusOptions& options)
 void WebPage::elementDidBlur(WebCore::Element& element)
 {
     if (m_focusedElement == &element) {
+#if PLATFORM(DRIFTSTACK)
+        // #6 keyboard: the focused editable element blurred → the GUI dismisses the keyboard.
+        driftstackEmitInputFocus(false);
+#endif
         m_recentlyBlurredElement = WTF::move(m_focusedElement);
         callOnMainRunLoop([protectedThis = Ref { *this }] {
             if (protectedThis->m_recentlyBlurredElement) {
