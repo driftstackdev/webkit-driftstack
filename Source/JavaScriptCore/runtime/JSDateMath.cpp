@@ -549,10 +549,19 @@ String DateCache::timeZoneDisplayName(bool isDST)
             : "Coordinated Universal Time";
         String canonicalString = timeZoneCache.m_canonicalTimeZone.toICUString();
         StringView canonicalView(canonicalString);
-        // GMT / Etc/GMT: band-selected (oscillates CUT→GMT→CUT). UTC/Etc/UTC are NOT in this table —
-        // they resolve to "Coordinated Universal Time" via macOS ICU on every band here.
+        // GMT / Etc/GMT: band-selected (oscillates CUT→GMT→CUT).
         if (canonicalView == "GMT"_s || canonicalView == "Etc/GMT"_s) {
             m_timeZoneStandardDisplayNameCache = String::fromLatin1(dsGmtName);
+            m_timeZoneDSTDisplayNameCache = m_timeZoneStandardDisplayNameCache;
+            return m_timeZoneStandardDisplayNameCache;
+        }
+        // UTC / Etc/UTC — Date.toString() parenthetical ONLY: "Greenwich Mean Time" on Safari <27 (real
+        // iPhone GT-confirmed 18.6 + 26.4: "GMT+0000 (Greenwich Mean Time)"), "Coordinated Universal Time"
+        // on >=27. ASYMMETRIC vs the Intl long name (which is "Coordinated Universal Time" on every band —
+        // handled in IntlDateTimeFormat.cpp, left unchanged). macOS ICU wrongly returns CUT here on every
+        // band → host-leak on the default-UTC config (launch 26.4 included). Unset (major 0) → Greenwich.
+        if (canonicalView == "UTC"_s || canonicalView == "Etc/UTC"_s) {
+            m_timeZoneStandardDisplayNameCache = String::fromLatin1(dsSafariMajor < 27 ? "Greenwich Mean Time" : "Coordinated Universal Time");
             m_timeZoneDSTDisplayNameCache = m_timeZoneStandardDisplayNameCache;
             return m_timeZoneStandardDisplayNameCache;
         }
