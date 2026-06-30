@@ -1413,6 +1413,113 @@ static bool driftstackIsTimeZoneField(UDateFormatField field)
         return false;
     }
 }
+
+// G4-Intl (tz-lang audit wponds5b1) — America/Asuncion DST host-leak override for the Intl/ICU
+// formatting path. JSDateMath.cpp's G4 fixes only the Date process-zone path (getTimezoneOffset()
+// / Date.prototype.toString); Intl.DateTimeFormat keyed on timeZone:"America/Asuncion" reads the
+// SAME macOS system ICU tzdata (>=2024b, Paraguay DST abolished -> permanent -03:00). Every captured
+// real iPhone still ships the OLDER bundled tzdata that OBSERVES Paraguay DST. Without this override
+// a Paraguay-geo session is doubly wrong: Intl reports no-DST (winter==summer==-03:00), AND it is
+// INCOHERENT with the Date path (getTimezoneOffset() DST via JSDateMath G4 but Intl no-DST) — a tell
+// real iPhones do not have.
+//
+// ⚠️ GROUND-TRUTH WINDOW (the real-device GTs WIN over JSDateMath.cpp's window — they DISAGREE):
+// reference/realdevice-bs/tzoffset-iPhone_17 + tzoffset-iPhone_16_Pro (byte-identical on both)
+// capture Asuncion as:
+//     Jan 15 (probe "winter") = -03:00 (offsetMin 180, "GMT-03:00") -> STANDARD
+//     Jul 15 (probe "summer") = -04:00 (offsetMin 240, "GMT-04:00") -> DST
+//     transitions: 2026-03-22T03:00Z (180 -> 240, std -> DST)
+//                  2026-10-04T04:00Z (240 -> 180, DST -> std)
+// i.e. the DST(-04:00) window is the CONTIGUOUS 4th-Sun-Mar .. 1st-Sun-Oct interval (Paraguay's
+// SOUTHERN-hemisphere WINTER per the captured bundled tzdata). This is the COMPLEMENT of the window
+// JSDateMath.cpp::driftstackAsuncionDstOffsetMs() implements (which has -04:00 in Oct..Mar, the
+// textbook southern-summer rule) — the two share the same transition TIMESTAMPS but invert which
+// side is DST. Per the closure contract (GT wins, byte-identical-to-real-device), this function
+// matches the GT directly and does NOT reuse JSDateMath's (GT-inverted) window. [FLAGGED: the
+// JSDateMath G4 process-zone path is itself GT-inverted for getTimezoneOffset()/Date.toString and
+// should be reconciled to this same Mar..Oct window in a separate JSDateMath edit.]
+//
+// Returns the DST component in milliseconds to ADD to the -03:00 standard offset: -3600000 inside
+// the Mar..Oct DST window, 0 (no override needed; macOS ICU's -03:00 is already correct) otherwise.
+static constexpr int32_t kDriftstackAsuncionStdOffsetMs = -10800000; // -03:00
+static int32_t driftstackAsuncionIntlDstOffsetMs(double millisecondsFromEpoch)
+{
+    constexpr int64_t kMsPerDay = 86400000LL;
+    constexpr int64_t kHourMs = 3600000LL;
+    auto daysFromCivil = [](int y, unsigned m, unsigned d) -> int64_t {
+        y -= m <= 2;
+        int64_t era = (y >= 0 ? y : y - 399) / 400;
+        unsigned yoe = static_cast<unsigned>(y - era * 400);
+        unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+        unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return era * 146097 + static_cast<int64_t>(doe) - 719468;
+    };
+    auto utcMidnightMs = [&](int y, unsigned m, unsigned d) -> int64_t {
+        return daysFromCivil(y, m, d) * kMsPerDay;
+    };
+    auto weekday = [&](int y, unsigned m, unsigned d) -> unsigned {
+        int64_t z = daysFromCivil(y, m, d);
+        return static_cast<unsigned>(z >= -4 ? (z + 4) % 7 : (z + 5) % 7 + 6);
+    };
+    auto nthSunday = [&](int y, unsigned m, unsigned n) -> unsigned {
+        unsigned wd = weekday(y, m, 1);
+        unsigned firstSun = (wd == 0) ? 1 : (1 + (7 - wd));
+        return firstSun + (n - 1) * 7;
+    };
+
+    int64_t utcMs = static_cast<int64_t>(millisecondsFromEpoch);
+    // Resolve the Gregorian year of this UTC instant.
+    int y = 1970 + static_cast<int>(utcMs / (static_cast<int64_t>(365.2425 * kMsPerDay)));
+    while (utcMidnightMs(y, 1, 1) > utcMs)
+        --y;
+    while (utcMidnightMs(y + 1, 1, 1) <= utcMs)
+        ++y;
+
+    // DST STARTS 4th Sun Mar at 00:00 local STD(-03:00): UTC = localMidnight + 03:00.
+    int64_t dstStartUTC = utcMidnightMs(y, 3, nthSunday(y, 3, 4)) - kDriftstackAsuncionStdOffsetMs;
+    // DST ENDS 1st Sun Oct at 00:00 local DST(-04:00): UTC = localMidnight + 04:00.
+    int64_t dstEndUTC = utcMidnightMs(y, 10, nthSunday(y, 10, 1)) - (kDriftstackAsuncionStdOffsetMs - kHourMs);
+    // DST(-04:00) active in the CONTIGUOUS Mar..Oct interval (does NOT wrap the year boundary).
+    if (utcMs >= dstStartUTC && utcMs < dstEndUTC)
+        return -static_cast<int32_t>(kHourMs);
+    return 0;
+}
+
+// The pre-shift (ms) to apply to the instant fed to ICU so that ICU's no-DST -03:00, applied to the
+// shifted instant, yields the real-device -04:00 wall-clock during the Asuncion DST window. Strictly
+// gated on the resolved IANA id == "America/Asuncion"; 0 for every other zone (no effect). The shift
+// equals the DST delta: feeding (value + dstMs) to ICU makes ICU emit wall = (value + dstMs) + (-03:00)
+// = value + (-04:00), the correct DST wall-clock. Outside the DST window dstMs == 0 (no shift).
+static int32_t driftstackAsuncionIntlPreShiftMs(const String& resolvedTimeZone, double value)
+{
+    if (resolvedTimeZone != "America/Asuncion"_s)
+        return 0;
+    return driftstackAsuncionIntlDstOffsetMs(value);
+}
+
+// The iPhone offset-name string to splice into the timeZoneName part during the Asuncion DST window,
+// for the OFFSET variants only (shortOffset / longOffset). After the pre-shift the numeric hour parts
+// are correct, but ICU still emits its no-DST offset name ("GMT-3" / "GMT-03:00") because Asuncion's
+// ICU offset is always -03:00; this overrides it to the DST offset. Forms verified against real-device
+// captures (tznamevariants-iPhone_17: e.g. America/New_York std short="GMT-5" long="GMT-05:00") and the
+// tzoffset GT (summerLongOffset == "GMT-04:00"). Returns nullptr outside the DST window, for non-offset
+// variants (Long/Short/Generic names left to ICU — no GT/probe coverage), or for any non-Asuncion zone.
+static const char* driftstackAsuncionIntlOffsetName(const String& resolvedTimeZone, double value, uint8_t variant)
+{
+    if (resolvedTimeZone != "America/Asuncion"_s)
+        return nullptr;
+    if (!driftstackAsuncionIntlDstOffsetMs(value))
+        return nullptr; // standard (-03:00) window: ICU is already correct.
+    auto v = static_cast<DriftstackTZNameVariant>(variant);
+    switch (v) {
+    case DriftstackTZNameVariant::LongOffset:
+        return "GMT-04:00";
+    case DriftstackTZNameVariant::ShortOffset:
+        return "GMT-4";
+    default:
+        return nullptr;
+    }
+}
 #endif // PLATFORM(DRIFTSTACK)
 
 JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) const
@@ -1431,19 +1538,33 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
     static_assert(static_cast<uint8_t>(TimeZoneName::None) == static_cast<uint8_t>(DriftstackTZNameVariant::None));
     static_assert(static_cast<uint8_t>(TimeZoneName::Short) == static_cast<uint8_t>(DriftstackTZNameVariant::Short));
     static_assert(static_cast<uint8_t>(TimeZoneName::Long) == static_cast<uint8_t>(DriftstackTZNameVariant::Long));
+    static_assert(static_cast<uint8_t>(TimeZoneName::ShortOffset) == static_cast<uint8_t>(DriftstackTZNameVariant::ShortOffset));
+    static_assert(static_cast<uint8_t>(TimeZoneName::LongOffset) == static_cast<uint8_t>(DriftstackTZNameVariant::LongOffset));
     static_assert(static_cast<uint8_t>(TimeZoneName::LongGeneric) == static_cast<uint8_t>(DriftstackTZNameVariant::LongGeneric));
+
+    // G4-Intl America/Asuncion DST: pre-shift the instant fed to ICU by the DST delta so ICU's no-DST
+    // -03:00 yields the real-device -04:00 wall-clock (hour/day numeric parts) during the Mar..Oct DST
+    // window. Strictly 0 for every other zone. (Outside the window the shift is 0 — std -03:00 already
+    // matches.) See driftstackAsuncionIntlDstOffsetMs() for the GT-correct window.
+    double icuValue = value + static_cast<double>(driftstackAsuncionIntlPreShiftMs(m_timeZoneForResolvedOptions, value));
+
     // For the iOS/macOS-divergent zones, locate the time-zone field via the field-position iterator
-    // and splice in the iPhone-correct display name. Covers the LONG style (the 26 #106 zones) plus
-    // the G3 non-LONG variant overrides (GMT/Etc/GMT short+longGeneric, Honolulu/Anadyr longGeneric).
-    // Zero overhead for every other format() call (common case): driftstackIPhoneZoneNameForVariant
-    // returns nullptr and the udat_format path below is unchanged.
+    // and splice in the iPhone-correct display name. Covers the LONG style (the 26 #106 zones), the
+    // G3 non-LONG variant overrides (GMT/Etc/GMT short+longGeneric, Honolulu/Anadyr longGeneric), and
+    // the Asuncion DST offset-name override (shortOffset "GMT-4" / longOffset "GMT-04:00") — the latter
+    // is needed because after the pre-shift ICU still emits its no-DST "GMT-3"/"GMT-03:00" offset name.
+    // Zero overhead for every other format() call (common case): both helpers return nullptr and the
+    // udat_format path below is unchanged (on icuValue == value).
     if (m_timeZoneName != TimeZoneName::None) {
-        if (const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName))) {
+        const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
+        if (!iosName)
+            iosName = driftstackAsuncionIntlOffsetName(m_timeZoneForResolvedOptions, value, static_cast<uint8_t>(m_timeZoneName));
+        if (iosName) {
             UErrorCode fstatus = U_ZERO_ERROR;
             auto fields = std::unique_ptr<UFieldPositionIterator, UFieldPositionIteratorDeleter>(ufieldpositer_open(&fstatus));
             if (U_SUCCESS(fstatus)) {
                 Vector<char16_t, 32> fresult;
-                fstatus = callBufferProducingFunction(udat_formatForFields, m_dateFormat.get(), value, fresult, fields.get());
+                fstatus = callBufferProducingFunction(udat_formatForFields, m_dateFormat.get(), icuValue, fresult, fields.get());
                 if (U_SUCCESS(fstatus)) {
                     replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(fresult); // length-preserving; field indices stay valid
                     int32_t b = 0, e = 0;
@@ -1464,7 +1585,12 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
 #endif
 
     Vector<char16_t, 32> result;
+#if PLATFORM(DRIFTSTACK)
+    // Format the (Asuncion-DST-pre-shifted) instant; icuValue == value for every other zone/instant.
+    auto status = callBufferProducingFunction(udat_format, m_dateFormat.get(), icuValue, result, nullptr);
+#else
     auto status = callBufferProducingFunction(udat_format, m_dateFormat.get(), value, result, nullptr);
+#endif
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "failed to format date value"_s);
     replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(result);
@@ -1551,8 +1677,18 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "failed to open field position iterator"_s);
 
+#if PLATFORM(DRIFTSTACK)
+    // G4-Intl America/Asuncion DST: pre-shift the instant fed to ICU by the DST delta so the formatted
+    // hour/day numeric parts reflect the real-device -04:00 wall-clock during the Mar..Oct DST window
+    // (the tzoffset probe derives the per-zone offset from exactly these numeric parts). icuValue ==
+    // value for every other zone/instant. The timeZoneName offset part is overridden separately below.
+    double icuValue = value + static_cast<double>(driftstackAsuncionIntlPreShiftMs(m_timeZoneForResolvedOptions, value));
+    Vector<char16_t, 32> result;
+    status = callBufferProducingFunction(udat_formatForFields, m_dateFormat.get(), icuValue, result, fields.get());
+#else
     Vector<char16_t, 32> result;
     status = callBufferProducingFunction(udat_formatForFields, m_dateFormat.get(), value, result, fields.get());
+#endif
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "failed to format date value"_s);
     replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(result);
@@ -1587,10 +1723,16 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
             auto type = jsNontrivialString(vm, partTypeString(UDateFormatField(fieldType)));
 #if PLATFORM(DRIFTSTACK)
             // Override the zone-name part for the iOS/macOS-divergent zones (see format()): LONG (#106
-            // 26 zones) + the G3 non-LONG variants (GMT short+longGeneric, Honolulu/Anadyr longGeneric).
+            // 26 zones), the G3 non-LONG variants (GMT short+longGeneric, Honolulu/Anadyr longGeneric),
+            // and the Asuncion DST offset name (shortOffset "GMT-4" / longOffset "GMT-04:00") — the
+            // latter keyed on the ORIGINAL instant (the function parameter `value`, not the pre-shifted
+            // icuValue) so the DST-window test uses the true UTC instant.
             const char* iosZoneName = nullptr;
-            if (m_timeZoneName != TimeZoneName::None && driftstackIsTimeZoneField(UDateFormatField(fieldType)))
+            if (m_timeZoneName != TimeZoneName::None && driftstackIsTimeZoneField(UDateFormatField(fieldType))) {
                 iosZoneName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
+                if (!iosZoneName)
+                    iosZoneName = driftstackAsuncionIntlOffsetName(m_timeZoneForResolvedOptions, value, static_cast<uint8_t>(m_timeZoneName));
+            }
             auto value = iosZoneName
                 ? jsString(vm, String::fromUTF8(iosZoneName))
                 : jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
