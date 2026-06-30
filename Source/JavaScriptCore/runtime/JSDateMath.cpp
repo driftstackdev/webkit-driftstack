@@ -477,7 +477,12 @@ String DateCache::timeZoneDisplayName(bool isDST)
             { "Africa/Niamey"_s,        "West Africa Time", "West Africa Time", 0 },
             { "Africa/Porto-Novo"_s,    "West Africa Time", "West Africa Time", 0 },
             { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time", "Dumont d\xE2\x80\x99Urville Time", 0 }, // U+2019 apostrophe (macOS uses a hyphen)
-            { "Asia/Anadyr"_s,          "Kamchatka Standard Time", "Kamchatka Standard Time", 0 },
+            // Asia/Anadyr is a DISTINCT metazone from Asia/Kamchatka on iOS-26 (CLDR split): iOS
+            // returns "Anadyr Standard Time" (real-device GT, iPhone 14/15PM/17 Safari 26.4), NOT
+            // "Kamchatka Standard Time" — which is what macOS ICU (and the older CLDR) collapses it to.
+            // The #106 row mistakenly carried the macOS/Kamchatka value (a no-op host leak). UTC+12,
+            // no DST → std==dst single name.
+            { "Asia/Anadyr"_s,          "Anadyr Standard Time", "Anadyr Standard Time", 0 },
             { "Asia/Brunei"_s,          "Brunei Time", "Brunei Time", 0 },
             { "Asia/Dili"_s,            "Timor-Leste Time", "Timor-Leste Time", 0 },
             { "Asia/Hovd"_s,            "Khovd Standard Time", "Khovd Standard Time", 0 },

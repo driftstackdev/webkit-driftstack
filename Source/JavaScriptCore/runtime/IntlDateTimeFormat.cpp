@@ -1269,7 +1269,7 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
         { "Africa/Niamey"_s,             "West Africa Time" },
         { "Africa/Porto-Novo"_s,         "West Africa Time" },
         { "Antarctica/DumontDUrville"_s, "Dumont d\xE2\x80\x99Urville Time" }, // U+2019 (macOS uses a hyphen)
-        { "Asia/Anadyr"_s,               "Kamchatka Standard Time" },
+        { "Asia/Anadyr"_s,               "Anadyr Standard Time" }, // iOS-26 CLDR splits Anadyr from Kamchatka; macOS ICU collapses to "Kamchatka Standard Time" (real-device GT iPhone 14/15PM/17 Saf26.4)
         { "Asia/Brunei"_s,               "Brunei Time" },
         { "Asia/Dili"_s,                 "Timor-Leste Time" },
         { "Asia/Hovd"_s,                 "Khovd Standard Time" },
