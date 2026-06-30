@@ -674,6 +674,35 @@ static bool driftstackEgressReliabilityEnabled()
     return enabled;
 }
 
+// #46 (founder heavy-page / slow-proxy fix) — DEDICATED gate for the PURE ADMISSION-PACING
+// bounds (request-admission cap Fix #2 + handshake cap Fix #4 + 3p fast-fail + per-page
+// deadline). These change ZERO wire bytes (ClientHello/cipher/curve/ALPN/header order,
+// routing all unchanged) — they are the RANK-1 fix for the founder's heavy-page hang:
+// PathB-v2 is blocking-thread-per-request, so a many-origin page parks all ~64 GCD workers,
+// the concurrent loaderQueue stops scheduling, and subresources never start their connect.
+// They were dead in prod only because they shared DRIFTSTACK_EGRESS_RELIABILITY with the
+// WIRE-AFFECTING reliability tweaks that were reverted (W2994). This split lets the pure-
+// pacing bounds ship independently: DRIFTSTACK_EGRESS_CONCURRENCY=1 enables them with NO
+// fingerprint/wire change.
+static bool driftstackConcurrencyGovernorEnabled()
+{
+    static const bool enabled = [] {
+        const char* e = getenv("DRIFTSTACK_EGRESS_CONCURRENCY");
+        WTFLogAlways("[#46/ConcurrencyGovernor] DRIFTSTACK_EGRESS_CONCURRENCY=%s", e ?: "(null)");
+        return e && e[0] == '1';
+    }();
+    return enabled;
+}
+
+// The pure-pacing bounds fire under EITHER the legacy egress-reliability master gate OR the
+// new dedicated concurrency-governor gate. Acquire/release stay paired (the admission slot
+// is flag-tracked via m_admissionSlotHeld; the handshake cap via a scoped release), so
+// toggling the gate never strands a semaphore slot.
+static bool driftstackAdmissionPacingEnabled()
+{
+    return driftstackEgressReliabilityEnabled() || driftstackConcurrencyGovernorEnabled();
+}
+
 // BUG-42 Fix #4 — process-wide concurrent-handshake cap. The custom loader has NO
 // global connection cap; H2/H3 pools coalesce only per-origin, so a heavy multi-
 // origin site opens dozens of concurrent SOCKS5 + ML-KEM-768 TLS handshakes on the
@@ -718,7 +747,7 @@ static dispatch_semaphore_t driftstackHandshakeCapSemaphore()
 static dispatch_semaphore_t driftstackRequestAdmissionSemaphore()
 {
     static dispatch_semaphore_t sem = [] {
-        long cap = 40;
+        long cap = 24;  // #46: 24 (was 40) — on a slow proxy each request pins its GCD worker up to 60s, so a 40-cap still allows 40 simultaneous 60s blocks; 24 leaves the ~64-worker pool comfortable headroom AND approximates iOS's bounded-but-warm working set (6/h1-origin + a handful of h2 origins). Override via DRIFTSTACK_EGRESS_REQUEST_CAP.
         if (const char* e = getenv("DRIFTSTACK_EGRESS_REQUEST_CAP")) {
             long parsed = atol(e);
             if (parsed >= 4 && parsed <= 60)
@@ -1552,7 +1581,7 @@ void DriftstackNetworkLoader::resume()
     // ~64-worker GCD pool can never be saturated past the cap. A retry/redirect that
     // re-enters resume() already holds its slot (m_admissionSlotHeld) and proceeds
     // immediately. Gate-off: skipped entirely → byte-identical to the prior code.
-    if (driftstackEgressReliabilityEnabled() && !m_cancelled) {
+    if (driftstackAdmissionPacingEnabled() && !m_cancelled) {
         if (!tryAcquireAdmissionSlot()) {
             // Cap saturated. Don't block the main thread and don't pin a GCD worker:
             // re-schedule this resume() after a short backoff so an in-flight request
@@ -1706,7 +1735,7 @@ void DriftstackNetworkLoader::resume()
     // drivable. First-party requests keep the full 20s W2750 budget. Gate-off: always 20s.
     if (currentAttempt == 1) {
         Seconds perRequestBudget = Seconds(20);
-        if (driftstackEgressReliabilityEnabled() && requestIsThirdParty)
+        if (driftstackAdmissionPacingEnabled() && requestIsThirdParty)
             perRequestBudget = driftstackThirdPartyRetryBudget();
         m_retryDeadline = MonotonicTime::now() + perRequestBudget;
     }
@@ -1717,7 +1746,7 @@ void DriftstackNetworkLoader::resume()
     // budget (the cause of the WD navigate timeout on heavy multi-origin sites). The
     // first request for a page stamps the deadline; all later requests + retries honour
     // it. Gate-off no-op: driftstackPageDeadlineFor is only consulted when the gate is on.
-    if (driftstackEgressReliabilityEnabled() && pageKey) {
+    if (driftstackAdmissionPacingEnabled() && pageKey) {
         MonotonicTime pageDeadline = driftstackPageDeadlineFor(pageKey);
         if (pageDeadline && MonotonicTime::now() >= pageDeadline) {
             withinRetryBudget = false;
@@ -2191,7 +2220,7 @@ void DriftstackNetworkLoader::resume()
         // makes the two mutually exclusive. Gate-off: no acquire, no release — true
         // no-op (handshakeSlotHeld stays false; the scope-exit does nothing).
         bool handshakeSlotHeld = false;
-        if (driftstackEgressReliabilityEnabled()) {
+        if (driftstackAdmissionPacingEnabled()) {
             // Cap the wait at the remaining retry budget (clamped to a sane floor) so
             // a fully-saturated cap degrades to proceed-without-slot, never a hang.
             Seconds remaining = m_retryDeadline - MonotonicTime::now();
