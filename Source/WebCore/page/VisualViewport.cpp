@@ -125,6 +125,20 @@ double VisualViewport::pageTop() const
 double VisualViewport::width() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // W2987: mirror LocalDOMWindow::innerWidth()'s no-meta-viewport desktop-fallback branch so
+    // visualViewport.width stays EQUAL to innerWidth on a no-<meta viewport> page. On real iPhone a
+    // no-meta page lays out at the 980 CSS-px desktop fallback → innerWidth==visualViewport.width==980
+    // (and vv.scale==deviceWidth/980). Without this, innerWidth returned 980 while visualViewport.width
+    // returned screenWidth() (402) → a cross-getter coherence tell on every no-meta page (real-device GT
+    // reference/realdevice-bs/envwide-iPhone_17-*.json: vv.width=980). height() already has this mirror
+    // (W2556 above); width()+scale() were the omission.
+    if (RefPtr legacyFrame = this->frame()) {
+        if (RefPtr document = legacyFrame->document()) {
+            const auto& args = document->viewportArguments();
+            if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit)
+                return 980.0;
+        }
+    }
     // V-074 + W2266: visualViewport.width === the CSS layout-viewport width === screen.width
     // (device-width). Derive from the archetype Config (matching innerWidth/outerWidth/availWidth)
     // so the matrix stays coherent — a hardcoded 402 mismatches screen.width for any non-402-wide
@@ -214,8 +228,29 @@ double VisualViewport::scale() const
     if (!frame || !frame->isMainFrame())
         return 1;
 
+#if PLATFORM(DRIFTSTACK)
+    // W2987: on a no-<meta viewport> page the iOS desktop-fallback lays out at 980 CSS px and shrinks to
+    // fit, so visualViewport.scale = deviceCssWidth / 980 (real iPhone-17/width-402: 402/980 ≈ 0.41020408
+    // — reference/realdevice-bs/envwide-iPhone_17-*.json). The upstream m_scale path returns the
+    // UIProcess pageScaleFactor, which is 1 in MiniBrowser/WebKitLegacy (no visual-viewport plumbing) →
+    // a wrong vv.scale=1 that disagrees with vv.width=980. A device-width meta page lays out 1:1 → scale 1.
+    if (RefPtr document = frame->document()) {
+        const auto& args = document->viewportArguments();
+        if (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit) {
+            float deviceWidth = 402.0f;
+            if (auto w = DriftstackArchetypeConfig::singleton().screenWidth(); w > 0)
+                deviceWidth = static_cast<float>(w);
+            // Compute in FLOAT (m_scale is a float upstream): real iPhone vv.scale on no-meta is the
+            // float32 value of deviceWidth/980 (iphone17 402/980 → 0.41020408272743225 widened, NOT the
+            // double 0.41020408163265304 — a sub-ULP tell if computed in double). Widen the float result.
+            return static_cast<double>(deviceWidth / 980.0f);
+        }
+    }
+    return 1;
+#else
     updateFrameLayout();
     return m_scale;
+#endif
 }
 
 void VisualViewport::update()
