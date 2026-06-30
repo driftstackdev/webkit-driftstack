@@ -41,6 +41,41 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+// Per-chip HEVC hardware-decode LEVEL ceiling. The fork's MediaCapabilities.decodingInfo path
+// (validateHEVCParameters below) reads the fleet Mac's VideoToolbox kVTHEVCDecoderProfileCapability_
+// MaxDecodeLevel, which on an Apple-Silicon Mac advertises HEVC Level 6.2 (generalLevelIDC 186 =
+// 8K). But the real iPhone HEVC decoder ceiling is chip-bound and BELOW 6.2 on A15/A16:
+//   BS real-device ground truth (hevc-levels-probe across the L90..L186 ladder x 5 res/fps):
+//     A15  (iPhone 14, Safari 18.3 / 26.2 / 26.4, 3 caps): L186 sup=false/pe=false, L180 sup=true  -> ceiling L180 (6.0)
+//     A16  (iPhone 14 Pro, Safari 26.4, captured 2026-06-30): L186 sup=false/pe=false, L180 sup=true -> ceiling L180 (6.0)
+//     A17Pro (iPhone 15 Pro Max), A18 (iPhone 16 Plus), A18Pro (16 Pro), A19 (iPhone 17): L186 sup=true -> no clamp
+// So on an A15/A16 archetype the host VT over-reports HEVC decodingInfo(hvc1.*.L186).supported=true/
+// powerEfficient=true where the real device returns supported=false/powerEfficient=false — a per-chip
+// MediaCapabilities fingerprint tell across exactly the L186 row (every lower level matches byte-identically).
+// The chip boundary is IDENTICAL to driftstackArchetypeHasAV1Decode (A17Pro+ = iphone15pro / iphone15promax /
+// iphone16* / iphone17*); registered in operations/boundary-registry.json (surface hevc_decode_level_ceiling).
+// Returns the max generalLevelIDC the emulated chip decodes (a level above it -> info.supported=false).
+// (project_codec_capability_perchip_hostderived_w2560; the same per-chip-clamp class as the host-GPU
+// MAX_SAMPLES / WebGL max-params host-leak.)
+static uint16_t driftstackArchetypeHEVCMaxDecodeLevel()
+{
+    // Read getenv LIVE (NOT a static cache — a static initializes during early process init when
+    // DRIFTSTACK_ARCHETYPE may still be unset, caching the wrong ceiling; same fix-class as the AV1 gate / Kefa / C1).
+    const char* env = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!env || !env[0])
+        return 255; // no archetype set => default fleet behavior (host passthrough, no clamp)
+    std::string_view sv { env };
+    // A17 Pro+ legitimately decodes HEVC Level 6.2: "iphone15pro" matches iphone15pro AND iphone15promax
+    // (NOT iphone15 / iphone15plus, which have no "pro"); "iphone16"/"iphone17" match all of those families.
+    if (sv.find("iphone15pro") == 0 || sv.find("iphone16") == 0 || sv.find("iphone17") == 0)
+        return 255; // no clamp — these chips report L186 supported (matches the real device)
+    // A15 / A16 (iphone13*, iphone14, iphone14plus, iphone14pro, iphone14promax, iphone15, iphone15plus):
+    // real-device ceiling is HEVC Level 6.0 (generalLevelIDC 180); anything above (L186 = 6.2) is unsupported.
+    return 180;
+}
+#endif
+
 std::optional<PlatformMediaCapabilitiesInfo> validateHEVCParameters(const HEVCParameters& parameters, bool hasAlphaChannel, bool hdrSupport)
 {
     CMVideoCodecType codec = kCMVideoCodecType_HEVC;
@@ -122,6 +157,15 @@ std::optional<PlatformMediaCapabilitiesInfo> validateHEVCParameters(const HEVCPa
     }
 
 #if PLATFORM(DRIFTSTACK)
+    // Per-chip HEVC LEVEL ceiling (see driftstackArchetypeHEVCMaxDecodeLevel above). The host VT
+    // MaxDecodeLevel check at line ~112 used the FLEET Mac's ceiling (HEVC L6.2 / generalLevelIDC 186),
+    // so an A15/A16 archetype over-reported decodingInfo(hvc1.*.L186)=supported where the real iPhone
+    // returns unsupported. Clamp to the emulated chip's ceiling so the L186 row matches the real device
+    // (A17Pro+ returns 255 = no clamp; A15/A16 return 180 = HEVC L6.0). BS-grounded, version-invariant
+    // (A15 L186=false captured identically on Safari 18.3 / 26.2 / 26.4 — the ceiling is a chip property).
+    if (parameters.generalLevelIDC > driftstackArchetypeHEVCMaxDecodeLevel())
+        return std::nullopt;
+
     // W2741 host-leak audit + BS real-device (iPhone 17, 45 HEVC configs across the level ladder x
     // resolution x framerate, 2 captures): real iPhone MediaCapabilities.decodingInfo(HEVC).smooth is
     // ALWAYS false (supported/powerEfficient stay true). Cause: iOS VideoToolbox does NOT expose
