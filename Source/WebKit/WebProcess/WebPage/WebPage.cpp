@@ -8723,7 +8723,11 @@ static void driftstackEmitInputFocus(bool focused)
     }();
     if (!enabled)
         return;
+    // Fixed format string + single %s — safe by construction; silence the libc unsafe-buffer
+    // diagnostic the same way the rest of the fork does (WebLocalFrameLoaderClient DRIFTSTACK_NAV_STATE).
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
     fprintf(stderr, "DRIFTSTACK_INPUT_FOCUS {\"focused\":%s}\n", focused ? "true" : "false");
+    WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     fflush(stderr);
 }
 #endif
