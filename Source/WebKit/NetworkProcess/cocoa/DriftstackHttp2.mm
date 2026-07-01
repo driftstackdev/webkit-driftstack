@@ -245,14 +245,19 @@ static const std::pair<const char*, const char*> kHpackStatic[] = {
     { "accept-charset", "" },
     // Wave 29-499.262 — re-enabled gzip+deflate+br after fixing streaming
     // decoder via compression_stream API.
-    // Real iOS 26.4 Safari Accept-Encoding = "gzip, deflate, br, zstd" (WebKit zstd
-    // support landed Safari 26.3; verified browserleaks-ip V-229 + the W1512 tls-full
-    // real-device capture). W1515 CLOSED the prior divergence: vendored libzstd
-    // (NetworkProcess/cocoa/zstd/zstddeclib.c) is bundled into the loader decode path
-    // (driftstackDecodeContentEncoding here + driftstackDecompressHttp3Body for h3), so
-    // the fork now both advertises AND decodes zstd — no response corruption. Decode
-    // logic validated bit-exact (W1513/W1514, 85B + 266KB).
-    { "accept-encoding", "gzip, deflate, br, zstd" },
+    // ⚠ egress audit wxzzaphvp (HIGH): this is the HPACK static table (RFC 7541 Appendix A) — a
+    // FIXED codebook shared by client encoder AND server decoder; entry 16 MUST be the RFC value.
+    // It was wrongly set to the iPhone Accept-Encoding "gzip, deflate, br, zstd", so hpackFindFullMatch
+    // encoded the client's Accept-Encoding as a bare index 16, which EVERY server decodes as its own
+    // RFC slot-16 value "gzip, deflate" → the server withholds br/zstd AND it is a wire tell (real
+    // Safari emits a literal value with an indexed name, since its value is not in the static table).
+    // The advertised Accept-Encoding is set independently via driftstackPathBAcceptEncoding()
+    // (DriftstackNetworkLoader.mm request extraHeaders) — unaffected by this codebook entry. With the
+    // RFC value here, hpackFindFullMatch no longer full-matches and the encoder correctly falls to
+    // name-index-16 + literal value; the decoder resolves a server's index 16 to the correct "gzip, deflate".
+    // (Fork still advertises + decodes zstd: vendored libzstd in driftstackDecodeContentEncoding /
+    //  driftstackDecompressHttp3Body, W1513/W1514 bit-exact — the advertise path is separate from this table.)
+    { "accept-encoding", "gzip, deflate" },
     { "accept-language", "" },
     { "accept-ranges", "" },
     { "accept", "" },
@@ -1167,40 +1172,12 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     if (static_cast<size_t>(padLen) + 1 > dataSpan.size()) break;
                     dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
                 }
-                // Wave 29-499.350 — streaming delivery: hand each DATA frame to
-                // the chunk callback and DON'T accumulate (an infinite SSE body
-                // would otherwise grow unbounded). A false return cancels.
+                // Wave 29-499.350 — streaming delivery (onBodyChunk) vs buffer-all accumulation.
                 if (request.onBodyChunk) {
                     if (dataSpan.size() && !request.onBodyChunk(dataSpan)) {
                         resp.failed = true;
                         resp.errorMessage = "stream cancelled mid-body"_s;
                         return resp;
-                    }
-                    streamIdleFrames = 0; // W2132: body progress — reset the no-progress flood guard
-                    // RFC 7540 §6.9 — replenish our receive windows so the server keeps
-                    // sending. iOS-faithful cadence (gt http2_windowupdate_midstream_cadence):
-                    // STREAM replenishes at window/4 (kDriftstackStreamWUThreshold),
-                    // CONNECTION at window/2 (kDriftstackConnWUThreshold) — different
-                    // thresholds, tracked separately (the old code emitted BOTH at a
-                    // fixed 1 MiB, matching neither). The increment == bytes consumed
-                    // since that window's last update (what a real iPhone sends).
-                    streamRecvSinceUpdate += dataSpan.size();
-                    connRecvSinceUpdate   += dataSpan.size();
-                    if (streamRecvSinceUpdate >= kDriftstackStreamWUThreshold) {
-                        uint32_t inc = static_cast<uint32_t>(streamRecvSinceUpdate);
-                        uint8_t wu[13];
-                        encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, streamId);
-                        wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
-                        sslWriteAll(ssl, transport, wu, 13);
-                        streamRecvSinceUpdate = 0;
-                    }
-                    if (connRecvSinceUpdate >= kDriftstackConnWUThreshold) {
-                        uint32_t inc = static_cast<uint32_t>(connRecvSinceUpdate);
-                        uint8_t wuc[13];
-                        encodeFrameHeader(wuc, 4, kFrameWindowUpdate, 0, 0);
-                        wuc[9] = (inc >> 24) & 0xff; wuc[10] = (inc >> 16) & 0xff; wuc[11] = (inc >> 8) & 0xff; wuc[12] = inc & 0xff;
-                        sslWriteAll(ssl, transport, wuc, 13);
-                        connRecvSinceUpdate = 0;
                     }
                 } else {
                     resp.body.append(dataSpan);
@@ -1209,6 +1186,34 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                         resp.errorMessage = "response body exceeds 128MB cap"_s;
                         return resp;
                     }
+                }
+                // RFC 7540 §6.9 — replenish our receive windows for EVERY delivered DATA frame,
+                // streaming AND buffer-all. egress audit wxzzaphvp (HIGH): this WINDOW_UPDATE emission
+                // used to live ONLY inside the onBodyChunk branch, so a buffer-all response larger than
+                // the initial stream/connection receive window exhausted the window and the server
+                // stopped sending → permanent flow-control deadlock (hang) on any response over ~2 MB
+                // (heavy pages). iOS-faithful cadence (gt http2_windowupdate_midstream_cadence): STREAM
+                // replenishes at window/4 (kDriftstackStreamWUThreshold), CONNECTION at window/2
+                // (kDriftstackConnWUThreshold), tracked separately; increment == bytes consumed since
+                // that window's last update.
+                streamIdleFrames = 0; // W2132: body progress — reset the no-progress flood guard
+                streamRecvSinceUpdate += dataSpan.size();
+                connRecvSinceUpdate   += dataSpan.size();
+                if (streamRecvSinceUpdate >= kDriftstackStreamWUThreshold) {
+                    uint32_t inc = static_cast<uint32_t>(streamRecvSinceUpdate);
+                    uint8_t wu[13];
+                    encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, streamId);
+                    wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
+                    sslWriteAll(ssl, transport, wu, 13);
+                    streamRecvSinceUpdate = 0;
+                }
+                if (connRecvSinceUpdate >= kDriftstackConnWUThreshold) {
+                    uint32_t inc = static_cast<uint32_t>(connRecvSinceUpdate);
+                    uint8_t wuc[13];
+                    encodeFrameHeader(wuc, 4, kFrameWindowUpdate, 0, 0);
+                    wuc[9] = (inc >> 24) & 0xff; wuc[10] = (inc >> 16) & 0xff; wuc[11] = (inc >> 8) & 0xff; wuc[12] = inc & 0xff;
+                    sslWriteAll(ssl, transport, wuc, 13);
+                    connRecvSinceUpdate = 0;
                 }
                 if (frameFlags & kFlagEndStream)
                     streamComplete = true;

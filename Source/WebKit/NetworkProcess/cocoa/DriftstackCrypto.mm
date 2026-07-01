@@ -709,14 +709,20 @@ Vector<uint8_t> driftstackP256ComputeShared(const P256Keypair& kp, const Vector<
 
 // === AES-256-GCM ===
 
+// a74622fc-256 (egress audit wxzzaphvp CRITICAL): AES-256-GCM (cipher 0x1302) must NOT use the
+// LibreSSL EVP_AEAD GCM path — that path emits WRONG 16-byte auth tags on the macOS 26.x fleet
+// (documented Wave 29-499.297: "LibreSSL EVP_AEAD: tag baaf8dd7… (wrong)"), which is the whole
+// reason the manual NIST SP 800-38D GCM was written for AES-128. 0x1302 is the FIRST TLS 1.3 suite
+// in our ClientHello AND OpenSSL/nginx's default top preference, so MOST servers select it — every
+// 0x1302 handshake was failing its AEAD tag → "page could not be loaded" (the broader sibling of the
+// 0x1303/ChaCha20 bug). The manual GCM's GHASH/CTR/J0 machinery is key-length-independent, so route
+// AES-256-GCM through the verified manual implementation (32-byte key), never EVP_AEAD.
 Vector<uint8_t> driftstackAes256GcmEncrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& nonce,
                                             const Vector<uint8_t>& plaintext,
                                             const Vector<uint8_t>& aad)
 {
-    auto& f = cryptoFns();
-    return aeadEncrypt(f.evp_aead_aes_256_gcm ? f.evp_aead_aes_256_gcm() : nullptr,
-                       key, nonce, plaintext, aad);
+    return driftstackAes128GcmEncrypt(key, nonce, plaintext, aad);
 }
 
 Vector<uint8_t> driftstackAes256GcmDecrypt(const Vector<uint8_t>& key,
@@ -724,9 +730,7 @@ Vector<uint8_t> driftstackAes256GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& ciphertext,
                                             const Vector<uint8_t>& aad)
 {
-    auto& f = cryptoFns();
-    return aeadDecrypt(f.evp_aead_aes_256_gcm ? f.evp_aead_aes_256_gcm() : nullptr,
-                       key, nonce, ciphertext, aad);
+    return driftstackAes128GcmDecrypt(key, nonce, ciphertext, aad);
 }
 
 // === HMAC-SHA384 ===
@@ -1020,7 +1024,11 @@ Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& aad)
 {
     using namespace driftstack_gcm;
-    if (!resolveAes() || key.size() != 16 || nonce.size() != 12) {
+    // Despite the historical "…128…" name, this serves BOTH AES-128-GCM and AES-256-GCM: the
+    // GHASH/CTR/J0 machinery below is key-length-independent — only AES_set_encrypt_key's bit-length
+    // (key.size()*8) and the expanded-key buffer size differ. driftstackAes256GcmEncrypt forwards
+    // here (egress audit wxzzaphvp CRITICAL: the EVP_AEAD GCM path emits wrong tags on the macOS 26.x fleet).
+    if (!resolveAes() || (key.size() != 16 && key.size() != 32) || nonce.size() != 12) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES-GCM precondition fail (resolveAes=%d key=%zu nonce=%zu)",
             resolveAes(), key.size(), nonce.size());
         return {};
@@ -1029,10 +1037,10 @@ Vector<uint8_t> driftstackAes128GcmEncrypt(const Vector<uint8_t>& key,
 
     // Wave .303 — log EVERY zero-key call to identify race/state corruption.
     bool isZeroKey = true;
-    for (int i = 0; i < 16; i++) if (key.span().data()[i]) { isZeroKey = false; break; }
+    for (size_t i = 0; i < key.size(); i++) if (key.span().data()[i]) { isZeroKey = false; break; }
 
     alignas(16) uint8_t aesKey[512] = { };
-    if (p.setKey(key.span().data(), 128, aesKey) != 0) {
+    if (p.setKey(key.span().data(), int(key.size() * 8), aesKey) != 0) {
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.297] AES_set_encrypt_key failed");
         return {};
     }
@@ -1114,12 +1122,13 @@ Vector<uint8_t> driftstackAes128GcmDecrypt(const Vector<uint8_t>& key,
                                             const Vector<uint8_t>& aad)
 {
     using namespace driftstack_gcm;
-    if (!resolveAes() || key.size() != 16 || nonce.size() != 12 || ciphertext.size() < 16)
+    // Handles AES-128 and AES-256 GCM (see driftstackAes128GcmEncrypt); driftstackAes256GcmDecrypt forwards here.
+    if (!resolveAes() || (key.size() != 16 && key.size() != 32) || nonce.size() != 12 || ciphertext.size() < 16)
         return {};
     auto& p = aesPrim();
 
-    uint8_t aesKey[256] = { };
-    if (p.setKey(key.span().data(), 128, aesKey) != 0)
+    uint8_t aesKey[512] = { };
+    if (p.setKey(key.span().data(), int(key.size() * 8), aesKey) != 0)
         return {};
 
     uint8_t zeroBlock[16] = { };

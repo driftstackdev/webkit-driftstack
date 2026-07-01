@@ -385,18 +385,19 @@ static void initDriftstackSslCtx()
             f.ssl_ctx_ctrl(g_driftstackSslCtx, kCtrlSetTLSExtStatusType, 1 /*ocsp*/, nullptr);
         }
 
-        // Wave 29-499.162 — BoringSSL doesn't know macOS Keychain CAs by
-        // default. SSL_CTX_set_default_verify_paths looks in OpenSSL
-        // /usr/local/ssl/certs (doesn't exist on macOS). For Phase 1.5b
-        // empirical: disable peer verification so the TLS 1.3 handshake
-        // completes; we can validate hostname/cert via Apple's Security
-        // framework separately if needed.
-        //
-        // Production-safe: TODO load system CAs via SecTrustGetTrustStore
-        // + iterate certs + SSL_CTX_set_cert_store. For empirical JA3
-        // verification, no-verify is fine.
+        // egress audit wxzzaphvp (defense-in-depth): this LibreSSL context backs ONLY the fallback
+        // path (driftstackTLSConnect when DRIFTSTACK_PATHB_V2_CUSTOM_TLS != 1) — never used in
+        // production, which always runs custom TLS (DriftstackTLS13Client) with its own chain+hostname
+        // validation. It previously set SSL_VERIFY_NONE "for empirical JA3 verification", which trusts
+        // ANY server certificate (a latent MITM hole). Use SSL_VERIFY_PEER (0x01, stable across
+        // OpenSSL/LibreSSL/BoringSSL): combined with ssl_set1_host(hostUtf8) in driftstackTLSConnect,
+        // LibreSSL verifies the chain AND hostname and ABORTS the handshake on failure (→ SSL_connect
+        // fails → nullptr), so this path can never egress over an unauthenticated TLS session — it
+        // fails safe rather than trusting silently if no trust anchors are loaded.
+        // TODO (to make the fallback usable, not just safe): load macOS Keychain CAs via
+        // SecTrustCopyAnchorCertificates + SSL_CTX_set_cert_store.
         if (f.ssl_ctx_set_verify)
-            f.ssl_ctx_set_verify(g_driftstackSslCtx, SSL_VERIFY_NONE, nullptr);
+            f.ssl_ctx_set_verify(g_driftstackSslCtx, 0x01 /* SSL_VERIFY_PEER */, nullptr);
 
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.139] BoringSSL SSL_CTX initialized: TLS 1.3 + iPhone cipher order + ALPN[h3,h2,h1] + X25519MLKEM768");
     });
@@ -3296,6 +3297,56 @@ _Pragma("clang diagnostic pop")
         h1body.resize([bodyBytes length]);
         if ([bodyBytes length])
             memcpy(h1body.mutableSpan().data(), [bodyBytes bytes], [bodyBytes length]);
+        // egress audit wxzzaphvp (HIGH): de-frame Transfer-Encoding: chunked BEFORE content-decoding.
+        // The h1 body above is the raw bytes after the header CRLFCRLF; if the server used chunked
+        // transfer-encoding the body is still chunk-framed (<hex-size>[;ext] CRLF <data> CRLF … 0 CRLF
+        // [trailers] CRLF), and delivering it raw injects the chunk-size lines + trailers into the page
+        // → corrupted body in the renderer. RFC 7230 §3.3.1: the receiver reverses Transfer-Encoding
+        // (de-chunk) FIRST, then Content-Encoding (gzip/br/zstd, done by the decoder below).
+        {
+            bool isChunked = false;
+            for (auto& [k, v] : h1headers) {
+                if (k.convertToASCIILowercase() == "transfer-encoding"_s
+                    && v.convertToASCIILowercase().contains("chunked"_s)) { isChunked = true; break; }
+            }
+            if (isChunked) {
+                Vector<uint8_t> dechunked;
+                const uint8_t* p = h1body.span().data();
+                size_t n = h1body.size(), i = 0;
+                while (i < n) {
+                    // chunk-size line: hex digits up to ';' (chunk-ext) or CRLF
+                    size_t j = i;
+                    while (j + 1 < n && !(p[j] == '\r' && p[j + 1] == '\n')) j++;
+                    if (j + 1 >= n) break;              // no CRLF — malformed/truncated
+                    size_t chunkSize = 0; bool anyHex = false;
+                    for (size_t k = i; k < j; k++) {
+                        uint8_t c = p[k];
+                        int d;
+                        if (c >= '0' && c <= '9') d = c - '0';
+                        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                        else break;                     // ';' chunk-ext or trailing ws ends the size token
+                        chunkSize = chunkSize * 16 + d; anyHex = true;
+                    }
+                    if (!anyHex) break;                 // malformed size line
+                    i = j + 2;                          // past the size line's CRLF
+                    if (!chunkSize) break;              // last-chunk (0) — trailers follow, ignore
+                    if (i + chunkSize > n) chunkSize = n - i;  // truncated body — take what is present
+                    dechunked.append(std::span<const uint8_t> { p + i, chunkSize });
+                    i += chunkSize;
+                    if (i + 2 <= n && p[i] == '\r' && p[i + 1] == '\n') i += 2;  // trailing CRLF after chunk data
+                }
+                h1body = std::move(dechunked);
+                // Strip Transfer-Encoding so WebCore + the content-decoder don't re-expect chunk framing.
+                Vector<std::pair<String, String>> filtered;
+                filtered.reserveInitialCapacity(h1headers.size());
+                for (auto& h : h1headers) {
+                    if (h.first.convertToASCIILowercase() == "transfer-encoding"_s) continue;
+                    filtered.append(h);
+                }
+                h1headers = std::move(filtered);
+            }
+        }
         WebKit::driftstackDecodeContentEncoding(h1body, h1headers);  // .331 chokepoint — pure-h1 (W1517)
         for (auto& [k, v] : h1headers)
             response.setHTTPHeaderField(k, v);

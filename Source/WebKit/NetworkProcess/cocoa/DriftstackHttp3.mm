@@ -2371,6 +2371,45 @@ static bool driftstackQuicCustomTlsEnabled()
             }
         }
 
+        // a74622fc-256 (egress audit wxzzaphvp CRITICAL) — AES-256-GCM NIST KAT.
+        // AES-256-GCM (cipher 0x1302) now routes through the manual NIST SP 800-38D GCM (was the
+        // broken EVP_AEAD path that emits wrong tags on macOS 26.x). Verify the key-length-generic
+        // manual impl with two canonical GCM AES-256 vectors (McGrew & Viega TC13 empty + TC16
+        // multi-block) plus a decrypt round-trip.
+        {
+            // TC13: K=0*32, IV=0*12, P/A empty -> C empty, T=530f8afbc74536b9a963b4f1c4cb738b
+            Vector<uint8_t> k256(32); memset(k256.mutableSpan().data(), 0, 32);
+            Vector<uint8_t> iv256(12); memset(iv256.mutableSpan().data(), 0, 12);
+            Vector<uint8_t> pEmpty, aEmpty;
+            auto t13 = WebKit::driftstackAes256GcmEncrypt(k256, iv256, pEmpty, aEmpty);
+            bool ok13 = t13.size() == 16
+                && t13[0]==0x53 && t13[1]==0x0f && t13[2]==0x8a && t13[3]==0xfb && t13[15]==0x8b;
+            WTFLogAlways("[a74622fc-256] AES-256-GCM NIST TC13 (empty) self-test: %d (1=PASS) size=%zu", ok13, t13.size());
+            // TC16: multi-block. K=feffe992...08 (x2), IV=cafebabe..., P=60-byte d931...
+            static const uint8_t k16[32] = {
+                0xfe,0xff,0xe9,0x92,0x86,0x65,0x73,0x1c,0x6d,0x6a,0x8f,0x94,0x67,0x30,0x83,0x08,
+                0xfe,0xff,0xe9,0x92,0x86,0x65,0x73,0x1c,0x6d,0x6a,0x8f,0x94,0x67,0x30,0x83,0x08};
+            static const uint8_t iv16[12] = {0xca,0xfe,0xba,0xbe,0xfa,0xce,0xdb,0xad,0xde,0xca,0xf8,0x88};
+            static const uint8_t p16[60] = {
+                0xd9,0x31,0x32,0x25,0xf8,0x84,0x06,0xe5,0xa5,0x59,0x09,0xc5,0xaf,0xf5,0x26,0x9a,
+                0x86,0xa7,0xa9,0x53,0x15,0x34,0xf7,0xda,0x2e,0x4c,0x30,0x3d,0x8a,0x31,0x8a,0x72,
+                0x1c,0x3c,0x0c,0x95,0x95,0x68,0x09,0x53,0x2f,0xcf,0x0e,0x24,0x49,0xa6,0xb5,0x25,
+                0xb1,0x6a,0xed,0xf5,0xaa,0x0d,0xe6,0x57,0xba,0x63,0x7b,0x39};
+            Vector<uint8_t> K16(32); memcpy(K16.mutableSpan().data(), k16, 32);
+            Vector<uint8_t> IV16(12); memcpy(IV16.mutableSpan().data(), iv16, 12);
+            Vector<uint8_t> P16(60); memcpy(P16.mutableSpan().data(), p16, 60);
+            Vector<uint8_t> A16;
+            auto ct16 = WebKit::driftstackAes256GcmEncrypt(K16, IV16, P16, A16);
+            // expected C[0..3]=52 2d c1 f0 ; T=b094dac5d93471bdec1a502270e3cc6c
+            bool ok16 = ct16.size() == 76
+                && ct16[0]==0x52 && ct16[1]==0x2d && ct16[2]==0xc1 && ct16[3]==0xf0
+                && ct16[60]==0xb0 && ct16[61]==0x94 && ct16[75]==0x6c;
+            WTFLogAlways("[a74622fc-256] AES-256-GCM NIST TC16 (multi-block) self-test: %d (1=PASS) size=%zu", ok16, ct16.size());
+            auto rt = WebKit::driftstackAes256GcmDecrypt(K16, IV16, ct16, A16);
+            bool okrt = rt.size()==60 && rt[0]==0xd9 && rt[59]==0x39;
+            WTFLogAlways("[a74622fc-256] AES-256-GCM decrypt round-trip: %d (1=PASS) size=%zu", okrt, rt.size());
+        }
+
         // AES-ECB hp_mask test: encrypt 16-byte zero block with zero key
         // Expected: 66e94bd4ef8a2c3b884cfa59ca342b2e (NIST AES-128 ECB test vector)
         if (resolveAesEncryptFns()) {
