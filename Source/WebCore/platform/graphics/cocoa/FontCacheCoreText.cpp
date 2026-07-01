@@ -3207,12 +3207,19 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     // real iPhone renders as COLOR EMOJI by default (perEmojiDims @200px = 200.2×264.26 color box), but the
     // fork's macOS cascade puts STIX Two / other symbol fonts ahead of Apple Color Emoji → distinct narrow
     // text dims. Fixture-exact set from the fork-vs-iOS perEmojiDims diff (daemon 70461 vs BS
-    // creepjsdomrect-iPhone_17-1782878388485). Excludes ★2605/✔2714/✖2716 (iOS text) and 3030〰/2640♀/2642♂
-    // (iOS = 300 tall bucket, already correct on the fork). Same proportional→emoji / mono→cascade gate.
+    // creepjsdomrect-iPhone_17-1782878388485). Excludes ★2605/✔2714/✖2716 (iOS text) and 2640♀/2642♂
+    // (iOS genuinely = 300 tall bucket). NOTE: 3030〰 is NOW routed here too (added below) — the original
+    // W2647 comment grouped it with ♀/♂ as "300, already correct" but that was a MISREAD: ground truth
+    // creepjsdomrect-iPhone_17 has 3030 h=264.2637939453125 (COLOR box), while ♀/♂ are 300. Same gate.
     case 0x23CF: case 0x23ED: case 0x23EF: case 0x23F1:
     case 0x2692: case 0x2694: case 0x2696: case 0x2697: case 0x2699: case 0x269B: case 0x269C:
     case 0x26A0: case 0x26A7: case 0x26B0: case 0x26B1: case 0x26C8: case 0x26CF:
-    case 0x26D1: case 0x26D3: case 0x26E9: case 0x26F0: case 0x26F1: case 0x26F4: case 0x26F7: case 0x26F8: {
+    case 0x26D1: case 0x26D3: case 0x26E9: case 0x26F0: case 0x26F1: case 0x26F4: case 0x26F7: case 0x26F8:
+    // U+3030 〰 WAVY DASH — RGI emoji, default TEXT presentation. Bare (no VS16) the macOS cascade lands it
+    // on the tall gender-sign symbol font (fork DOMRect height 300.2997, bit-identical to fork ♂2642); a
+    // real iPhone resolves it to Apple Color Emoji (264.2638). Route it to color; keeps uniqueEmojiDims at 7
+    // (both the 264 and 300 buckets pre-exist, so moving 3030 changes no bucket count).
+    case 0x3030: {
         if (baseFontIsMonospace)
             return nullptr;
         static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
