@@ -577,6 +577,28 @@ bool DriftstackTLS13Client::receiveServerHello()
             m_errorMessage = "X25519 ECDH derivation failed"_s;
             return false;
         }
+    } else if (sh.keyShareGroup == 0x0017) {
+        // egress audit wxzzaphvp (#7): HelloRetryRequest → P-256 (secp256r1). When a server rejects our
+        // PQ (X25519MLKEM768) + X25519 key shares it sends an HRR requesting 0x0017; the CH2 path
+        // (~line 442) generates m_p256Keypair and sends its public key, and this (CH2) ServerHello
+        // carries the server's P-256 key_share. There was NO 0x0017 derivation branch → it fell through
+        // to the else ("Unsupported key_share group 0x0017") → the handshake ALWAYS failed after an
+        // HRR→P-256 (a real "site won't load" for servers that don't support our key shares and prefer
+        // P-256). Derive the ECDH shared from the server's 65-byte uncompressed point via the CH2 keypair.
+        if (!m_p256Keypair.ok) {
+            m_errorMessage = "server selected P-256 (0x0017) but no CH2 P-256 keypair was generated"_s;
+            return false;
+        }
+        if (sh.keyShareKey.size() != 65) {
+            m_errorMessage = makeString("P-256 key_share must be a 65-byte uncompressed point, got "_s,
+                String::number(sh.keyShareKey.size()));
+            return false;
+        }
+        m_ecdhShared = driftstackP256ComputeShared(m_p256Keypair, sh.keyShareKey);
+        if (m_ecdhShared.size() != 32) {
+            m_errorMessage = "P-256 ECDH derivation failed"_s;
+            return false;
+        }
     } else {
         m_errorMessage = makeString("Unsupported key_share group 0x"_s, hex(sh.keyShareGroup, 4),
             " or size "_s, String::number(sh.keyShareKey.size()));
@@ -1224,6 +1246,28 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord(int depth)
             m_errorMessage = "too many post-handshake records — rejecting (DoS defense)"_s;
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2209] post-handshake 0x16 flood (depth=%d transcript=%zu) — rejecting (recursion/alloc DoS defense)", depth, m_transcriptBytes.size());
             return { };
+        }
+        // egress audit wxzzaphvp (#8): handle a server KeyUpdate (RFC 8446 §7.2, handshake type 0x18)
+        // BEFORE the transcript append. The server has switched to the next server
+        // application_traffic_secret; without rekeying our READ key here, EVERY subsequent record fails
+        // its AEAD tag ("decrypt failed") → the connection breaks mid-session. Advance the secret via
+        // HKDF-Expand-Label("traffic upd") + re-derive the read key (deriveTrafficKey resets seqNum→0).
+        // KeyUpdate is post-handshake → NOT transcript material, so it is NOT appended. We deliberately
+        // do NOT rotate our own SEND key / echo a KeyUpdate on update_requested: the server keeps
+        // decrypting our records with our unchanged send key, so the connection stays valid — send-key
+        // rotation is a minor RFC-SHOULD follow-up, not required to keep reading.
+        if (!pt.isEmpty() && pt[0] == 0x18) {
+            if (m_serverAppSecretCurrent.isEmpty())
+                m_serverAppSecretCurrent = m_keySchedule.serverApplicationSecret();
+            auto next = hkdfExpandLabel(m_negotiatedCipher, m_serverAppSecretCurrent, "traffic upd", { }, m_keySchedule.hashLen());
+            if (next.size() != m_keySchedule.hashLen()) {
+                m_errorMessage = "KeyUpdate: server traffic-secret update (traffic upd) failed"_s;
+                return { };
+            }
+            m_serverAppSecretCurrent = std::move(next);
+            m_serverAppKey = m_keySchedule.deriveTrafficKey(m_serverAppSecretCurrent);
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/wxzzaphvp] server KeyUpdate — server app read-key rekeyed (traffic upd), seqNum reset to 0");
+            return readApplicationRecord(depth + 1);
         }
         m_transcriptBytes.append(pt.span());
         return readApplicationRecord(depth + 1);

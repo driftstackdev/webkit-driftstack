@@ -109,6 +109,10 @@ private:
     // Application traffic keys
     TLS13TrafficKey m_clientAppKey;
     TLS13TrafficKey m_serverAppKey;
+    // egress audit wxzzaphvp (#8): the CURRENT server application_traffic_secret, advanced on each
+    // server KeyUpdate (RFC 8446 §7.2 "traffic upd"). Empty until the first KeyUpdate, then tracks
+    // secret_N so successive KeyUpdates chain correctly. Read/updated only in readApplicationRecord.
+    Vector<uint8_t> m_serverAppSecretCurrent;
 
     // Saved ephemeral X25519 private keys (for ECDH after ServerHello).
     // DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON): the iPhone-correct wire emits TWO
