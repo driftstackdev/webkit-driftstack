@@ -63415,6 +63415,143 @@ static constexpr char kCanvasFp10x_rigGidToBlob9_200x100[] =
     "BAUtPj4KIRsECiGbD/1AhYIKnpcXDRCFgg0QzYf2oELJDU9Di4aAQskGgG7D81AhZIanocXDQCFk"
     "g0A/afGgELJDU9Di4aAQskmgH7T43AB43Iwllw3U6tAAAAAElFTkSuQmCC";
 
+// rig-gid toBlob cumrig-toBlob-3 (200x100) FAMILY-B — toBlob PNG sha=e1a5228c (real iPhone 17/iOS18.7 GT, rule-9 un-infer 2026-06-30)
+static constexpr char kCanvasFp10x_rigGidToBlob3_200x100_iphone17_ios18_7_safari26_4[] =
+    "data:image/png;base64,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";
+
+// rig-gid toBlob cumrig-toBlob-6 (200x100) FAMILY-B — toBlob PNG sha=2b39ad85 (real iPhone 17/iOS18.7 GT, rule-9 un-infer 2026-06-30)
+static constexpr char kCanvasFp10x_rigGidToBlob6_200x100_iphone17_ios18_7_safari26_4[] =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAYAAADDhn8LAAAAAXNSR0"
+    "IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAA"
+    "QAAAABAAAAyKADAAQAAAABAAAAZAAAAAAujE8CAAAIuElEQVR4Ae1aCbDVcxT+XiGkeq2EiCgUFU"
+    "mMJVMzkhkRLSMylkJmLMOMFxphso2QJTWWmKwjYkIlsreoiDK0eEgKLSpLpc13frrPv/tel2aqc9"
+    "7Md2buu/f+t3P+33e+3znnf18R+g7fBJkQEAIVIlClwq3aKASEQEJAAlEiCIECCEggBcDRLiEggS"
+    "gHhEABBHYpsG+H7+qB6ViDXfEaWm6Tr2pYj7UoHHpt/Il78HLZddejCuZibzyOE/EbdscBWI7L8A"
+    "Fuwlllx1T04Uk8jX44L8VZ0f78bea3M2ZhIWrjfTTN363vlQwB1wqyCzYwzTdsE2RVsZHJeiX2ok"
+    "QKme2/FB9hEppQBofiKzREH35/BcPSafXwO7pjRqFLpH298Alj3Pifx9kBp+FLfIHb0Invb2EI+m"
+    "Ps/zpPB8VFoPAyvIPjfhbH7WAPwLNoi782V5tFKOb3J2AVaHtbFWzCvRiFi3Ah3sbheJ5+B+FV3I"
+    "nTt7crXW8nIlChQGzlvQHjUxhTcBBX3gtwJH5kO/ImG5J+aXtbfIfruU52R990bG38gaN4zGH4iY"
+    "3N0ViEWriCTcZGFOEq9OSRR+Baps6eTNfjUcp1uTHPqMaGZDc8ilNwMT7GdZiQ2p/RaI02vH43Nk"
+    "H5NgrD06b3MBgnM4KDsBRD8RwO5vsMNk7DuXUsWuSflr6voVCWsvZYu5W16qw2g5ncp2M2fkGNlN"
+    "yPoH1ZG1eCcbyDabynYtj2FxldvrXjPdVnVTJxmI3n/a5iKyer3AiUE8hJmIdbMYbrX38sYTI9hp"
+    "GpVZmF/disLCm7W0t0S0qzfbAS1oq0Q0lKvvm4OSVRKwxAb0zh3zeSQBow/U18JrjxaI47MJopVY"
+    "3nr0rHtKdETDTm0wRZkZ1L0ayn9OzYDUz0MUzZB9Ahicxam6fxFFudq5MQ7PwR3GIirYXVnD7m4x"
+    "r0SOdlrz2IU1BD3oPdc002cObfBD8AXdJh1o615LfmWMw7eQgT0YxI1MheIi0M8ymRd3A/JbKYYj"
+    "2Q1aPTFsfoS+VDoJxAuuBz1okWTM/idDeX4XzsgXWsDgsL3t0YHlGKeumYxUxHG4atOnzKVT3bi1"
+    "t1eRWttrhWN6aTVY3vUTdtt1V6GJshs3N4ha74LH0eSQlO2LxC24bWWJAS/2GcmkRgMbzPeaMDJ4"
+    "4XcWw6xyrKOlTlWr4uzSLWBtnqnrWu9HEJW6OfKQ97DWVFs2qWE8h96JiEa1VvIqVg8VglysZlla"
+    "wdvsUJrKd2z7YQPJiWiRuzrvS5kiFQTiC2KtuqnjPrrSsapBtw1S/ivpx9jzq5j+l9FWWVs+xxy1"
+    "E9t7ns3dqyrM/suXNYXyzxzXICzJ1os8VK+rEKkTOrbD9kYrEWMTeDvMuVvyO+xrlM4cmsfzkzAf"
+    "3K5i9n+dfIj3k1hZ8f1yFszkxA9jKzBWIIBbIvVqTWLG3Un0qHQJX8iK2/7sxevC7XTEtsazfOxk"
+    "ymcC3sT7Lrs00ys9VzUyYx86+zLd+nMonPZOWqQ59mffBh2emzmWIvsBrYyx7TmplfG7RtpbZ5oj"
+    "33mB3B1qYN65BVwHyzKtgLU7nKl3LaabLFbrt2b0rGnpBZi9WTj59HZ6qcVTizxljGejQXr7MBzI"
+    "/LxNeSVTbXdtqj3s+JmM0tssqLQLkKYklnj0W/Y2Nkz/ItKUewcbBEnET6Szmqz0MDplDjJKDtce"
+    "vP8GmWtSiTcXe6nK3CW/udwyqcDfwz+IyoOW5Jv2PYXDCHcdqMUEI52+8cxZw5zNbykbCZVQmL2x"
+    "4YzEQjNnoL0nb7Y23YeK7389hU1eR50+g/2waaAC8nKs24TNyOM/gLSvkq+CWFXMJlYzYGEqP6aS"
+    "6r6CFDmVN9qBQIFG3tv3ltNbdktBYmazZQL2OCWMJtL7PhvZgTyzdMLKsOVk1stS+UYHb8is1tkf"
+    "3mcTDH5n+eI/3bHm5LfFY9mnICsfYuN39lz7ch3maqfDyyx9jnGqxAjdiw2cCea+3yj9H3yoPAVg"
+    "WyM2/Bkm8K7kqrsw2/Azl1DGKj9xKO2ZlhyJcQKIdACIFYVDY7dGHzU53r7jg2S9ZGyYSANwLlZh"
+    "CvgKbzdwN7yYRAJATKPcWKFJxiEQLeCEgg3gzIf2gEJJDQ9Cg4bwQkEG8G5D80AhJIaHoUnDcCEo"
+    "g3A/IfGgEJJDQ9Cs4bAQnEmwH5D42ABBKaHgXnjYAE4s2A/IdGQAIJTY+C80ZAAvFmQP5DIyCBhK"
+    "ZHwXkjIIF4MyD/oRGQQELTo+C8EZBAvBmQ/9AISCCh6VFw3ghIIN4MyH9oBCSQ0PQoOG8EJBBvBu"
+    "Q/NAISSGh6FJw3AhKINwPyHxoBCSQ0PQrOGwEJxJsB+Q+NgAQSmh4F542ABOLNgPyHRkACCU2Pgv"
+    "NGQALxZkD+QyMggYSmR8F5IyCBeDMg/6ERkEBC06PgvBGQQLwZkP/QCEggoelRcN4ISCDeDMh/aA"
+    "QkkND0KDhvBCQQbwbkPzQCEkhoehScNwISiDcD8h8aAQkkND0KzhsBCcSbAfkPjYAEEpoeBeeNgA"
+    "TizYD8h0ZAAglNj4LzRkAC8WZA/kMjIIGEpkfBeSMggXgzIP+hEZBAQtOj4LwRkEC8GZD/0AhIIK"
+    "HpUXDeCEgg3gzIf2gEJJDQ9Cg4bwQkEG8G5D80AhJIaHoUnDcCEog3A/IfGgEJJDQ9Cs4bAQnEmw"
+    "H5D42ABBKaHgXnjYAE4s2A/IdGQAIJTY+C80ZAAvFmQP5DIyCBhKZHwXkjIIF4MyD/oRGQQELTo+"
+    "C8EZBAvBmQ/9AISCCh6VFw3ghIIN4MyH9oBCSQ0PQoOG8EJBBvBuQ/NAISSGh6FJw3AhKINwPyHx"
+    "oBCSQ0PQrOGwEJxJsB+Q+NgAQSmh4F542ABOLNgPyHRkACCU2PgvNGQALxZkD+QyMggYSmR8F5Iy"
+    "CBeDMg/6ERkEBC06PgvBGQQLwZkP/QCEggoelRcN4ISCDeDMh/aAT+Br5Auu6HzYdMAAAAAElFTk"
+    "SuQmCC";
+
+// rig-gid toBlob cumrig-toBlob-9 (200x100) FAMILY-B — toBlob PNG sha=6ecdecd9 (real iPhone 17/iOS18.7 GT, rule-9 un-infer 2026-06-30)
+static constexpr char kCanvasFp10x_rigGidToBlob9_200x100_iphone17_ios18_7_safari26_4[] =
+    "data:image/png;base64,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";
+
 // ============= end rig-gid getImageData/toBlob canonicals =============
 
 // fpjs_240x60 iphone17_ios18_7_safari26_4 — stationary across n=6 captures, sha=e74fe15d05daff92…
@@ -64314,19 +64451,19 @@ static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-2", kCanvasFp10x_rigGidToBlob2_200x100, "rig_gid_toblob_2_200x100" },
     { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-2", kCanvasFp10x_rigGidToBlob2_200x100, "rig_gid_toblob_2_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-3", kCanvasFp10x_rigGidToBlob3_200x100, "rig_gid_toblob_3_200x100" },
-    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-3", kCanvasFp10x_rigGidToBlob3_200x100, "rig_gid_toblob_3_200x100" },
+    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-3", kCanvasFp10x_rigGidToBlob3_200x100_iphone17_ios18_7_safari26_4, "rig_gid_toblob_3_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-4", kCanvasFp10x_rigGidToBlob4_200x100, "rig_gid_toblob_4_200x100" },
     { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-4", kCanvasFp10x_rigGidToBlob4_200x100, "rig_gid_toblob_4_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-5", kCanvasFp10x_rigGidToBlob5_200x100, "rig_gid_toblob_5_200x100" },
     { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-5", kCanvasFp10x_rigGidToBlob5_200x100, "rig_gid_toblob_5_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-6", kCanvasFp10x_rigGidToBlob6_200x100, "rig_gid_toblob_6_200x100" },
-    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-6", kCanvasFp10x_rigGidToBlob6_200x100, "rig_gid_toblob_6_200x100" },
+    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-6", kCanvasFp10x_rigGidToBlob6_200x100_iphone17_ios18_7_safari26_4, "rig_gid_toblob_6_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-7", kCanvasFp10x_rigGidToBlob7_200x100, "rig_gid_toblob_7_200x100" },
     { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-7", kCanvasFp10x_rigGidToBlob7_200x100, "rig_gid_toblob_7_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-8", kCanvasFp10x_rigGidToBlob8_200x100, "rig_gid_toblob_8_200x100" },
     { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-8", kCanvasFp10x_rigGidToBlob8_200x100, "rig_gid_toblob_8_200x100" },
     { "iphone16pro_ios18_6", 200, 100, "cumrig-toBlob-9", kCanvasFp10x_rigGidToBlob9_200x100, "rig_gid_toblob_9_200x100" },
-    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-9", kCanvasFp10x_rigGidToBlob9_200x100, "rig_gid_toblob_9_200x100" },
+    { "iphone17_ios18_7_safari26_4", 200, 100, "cumrig-toBlob-9", kCanvasFp10x_rigGidToBlob9_200x100_iphone17_ios18_7_safari26_4, "rig_gid_toblob_9_200x100" },
     // V-659: iOS 18.7 entry must precede iOS 18.6 so archetype-gated
     // lookup finds it first for the launch archetype.
     { "iphone16pro_ios18_7_safari26_4", 220, 30, "Cwm fjordbank glyphs vext quiz, 😃🍕", kCanvasFp10x_text2LineEmoji220x30_iphone16pro_ios18_7_safari26_4, "text_2line_emoji_220x30" },
