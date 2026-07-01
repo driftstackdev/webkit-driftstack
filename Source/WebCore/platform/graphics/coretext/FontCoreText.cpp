@@ -1493,6 +1493,25 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         case 600: u2049Advance = 500.4062805175781f;  break;
         default: break;
         }
+        if (u2049Advance >= 0.f) {
+            // W3056 (A3 REVERSE diagnostic — A1 requested on-box advance.width + familyName): the render
+            // showed U+2049 UNCHANGED (166.97915649414062), so the value-self-guard didn't fire. Log every
+            // guard input whenever a candidate SIZE matches so A1 can see WHY (advance out of the 0.05 window /
+            // glyph-identity mismatch / wrong size case). Temporary — remove once the guard is tuned.
+            RetainPtr u2049FontDiag = ctFont();
+            char famBuf[128] = { 0 };
+            if (u2049FontDiag) {
+                RetainPtr<CFStringRef> famName = adoptCF(CTFontCopyFamilyName(u2049FontDiag.get()));
+                if (famName)
+                    CFStringGetCString(famName.get(), famBuf, sizeof(famBuf), kCFStringEncodingUTF8);
+            }
+            UniChar chDiag = 0x2049;
+            CGGlyph gDiag = 0;
+            bool gotG = u2049FontDiag && CTFontGetGlyphsForCharacters(u2049FontDiag.get(), &chDiag, &gDiag, 1);
+            WTFLogAlways("[W3056/U2049-DIAG] size=%.5f advance.width=%.11f expected=%.11f fabsdiff=%.11f measuredGlyph=%u u2049Glyph=%u gotGlyphs=%d valueMatch=%d family='%s'",
+                platformData().size(), advance.width, u2049Advance, std::fabs(advance.width - u2049Advance),
+                glyph, gDiag, (int)gotG, (int)(gotG && gDiag && gDiag == glyph), famBuf);
+        }
         if (u2049Advance >= 0.f && std::fabs(advance.width - u2049Advance) < 0.05) {
             RetainPtr u2049Font = ctFont();
             UniChar u2049Ch = 0x2049;
