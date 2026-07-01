@@ -708,8 +708,18 @@ void WebAutomationSession::respondToPendingPageNavigationCallbacksWithTimeout(Ha
         auto callback = map.take(id);
         if (page && m_client->isShowingJavaScriptDialogOnPage(*this, *page))
             callback({ });
-        else
+        else {
+            // W3060 (#51 — API/agent heavy-page unblock, drive-list rank-1): a readyState=complete pageLoad
+            // timeout leaves the WebContent main thread WEDGED on the never-completing load, so EVERY follow-up
+            // WD command (execute_script, currentURL, back/forward) also times out — the API/agent path can't
+            // drive a heavy page at all (verified via --drive-probe on westernunion; the GUI eager path is
+            // unaffected). The page HAS committed + rendered to interactive; stopLoading aborts the pending
+            // subresources, frees the main thread, and leaves the DOM intact so subsequent commands run. The
+            // navigate STILL returns the correct W3C Timeout (result unchanged). No-op if the load finished.
+            if (page)
+                page->stopLoading();
             ASYNC_FAIL_WITH_PREDEFINED_ERROR(Timeout);
+        }
     }
 }
 
@@ -728,8 +738,11 @@ void WebAutomationSession::respondToPendingFrameNavigationCallbacksWithTimeout(H
         auto callback = map.take(id);
         if (page && m_client->isShowingJavaScriptDialogOnPage(*this, *page))
             callback({ });
-        else
+        else {
+            if (page)
+                page->stopLoading();   // W3060 (#51): free the wedged WebContent so follow-up WD cmds run (see the page variant above); still returns W3C Timeout
             ASYNC_FAIL_WITH_PREDEFINED_ERROR(Timeout);
+        }
     }
 }
 
