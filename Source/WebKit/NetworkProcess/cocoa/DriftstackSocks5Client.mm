@@ -247,7 +247,7 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 static CString stripIpv6Brackets(const CString& host)
 {
     if (host.length() >= 2 && host.data()[0] == '[' && host.data()[host.length() - 1] == ']')
-        return CString(host.data() + 1, host.length() - 2);
+        return CString(std::span<const char> { host.data() + 1, host.length() - 2 });
     return host;
 }
 static DestAddrKind classifyDest(const CString& hostUtf8)
