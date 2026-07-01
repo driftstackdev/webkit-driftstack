@@ -2217,6 +2217,12 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
 static void applyDriftstackU2049AdvanceOverride(GlyphBuffer& glyphBuffer, unsigned beginningGlyphIndex,
     unsigned beginningStringIndex, float ptSize, StringView text)
 {
+    // W3062 fire-diagnostic (TEMPORARY, remove after A3 reports): W3061 didn't move getClientRects. Is this
+    // helper even reached? does recoverCodepointFromGlyph return 0x2049? what shaped advance does it see? does
+    // expandAdvance run? Gated to the 200px probe (ptSize>150) to avoid flood.
+    bool dsDiag = ptSize > 150.f;
+    if (dsDiag)
+        WTFLogAlways("[DS-U2049] CALLED ptSize=%.3f gbSize=%u begin=%u", ptSize, glyphBuffer.size(), beginningGlyphIndex);
     if (glyphBuffer.size() <= beginningGlyphIndex)
         return;
     static constexpr struct { int size; float adv; } k2049Advances[] = {
@@ -2231,14 +2237,22 @@ static void applyDriftstackU2049AdvanceOverride(GlyphBuffer& glyphBuffer, unsign
     for (auto& c : k2049Advances) {
         if (c.size == sizePx) { target = c.adv; break; }
     }
+    if (dsDiag)
+        WTFLogAlways("[DS-U2049] sizePx=%d target=%.6f", sizePx, target);
     if (target < 0.f)
         return;
     for (unsigned i = beginningGlyphIndex; i < glyphBuffer.size(); ++i) {
-        if (recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex) != 0x2049)
-            continue;
+        char32_t cp = recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex);
         float shaped = WebCore::width(glyphBuffer.advanceAt(i));
-        if (std::fabs(shaped - target) < 0.05f)
+        if (dsDiag && (cp == 0x2049 || (shaped > 160.f && shaped < 172.f)))
+            WTFLogAlways("[DS-U2049] i=%u cp=U+%04X shaped=%.11f match=%d guard=%d", i, (unsigned)cp, shaped, (int)(cp == 0x2049), (int)(std::fabs(shaped - target) < 0.05f));
+        if (cp != 0x2049)
+            continue;
+        if (std::fabs(shaped - target) < 0.05f) {
             glyphBuffer.expandAdvance(i, target - shaped);
+            if (dsDiag)
+                WTFLogAlways("[DS-U2049] FIRED i=%u new=%.11f", i, WebCore::width(glyphBuffer.advanceAt(i)));
+        }
     }
 }
 
