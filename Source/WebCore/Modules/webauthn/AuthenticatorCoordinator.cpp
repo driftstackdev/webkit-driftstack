@@ -483,6 +483,29 @@ void AuthenticatorCoordinator::isConditionalMediationAvailable(const Document& d
 
 void AuthenticatorCoordinator::getClientCapabilities(const Document& document, DOMPromiseDeferred<PublicKeyCredentialClientCapabilities>&& promise) const
 {
+#if PLATFORM(DRIFTSTACK)
+    // host-leak-hunt P1 (2026-07-01): without this the getter falls through to the Mac fleet's
+    // ASCWebKitSPISupport (m_client->getClientCapabilities), leaking host capabilities while the sibling
+    // getters isUVPAA/isConditionalMediation ARE overridden. Real-device captured (bs-webauthn-clientcapabilities.js):
+    //   • iPhone 16 Pro / iOS 18.6 / Safari 18.6 (Family A): all 6 keys true (dict.userVerifyingPlatformAuthenticator
+    //     reports the STATIC platform capability = true, independent of biometric enrollment).
+    //   • iPhone 17 / Safari 26.5 (Family B): the 5 feature-flags true; dict.uvpa=false on the BS device is the
+    //     no-biometric artifact — on 26.x dict.uvpa tracks isUVPAA(), which the fork forces true for Family B
+    //     (founder physical iPhone 16 Pro / 26.4.1 = true). So a real enrolled Family-B device returns uvpa=true.
+    // ⇒ the served dict is FAMILY-INDEPENDENT: the same 6-key set, all true, for every archetype.
+    // Keys emitted pre-sorted by codePointCompareLessThan (alphabetical) to match the WebKit .mm enumeration
+    // order the record<DOMString,boolean> materializes in (verified: capKeysInOrder == capKeysSorted on both captures).
+    Vector<KeyValuePair<String, bool>> caps {
+        { "conditionalCreate"_s, true },
+        { "conditionalGet"_s, true },
+        { "hybridTransport"_s, true },
+        { "passkeyPlatformAuthenticator"_s, true },
+        { "relatedOrigins"_s, true },
+        { "userVerifyingPlatformAuthenticator"_s, true },
+    };
+    promise.resolve(caps);
+    return;
+#endif
     if (!m_client)  {
         promise.reject(Exception { ExceptionCode::UnknownError, "Unknown internal error."_s });
         return;
