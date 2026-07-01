@@ -492,17 +492,25 @@ static inline RTCRtpCapabilities toRTCRtpCapabilities(const webrtc::RtpCapabilit
         if (sdpFmtpLine.isEmpty()
             && equalLettersIgnoringASCIICase(mimeType, "audio/red"_s)) {
             // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            // Family A = Safari MAJOR < 26 (the libwebrtc bump). Real-device aio captures: audio/red
+            // sdpFmtpLine "=111/111" is present ONLY at 18.6; EMPTY on ALL 26.x (26.0 aio-iPhone_17_Pro,
+            // 26.2 aio-iPhone_14, 26.4 aio-iPhone_17). The prior safari26_0/1/2/3 clauses WRONGLY injected
+            // "=111/111" on 26.0-26.3 archetypes (a WebRTC audio/red fmtp tell — boundary-lambda-audit
+            // 2026-07-01). Parse the major + compare, matching driftstackIsFamilyARTC() in
+            // PeerConnectionBackend.cpp (same libwebrtc bump / registry surface) — drift-proof vs the
+            // per-minor string-find list that had silently drifted.
             const bool s_isFamilyAArchetypeRTC = []() {
                 const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-                if (!archetype) return false;
+                if (!archetype || !archetype[0]) return false;
                 std::string_view sv(archetype);
-                return sv.find("safari17_") != std::string_view::npos
-                    || sv.find("safari18_") != std::string_view::npos
-                    || sv.find("safari19_") != std::string_view::npos
-                    || sv.find("safari26_0") != std::string_view::npos
-                    || sv.find("safari26_1") != std::string_view::npos
-                    || sv.find("safari26_2") != std::string_view::npos
-                    || sv.find("safari26_3") != std::string_view::npos;
+                auto pos = sv.find("safari");
+                if (pos == std::string_view::npos) return false;
+                sv.remove_prefix(pos + 6);
+                if (sv.empty() || sv[0] < '0' || sv[0] > '9') return false;
+                int major = 0;
+                for (size_t i = 0; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+                    major = major * 10 + (sv[i] - '0');
+                return major < 26;
             }();
             if (s_isFamilyAArchetypeRTC)
                 sdpFmtpLine = "=111/111"_s;
