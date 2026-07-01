@@ -1082,7 +1082,23 @@ static HashSet<String>& driftstackH2PoolPending()
 [[maybe_unused]] static void driftstackH3PoolSet(const String& origin, RefPtr<WebKit::DriftstackHttp3Session>&& session)
 {
     Locker locker { driftstackH3PoolLock() };
-    driftstackH3Pool().set(origin, std::move(session));
+    // W3041 (audit w7wqi2pq4 MED): sweep DEAD sessions on every insert, mirroring the h2 pool's W2342
+    // fix. A pooled h3 session whose QUIC connection terminated (server CONNECTION_CLOSE / idle-timeout
+    // expiry → isAlive()==false once the pump self-terminates per the W3041 runPump fix) otherwise
+    // lingers here holding its udpFd + SOCKS5 relay fd. The pool's only other evictors are same-origin
+    // re-claim (driftstackH3PoolClaim) and driftstackH3PoolEvict on a reused-session failure, so an h3
+    // origin visited ONCE and never revisited keeps that fd until the NetworkProcess exits. Sweeping
+    // here bounds it: any new pooling clears every dead entry across all origins. Alive sessions are
+    // untouched (no reuse regression). O(pool size) under the lock (dozens of origins — negligible).
+    auto& pool = driftstackH3Pool();
+    Vector<String> dead;
+    for (auto& [key, sess] : pool) {
+        if (!sess || !sess->isAlive())
+            dead.append(key);
+    }
+    for (auto& key : dead)
+        pool.remove(key);
+    pool.set(origin, std::move(session));
 }
 [[maybe_unused]] static void driftstackH3PoolFinishPending(const String& origin)
 {

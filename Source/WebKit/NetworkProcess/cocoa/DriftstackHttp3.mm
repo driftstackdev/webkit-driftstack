@@ -4473,6 +4473,7 @@ void DriftstackHttp3Session::runPump()
     auto& nf = ngtcp2Fns();
     Socks5Framing::Endpoint peerEp { qc->peerIp, qc->peerPort };
     while (true) {
+        bool connTerminal = false; // W3041: set when the QUIC conn hits a definitive close/idle-timeout this iteration
         // 1. take queued requests + check stop.
         Vector<std::shared_ptr<H3PendingReq>> toSubmit;
         {
@@ -4518,12 +4519,19 @@ void DriftstackHttp3Session::runPump()
                 Vector<uint8_t> payload;
                 if (!Socks5Framing::unwrap(std::span<const uint8_t> { inbound, static_cast<size_t>(r) }, src, payload))
                     continue;
-                driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
+                int rrv = driftstackQuicReadPacket(qc, payload.span().data(), payload.size(),
                     reinterpret_cast<struct sockaddr*>(&qc->peerSa), sizeof(qc->peerSa),
                     reinterpret_cast<struct sockaddr*>(&qc->localSa), sizeof(qc->localSa));
+                if (rrv == -223 || rrv == -224) // NGTCP2_ERR_DRAINING / _CLOSING → peer CONNECTION_CLOSE (W3041)
+                    connTerminal = true;
             }
-        } else if (nf.conn_handle_expiry)
-            nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow());
+        } else if (nf.conn_handle_expiry) {
+            // W3041: a nonzero handle_expiry return (NGTCP2_ERR_IDLE_CLOSE / NOMEM) is terminal — the
+            // connection's idle timeout fired and it can no longer proceed (handle_expiry has no
+            // transient/retryable nonzero, so any != 0 means the conn is done).
+            if (nf.conn_handle_expiry(qc->conn, driftstackQuicTimestampNow()) != 0)
+                connTerminal = true;
+        }
         driftstackHttp3DrainWrites(qc, qc->udpFd, peerEp, qc->relaySa);
         // 4. harvest completed streams from the per-stream map (written by the
         //    callbacks above, on THIS thread) into their pending-request slots.
@@ -4559,6 +4567,27 @@ void DriftstackHttp3Session::runPump()
         }
         if (anyDone)
             st->cond.notifyAll();
+        // W3041 (audit w7wqi2pq4 MED): self-terminate on a DEFINITIVE QUIC close (peer CONNECTION_CLOSE
+        // read above, or an idle-timeout expiry) so isAlive() flips false and the next pool sweep evicts
+        // this session → its dtor joins THIS thread + closes qc->udpFd + the SOCKS5 relay fd. Without it,
+        // m_alive stays true forever and this pump spins select() at ~50Hz holding both fds for the whole
+        // NetworkProcess lifetime — one leaked thread+fd per h3 origin visited once. Conservative: ONLY
+        // the terminal ngtcp2 states trip it (a healthy conn never returns them → no live-load regression).
+        if (connTerminal) {
+            Locker l { m_lock };
+            m_alive = false;
+            st->stop = true;
+            for (auto& entry : st->inflight) {
+                auto& p = entry.value;
+                if (p && !p->done) {
+                    p->response.failed = true;
+                    p->response.errorMessage = "h3 connection closed"_s;
+                    p->done = true;
+                }
+            }
+            st->cond.notifyAll();
+            break;
+        }
     }
 }
 
