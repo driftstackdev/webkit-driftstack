@@ -223,6 +223,126 @@ static constexpr char kCanvasFp10x_textArial14_240x50_iphone16pro_ios18_6[] =
     "QCAgEBAICAQEAgIBgYBAQCAgEBAICAQEAgIBgYBAQCAgEBAICAQEAgIBgYBAQCAgELipEfhf"
     "b5OL3PKi1UEAAAAASUVORK5CYII=";
 
+// Arial 14px text + fillRect + 2-stroke (current live) (220x30) [Family-A sub-band: Safari 26.0-26.3] — lastFillText: 'BrowserLeaks,com <canvas> 1.0'
+// Real-device GT: browserleaks.com /canvas Signature md5=c3609d38b9d3a1e6a78b0602335d4511 (6148 PNG bytes), iPhone 14 Pro / Safari 26.3 (Family-A, 26.0-26.3 band). Analog of the 18.6 971499ce serve.
+// The browserleaks /canvas is Arial-14px TEXT (font-version-sensitive), so it splits 18.6 (971499ce) vs 26.0-26.3 (c3609d38) — the SAME font-version split as glyphHash (18.6=95f11efd / 26.x=5d474692). Geometry canvases stay band-uniform.
+static constexpr char kCanvasFp10x_textArial14_220x30_familyA_safari26x[] =
+    "data:image/png;base64,"
+    "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";
+
 // Arial 14px text + fillRect + 2-stroke (current live) (220x30) [archetype: iphone16pro_ios18_6] — lastFillText: 'BrowserLeaks,com <canvas> 1.0'
 static constexpr char kCanvasFp10x_textArial14_220x30_iphone16pro_ios18_6[] =
     "data:image/png;base64,"
@@ -64470,6 +64590,11 @@ static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
     { "iphone16pro_ios18_6", 220,  30, "Cwm fjordbank glyphs vext quiz, 😃🍕", kCanvasFp10x_text2LineEmoji220x30_iphone16pro_ios18_6, "text_2line_emoji_220x30" },
     { "iphone16pro_ios18_6", 240,  50, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_240x50_iphone16pro_ios18_6, "text_arial14_240x50" },
     { "iphone16pro_ios18_6", 220,  30, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_220x30_iphone16pro_ios18_6, "text_arial14_220x30" },
+    // ASK-C 2026-07-01 — Family-A SUB-BAND row: Safari 26.0-26.3 browserleaks /canvas = c3609d38 (18.6 = 971499ce above).
+    // Donor slug "familyA_safari26x" is Family-A (IsFamilyB==false) so the launch (26.4) family check still rejects it;
+    // the browserleaks-canvas sub-band tie-break (driftstackBrowserleaksCanvasSubBandEligible) routes 26.0-26.3 here and
+    // 18.x to the 18.6 row above. SCOPED to this scene only — the geometry canvases stay band-uniform on the 18.6 sentinel.
+    { "familyA_safari26x", 220,  30, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_220x30_familyA_safari26x, "text_arial14_220x30" },
     { "iphone16pro_ios18_6", 240,  60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_textNoRealFont240x60_iphone16pro_ios18_6, "text_norealfont_240x60" },
     { "iphone16pro_ios18_6", 280,  60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_textArc280x60_iphone16pro_ios18_6, "text_arc_280x60" },
     { "iphone16pro_ios18_6", 250,  50, "😀", kCanvasFp10x_textEmojiSmile250x50_iphone16pro_ios18_6, "text_emoji_smile_250x50" },
@@ -65182,6 +65307,49 @@ inline bool driftstackArchetypeSameSafariMinor(const char* donor, const char* re
     return donorKey == driftstackArchetypeSafariVersionKey(requester);
 }
 
+// ASK-C 2026-07-01 — Family-A canvas SUB-BAND split, SCOPED to the browserleaks.com
+// /canvas scene ONLY (220×30, "BrowserLeaks,com <canvas> 1.0", tag "text_arial14_220x30").
+//
+// Unlike the GEOMETRY canvases (canvas_fingerprint10x daa87d6c, getImageData/toBlob) which are
+// byte-uniform across ALL of Family-A (18.6 / 26.0 / 26.1 / 26.2 / 26.3), the browserleaks /canvas
+// is Arial-14px TEXT and is FONT-VERSION-sensitive — so it SPLITS within Family-A:
+//   18.6        → 971499ce  (kCanvasFp10x_textArial14_220x30_iphone16pro_ios18_6)
+//   26.0–26.3   → c3609d38  (kCanvasFp10x_textArial14_220x30_familyA_safari26x)
+// (the same font-version split as the CLOSED glyphHash: 18.6=95f11efd / 26.x=5d474692.)
+//
+// Both donor rows are Family-A (IsFamilyB==false) and both key to -1 or an 18/26 minor, so the
+// V-790 SameSafariMinor guard alone cannot distinguish them for a modern Family-A requester. This
+// helper is the sub-band tie-break: it returns true iff the donor row's sub-band matches the
+// requester's Safari minor. It is called ONLY on the browserleaks-canvas scene (see the tag guard
+// in the fallback loops) — it does NOT touch any geometry / band-uniform scene.
+//
+// Sub-band of a slug = "26x" if its parsed Safari major==26 && minor∈[0,3]; else "18x" (18.6, or
+// the legacy bare "iphone16pro_ios18_6"/"familyA…18…" sentinels, key<0 or major!=26). The donor
+// slug "familyA_safari26x" is the 26.0–26.3 donor (rfind("_safari")→rest "26x"→ no '_' → key -1 →
+// treated as the 26x sub-band by the explicit "safari26x" tag below). A 26.4+ requester never
+// reaches here (family check rejects Family-A donors upstream), so the launch band is untouched.
+inline bool driftstackCanvasSlugIs26xSubBand(const char* slug)
+{
+    if (!slug)
+        return false;
+    std::string_view s { slug };
+    // Explicit 26.0–26.3 donor sentinel used by the new sub-band row.
+    if (s.find("safari26x") != std::string_view::npos)
+        return true;
+    int key = driftstackArchetypeSafariVersionKey(slug);
+    // Parsed Safari 26.0–26.3 (keys 26000–26003). 26004+ is Family-B (never Family-A here);
+    // 18.x / legacy (key<0) → NOT the 26x sub-band → the 18.6 donor.
+    return key >= 26000 && key <= 26003;
+}
+
+// Sub-band tie-break for the browserleaks-canvas scene: donor row is eligible for the requester
+// iff they are the SAME Family-A sub-band (both 26.0–26.3, or both 18.x). Family + SameSafariMinor
+// are already enforced upstream; this only disambiguates the two Family-A browserleaks donor rows.
+inline bool driftstackBrowserleaksCanvasSubBandEligible(const char* donor, const char* requester)
+{
+    return driftstackCanvasSlugIs26xSubBand(donor) == driftstackCanvasSlugIs26xSubBand(requester);
+}
+
 // 2026-06-26 — canonical CANVAS-PIXEL family boundary helper (founder #1).
 // The browserleaks canvas FP family is ≤26.3 (Family A, md5 61b7a151) vs ≥26.4
 // (Family B, md5 57186fab). This is the CANVAS boundary ONLY — it is NOT the
@@ -65269,6 +65437,13 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
         // -1 on both sides → equal → pass-through (launch path unchanged).
         if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
             continue; // Cross-minor borrow — skip (V-790 Wave 3)
+        // ASK-C 2026-07-01 sub-band tie-break — SCOPED to the browserleaks-canvas scene
+        // (tag "text_arial14_220x30"): 18.6 and 26.0-26.3 render DIFFERENT Arial text so
+        // require the donor's Family-A sub-band to match the requester's. Every OTHER scene
+        // is band-uniform and skips this (its two -1-keyed donors, if any, are byte-identical).
+        if (entry.tag && std::string_view(entry.tag) == std::string_view("text_arial14_220x30")
+            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, arch))
+            continue; // Wrong Family-A sub-band for the browserleaks-canvas scene
         return entry.dataURL;
     }
     return nullptr;
@@ -65294,6 +65469,11 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
         // Legacy/unset slugs key to -1 both sides → equal → pass-through.
         if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
             continue; // Cross-minor borrow — skip (V-790 Wave 3)
+        // ASK-C 2026-07-01 sub-band tie-break — SCOPED to the browserleaks-canvas scene
+        // (mirror of the WithText path): the 220x30 Arial text canvas splits 18.6 vs 26.0-26.3.
+        if (entry.tag && std::string_view(entry.tag) == std::string_view("text_arial14_220x30")
+            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, arch))
+            continue; // Wrong Family-A sub-band for the browserleaks-canvas scene
         return entry.dataURL;
     }
     return nullptr;
