@@ -862,7 +862,14 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             // V-094/W554 — the exact captured iPhone curve, advance==ptSize for size>=26), so both
             // text paths agree on the real iPhone 17 emoji advance. SyntheticBoldInclusion::Exclude
             // because the complex path blanket-applies synthetic bold later in this function.
-            if (!treatAsSpace && font->colorGlyphType(glyph) == ColorGlyphType::Color)
+            // W2648: only re-strike color glyphs CoreText gave a REAL advance (>0). The macOS emoji font
+            // renders some ZWJ sequences (kiss 1F469-200D-2764-FE0F-200D-1F48B-200D-1F468 / couple-with-heart)
+            // as a 2-glyph OVERLAPPING partial ligature — a composite glyph at CoreText advance 0 + a trailing
+            // glyph at ptSize; CoreText's TOTAL is correctly 200 @200px (iOS ligates to ONE glyph, box 200.2).
+            // Forcing ptSize onto the zero-advance overlap glyph double-counts the strike -> 400 (2x) box.
+            // Preserving 0 for overlap components makes the fork total == iOS's single-ligature box. Single-glyph
+            // emoji + the W2647-routed BMP symbols all have advance>0 -> still overridden (unchanged).
+            if (!treatAsSpace && advance.width() > 0 && font->colorGlyphType(glyph) == ColorGlyphType::Color)
                 advance.setWidth(font->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude));
 
             if (character == tabCharacter && m_run->allowTabs()) {
