@@ -49,6 +49,7 @@
 #include "UserContentProvider.h"
 #include <JavaScriptCore/ConsoleTypes.h>
 #include <wtf/CompletionHandler.h>
+#include <wtf/RunLoop.h>
 #include <wtf/TZoneMallocInlines.h>
 #include <wtf/URL.h>
 
@@ -117,6 +118,30 @@ bool PaymentCoordinator::canMakePayments()
 
 void PaymentCoordinator::canMakePaymentsWithActiveCard(Document& document, const String& merchantIdentifier, Function<void(bool)>&& completionHandler)
 {
+#if PLATFORM(DRIFTSTACK)
+    // LAUNCH-SECURITY guard (systemic sibling of beginPaymentSession #50): a customer session must NEVER
+    // reach the SHARED WORKER's PassKit. The default persistent-session path (shouldDiscloseApplePayCapability
+    // true → ApplePaySession.cpp) calls this coordinator method, which reaches m_client →
+    // WebPaymentCoordinatorProxy → the worker's host PKPassLibrary/Wallet = a cross-account/cross-tenant leak
+    // AND a fingerprint tell (fleet worker w/ no active card → false; a real established-user iPhone → true).
+    // #50 gated beginPaymentSession() but left THIS coordinator method ungated. Serve the archetype-pinned
+    // value, self-consistent with canMakePayments()/apple_pay.set_up (an established Apple-Pay user has an
+    // active card; a non-set-up device has none — and ApplePaySession.cpp's non-disclose branch already
+    // resolves active-card with canMakePayments(), so the two getters stay coherent). NEVER call m_client.
+    {
+        bool activeCard = false;
+        auto& cfg = DriftstackArchetypeConfig::singleton();
+        if (cfg.isValid())
+            activeCard = cfg.applePaySetUp();
+        else if (const char* env = getenv("DRIFTSTACK_APPLE_PAY_SET_UP"))
+            activeCard = (env[0] == '1');
+        PAYMENT_COORDINATOR_RELEASE_LOG("canMakePaymentsWithActiveCard() driftstack-config -> %d (never reaches PassKit)", activeCard);
+        RunLoop::mainSingleton().dispatch([completionHandler = WTF::move(completionHandler), activeCard]() mutable {
+            completionHandler(activeCard);
+        });
+        return;
+    }
+#endif
     m_client->canMakePaymentsWithActiveCard(merchantIdentifier, document.domain(), [weakThis = WeakPtr { *this }, document = WeakPtr<Document, WeakPtrImplWithEventTargetData> { document }, completionHandler = WTF::move(completionHandler)](bool canMakePayments) {
         if (!weakThis)
             return completionHandler(false);
