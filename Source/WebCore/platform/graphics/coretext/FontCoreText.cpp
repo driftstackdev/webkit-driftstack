@@ -611,12 +611,20 @@ void Font::platformInit()
                 }
             }
         } else {
-            // emojiSize > 96: linear-extrapolate from the table's size-64 and size-96 entries.
-            const auto& lo = driftstackEmojiFontMetricsTable[64 - 8]; // size 64
+            // emojiSize > 96: linear-extrapolate the iPhone table. ASCENT from the size-64→96 pair
+            // (slope 1.0 → 201 @200px). DESCENT from the FULL captured range size-8 (.front()={10,4}) →
+            // size-96 (.back()={97,31}), slope 0.3068. W2647: the LOCAL size-64→96 descent slope (0.3125)
+            // lands descent(200)=63.5 exactly on the half-integer → ceilf→64 → lineSpacing 265 → CreepJS
+            // DOMRect box 265.2647 (iPhone is 264 = 201+63; the fixture's scale(1.000999) → 264.2638, BS
+            // ground truth creepjsdomrect-iPhone_17). The full-range slope gives descent(200)=62.9→63 → 264,
+            // and PRESERVES W2596's descent(128)=40.8→41 (→170). Only the >96px descent extrapolation changes.
+            const auto& lo = driftstackEmojiFontMetricsTable[64 - 8]; // size 64 (ascent slope)
             const auto& hi = driftstackEmojiFontMetricsTable.back();  // size 96
             float t = (emojiSize - hi.size) / (hi.size - lo.size);
             ascent  = hi.ascent  + t * (hi.ascent  - lo.ascent);
-            descent = hi.descent + t * (hi.descent - lo.descent);
+            const auto& dlo = driftstackEmojiFontMetricsTable.front(); // size 8 (descent slope over full range)
+            float td = (emojiSize - hi.size) / (hi.size - dlo.size);
+            descent = hi.descent + td * (hi.descent - dlo.descent);
         }
         // W2588: the table above replaces ascent/descent with the iOS Apple Color Emoji
         // values, but lineSpacing was computed earlier (≈line 304) from Mac CoreText's RAW

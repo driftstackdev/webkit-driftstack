@@ -3202,7 +3202,17 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForUniversalSymbolCluster(S
     case 0x2668: case 0x267B: case 0x267E: case 0x2702: case 0x2708: case 0x2709:
     case 0x270C: case 0x270D: case 0x270F: case 0x2712: case 0x2714: case 0x2716:
     case 0x271D: case 0x2721: case 0x2733: case 0x2734: case 0x2744: case 0x2747:
-    case 0x2763: case 0x2764: case 0x27A1: {
+    case 0x2763: case 0x2764: case 0x27A1:
+    // W2647 (CreepJS DOMRect uniqueEmojiDims 23→7): 25 more Emoji=Yes/Emoji_Presentation=No BMP symbols a
+    // real iPhone renders as COLOR EMOJI by default (perEmojiDims @200px = 200.2×264.26 color box), but the
+    // fork's macOS cascade puts STIX Two / other symbol fonts ahead of Apple Color Emoji → distinct narrow
+    // text dims. Fixture-exact set from the fork-vs-iOS perEmojiDims diff (daemon 70461 vs BS
+    // creepjsdomrect-iPhone_17-1782878388485). Excludes ★2605/✔2714/✖2716 (iOS text) and 3030〰/2640♀/2642♂
+    // (iOS = 300 tall bucket, already correct on the fork). Same proportional→emoji / mono→cascade gate.
+    case 0x23CF: case 0x23ED: case 0x23EF: case 0x23F1:
+    case 0x2692: case 0x2694: case 0x2696: case 0x2697: case 0x2699: case 0x269B: case 0x269C:
+    case 0x26A0: case 0x26A7: case 0x26B0: case 0x26B1: case 0x26C8: case 0x26CF:
+    case 0x26D1: case 0x26D3: case 0x26E9: case 0x26F0: case 0x26F1: case 0x26F4: case 0x26F7: case 0x26F8: {
         if (baseFontIsMonospace)
             return nullptr;
         static const std::array<ASCIILiteral, 1> candidates { "apple color emoji"_s };
