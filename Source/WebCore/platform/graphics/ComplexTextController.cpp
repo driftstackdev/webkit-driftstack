@@ -49,7 +49,6 @@
 #if PLATFORM(DRIFTSTACK)
 #include "DriftstackGcpsFallback.h"
 #include "DriftstackOrphanMarkTable.h"
-#include <CoreText/CoreText.h> // W3057: CTFontGetGlyphsForCharacters — the base CoreText.h include is IOS_FAMILY-gated
 #include <wtf/HashMap.h>
 #include <wtf/NeverDestroyed.h>
 #endif
@@ -872,44 +871,6 @@ void ComplexTextController::adjustGlyphsAndAdvances()
             // emoji + the W2647-routed BMP symbols all have advance>0 -> still overridden (unchanged).
             if (!treatAsSpace && advance.width() > 0 && font->colorGlyphType(glyph) == ColorGlyphType::Color)
                 advance.setWidth(font->widthForGlyph(glyph, Font::SyntheticBoldInclusion::Exclude));
-
-#if PLATFORM(DRIFTSTACK)
-            // W3057 (#79): U+2049 (⁉) complex-shaping advance ULP correction. U+2049 renders as TEXT here
-            // (Helvetica Neue, glyph 1269, height bucket 240 — NOT the 264/300 color box, so the color-glyph
-            // override above does NOT touch it). Mac CoreText's ComplexTextController shaping advance for
-            // U+2049 sits exactly ONE float32 ULP above the real iPhone (166.81251525878906/0x4326d001 vs iOS
-            // 166.8125/0x4326d000 @200px); through the CreepJS domrect transform scale(1.000999) that single
-            // ULP is the SOLE net driver of the domrectSystemSum residual. platformWidthForGlyph does NOT feed
-            // getClientRects (proven on-box, W3056 diag) — that width derives from m_adjustedBaseAdvances[i]
-            // (appended below, accumulated by advance() into m_runWidthSoFar), so the correction must land on
-            // THIS shaped advance. Serve the captured real-iPhone shaping advance per point size (each round-
-            // trips byte-exact: f32(raw * f32(1.000999)) == the captured getClientRects width). Self-scoped BY
-            // VALUE (advance already within 0.05px of the captured cell) so a full-width CJK U+2049 in another
-            // face (advance ≈ ptSize) is untouched with no familyName lookup; the CTFont reverse-match on the
-            // run's OWN font then confirms the glyph is U+2049. ⚠️ STAGED — A3 REVERSE pending (verify 2049.w
-            // ==166.97914123535156, domrectSystemSum==0.029615962524414063, uniqueEmojiDims==7, no other cp).
-            if (!treatAsSpace && advance.width() > 0) {
-                static constexpr struct { int size; float adv; } k2049Advances[] = {
-                    {  50,  41.703125f          }, {  72,  60.0625f            },
-                    {  96,  80.07813262939453f  }, { 100,  83.40625f           },
-                    { 150, 125.109375f          }, { 200, 166.8125f            },
-                    { 300, 250.20314025878906f  }, { 400, 333.609375f          },
-                    { 600, 500.4062805175781f   },
-                };
-                int u2049SizePx = std::lround(font->platformData().size());
-                for (auto& cell : k2049Advances) {
-                    if (cell.size != u2049SizePx)
-                        continue;
-                    if (std::fabs(advance.width() - cell.adv) > 0.05f)
-                        break; // advance out of the captured window -> not the text U+2049 (e.g. CJK face); leave native
-                    UniChar u2049Ch = 0x2049;
-                    CGGlyph u2049Glyph = 0;
-                    if (CTFontGetGlyphsForCharacters(font->platformData().ctFont(), &u2049Ch, &u2049Glyph, 1) && u2049Glyph && u2049Glyph == glyph)
-                        advance.setWidth(cell.adv);
-                    break;
-                }
-            }
-#endif
 
             if (character == tabCharacter && m_run->allowTabs()) {
                 advance.setWidth(m_fontCascade->tabWidth(font.get(), m_run->tabSize(), m_run->xPos() + m_totalAdvance.width(), Font::SyntheticBoldInclusion::Exclude));
