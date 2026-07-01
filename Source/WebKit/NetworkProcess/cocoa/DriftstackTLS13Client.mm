@@ -276,9 +276,28 @@ bool DriftstackTLS13Client::receiveServerHello()
     uint8_t type;
     uint16_t version;
     Vector<uint8_t> body;
-    if (!driftstackReadTLSRecord(m_fd, type, version, body)) {
-        m_errorMessage = "read ServerHello record failed"_s;
-        return false;
+    // W3053 (FOUNDER westernunion): RFC 8446 §D.4 middlebox-compat — a ChangeCipherSpec
+    // (0x14) record can arrive interleaved with the server's first handshake flight (some
+    // servers, and observed nodemaven-proxy exits, emit it before we've consumed the
+    // ServerHello). It carries no handshake meaning and is NOT part of the TLS transcript,
+    // so a robust client (incl. real Safari) skips it. Previously any leading CCS was
+    // rejected as a "bad record" → the whole TLS handshake failed → fresh-connect churn
+    // (the observed quantummetric-via-proxy status=0 failures). Skip leading CCS record(s)
+    // and read the next; bounded so a peer streaming CCS can't loop forever. Fingerprint-
+    // neutral: changes only what we TOLERATE on receive, never what we send.
+    int ccsSkips = 0;
+    for (;;) {
+        if (!driftstackReadTLSRecord(m_fd, type, version, body)) {
+            m_errorMessage = "read ServerHello record failed"_s;
+            return false;
+        }
+        if (type != 0x14)
+            break;
+        if (++ccsSkips > 3) {
+            m_errorMessage = "Too many ChangeCipherSpec records before ServerHello"_s;
+            return false;
+        }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.322] receiveServerHello: skipping interleaved ChangeCipherSpec (RFC8446 D.4), skip#%d", ccsSkips);
     }
 
     if (type != 0x16 || body.size() < 4) {
