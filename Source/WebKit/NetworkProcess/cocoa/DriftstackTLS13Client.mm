@@ -795,6 +795,13 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
 
     bool gotServerFinished = false;
     size_t hsRecordsRead = 0;
+    // egress audit wxzzaphvp (#9): a single TLS 1.3 handshake message (typically Certificate, or the RFC 8879
+    // CompressedCertificate) can be FRAGMENTED across multiple encrypted records when the chain exceeds ~16 KiB.
+    // The per-record parse loop below dropped the partial tail (its `break`), so the message was never fully
+    // parsed → m_leafCert stayed null → CertificateVerify/Finished failed → handshake failed for big-cert-chain
+    // servers. hsLeftover carries the unconsumed partial-message bytes to the next record (prepended to that
+    // record's plaintext) so the existing per-message parser always sees COMPLETE messages.
+    Vector<uint8_t> hsLeftover;
     while (!gotServerFinished) {
         // W2208 (parser-robustness audit weta2casf P2): bound a hostile peer (this runs pre-cert-validation)
         // that keeps the handshake never-completing — a stream of ChangeCipherSpec records (skipped below
@@ -886,6 +893,15 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
         if (innerType != 0x16) {
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.178] Inner record type 0x%02x (not handshake) — skipping", innerType);
             continue;
+        }
+
+        // egress audit wxzzaphvp (#9): prepend any partial handshake-message bytes carried from a prior
+        // record so the parser below sees COMPLETE messages (fragmented cert chains). Common case
+        // (hsLeftover empty) leaves `plaintext` byte-identical to the single-record path.
+        if (!hsLeftover.isEmpty()) {
+            Vector<uint8_t> combined = std::move(hsLeftover);
+            combined.append(plaintext.span());
+            plaintext = std::move(combined);
         }
 
         // Parse handshake messages from plaintext (may contain multiple)
@@ -1093,6 +1109,20 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
             }
 
             off += 4 + hsLen;
+        }
+        // egress audit wxzzaphvp (#9): retain the unconsumed partial-message tail (a handshake message
+        // fragmented across records) for the next record. `plaintext` already includes any prior leftover
+        // (prepended above), so REPLACE hsLeftover with the tail. Bound it (a legit fragmented handshake
+        // message — even a large cert chain — is < 128 KiB; 256 KiB is safe headroom) to reject a hostile
+        // peer dribbling never-completing message bytes (DoS), complementing the 512-record cap above.
+        hsLeftover.clear();
+        if (off < plaintext.size()) {
+            if (plaintext.size() - off > (static_cast<size_t>(256) << 10)) {
+                m_errorMessage = "handshake message fragment exceeds 256 KiB — rejecting (DoS defense)"_s;
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/wxzzaphvp] handshake fragment >256 KiB (%zu) — rejecting", plaintext.size() - off);
+                return false;
+            }
+            hsLeftover.append(plaintext.span().subspan(off));
         }
     }
     return true;
