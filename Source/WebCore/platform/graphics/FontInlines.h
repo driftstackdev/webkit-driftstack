@@ -122,6 +122,19 @@ ALWAYS_INLINE float Font::widthForGlyph(Glyph glyph, SyntheticBoldInclusion Synt
         return 0;
 
     float width = m_glyphToWidthMap.metricsForGlyph(glyph);
+#if PLATFORM(DRIFTSTACK)
+    // W3058 (#79 U+2049 width-source diagnostic — TEMPORARY, remove after A3 reports). getClientRects for
+    // an isolated 200px glyph funnels here (SIMPLE codePath). Two caches sit above platformWidthForGlyph
+    // (this per-glyph m_glyphToWidthMap + the run-level glyphGeometryCache) — the likely reason the earlier
+    // platformWidthForGlyph override fired but the layout read was unchanged. Log the CACHE decision + the
+    // exact value so we know whether an override at platformWidthForGlyph reaches getClientRects, or a cache
+    // serves stale. Gated >150px to isolate the domrect probe; grep glyph=1269 / width≈166.8 for U+2049.
+    if (platformData().size() > 150.f) {
+        bool dsHit = (width != cGlyphSizeUnknown);
+        float dsResolved = dsHit ? width : platformWidthForGlyph(glyph);
+        WTFLogAlways("[DS-WFG] size=%.3f glyph=%u cacheHit=%d width=%.17g", platformData().size(), (unsigned)glyph, (int)dsHit, dsResolved);
+    }
+#endif
     if (width != cGlyphSizeUnknown)
         return width + (SyntheticBoldInclusion == SyntheticBoldInclusion::Incorporate ? syntheticBoldOffset() : 0);
 
