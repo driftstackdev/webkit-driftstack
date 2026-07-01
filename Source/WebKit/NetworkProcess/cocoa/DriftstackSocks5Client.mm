@@ -238,13 +238,25 @@ Socks5Result DriftstackSocks5Client::performHandshake()
 // hostname (retry-eligible) apart from a literal (genuinely unreachable on an
 // IPv4-only proxy, no retry — preserves W2868 fail-fast).
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+// W2900 (#48) — WebKit's URL::host() returns IPv6 literals WITH surrounding
+// brackets (e.g. "[2606:...]"), which inet_pton(AF_INET6) rejects. Strip a single
+// leading '[' + trailing ']' so a bracketed IPv6 literal is recognized as an
+// IPv6Literal (→ ATYP=0x04 with the correct 16-byte address), not misclassified as
+// a hostname (ATYP=0x03 domain, retry-eligible). No-op for a hostname or a
+// bracket-less literal.
+static CString stripIpv6Brackets(const CString& host)
+{
+    if (host.length() >= 2 && host.data()[0] == '[' && host.data()[host.length() - 1] == ']')
+        return CString(host.data() + 1, host.length() - 2);
+    return host;
+}
 static DestAddrKind classifyDest(const CString& hostUtf8)
 {
     struct in_addr a4 { };
     if (inet_pton(AF_INET, hostUtf8.data(), &a4) == 1)
         return DestAddrKind::IPv4Literal;
     struct in6_addr a6 { };
-    if (inet_pton(AF_INET6, hostUtf8.data(), &a6) == 1)
+    if (inet_pton(AF_INET6, stripIpv6Brackets(hostUtf8).data(), &a6) == 1)
         return DestAddrKind::IPv6Literal;
     return DestAddrKind::Hostname;
 }
@@ -271,10 +283,11 @@ bool DriftstackSocks5Client::sendConnectAndReadReply(int fd, const Socks5Endpoin
         uint32_t net = a4.s_addr;  // already network byte order
         req.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(&net), 4 });
     } else if (kind == DestAddrKind::IPv6Literal) {
-        // [ATYP=0x04, 16-byte IPv6]
+        // [ATYP=0x04, 16-byte IPv6] — W2900 (#48) strip brackets so inet_pton parses
+        // the address (URL::host() gives "[2606:...]"); without this a6 stays :: (all-zero).
         req.append(Socks5::kAtypIpv6);
         struct in6_addr a6 { };
-        inet_pton(AF_INET6, destUtf8.data(), &a6);
+        inet_pton(AF_INET6, stripIpv6Brackets(destUtf8).data(), &a6);
         req.append(std::span<const uint8_t> { a6.s6_addr, 16 });
     } else {
         // [ATYP=0x03 DOMAIN, DLEN, DOMAIN...] — default, proxy-side DNS, no local leak.
