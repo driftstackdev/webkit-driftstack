@@ -1275,15 +1275,15 @@ static String driftstackPathBAcceptEncoding()
     return "gzip, deflate, br, zstd"_s;  // Safari >=26.3 (incl the 26.4 launch) + default
 }
 
-// P3 (#61) — RFC 9218 `priority` header, nav-vs-fetch. Real iOS (40 in-repo aio captures,
-// 100% consistent) sends `u=0, i` for the document/navigation request and `u=3, i` for
-// fetch/XHR sub-requests. On iOS this is injected by CFNetwork; PathB bypasses CFNetwork, so
-// the value is derived from the request's own sec-fetch-dest / accept (already present in the
-// WebProcess request): dest=document OR accept contains text/html → navigation (u=0); else the
-// fetch/XHR default (u=3). The richer per-resource-type sub-urgency matrix (image/script/style/
-// font) is the deferred #61 residual (needs multi-resource capture); those still fall through to
-// u=3 here. `dest` and `accept` are the lowercased header values (empty if absent). If WebKit
-// already supplied a `priority` header, pass that through unchanged (handled at the call sites).
+// P3 (#61) — RFC 9218 `priority` header, full per-resource-type matrix. On iOS CFNetwork injects
+// it on every request; PathB bypasses CFNetwork, so the value is derived from the request's own
+// sec-fetch-dest / accept (already present in the WebProcess request). The full per-type urgency
+// matrix is real-device-verified (gt-registry http2_priority_rfc9218: 4 BS cells iOS 18.6–26.5,
+// Family A + B, byte-identical) and gated by h2-priority-matrix-gate.sh (FORWARD real-device +
+// REVERSE source-assert, both GREEN): document → u=0; {style,script,module} → u=1 (module reports
+// sec-fetch-dest=script); image → u=5; {font,preload-font,fetch,xhr,empty,other} → u=3; all `i`.
+// `dest` and `accept` are the lowercased header values (empty if absent). If WebKit already
+// supplied a `priority` header, pass that through unchanged (handled at the call sites).
 static String driftstackPathBPriorityHeader(const String& secFetchDest, const String& accept)
 {
     // RFC 9218 priority — per-resource-type u-value, byte-matching real iPhone Safari
