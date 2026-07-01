@@ -639,6 +639,15 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // gate is on; harness sets it ONLY to a real non-loopback upstream, W2876) so the
             // no-UDP latch can reflect the customer proxy's TRUE UDP capability.
             { "DRIFTSTACK_EGRESS_RELIABILITY", getenv("DRIFTSTACK_EGRESS_RELIABILITY") },
+            // #46 (2026-06-30, 199a9a0c8a): the pure-pacing admission-concurrency governor — the
+            // wire-neutral survivor of the RELIABILITY split (RELIABILITY was DISABLED W2994 for
+            // crashing on real residential RTT; CONCURRENCY ships to fix the founder heavy-page HANG,
+            // launch-env-v1.sh:306 EGRESS_CONCURRENCY=1). It is getenv()'d in the NetworkProcess
+            // (DriftstackNetworkLoader.mm:692 driftstackConcurrencyGovernorEnabled) + set in launch-env
+            // but was NOT forwarded here → getenv NULL on the fleet → governor silently DISABLED → the
+            // hang fix was inactive. Caught by np-env-forwarding-guard 2026-07-01 (the __XPC_ mirror does
+            // NOT reach NetworkProcess; only this dsEnv[] entry does — same class as H3_POOL W2200/#52).
+            { "DRIFTSTACK_EGRESS_CONCURRENCY", getenv("DRIFTSTACK_EGRESS_CONCURRENCY") },
             { "DRIFTSTACK_SOCKS5_UDP_PROXY", getenv("DRIFTSTACK_SOCKS5_UDP_PROXY") },
             // GRANTED-state DeviceMotion/DeviceOrientation synthesis gate. Read via static
             // getenv() in BOTH sandboxed-WebContent read sites — WebCore Page::Page (installs
