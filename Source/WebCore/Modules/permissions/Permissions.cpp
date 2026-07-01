@@ -293,6 +293,12 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
                 || permissionDescriptor.name == PermissionName::Microphone
                 || permissionDescriptor.name == PermissionName::ScreenWakeLock)
                 permissionState = PermissionState::Prompt;
+            // Mirror the window-path notifications/push -> Denied (real iPhone returns 'denied' in EVERY
+            // context — Web Push works only in an installed PWA on iOS). Without this the worker query path
+            // falls through to the Mac host TCC store — a DedicatedWorker sibling gap to the window fix at
+            // ~:216. Same value the window path already serves.
+            if (permissionDescriptor.name == PermissionName::Notifications || permissionDescriptor.name == PermissionName::Push)
+                permissionState = PermissionState::Denied;
 #endif
 
 #if ENABLE(GEOLOCATION)
