@@ -33,6 +33,7 @@
 #import <wtf/MonotonicTime.h>
 #import <wtf/StdLibExtras.h>
 #import <wtf/text/CString.h>
+#import <wtf/text/MakeString.h>
 #import <wtf/text/StringBuilder.h>  // Wave 29-499.266 — header dump diagnostic
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
@@ -1568,19 +1569,50 @@ void DriftstackHttp2Session::readerLoop()
     // response headers (e.g. access-control-allow-origin on reused connections)
     // decode correctly instead of being dropped.
     HpackDecoderState hpackDyn;
-    auto markDeadAndFailAll = [&] {
-        Locker locker { m_lock };
-        m_alive = false;
-        for (auto& [id, s] : m_streams) {
-            // Don't clobber a stream that already completed successfully but whose
-            // execute() hasn't removed it from the map yet (race: reader hits EOF
-            // right after delivering END_STREAM). Only fail still-in-flight streams.
-            if (!s->complete) {
-                s->failed = true;
-                s->complete = true;
-            }
+    // a74622fc Phase 1 — collects (callbacks, resp) pairs for async streams that just became
+    // terminal so they can be invoked AFTER releasing m_lock (never call out to arbitrary
+    // client code while holding the session lock — risk (a) in the design). Reused at all 4
+    // terminal points (markDeadAndFailAll, GOAWAY, RST_STREAM, HEADERS/DATA END_STREAM).
+    struct FinishedAsync { AsyncStreamCallbacks cb; DriftstackHttp2Response resp; bool headersAlreadyDelivered { false }; };
+    auto deliverFinishedAsync = [](Vector<FinishedAsync>&& finished) {
+        for (auto& f : finished) {
+            if (!f.resp.failed)
+                driftstackDecompressHttp2Body(f.resp);
+            if (!f.headersAlreadyDelivered && f.cb.onHeaders)
+                f.cb.onHeaders(f.resp.statusCode, f.resp.headers);
+            if (!f.resp.body.isEmpty() && f.cb.onData)
+                f.cb.onData(f.resp.body.span().data(), f.resp.body.size());
+            if (f.cb.onComplete)
+                f.cb.onComplete(f.resp.failed, f.resp.errorMessage);
         }
-        m_cond.notifyAll();
+    };
+    auto markDeadAndFailAll = [&] {
+        Vector<FinishedAsync> finished;
+        {
+            Locker locker { m_lock };
+            m_alive = false;
+            Vector<uint32_t> toRemove;
+            for (auto& [id, s] : m_streams) {
+                // Don't clobber a stream that already completed successfully but whose
+                // execute() hasn't removed it from the map yet (race: reader hits EOF
+                // right after delivering END_STREAM). Only fail still-in-flight streams.
+                if (!s->complete) {
+                    s->failed = true;
+                    s->complete = true;
+                    if (s->asyncCallbacks) {
+                        s->resp.failed = true;
+                        if (s->resp.errorMessage.isEmpty())
+                            s->resp.errorMessage = "h2 connection lost"_s;
+                        finished.append({ std::exchange(*s->asyncCallbacks, {}), std::move(s->resp), s->asyncHeadersDelivered });
+                        toRemove.append(id);
+                    }
+                }
+            }
+            for (auto id : toRemove)
+                m_streams.remove(id);
+            m_cond.notifyAll();
+        }
+        deliverFinishedAsync(std::move(finished));
     };
 
     for (;;) {
@@ -1622,15 +1654,28 @@ void DriftstackHttp2Session::readerLoop()
             // the response → ja3/ja4 rendered N/A). So: retire the session for reuse, fail ONLY
             // streams > lastStreamId, and keep reading so streams <= lastStreamId can complete.
             bool anyInflight = false;
+            Vector<FinishedAsync> goawayFinished;
             {
                 Locker locker { m_lock };
                 m_alive = false;
+                Vector<uint32_t> toRemove;
                 for (auto& [id, s] : m_streams) {
-                    if (id > lastSid) { s->failed = true; s->complete = true; }
-                    else if (!s->complete) anyInflight = true;
+                    if (id > lastSid) {
+                        s->failed = true; s->complete = true;
+                        if (s->asyncCallbacks) {
+                            s->resp.failed = true;
+                            if (s->resp.errorMessage.isEmpty())
+                                s->resp.errorMessage = "h2 GOAWAY (stream not processed by server)"_s;
+                            goawayFinished.append({ std::exchange(*s->asyncCallbacks, {}), std::move(s->resp), s->asyncHeadersDelivered });
+                            toRemove.append(id);
+                        }
+                    } else if (!s->complete) anyInflight = true;
                 }
+                for (auto id : toRemove)
+                    m_streams.remove(id);
                 m_cond.notifyAll();
             }
+            deliverFinishedAsync(std::move(goawayFinished));
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.342] h2 GOAWAY: lastStreamId=%u errorCode=%u — session retired; %s",
                 lastSid, errCode, anyInflight ? "draining in-flight streams <= lastStreamId" : "no in-flight streams, closing");
             if (!anyInflight) { markDeadAndFailAll(); return; }
@@ -1641,12 +1686,24 @@ void DriftstackHttp2Session::readerLoop()
         case kFrameRstStream: {
             uint32_t errCode = payload.size() >= 4 ? ((uint32_t(payload[0]) << 24) | (uint32_t(payload[1]) << 16) | (uint32_t(payload[2]) << 8) | payload[3]) : 0;
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.342] h2 RST_STREAM on stream %u errorCode=%u — failing stream (session stays alive)", sid, errCode);
-            Locker locker { m_lock };
-            if (auto it = m_streams.find(sid); it != m_streams.end()) {
-                it->value->failed = true;
-                it->value->complete = true;
-                m_cond.notifyAll();
+            std::optional<FinishedAsync> rstFinished;
+            {
+                Locker locker { m_lock };
+                if (auto it = m_streams.find(sid); it != m_streams.end()) {
+                    it->value->failed = true;
+                    it->value->complete = true;
+                    if (it->value->asyncCallbacks) {
+                        it->value->resp.failed = true;
+                        if (it->value->resp.errorMessage.isEmpty())
+                            it->value->resp.errorMessage = makeString("h2 RST_STREAM errorCode="_s, errCode);
+                        rstFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), it->value->asyncHeadersDelivered });
+                        m_streams.remove(sid);
+                    }
+                    m_cond.notifyAll();
+                }
             }
+            if (rstFinished)
+                deliverFinishedAsync({ std::move(*rstFinished) });
             break;
         }
         case kFrameHeaders: {
@@ -1663,20 +1720,46 @@ void DriftstackHttp2Session::readerLoop()
                 if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
                     break;
             }
-            Locker locker { m_lock };
-            auto it = m_streams.find(sid);
-            if (it != m_streams.end()) {
-                for (auto& [k, v] : decoded) {
-                    if (k == ":status"_s) {
-                        int sc = 0; auto v8 = v.utf8();
-                        for (size_t i = 0; i < v8.length(); ++i) { char c = v8.data()[i]; if (c < '0' || c > '9') break; sc = sc * 10 + (c - '0'); }
-                        if (sc > 0) it->value->resp.statusCode = sc;
-                    } else if (!k.startsWith(':'))
-                        it->value->resp.headers.append({ k, v });
+            std::function<void(int, const Vector<std::pair<String, String>>&)> headersCb;
+            int headersCbStatus = 0;
+            Vector<std::pair<String, String>> headersCbHeaders;
+            std::optional<FinishedAsync> headersOnlyFinished;
+            {
+                Locker locker { m_lock };
+                auto it = m_streams.find(sid);
+                if (it != m_streams.end()) {
+                    for (auto& [k, v] : decoded) {
+                        if (k == ":status"_s) {
+                            int sc = 0; auto v8 = v.utf8();
+                            for (size_t i = 0; i < v8.length(); ++i) { char c = v8.data()[i]; if (c < '0' || c > '9') break; sc = sc * 10 + (c - '0'); }
+                            if (sc > 0) it->value->resp.statusCode = sc;
+                        } else if (!k.startsWith(':'))
+                            it->value->resp.headers.append({ k, v });
+                    }
+                    if (!it->value->resp.statusCode) it->value->resp.statusCode = 200;
+                    if (it->value->asyncCallbacks) {
+                        it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // progress → extend (Wave .354 semantic, ported)
+                        if (frameFlags & kFlagEndStream) {
+                            // Headers-only response (no DATA frames coming) — complete now. Pass
+                            // headersAlreadyDelivered=false (it->value->asyncHeadersDelivered is still
+                            // its default false here) so deliverFinishedAsync delivers onHeaders itself.
+                            it->value->complete = true;
+                            headersOnlyFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), false });
+                            m_streams.remove(sid);
+                        } else if (it->value->asyncCallbacks->onHeaders) {
+                            headersCb = it->value->asyncCallbacks->onHeaders; // copy — callbacks struct still needed for the body/completion path
+                            headersCbStatus = it->value->resp.statusCode;
+                            headersCbHeaders = it->value->resp.headers; // copy
+                            it->value->asyncHeadersDelivered = true; // so DATA-end/RST/GOAWAY finish paths don't re-call onHeaders
+                        }
+                    }
+                    if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
                 }
-                if (!it->value->resp.statusCode) it->value->resp.statusCode = 200;
-                if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
             }
+            if (headersCb)
+                headersCb(headersCbStatus, headersCbHeaders);
+            if (headersOnlyFinished)
+                deliverFinishedAsync({ std::move(*headersOnlyFinished) });
             break;
         }
         case kFrameData: {
@@ -1687,6 +1770,7 @@ void DriftstackHttp2Session::readerLoop()
                 if (static_cast<size_t>(padLen) + 1 > dataSpan.size()) break;
                 dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
             }
+            std::optional<FinishedAsync> dataFinished;
             {
                 Locker locker { m_lock };
                 if (auto it = m_streams.find(sid); it != m_streams.end()) {
@@ -1701,13 +1785,28 @@ void DriftstackHttp2Session::readerLoop()
                         it->value->resp.failed = true;
                         it->value->resp.errorMessage = "response body exceeds 128MB cap"_s;
                         it->value->complete = true;
+                        if (it->value->asyncCallbacks) {
+                            dataFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), it->value->asyncHeadersDelivered });
+                            m_streams.remove(sid);
+                        }
                         m_cond.notifyAll();
                         break;
                     }
                     it->value->resp.body.append(dataSpan);
-                    if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
+                    if (it->value->asyncCallbacks)
+                        it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // progress → extend (ported .354 semantic)
+                    if (frameFlags & kFlagEndStream) {
+                        it->value->complete = true;
+                        if (it->value->asyncCallbacks) {
+                            dataFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), it->value->asyncHeadersDelivered });
+                            m_streams.remove(sid);
+                        }
+                        m_cond.notifyAll();
+                    }
                 }
             }
+            if (dataFinished)
+                deliverFinishedAsync({ std::move(*dataFinished) });
             // Replenish flow-control windows (connection + stream) by the FULL
             // frame length so large/streamed responses don't stall.
             if (length) {
@@ -1728,10 +1827,13 @@ void DriftstackHttp2Session::readerLoop()
     }
 }
 
-DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Request& request)
+// a74622fc Phase 1 — factored VERBATIM out of execute() (same body/comments) so submitAsync()
+// sends BYTE-IDENTICAL wire frames in the SAME id-alloc+write-lock ordering. Returns the
+// allocated stream id, or 0 with outFailureResp.failed=true on send failure (the stream, if
+// allocated, has already been removed from m_streams and m_alive cleared in that case — the
+// caller must NOT touch m_streams for streamId==0).
+uint32_t DriftstackHttp2Session::sendRequestFrames(const DriftstackHttp2Request& request, DriftstackHttp2Response& outFailureResp)
 {
-    DriftstackHttp2Response resp;
-
     // Wave 29-499.349 — the pooled path still single-frames the body (no
     // chunking/flow control on the shared multiplexed connection yet). A body
     // > 16384 would exceed the peer's default SETTINGS_MAX_FRAME_SIZE and kill
@@ -1739,9 +1841,9 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     // fast instead — the loader falls through to a fresh one-shot connection,
     // whose body send is chunked + flow-controlled.
     if (request.body.size() > 16384) {
-        resp.failed = true;
-        resp.errorMessage = "pooled h2 path declines bodies > 16384 (no per-stream flow control); use one-shot"_s;
-        return resp;
+        outFailureResp.failed = true;
+        outFailureResp.errorMessage = "pooled h2 path declines bodies > 16384 (no per-stream flow control); use one-shot"_s;
+        return 0;
     }
 
     // Build the HEADERS block FIRST — the HPACK encoder is static-table-only (literal
@@ -1776,7 +1878,7 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
         Locker w { m_writeLock };
         {
             Locker locker { m_lock };
-            if (!m_alive) { resp.failed = true; resp.errorMessage = "h2 session not alive"_s; return resp; }
+            if (!m_alive) { outFailureResp.failed = true; outFailureResp.errorMessage = "h2 session not alive"_s; return 0; }
             streamId = m_nextStreamId;
             m_nextStreamId += 2;
             if (m_nextStreamId >= 0x7FFFFFFF) m_alive = false; // stream-id space nearly exhausted; retire after this
@@ -1796,13 +1898,24 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
         }
     }
 
-    Locker locker { m_lock };
     if (!sendOk) {
+        Locker locker { m_lock };
         m_streams.remove(streamId);
         m_alive = false;
-        resp.failed = true; resp.errorMessage = "h2 stream write failed"_s;
-        return resp;
+        outFailureResp.failed = true; outFailureResp.errorMessage = "h2 stream write failed"_s;
+        return 0;
     }
+    return streamId;
+}
+
+DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Request& request)
+{
+    DriftstackHttp2Response resp;
+    uint32_t streamId = sendRequestFrames(request, resp);
+    if (!streamId)
+        return resp; // resp already carries failed=true + errorMessage from sendRequestFrames
+
+    Locker locker { m_lock };
     // Wave 29-499.343 — wait for the STREAM to complete, not for the session to stay
     // alive (a graceful GOAWAY sets m_alive=false but our in-flight stream still gets its
     // response a few frames later — breaking on !m_alive lost it → status=0 / ja3 N/A).
@@ -1865,6 +1978,75 @@ DriftstackHttp2Response DriftstackHttp2Session::execute(const DriftstackHttp2Req
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.321] HTTP/2 pooled stream %u completed: status=%d, body=%zu bytes (failed=%d)",
         streamId, resp.statusCode, resp.body.size(), resp.failed ? 1 : 0);
     return resp;
+}
+
+uint32_t DriftstackHttp2Session::submitAsync(const DriftstackHttp2Request& request, AsyncStreamCallbacks&& callbacks)
+{
+    DriftstackHttp2Response failureResp;
+    uint32_t streamId = sendRequestFrames(request, failureResp);
+    if (!streamId) {
+        // sendRequestFrames already removed any partially-allocated stream + marked !alive.
+        // Nobody else has a handle on this failure — invoke onComplete synchronously so the
+        // caller (which returned immediately and has no other way to learn the outcome) isn't
+        // left silently hanging forever waiting for a callback that would otherwise never fire.
+        if (callbacks.onComplete)
+            callbacks.onComplete(true, failureResp.errorMessage);
+        return 0;
+    }
+    Locker locker { m_lock };
+    auto it = m_streams.find(streamId);
+    if (it == m_streams.end()) {
+        // Reader thread already retired the session (e.g. a GOAWAY landed between the send
+        // above and this lock) and removed/failed the stream before we could attach callbacks.
+        // Deliver the failure now rather than leaking a silent hang.
+        locker.unlockEarly();
+        if (callbacks.onComplete)
+            callbacks.onComplete(true, "h2 stream lost before callbacks attached"_s);
+        return 0;
+    }
+    it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // mirrors execute()'s kIdleTimeout (Wave .354)
+    bool alreadyComplete = it->value->complete;
+    bool alreadyFailed = it->value->failed;
+    DriftstackHttp2Response snapshotResp;
+    if (alreadyComplete) {
+        // Frames for this stream arrived and completed it between sendRequestFrames() returning
+        // and us re-acquiring m_lock here (a real, if narrow, race on a fast/small response —
+        // the reader thread runs concurrently with us the whole time). Take over delivery
+        // ourselves rather than storing callbacks nobody will ever invoke.
+        snapshotResp = std::move(it->value->resp);
+        m_streams.remove(streamId);
+    } else {
+        it->value->asyncCallbacks = std::move(callbacks);
+    }
+    locker.unlockEarly();
+    if (alreadyComplete) {
+        if (!alreadyFailed)
+            driftstackDecompressHttp2Body(snapshotResp);
+        if (callbacks.onHeaders)
+            callbacks.onHeaders(snapshotResp.statusCode, snapshotResp.headers);
+        if (!snapshotResp.body.isEmpty() && callbacks.onData)
+            callbacks.onData(snapshotResp.body.span().data(), snapshotResp.body.size());
+        if (callbacks.onComplete)
+            callbacks.onComplete(alreadyFailed, snapshotResp.errorMessage);
+    }
+    return streamId;
+}
+
+void DriftstackHttp2Session::cancelStream(uint32_t streamId)
+{
+    bool hadStream = false;
+    {
+        Locker locker { m_lock };
+        hadStream = m_streams.remove(streamId);
+    }
+    if (!hadStream)
+        return; // already completed + removed by the reader, or never existed — no-op
+    Locker w { m_writeLock };
+    uint8_t rst[9 + 4];
+    encodeFrameHeader(rst, 4, kFrameRstStream, 0, streamId);
+    uint32_t cancelCode = 0x8; // CANCEL (RFC 7540 §7)
+    rst[9] = (cancelCode >> 24) & 0xff; rst[10] = (cancelCode >> 16) & 0xff; rst[11] = (cancelCode >> 8) & 0xff; rst[12] = cancelCode & 0xff;
+    transportWriteAll(m_transport, rst, sizeof(rst));
 }
 
 // ===== Wave 29-499.352 — RFC 8441 WebSocket-over-HTTP/2 (Extended CONNECT) =====

@@ -18,6 +18,7 @@
 
 #import <CommonCrypto/CommonCrypto.h>
 #import <CommonCrypto/CommonCryptor.h>
+#import <wtf/Lock.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <stdlib.h>
@@ -572,11 +573,34 @@ Vector<uint8_t> driftstackX25519SharedSecret(const Vector<uint8_t>& ourPrivate,
 }
 
 // Wave 29-499.218 — MLKEM768 (PQ hybrid for iPhone Safari 26+ key_share)
-// Private key struct size from BoringSSL header: 512*(3+3+9) + 32+32+32 = 7776 bytes
-constexpr size_t kMLKEM768PrivateKeyBytes = 7776;
+// a74622fc HARDENING: this size was hand-derived from reading a BoringSSL header at some point
+// (512*(3+3+9)+32+32+32=7776) against /usr/lib/libssl.48.dylib — a macOS SYSTEM library that
+// updates every OS release, backing a struct BoringSSL explicitly does NOT guarantee ABI-stable
+// across versions. Investigated as a candidate cause of the facebook.com TLS auth-tag failures
+// (ruled out empirically — bumping this buffer alone did not change the failure rate; the real
+// cause was the missing 0x1303/ChaCha20-Poly1305 cipher branch in aesGcmEncrypt/Decrypt below,
+// see DriftstackTLS13Client.mm). Kept at this generous size anyway as defense-in-depth against a
+// future macOS update changing the real struct size: decap only ever READS through this pointer
+// at whatever size BoringSSL's OWN struct actually is, so extra headroom is harmless.
+constexpr size_t kMLKEM768PrivateKeyBytes = 32768;
 constexpr size_t kMLKEM768PublicKeyBytes = 1184;
 constexpr size_t kMLKEM768CiphertextBytes = 1088;
 constexpr size_t kMLKEMSharedSecretBytes = 32;
+
+// a74622fc HARDENING: dlsym'd from a PRIVATE, undocumented symbol in the macOS system
+// libssl.48.dylib (not a public/supported API) — Apple gives zero thread-safety guarantee for
+// concurrent calls through it, and a heavy multi-origin page opens MANY simultaneous TLS
+// connections (each on its own worker thread, each calling MLKEM768_generate_key/_decap
+// concurrently). Investigated as a candidate cause of the facebook.com TLS auth-tag failures
+// (ruled out empirically — serializing alone did not change the failure rate; the real cause was
+// the missing 0x1303/ChaCha20-Poly1305 cipher branch, see DriftstackTLS13Client.mm). Kept anyway:
+// serializing is cheap (keygen/decap are microseconds) and removes a real, still-live risk —
+// nothing guarantees this private symbol is safe under concurrent invocation.
+static Lock& mlkem768Lock()
+{
+    static Lock lock;
+    return lock;
+}
 
 MLKEM768Keypair driftstackMLKEM768Generate()
 {
@@ -592,7 +616,10 @@ MLKEM768Keypair driftstackMLKEM768Generate()
     memset(kp.privateKey, 0, kMLKEM768PrivateKeyBytes);
 
     kp.publicKey.resize(kMLKEM768PublicKeyBytes);
-    f.mlkem768_generate_key(kp.publicKey.mutableSpan().data(), nullptr, kp.privateKey);
+    {
+        Locker locker { mlkem768Lock() };
+        f.mlkem768_generate_key(kp.publicKey.mutableSpan().data(), nullptr, kp.privateKey);
+    }
     kp.ok = true;
     return kp;
 }
@@ -612,8 +639,12 @@ Vector<uint8_t> driftstackMLKEM768Decap(const MLKEM768Keypair& kp, const Vector<
     auto& f = cryptoFns();
     if (!f.mlkem768_decap) return {};
     Vector<uint8_t> shared(kMLKEMSharedSecretBytes);
-    int rc = f.mlkem768_decap(shared.mutableSpan().data(), ciphertext.span().data(),
-        ciphertext.size(), kp.privateKey);
+    int rc;
+    {
+        Locker locker { mlkem768Lock() };
+        rc = f.mlkem768_decap(shared.mutableSpan().data(), ciphertext.span().data(),
+            ciphertext.size(), kp.privateKey);
+    }
     if (rc != 1) return {};
     return shared;
 }

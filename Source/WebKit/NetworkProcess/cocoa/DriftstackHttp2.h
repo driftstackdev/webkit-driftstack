@@ -34,12 +34,14 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdint.h>
 #include <wtf/Condition.h>
 #include <wtf/Forward.h>
 #include <wtf/HashMap.h>
 #include <wtf/Lock.h>
+#include <wtf/MonotonicTime.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/Threading.h>
 #include <wtf/Vector.h>
@@ -182,6 +184,32 @@ public:
     // completes (or error / timeout). Thread-safe; concurrent calls multiplex.
     DriftstackHttp2Response execute(const DriftstackHttp2Request&);
 
+    // a74622fc Phase 1 — async-delivery restructure (root cause of the westernunion/
+    // facebook heavy-multi-origin-page hang over a non-UDP proxy: execute() pins a GCD
+    // worker thread for the ENTIRE response, which self-starves the shared blocking-I/O
+    // worker pool once enough slow/many-origin streams are in flight simultaneously —
+    // "NO real-iOS analog" since NSURLSession is event-driven and never pins a thread
+    // per in-flight request). submitAsync sends the SAME HEADERS(+DATA) bytes as
+    // execute() (factored via sendRequestFrames — byte-identical wire order, zero
+    // fingerprint risk) and returns IMMEDIATELY, freeing the calling worker thread.
+    // Delivery happens via callbacks invoked from the session's existing reader thread
+    // (no new threads) at the same 3 mutate points readerLoop already has. Additive:
+    // execute() is completely unchanged; only used when DRIFTSTACK_EGRESS_ASYNC_DELIVERY=1.
+    struct AsyncStreamCallbacks {
+        std::function<void(int statusCode, const Vector<std::pair<String, String>>&)> onHeaders;
+        std::function<void(const uint8_t* data, size_t length)> onData;
+        // failed=true + a non-empty errorMessage on any failure path (RST_STREAM, GOAWAY of
+        // an unprocessed stream, dead connection, idle timeout); failed=false + empty on a
+        // clean END_STREAM. Called EXACTLY once, terminally — safe to release/destroy state.
+        std::function<void(bool failed, const String& errorMessage)> onComplete;
+    };
+    // Returns the allocated stream id (0 on immediate send failure — onComplete is invoked
+    // synchronously with failed=true before returning in that case, never left silent).
+    uint32_t submitAsync(const DriftstackHttp2Request&, AsyncStreamCallbacks&&);
+    // Removes the callback stream + sends RST_STREAM (CANCEL); safe to call at most once,
+    // safe to call after the stream already completed (no-op then).
+    void cancelStream(uint32_t streamId);
+
     // True while the connection is healthy + accepting new streams (no GOAWAY /
     // transport error / max-stream-id exhaustion).
     bool isAlive();
@@ -190,11 +218,31 @@ private:
     DriftstackHttp2Session(std::unique_ptr<DriftstackTLS13Client>&&, std::unique_ptr<DriftstackSocks5Client>&&);
     bool sendPrefaceAndSettings();
     void readerLoop();
+    // Shared by execute() and submitAsync(): allocates the next stream id and writes
+    // HEADERS(+DATA) UNDER m_writeLock+m_lock atomically (Wave 29-499.357 ordering
+    // invariant — MUST stay identical for both callers). Returns 0 + sets resp.failed
+    // on a send failure (session already marked !alive by the time it returns false).
+    uint32_t sendRequestFrames(const DriftstackHttp2Request&, DriftstackHttp2Response& outFailureResp);
 
     struct Stream {
         DriftstackHttp2Response resp;
         bool complete { false };
         bool failed { false };
+        // Unset (default) for the execute()-blocking path — completely inert, zero behavior
+        // change. Set for submitAsync() streams: the READER thread (not a caller) owns
+        // removal from m_streams once onComplete fires (execute() streams are removed by
+        // the blocking caller instead, as today).
+        std::optional<AsyncStreamCallbacks> asyncCallbacks;
+        // onHeaders is delivered as soon as the HEADERS frame arrives (not deferred to
+        // completion, so WebCore can start as early as a real network stack would); every
+        // later finish path (DATA-end, RST, GOAWAY, dead-connection) must check this before
+        // calling onHeaders again — it may fire on a completion path that races ahead of, or
+        // instead of, the dedicated HEADERS-block delivery.
+        bool asyncHeadersDelivered { false };
+        // a74622fc risk (d): submitAsync has no caller-side wait loop to extend/enforce the
+        // idle-progress deadline, so the reader ports it here — updated on every HEADERS/DATA
+        // notify point, swept opportunistically each time the reader processes a frame.
+        MonotonicTime idleDeadline;
     };
 
     std::unique_ptr<DriftstackTLS13Client> m_tls;       // owned; outlives the reader

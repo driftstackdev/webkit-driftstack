@@ -704,6 +704,22 @@ static bool driftstackAdmissionPacingEnabled()
     return driftstackEgressReliabilityEnabled() || driftstackConcurrencyGovernorEnabled();
 }
 
+// a74622fc Phase 1 — the h2-pool fast path calls DriftstackHttp2Session::submitAsync()
+// instead of the blocking execute() when set, freeing the calling GCD worker immediately
+// instead of pinning it for the full response duration (the westernunion/facebook
+// heavy-multi-origin-page hang root cause: NO real-iOS analog, NSURLSession is
+// event-driven). Default OFF: gate-off path is byte-identical to before this change.
+static bool driftstackAsyncDeliveryEnabled()
+{
+    static bool enabled = [] {
+        const char* env = getenv("DRIFTSTACK_EGRESS_ASYNC_DELIVERY");
+        bool on = env && env[0] == '1';
+        WTFLogAlways("[a74622fc/AsyncDelivery] DRIFTSTACK_EGRESS_ASYNC_DELIVERY=%s -> %s", env ? env : "(null)", on ? "ON" : "off");
+        return on;
+    }();
+    return enabled;
+}
+
 // BUG-42 Fix #4 — process-wide concurrent-handshake cap. The custom loader has NO
 // global connection cap; H2/H3 pools coalesce only per-origin, so a heavy multi-
 // origin site opens dozens of concurrent SOCKS5 + ML-KEM-768 TLS handshakes on the
@@ -2225,79 +2241,129 @@ void DriftstackNetworkLoader::resume()
             if (RefPtr<WebKit::DriftstackHttp2Session> session = h2Claim.first) {
                 String poolHost = url.host().toString();
                 auto h2req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, poolHost, driftstackCookieHeader);
+                // a74622fc Phase 1 — the success-handling logic factored into a lambda so it can be
+                // invoked either synchronously (gate-off, blocking execute() — behavior UNCHANGED) or
+                // from submitAsync's onComplete callback (gate-on) without duplicating the mime/
+                // redirect/cookie/decompress/deliver logic. Returns true if it fully handled the
+                // response (caller must return immediately, matching today's `return;`), false if the
+                // caller should fall through to the fresh-connect path below (pooled session failed).
+                Ref<DriftstackNetworkLoader> protectedThisForH2 { *this };
+                auto finishH2Response = [protectedThisForH2, url, origin](WebKit::DriftstackHttp2Response&& h2resp) -> bool {
+                    auto& loader = protectedThisForH2.get();
+                    RefPtr task = loader.protectedTask();
+                    if (!task) return true; // task gone — nothing more to do, don't fall through either
+                    if (!h2resp.failed && h2resp.statusCode) {
+                        driftstackH2NoteHealthy(origin);   // W3046: pooled reuse worked — clear any churn strike
+                        String mimeType = "text/html"_s, charset = "UTF-8"_s;
+                        long long expectedLength = -1;
+                        for (auto& [k, v] : h2resp.headers) {
+                            if (equalIgnoringASCIICase(k, "content-type"_s)) {
+                                String hv = v; size_t semi = hv.find(';');
+                                if (semi != notFound) {
+                                    mimeType = hv.left(semi).trim(deprecatedIsSpaceOrNewline);
+                                    String params = hv.substring(semi + 1);
+                                    size_t ci = params.findIgnoringASCIICase("charset="_s);
+                                    if (ci != notFound) {
+                                        String cs = params.substring(ci + 8).trim(deprecatedIsSpaceOrNewline);
+                                        size_t e = cs.find(';'); if (e != notFound) cs = cs.left(e);
+                                        if (cs.startsWith('"') && cs.endsWith('"')) cs = cs.substring(1, cs.length() - 2);
+                                        if (!cs.isEmpty()) charset = cs;
+                                    }
+                                } else
+                                    mimeType = hv.trim(deprecatedIsSpaceOrNewline);
+                            } else if (equalIgnoringASCIICase(k, "content-length"_s)) {
+                                long long n = parseInteger<long long>(v).value_or(-1);
+                                if (n >= 0) expectedLength = n;
+                            }
+                        }
+                        if (expectedLength < 0) expectedLength = static_cast<long long>(h2resp.body.size());
+                        WebCore::ResourceResponse response { URL(url), std::move(mimeType), expectedLength, std::move(charset) };
+                        response.setHTTPStatusCode(h2resp.statusCode);
+                        for (auto& [k, v] : h2resp.headers)
+                            response.setHTTPHeaderField(k, v);
+                        // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from h2resp.headers.
+                        Vector<String> h2SetCookies = driftstackExtractRawSetCookies(h2resp.headers);
+                        if (loader.tryFollowRedirect(response, h2SetCookies)) return true;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
+                        WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
+                        auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
+                        if (!loader.tryBeginCompletion()) return true;  // Wave .325 single-completion guard
+                        // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins.
+                        if (!h2SetCookies.isEmpty()) {
+                            Ref<DriftstackNetworkLoader> cookieRef { loader };
+                            callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h2SetCookies = WTF::move(h2SetCookies)]() mutable {
+                                cookieRef->driftstackPersistSetCookies(responseURL, h2SetCookies);
+                            });
+                        }
+                        Ref<DriftstackNetworkLoader> protectedThis { loader };
+                        callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
+                            RefPtr task = protectedThis->protectedTask();
+                            if (!task)
+                                return;
+                            RefPtr client = task->client();
+                            if (!client)
+                                return;
+                            client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                                [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
+                                    if (action == WebCore::PolicyAction::Use) {
+                                        RefPtr task = protectedThis->protectedTask();
+                                        if (!task)
+                                            return;
+                                        RefPtr client = task->client();
+                                        if (!client)
+                                            return;
+                                        client->didReceiveData(bodyBuffer.get());
+                                        WebCore::NetworkLoadMetrics metrics;
+                                        client->didCompleteWithError(WebCore::ResourceError(), metrics);
+                                    }
+                                });
+                        });
+                        return true;
+                    }
+                    return false; // failed — caller falls through to fresh-connect
+                };
+                if (driftstackAsyncDeliveryEnabled()) {
+                    // Non-blocking: submit and return immediately, freeing this GCD worker for the ENTIRE
+                    // response duration (the actual fix — see driftstackAsyncDeliveryEnabled comment).
+                    // On failure, mark the origin churning (identical accounting to the sync path below)
+                    // then RE-ENTER resume() on the main queue — resume() re-derives everything from
+                    // m_request and, seeing the origin now churning (driftstackH2OriginChurning, checked
+                    // above where h2Claim is computed), naturally skips the pool and falls through to the
+                    // EXISTING fresh-connect code — reusing that fallback path verbatim rather than
+                    // duplicating it here.
+                    auto accum = std::make_shared<WebKit::DriftstackHttp2Response>();
+                    WebKit::DriftstackHttp2Session::AsyncStreamCallbacks cb;
+                    cb.onHeaders = [accumPtr = accum.get()](int status, const Vector<std::pair<String, String>>& headers) {
+                        accumPtr->statusCode = status;
+                        accumPtr->headers = headers;
+                    };
+                    cb.onData = [accumPtr = accum.get()](const uint8_t* data, size_t length) {
+                        accumPtr->body.append(std::span<const uint8_t> { data, length });
+                    };
+                    Ref<DriftstackNetworkLoader> protectedThisForRetry { *this };
+                    cb.onComplete = [accum, finishH2Response, protectedThisForRetry, origin](bool failed, const String& errorMessage) mutable {
+                        if (failed) {
+                            accum->failed = true;
+                            if (accum->errorMessage.isEmpty()) accum->errorMessage = errorMessage;
+                        }
+                        if (finishH2Response(std::move(*accum)))
+                            return; // handled (success delivered, or task already gone)
+                        driftstackH2NoteChurn(origin);   // W3046: count the churn; a persistently-GOAWAY origin trips the breaker (skip pool)
+                        WTFLogAlways("[Wave29-499.321/H2POOL] pooled session submitAsync failed for %s — re-entering resume() for fresh connect", origin.utf8().data());
+                        callOnMainRunLoop([protectedThisForRetry] {
+                            if (!protectedThisForRetry->m_cancelled)
+                                protectedThisForRetry->resume();
+                        });
+                    };
+                    session->submitAsync(h2req, std::move(cb));
+                    return;
+                }
                 WebKit::DriftstackHttp2Response h2resp = session->execute(h2req);
                 {
                 RefPtr task = protectedTask();
                 if (!task) return;
                 }
-                if (!h2resp.failed && h2resp.statusCode) {
-                    driftstackH2NoteHealthy(origin);   // W3046: pooled reuse worked — clear any churn strike
-                    String mimeType = "text/html"_s, charset = "UTF-8"_s;
-                    long long expectedLength = -1;
-                    for (auto& [k, v] : h2resp.headers) {
-                        if (equalIgnoringASCIICase(k, "content-type"_s)) {
-                            String hv = v; size_t semi = hv.find(';');
-                            if (semi != notFound) {
-                                mimeType = hv.left(semi).trim(deprecatedIsSpaceOrNewline);
-                                String params = hv.substring(semi + 1);
-                                size_t ci = params.findIgnoringASCIICase("charset="_s);
-                                if (ci != notFound) {
-                                    String cs = params.substring(ci + 8).trim(deprecatedIsSpaceOrNewline);
-                                    size_t e = cs.find(';'); if (e != notFound) cs = cs.left(e);
-                                    if (cs.startsWith('"') && cs.endsWith('"')) cs = cs.substring(1, cs.length() - 2);
-                                    if (!cs.isEmpty()) charset = cs;
-                                }
-                            } else
-                                mimeType = hv.trim(deprecatedIsSpaceOrNewline);
-                        } else if (equalIgnoringASCIICase(k, "content-length"_s)) {
-                            long long n = parseInteger<long long>(v).value_or(-1);
-                            if (n >= 0) expectedLength = n;
-                        }
-                    }
-                    if (expectedLength < 0) expectedLength = static_cast<long long>(h2resp.body.size());
-                    WebCore::ResourceResponse response { URL(url), std::move(mimeType), expectedLength, std::move(charset) };
-                    response.setHTTPStatusCode(h2resp.statusCode);
-                    for (auto& [k, v] : h2resp.headers)
-                        response.setHTTPHeaderField(k, v);
-                    // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from h2resp.headers.
-                    Vector<String> h2SetCookies = driftstackExtractRawSetCookies(h2resp.headers);
-                    if (tryFollowRedirect(response, h2SetCookies)) return;  // Wave .344 — follow 3xx like Safari, don't render the redirect page (redirect Set-Cookie persisted inside)
-                    WebKit::driftstackDecodeContentEncoding(h2resp.body, h2resp.headers);  // .331 chokepoint
-                    // Wave .346 DEBUG (removable) — dump decompressed fingerprint JSON for browserleaks
-                    // probe endpoints so we can diff our TLS/QUIC family vs the real-iPhone reference.
-                    auto bodyBuffer = WebCore::SharedBuffer::create(h2resp.body.span());
-                    if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
-                    // Final (non-redirect) response: persist Set-Cookie after the single-completion guard wins.
-                    if (!h2SetCookies.isEmpty()) {
-                        Ref<DriftstackNetworkLoader> cookieRef { *this };
-                        callOnMainRunLoop([cookieRef = WTF::move(cookieRef), responseURL = URL(url), h2SetCookies = WTF::move(h2SetCookies)]() mutable {
-                            cookieRef->driftstackPersistSetCookies(responseURL, h2SetCookies);
-                        });
-                    }
-                    callOnMainRunLoop([protectedThis, response = WebCore::ResourceResponse(response), bodyBuffer = std::move(bodyBuffer)]() mutable {
-                        RefPtr task = protectedThis->protectedTask();
-                        if (!task)
-                            return;
-                        RefPtr client = task->client();
-                        if (!client)
-                            return;
-                        client->didReceiveResponse(std::move(response), NegotiatedLegacyTLS::No, PrivateRelayed::No,
-                            [protectedThis, bodyBuffer = std::move(bodyBuffer)](WebCore::PolicyAction action) mutable {
-                                if (action == WebCore::PolicyAction::Use) {
-                                    RefPtr task = protectedThis->protectedTask();
-                                    if (!task)
-                                        return;
-                                    RefPtr client = task->client();
-                                    if (!client)
-                                        return;
-                                    client->didReceiveData(bodyBuffer.get());
-                                    WebCore::NetworkLoadMetrics metrics;
-                                    client->didCompleteWithError(WebCore::ResourceError(), metrics);
-                                }
-                            });
-                    });
+                if (finishH2Response(std::move(h2resp)))
                     return;
-                }
                 // Pooled session failed (e.g. GOAWAY mid-flight) — fall through
                 // to a fresh connection.
                 driftstackH2NoteChurn(origin);   // W3046: count the churn; a persistently-GOAWAY origin trips the breaker (skip pool)

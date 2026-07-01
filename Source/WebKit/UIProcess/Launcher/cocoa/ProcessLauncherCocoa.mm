@@ -510,6 +510,10 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Audio:
             { "DRIFTSTACK_AUDIO_FLOAT16", getenv("DRIFTSTACK_AUDIO_FLOAT16") },
             { "DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH", getenv("DRIFTSTACK_AUDIO_GRAPH_HASH_DISPATCH") },
+            // Egress (a74622fc Phase 1 — async delivery, read in the NetworkProcess by
+            // driftstackAsyncDeliveryEnabled(); default OFF, this is the fix for the
+            // westernunion/facebook heavy-multi-origin-page worker-starvation hang):
+            { "DRIFTSTACK_EGRESS_ASYNC_DELIVERY", getenv("DRIFTSTACK_EGRESS_ASYNC_DELIVERY") },
             // WebRTC:
             { "DRIFTSTACK_FORCE_ICE_RELAY", getenv("DRIFTSTACK_FORCE_ICE_RELAY") },
             // Behavioral:

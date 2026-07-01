@@ -11,6 +11,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <errno.h>
+#import <string.h>
 #import <sys/socket.h>
 #import <unistd.h>
 #import <wtf/Assertions.h>
@@ -25,15 +26,25 @@ namespace {
 constexpr uint16_t kExtSupportedVersions = 43;
 constexpr uint16_t kExtKeyShare = 51;
 
-// Read exactly N bytes from fd; returns false on EOF/error.
+// Read exactly N bytes from fd; returns false on EOF/error. A failure here is a NORMAL,
+// frequent occurrence at fleet scale (any flaky proxy exit, any closed/reset connection during
+// the existing fresh-exit-retry flow) — stay silent by default (matching this function's
+// pre-a74622fc convention) and only log when DRIFTSTACK_RTR_TRACE=1 opts into the verbose path
+// (same gate driftstackReadTLSRecord already uses), so a genuinely-wedged handshake can be
+// diagnosed on demand without adding log volume to routine proxy retries in production.
 bool readExact(int fd, uint8_t* buf, size_t n)
 {
+    static const bool trace = getenv("DRIFTSTACK_RTR_TRACE") != nullptr;
     size_t got = 0;
     while (got < n) {
         ssize_t r = recv(fd, buf + got, n - got, 0);
         if (r > 0) { got += static_cast<size_t>(r); continue; }
-        if (r == 0) return false;  // EOF
+        if (r == 0) {
+            if (trace) WTFLogAlways("[a74622fc/RTRDiag] readExact EOF: got=%zu/%zu fd=%d", got, n, fd);
+            return false;
+        }
         if (errno == EINTR) continue;
+        if (trace) WTFLogAlways("[a74622fc/RTRDiag] readExact ERROR: got=%zu/%zu fd=%d errno=%d(%s)", got, n, fd, errno, strerror(errno));
         return false;
     }
     return true;

@@ -85,6 +85,15 @@ Vector<uint8_t> aesGcmEncrypt(uint16_t cipher, const Vector<uint8_t>& key,
                                const Vector<uint8_t>& nonce, const Vector<uint8_t>& pt,
                                const Vector<uint8_t>& aad)
 {
+    // a74622fc — 0x1303 (TLS_CHACHA20_POLY1305_SHA256) was MISSING from this dispatcher and
+    // fell through to the AES-128-GCM branch below: decrypting/encrypting ChaCha20-Poly1305
+    // ciphertext as if it were AES-GCM, which deterministically fails the AEAD auth tag on
+    // EVERY record. Any server whose top cipher-suite preference is 0x1303 (Meta/Facebook's
+    // edge among them) never completes the TLS handshake — the root cause of the
+    // westernunion/facebook "page could not be loaded" reports. The implementation already
+    // existed (built for QUIC's cipher 0x1303) — it was just never wired in here.
+    if (cipher == 0x1303)
+        return driftstackChacha20Poly1305Encrypt(key, nonce, pt, aad);
     if (cipher == 0x1302)
         return driftstackAes256GcmEncrypt(key, nonce, pt, aad);
     return driftstackAes128GcmEncrypt(key, nonce, pt, aad);
@@ -93,6 +102,9 @@ Vector<uint8_t> aesGcmDecrypt(uint16_t cipher, const Vector<uint8_t>& key,
                                const Vector<uint8_t>& nonce, const Vector<uint8_t>& ct,
                                const Vector<uint8_t>& aad)
 {
+    // a74622fc — see aesGcmEncrypt above for why 0x1303 needs its own branch.
+    if (cipher == 0x1303)
+        return driftstackChacha20Poly1305Decrypt(key, nonce, ct, aad);
     if (cipher == 0x1302)
         return driftstackAes256GcmDecrypt(key, nonce, ct, aad);
     return driftstackAes128GcmDecrypt(key, nonce, ct, aad);
@@ -835,6 +847,9 @@ bool DriftstackTLS13Client::readEncryptedHandshakeMessages()
         auto plaintext = aesGcmDecrypt(m_negotiatedCipher, m_serverHsKey.key, nonce, recBody, aad);
         if (plaintext.isEmpty()) {
             m_errorMessage = "encrypted handshake record decrypt failed (auth tag)"_s;
+            WTFLogAlways("[a74622fc/TLSDecryptDiag] sni=%s recordIndex=%zu(1-based) cipher=0x%04x bodySize=%zu seqNumAtFail=%llu",
+                m_sniHostname.utf8().data(), hsRecordsRead, m_negotiatedCipher,
+                recBody.size(), static_cast<unsigned long long>(m_serverHsKey.seqNum - 1));
             return false;
         }
 
