@@ -940,6 +940,38 @@ static HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>& driftstackH2Pool
     static NeverDestroyed<HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>> pool;
     return pool.get();
 }
+// W3046 (FOUNDER westernunion): per-origin H2 GOAWAY-churn circuit-breaker. Some origins — session-replay
+// beacon endpoints like ingest.quantummetric.com — GOAWAY-retire EVERY H2 session after 1-few streams, so
+// each pooled reuse fails (session dead) → fresh connect → re-adopt → GOAWAY → churn. On a heavy page
+// (westernunion) that STORMS the slow proxy with 500+ connects (~255 failed-reuse + ~255 fresh), saturating
+// the shared admission (40) + handshake (10) caps so the page's REAL content queues behind the beacon storm
+// → "loads slowly / doesn't properly load". Track per-origin CONSECUTIVE pooled-reuse failures; once an
+// origin churns >= kH2ChurnThreshold, STOP pooling it (skip reuse + skip re-adopt) so its beacons go DIRECT
+// (one connect each, no wasted failed-reuse) — halves the storm + stops the adopt/fail loop. Reset on any
+// successful pooled reuse (origin recovered). Process-global; guarded by the existing pool lock.
+static HashMap<String, unsigned>& driftstackH2ChurnMap()
+{
+    static NeverDestroyed<HashMap<String, unsigned>> m;
+    return m.get();
+}
+static constexpr unsigned kH2ChurnThreshold = 3;
+[[maybe_unused]] static bool driftstackH2OriginChurning(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    auto it = driftstackH2ChurnMap().find(origin);
+    return it != driftstackH2ChurnMap().end() && it->value >= kH2ChurnThreshold;
+}
+[[maybe_unused]] static void driftstackH2NoteChurn(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    auto& n = driftstackH2ChurnMap().add(origin, 0u).iterator->value;
+    if (n < 100000u) ++n;
+}
+[[maybe_unused]] static void driftstackH2NoteHealthy(const String& origin)
+{
+    Locker locker { driftstackH2PoolLock() };
+    driftstackH2ChurnMap().remove(origin);
+}
 // Return a live pooled session for origin, or nullptr (evicting a dead one).
 [[maybe_unused]] static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& origin)
 {
@@ -2137,7 +2169,12 @@ void DriftstackNetworkLoader::resume()
             h2PoolOrigin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
             const String& origin = h2PoolOrigin;
             // Coalesce: live session → fast-path; else claim winner / wait for one.
-            auto h2Claim = driftstackH2PoolClaim(origin);
+            // W3046: a GOAWAY-churning origin's pooled reuse always fails → skip the pool entirely (go
+            // direct fresh connect, no wasted failed-reuse + no re-adopt) so its beacon storm can't saturate
+            // the shared admission/handshake caps the real page content needs.
+            auto h2Claim = driftstackH2OriginChurning(origin)
+                ? std::pair<RefPtr<WebKit::DriftstackHttp2Session>, bool> { nullptr, false }
+                : driftstackH2PoolClaim(origin);
             h2PoolWinner = h2Claim.second;
             if (RefPtr<WebKit::DriftstackHttp2Session> session = h2Claim.first) {
                 String poolHost = url.host().toString();
@@ -2148,6 +2185,7 @@ void DriftstackNetworkLoader::resume()
                 if (!task) return;
                 }
                 if (!h2resp.failed && h2resp.statusCode) {
+                    driftstackH2NoteHealthy(origin);   // W3046: pooled reuse worked — clear any churn strike
                     String mimeType = "text/html"_s, charset = "UTF-8"_s;
                     long long expectedLength = -1;
                     for (auto& [k, v] : h2resp.headers) {
@@ -2216,6 +2254,7 @@ void DriftstackNetworkLoader::resume()
                 }
                 // Pooled session failed (e.g. GOAWAY mid-flight) — fall through
                 // to a fresh connection.
+                driftstackH2NoteChurn(origin);   // W3046: count the churn; a persistently-GOAWAY origin trips the breaker (skip pool)
                 WTFLogAlways("[Wave29-499.321/H2POOL] pooled session execute failed for %s — fresh connect", origin.utf8().data());
             }
         }
@@ -2670,7 +2709,10 @@ void DriftstackNetworkLoader::resume()
                     String origin = makeString(host, ':', static_cast<unsigned>(url.port().value_or(443)));
                     // Publish the session + wake coalesced waiters NOW (before our
                     // own request runs) so they multiplex concurrently over it.
-                    driftstackH2PoolSet(origin, RefPtr<WebKit::DriftstackHttp2Session>(session));
+                    // W3046: do NOT re-pool a GOAWAY-churning origin — it would just be reused-then-fail again
+                    // next request (the adopt/GOAWAY loop). Serve THIS request on the fresh session, then drop it.
+                    if (!driftstackH2OriginChurning(origin))
+                        driftstackH2PoolSet(origin, RefPtr<WebKit::DriftstackHttp2Session>(session));
                     if (h2PoolWinner) { driftstackH2PoolFinishPending(origin); h2PoolWinner = false; }
                     // BUG-42 Fix #4 — the fresh connect+TLS handshake is DONE and the
                     // session is published; release the handshake-cap slot NOW (before
