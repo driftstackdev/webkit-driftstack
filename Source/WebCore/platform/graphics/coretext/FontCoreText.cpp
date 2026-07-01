@@ -611,20 +611,19 @@ void Font::platformInit()
                 }
             }
         } else {
-            // emojiSize > 96: linear-extrapolate the iPhone table. ASCENT from the size-64→96 pair
-            // (slope 1.0 → 201 @200px). DESCENT from the FULL captured range size-8 (.front()={10,4}) →
-            // size-96 (.back()={97,31}), slope 0.3068. W2647: the LOCAL size-64→96 descent slope (0.3125)
-            // lands descent(200)=63.5 exactly on the half-integer → ceilf→64 → lineSpacing 265 → CreepJS
-            // DOMRect box 265.2647 (iPhone is 264 = 201+63; the fixture's scale(1.000999) → 264.2638, BS
-            // ground truth creepjsdomrect-iPhone_17). The full-range slope gives descent(200)=62.9→63 → 264,
-            // and PRESERVES W2596's descent(128)=40.8→41 (→170). Only the >96px descent extrapolation changes.
-            const auto& lo = driftstackEmojiFontMetricsTable[64 - 8]; // size 64 (ascent slope)
-            const auto& hi = driftstackEmojiFontMetricsTable.back();  // size 96
-            float t = (emojiSize - hi.size) / (hi.size - lo.size);
-            ascent  = hi.ascent  + t * (hi.ascent  - lo.ascent);
-            const auto& dlo = driftstackEmojiFontMetricsTable.front(); // size 8 (descent slope over full range)
-            float td = (emojiSize - hi.size) / (hi.size - dlo.size);
-            descent = hi.descent + td * (hi.descent - dlo.descent);
+            // emojiSize > 96: reproduce iOS CoreText's EXACT AppleColorEmoji FontMetrics floats (not just the
+            // ceil-sum). AppleColorEmoji.ttc (uPM=800, hhea ascent=800 descent=-250, leading=0) scales in
+            // CoreText at a constant point-size epsilon — VERIFIED via CTFontGetAscent/Descent @97..600px:
+            //   ascent = size + 1e-4 ,  descent = 0.3125*size + 3.125e-5 ,  leading = 0
+            // (byte-identical on macOS + iOS: same font binary). The OLD table-slope extrapolation ceil-summed
+            // right (201+63=264) but carried the WRONG raw float sub-structure → the CreepJS getClientRects
+            // line box landed 2^-15 (1 float32 ULP) below iOS (fork 264.2637634277344 vs iPhone-17
+            // 264.2637939453125, creepjsdomrect-iPhone_17-1782878388485). Serving iOS's exact floats threads
+            // the right residual through the subpixel line-box assembly. ceil-sum + lineSpacing UNCHANGED at
+            // every size (129/170/198/264/395/527/789 @97/128/150/200/300/400/600 — W2596 128px→170 + glyphHash
+            // preserved); the 16..96px table path (glyphHash 16/13px) is untouched.
+            ascent  = static_cast<float>(static_cast<double>(emojiSize) + 0.0001);
+            descent = static_cast<float>(static_cast<double>(emojiSize) * (250.0 / 800.0) + 0.00003125);
         }
         // W2588: the table above replaces ascent/descent with the iOS Apple Color Emoji
         // values, but lineSpacing was computed earlier (≈line 304) from Mac CoreText's RAW
