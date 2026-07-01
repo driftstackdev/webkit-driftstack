@@ -27,6 +27,7 @@
 #import <wtf/Scope.h>
 #import <wtf/Lock.h>
 #import <wtf/NeverDestroyed.h>
+#import <wtf/OSObjectPtr.h>
 
 // Wave 29-499.154 — STATIC LINK libwebrtc's libboringssl.a into WebKit
 // framework via OTHER_LDFLAGS += -lboringssl in WebKit.xcconfig. All 560
@@ -971,6 +972,51 @@ static constexpr unsigned kH2ChurnThreshold = 3;
 {
     Locker locker { driftstackH2PoolLock() };
     driftstackH2ChurnMap().remove(origin);
+}
+// W3052 (FOUNDER westernunion — the DEEP fix): per-ORIGIN fresh-connect concurrency cap.
+// W3046 stopped the failed-reuse/re-adopt churn, but a session-replay tracker that GOAWAYs
+// every session (ingest.quantummetric.com) is treated as "churning" → it BYPASSES the h2Pool
+// winner/waiter claim entirely, so MANY concurrent beacons to that one origin ALL become
+// last-resort own-connect winners at once (a fresh-connect stampede). Each pins a GCD worker
+// + an admission slot (of 24) for its whole life, so ONE tracker can still monopolise the
+// admission cap and starve the document's own connects — even though the 24-cap is "active".
+// This bounds concurrent NON-POOLED (fresh-connecting) requests to any single origin to
+// kMaxFreshConnectsPerOrigin, held from just-before the fresh handshake through request
+// completion (released by the same handshakeCapGuard scope-exit that frees the handshake
+// slot). So no one origin can occupy more than N of the 24 admission slots; the rest stay
+// free for real content. Pooled REUSE requests take the fast path ABOVE this acquire and
+// never touch it — legit multiplexed high-fanout origins (a CDN serving 30 subresources over
+// ONE pooled H2 connection) are entirely exempt. This mirrors iOS Safari's per-host
+// connection bound (HTTPMaximumConnectionsPerHost ~6): a multiplexing origin uses 1 pooled
+// connection; a non-multiplexing/churning origin is capped at ~6 concurrent. Fingerprint-
+// neutral (pure connect pacing — no ClientHello/cipher/curve/ALPN/header/routing change).
+// Gated under the same driftstackAdmissionPacingEnabled() gate; gate-off = true no-op.
+static long driftstackMaxFreshConnectsPerOrigin()
+{
+    static long cap = [] {
+        long c = 6;  // = iOS HTTPMaximumConnectionsPerHost
+        if (const char* e = getenv("DRIFTSTACK_MAX_CONNS_PER_ORIGIN")) {
+            long p = atol(e);
+            if (p >= 1 && p <= 24)
+                c = p;
+        }
+        WTFLogAlways("[W3052/Fix3] per-origin fresh-connect cap = %ld", c);
+        return c;
+    }();
+    return cap;
+}
+[[maybe_unused]] static dispatch_semaphore_t driftstackOriginConnectSemaphore(const String& origin)
+{
+    // Lazily created, one counting semaphore per origin (cap = the per-origin bound).
+    // Guarded by the existing pool lock (brief critical section on cache-miss only; the
+    // dispatch_semaphore_wait happens OUTSIDE this lock at the call site). Semaphores are
+    // process-lifetime (never removed) — bounded by the unique-origin count of a single
+    // per-session process; OSObjectPtr keeps the ARC-managed dispatch object retained.
+    static NeverDestroyed<HashMap<String, OSObjectPtr<dispatch_semaphore_t>>> map;
+    Locker locker { driftstackH2PoolLock() };
+    return map.get().ensure(origin, [] {
+        return adoptOSObject(dispatch_semaphore_create(driftstackMaxFreshConnectsPerOrigin()));
+    }).iterator->value.get();
 }
 // Return a live pooled session for origin, or nullptr (evicting a dead one).
 [[maybe_unused]] static RefPtr<WebKit::DriftstackHttp2Session> driftstackH2PoolGet(const String& origin)
@@ -2281,6 +2327,8 @@ void DriftstackNetworkLoader::resume()
         // makes the two mutually exclusive. Gate-off: no acquire, no release — true
         // no-op (handshakeSlotHeld stays false; the scope-exit does nothing).
         bool handshakeSlotHeld = false;
+        bool originSlotHeld = false;
+        dispatch_semaphore_t originConnectSem = nullptr;
         if (driftstackAdmissionPacingEnabled()) {
             // Cap the wait at the remaining retry budget (clamped to a sane floor) so
             // a fully-saturated cap degrades to proceed-without-slot, never a hang.
@@ -2288,16 +2336,48 @@ void DriftstackNetworkLoader::resume()
             double waitSecs = remaining.value();
             if (waitSecs < 1.0) waitSecs = 1.0;
             if (waitSecs > 20.0) waitSecs = 20.0;
-            dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(waitSecs * NSEC_PER_SEC));
+            // W3052 — per-ORIGIN fresh-connect cap FIRST (tighter than the global handshake
+            // cap for a single flooding origin). Held through request completion (released by
+            // the scope-exit below, NOT early at the H2-publish point), so it bounds the
+            // origin's concurrent-REQUEST footprint — a churning tracker can occupy at most N
+            // of the 24 admission slots. Pooled reuse never reaches here (fast path above).
+            // Derive the key from the URL directly (h2PoolOrigin is only populated when the H2
+            // pool is enabled AND https — for http / pool-off it's empty, which would collapse
+            // every origin onto one shared semaphore and over-throttle).
+            const String capOrigin = !h2PoolOrigin.isEmpty()
+                ? h2PoolOrigin
+                : makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(url.protocolIs("https"_s) ? 443 : 80)));
+            originConnectSem = driftstackOriginConnectSemaphore(capOrigin);
+            dispatch_time_t originDeadline = dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(waitSecs * NSEC_PER_SEC));
+            if (dispatch_semaphore_wait(originConnectSem, originDeadline) == 0)
+                originSlotHeld = true;
+            else
+                WTFLogAlways("[W3052/Fix3] per-origin fresh-connect cap (%ld) saturated (>%.1fs) — proceeding for %s", driftstackMaxFreshConnectsPerOrigin(), waitSecs, capOrigin.utf8().data());
+            // BUG-42 Fix #4 — global concurrent fresh-handshake cap. Recompute the remaining
+            // budget so the two sequential waits together stay bounded by the request deadline.
+            Seconds remaining2 = m_retryDeadline - MonotonicTime::now();
+            double waitSecs2 = remaining2.value();
+            if (waitSecs2 < 1.0) waitSecs2 = 1.0;
+            if (waitSecs2 > 20.0) waitSecs2 = 20.0;
+            dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(waitSecs2 * NSEC_PER_SEC));
             if (dispatch_semaphore_wait(driftstackHandshakeCapSemaphore(), deadline) == 0)
                 handshakeSlotHeld = true;
             else
-                WTFLogAlways("[BUG-42/Fix4] handshake-cap saturated (>%.1fs) — proceeding without a slot for %s", waitSecs, url.host().toString().utf8().data());
+                WTFLogAlways("[BUG-42/Fix4] handshake-cap saturated (>%.1fs) — proceeding without a slot for %s", waitSecs2, url.host().toString().utf8().data());
         }
         auto handshakeCapGuard = WTF::makeScopeExit([&] {
             if (handshakeSlotHeld) {
                 handshakeSlotHeld = false;
                 dispatch_semaphore_signal(driftstackHandshakeCapSemaphore());
+            }
+            // W3052 — release the per-origin fresh-connect slot on EVERY exit (connect/TLS/
+            // session-create early returns, SSE return, retry-dispatch return, and normal
+            // completion after execute). Deliberately NOT early-released at the H2-publish
+            // point (unlike the handshake slot): holding it through execute is what bounds the
+            // origin's concurrent-REQUEST footprint, not merely its handshakes.
+            if (originSlotHeld) {
+                originSlotHeld = false;
+                dispatch_semaphore_signal(originConnectSem);
             }
         });
 
