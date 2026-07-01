@@ -655,14 +655,7 @@ void WebAutomationSession::waitForNavigationToCompleteOnPage(WebPageProxy& page,
     ASSERT(!m_loadTimer.isActive());
     Ref pageLoadState = page.pageLoadState();
 
-    // W3042 (westernunion navigate-timeout diagnosis): trace the navigate-completion timer so we can tell
-    // whether the fork honors the harness's eager+45s (returns at DOMContentLoaded / a clean 45s timeout) or
-    // blocks past the harness's 55s URLSession cap (-1001). Low-frequency (once per navigate). Remove after root-cause.
-    WTFLogAlways("[W3042/NavTimer] wait-begin strategy=%d timeout=%.0fms loading=%d uncommitted=%d",
-        static_cast<int>(loadStrategy), timeout.milliseconds(), pageLoadState->isLoading() ? 1 : 0, pageLoadState->hasUncommittedLoad() ? 1 : 0);
-
     if (loadStrategy == Inspector::Protocol::Automation::PageLoadStrategy::None || (!pageLoadState->isLoading() && !pageLoadState->hasUncommittedLoad())) {
-        WTFLogAlways("[W3042/NavTimer] wait-short-circuit (None-strategy or not-loading) — returning navigate immediately");
         callback({ });
         return;
     }
@@ -748,7 +741,6 @@ void WebAutomationSession::respondToPendingFrameNavigationCallbacksWithTimeout(H
 
 void WebAutomationSession::loadTimerFired()
 {
-    WTFLogAlways("[W3042/NavTimer] loadTimerFired — pageLoad TIMEOUT reached; failing pending nav callbacks with W3C Timeout");
     respondToPendingFrameNavigationCallbacksWithTimeout(m_pendingNormalNavigationInBrowsingContextCallbacksPerFrame);
     respondToPendingFrameNavigationCallbacksWithTimeout(m_pendingEagerNavigationInBrowsingContextCallbacksPerFrame);
     respondToPendingPageNavigationCallbacksWithTimeout(m_pendingNormalNavigationInBrowsingContextCallbacksPerPage);
@@ -1021,7 +1013,6 @@ void WebAutomationSession::navigationOccurredForFrame(const WebFrameProxy& frame
         });
 
         if (auto callback = m_pendingNormalNavigationInBrowsingContextCallbacksPerPage.take(frame.page()->identifier())) {
-            WTFLogAlways("[W3042/NavTimer] normal nav COMPLETE (full load fired) — returning navigate");
             m_loadTimer.stop();
             callback({ });
         }
@@ -1055,7 +1046,6 @@ void WebAutomationSession::documentLoadedForFrame(const WebFrameProxy& frame, st
 
     if (frame.isMainFrame()) {
         if (auto callback = m_pendingEagerNavigationInBrowsingContextCallbacksPerPage.take(frame.page()->identifier())) {
-            WTFLogAlways("[W3042/NavTimer] eager nav COMPLETE (documentLoaded/DOMContentLoaded) — returning navigate at interactive");
             m_loadTimer.stop();
             callback({ });
         }
