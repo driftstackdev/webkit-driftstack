@@ -3031,7 +3031,14 @@ _Pragma("clang diagnostic pop")
             // so when the gate is off the loop is byte-identical to the prior W2341 code.
             NSMutableData* respMutable = [NSMutableData data];
             uint8_t readBuf[4096];
-            const bool h1DeadlineActive = driftstackEgressReliabilityEnabled();
+            // W3051 (FOUNDER westernunion, workflow wx1i6f1ee RANK-6): gate the h1 60s idle/no-progress deadline
+            // on the ACTIVE pacing governor, not the reverted-in-prod EGRESS_RELIABILITY. The identical h2 idle
+            // (DriftstackHttp2.mm) is always-on; the h1 one was gated on EGRESS_RELIABILITY (off in prod, W2994)
+            // → a silent/dribbling no-FIN h1 tracker held its admission slot (1 of 24) + a GCD worker until
+            // external cancel, compounding the beacon-storm starvation. driftstackAdmissionPacingEnabled() is
+            // true in prod (EGRESS_CONCURRENCY=1), so this activates the h1 deadline exactly where the cap it
+            // protects is active. Gate-off (both flags unset) = byte-identical to the prior W2341 code.
+            const bool h1DeadlineActive = driftstackAdmissionPacingEnabled();
             const Seconds kH1IdleTimeout = Seconds(60); // match the h2 kIdleTimeout
             MonotonicTime h1IdleDeadline = MonotonicTime::now() + kH1IdleTimeout;
             while (true) {
