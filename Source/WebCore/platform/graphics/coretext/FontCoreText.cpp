@@ -2202,6 +2202,46 @@ static void applyDriftstackPairKerningOverride(GlyphBuffer& glyphBuffer,
     (void)populateMacKerningCellOnce; (void)lookupMacPairKerning; // unused in v4
 }
 
+// W3061 (#79): U+2049 (⁉) SHAPED-advance ULP correction — the DEFINITIVE site. WidthIterator gets
+// widthForGlyph=166.8 (design) but CTFontShapeGlyphs (this applyTransforms) OVERWRITES glyphBuffer's
+// advance with CoreText's hinted SHAPED advance (166.81251525878906/0x4326d001 macOS @200px), and THAT
+// is what getClientRects reads (proven: W3058 diag showed platformWidthForGlyph returns 166.8 but layout
+// uses 166.8125 — the shaped advance). A real iPhone's shaped advance is 166.8125/0x4326d000, exactly 1
+// float32 ULP below → +2^-16 on the CreepJS domrect width = the sole net driver of domrectSystemSum.
+// platformWidthForGlyph (W3056) + ComplexTextController (W3057) were the WRONG paths (this glyph is SIMPLE
+// codePath; the width is the SHAPED advance here). Serve the captured iPhone shaped advance per size (same
+// 9 round-trip-verified values: f32(raw*1.000999)==captured getClientRects width). Value-self-scoped
+// (shaped within 0.05px of the cell → CJK U+2049 in another face untouched) + codepoint match via the
+// same recoverCodepointFromGlyph idiom as the kerning override. Runs UNCONDITIONALLY (advance correction,
+// not kerning — not gated on enableKerning).
+static void applyDriftstackU2049AdvanceOverride(GlyphBuffer& glyphBuffer, unsigned beginningGlyphIndex,
+    unsigned beginningStringIndex, float ptSize, StringView text)
+{
+    if (glyphBuffer.size() <= beginningGlyphIndex)
+        return;
+    static constexpr struct { int size; float adv; } k2049Advances[] = {
+        {  50,  41.703125f          }, {  72,  60.0625f            },
+        {  96,  80.07813262939453f  }, { 100,  83.40625f           },
+        { 150, 125.109375f          }, { 200, 166.8125f            },
+        { 300, 250.20314025878906f  }, { 400, 333.609375f          },
+        { 600, 500.4062805175781f   },
+    };
+    int sizePx = static_cast<int>(roundf(ptSize));
+    float target = -1.f;
+    for (auto& c : k2049Advances) {
+        if (c.size == sizePx) { target = c.adv; break; }
+    }
+    if (target < 0.f)
+        return;
+    for (unsigned i = beginningGlyphIndex; i < glyphBuffer.size(); ++i) {
+        if (recoverCodepointFromGlyph(glyphBuffer, i, text, beginningStringIndex) != 0x2049)
+            continue;
+        float shaped = WebCore::width(glyphBuffer.advanceAt(i));
+        if (std::fabs(shaped - target) < 0.05f)
+            glyphBuffer.expandAdvance(i, target - shaped);
+    }
+}
+
 } // anonymous namespace
 #endif // PLATFORM(DRIFTSTACK)
 
@@ -2325,6 +2365,9 @@ GlyphBufferAdvance Font::applyTransforms(GlyphBuffer& glyphBuffer, unsigned begi
     applyDriftstackPairKerningOverride(glyphBuffer, beginningGlyphIndex,
         beginningStringIndex, enableKerning, ctFont.get(),
         m_platformData.familyName(), m_platformData.size(), text);
+    // W3061 (#79): correct U+2049's shaped advance to the iPhone value (unconditional — not kerning).
+    applyDriftstackU2049AdvanceOverride(glyphBuffer, beginningGlyphIndex,
+        beginningStringIndex, m_platformData.size(), text);
 #endif
 
     for (unsigned i = 0; i < glyphBuffer.size() - beginningGlyphIndex; ++i)
