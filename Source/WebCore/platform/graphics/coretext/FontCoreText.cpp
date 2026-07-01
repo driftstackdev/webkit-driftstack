@@ -1461,66 +1461,6 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         }
     }
 
-    // #79 (2026-07-01, founder-approved per-size table): U+2049 (⁉ EXCLAMATION QUESTION MARK) TEXT-
-    // presentation advance override. The CreepJS domrect probe renders U+2049 as text (no VS16) at 200px
-    // with transform:scale(1.000999). Real iPhone-17/Safari-26.4 getClientRects width == 166.97914123535156
-    // (raw advance 166.8125 = 0x4326d000, on the iOS advance grid); macOS CoreText grid-fits +1 float32 ULP
-    // above (166.81251525878906 = 0x4326d001) → after the scale transform the width is 166.97915649414062
-    // (+2^-16), the SOLE net driver of the CreepJS domrectSystemSum residual (the 1F600 264-box + 2695 line-
-    // box ULP errors cancel in sum = 0.00001·Σ over the 7 unique (w,h) of (w+h)). Serve the captured real-
-    // iPhone RAW advance per size (reference/realdevice-bs/u2049-advance-multisize-iPhone17-26_4.json, 3
-    // units bit-identical; 200px cross-checked vs boundary-registry U+2049 iOS 0x4326d000). iOS is NON-LINEAR
-    // per size (on-grid @200/400, 1 ULP off-grid @96/300/600) → per-em/grid-snap is NOT byte-exact-general;
-    // a captured per-size table is required (founder call: byte-exact table, not the mechanism). All 9 raw
-    // literals VERIFIED: f32(raw·1.000999) == the captured width byte-exact. Self-scoped BY VALUE:
-    // fires only when this font's macOS advance is within 0.05px of the iOS text-fallback advance for the
-    // size, so a full-width CJK U+2049 in another face (advance ≈ ptSize) is untouched — no familyName lookup
-    // needed, and it never fires on a face whose advance already ≠ the iOS value. Returns the raw advance;
-    // layout applies the CSS transform (f32(raw·1.000999) reproduces every captured width byte-exact).
-    // ⚠️ STAGED — A3 REVERSE pending (render creepjsdomrect → 2049.w==166.97914123535156, domrectSystemSum
-    // ==0.029615962524414063, uniqueEmojiDims==7, no other cp changed; creepjs-domrect-gate.sh mutation-tests it).
-    if (platformData().size() > 0.f) {
-        float u2049Advance = -1.f;
-        switch (static_cast<unsigned>(platformData().size() + 0.5f)) {
-        case 50:  u2049Advance = 41.703125f;  break;
-        case 72:  u2049Advance = 60.0625f;    break;
-        case 96:  u2049Advance = 80.07813262939453f;  break;
-        case 100: u2049Advance = 83.40625f;   break;
-        case 150: u2049Advance = 125.109375f; break;
-        case 200: u2049Advance = 166.8125f;   break; // domrect probe size → renders 166.97914123535156
-        case 300: u2049Advance = 250.20314025878906f; break;
-        case 400: u2049Advance = 333.609375f; break;
-        case 600: u2049Advance = 500.4062805175781f;  break;
-        default: break;
-        }
-        if (u2049Advance >= 0.f) {
-            // W3056 (A3 REVERSE diagnostic — A1 requested on-box advance.width + familyName): the render
-            // showed U+2049 UNCHANGED (166.97915649414062), so the value-self-guard didn't fire. Log every
-            // guard input whenever a candidate SIZE matches so A1 can see WHY (advance out of the 0.05 window /
-            // glyph-identity mismatch / wrong size case). Temporary — remove once the guard is tuned.
-            RetainPtr u2049FontDiag = ctFont();
-            char famBuf[128] = { 0 };
-            if (u2049FontDiag) {
-                RetainPtr<CFStringRef> famName = adoptCF(CTFontCopyFamilyName(u2049FontDiag.get()));
-                if (famName)
-                    CFStringGetCString(famName.get(), famBuf, sizeof(famBuf), kCFStringEncodingUTF8);
-            }
-            UniChar chDiag = 0x2049;
-            CGGlyph gDiag = 0;
-            bool gotG = u2049FontDiag && CTFontGetGlyphsForCharacters(u2049FontDiag.get(), &chDiag, &gDiag, 1);
-            WTFLogAlways("[W3056/U2049-DIAG] size=%.5f advance.width=%.11f expected=%.11f fabsdiff=%.11f measuredGlyph=%u u2049Glyph=%u gotGlyphs=%d valueMatch=%d family='%s'",
-                platformData().size(), advance.width, u2049Advance, std::fabs(advance.width - u2049Advance),
-                glyph, gDiag, (int)gotG, (int)(gotG && gDiag && gDiag == glyph), famBuf);
-        }
-        if (u2049Advance >= 0.f && std::fabs(advance.width - u2049Advance) < 0.05) {
-            RetainPtr u2049Font = ctFont();
-            UniChar u2049Ch = 0x2049;
-            CGGlyph u2049Glyph = 0;
-            if (u2049Font && CTFontGetGlyphsForCharacters(u2049Font.get(), &u2049Ch, &u2049Glyph, 1) && u2049Glyph && u2049Glyph == glyph)
-                return u2049Advance;
-        }
-    }
-
     // V-121 closure: per-glyph ASCII advance override at the configured
     // (font, size, codepoint) combinations. iPhone reference data captured
     // via stage-f-ascii-advances probe (1900 entries × 4 fonts × 5 sizes ×
