@@ -351,11 +351,12 @@ static void hpackEncodeString(Vector<uint8_t>& out, const String& s)
 {
     auto utf8 = s.utf8();
     // DRIFTSTACK_H2_HPACK_HUFFMAN: iOS-faithful Huffman literal compression.
-    // Default OFF pending A3 on-box build-verify — this changes EVERY h2 request's
-    // header bytes, so a regression would break all h2 (the server must Huffman-
-    // decode, which standard h2 servers do). When ON, apply the canonical heuristic
-    // (Huffman only when strictly shorter; ties → raw, matching nghttp2/CFNetwork).
-    static const bool huffmanEnabled = getenv("DRIFTSTACK_H2_HPACK_HUFFMAN") != nullptr;
+    // W3066: now DEFAULT-ON (iPhone/CFNetwork Huffman-encodes every literal — the raw path was a
+    // ~25% larger plaintext HEADERS = a real sub-akamai wire tell on EVERY h2 request, byte-verified
+    // vs a real iPhone capture). Opt-out with DRIFTSTACK_H2_HPACK_HUFFMAN=0 (kept for a fast rollback
+    // if a server ever rejects Huffman — standard h2 servers all Huffman-decode). Canonical heuristic:
+    // Huffman only when strictly shorter; ties → raw, matching nghttp2/CFNetwork.
+    static const bool huffmanEnabled = [] { const char* e = getenv("DRIFTSTACK_H2_HPACK_HUFFMAN"); return !(e && e[0] == '0'); }();
     if (huffmanEnabled) {
         size_t huffLen = hpackHuffmanEncodedLength(utf8);
         if (huffLen < utf8.length()) {
