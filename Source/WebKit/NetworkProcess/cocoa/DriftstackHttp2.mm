@@ -1760,9 +1760,36 @@ void DriftstackHttp2Session::readerLoop()
             // front offset desyncs HPACK → corrupted response headers).
             if (frameFlags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
             if (frameFlags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
-            size_t cursor = start;
-            while (cursor < headerEnd) {
-                if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
+            // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10) — same as the one-shot
+            // reader (webkit eb4010919a90). If END_HEADERS is not set the header block continues in
+            // immediately-following CONTINUATION frames on the SAME stream (no interleaving allowed, even on
+            // a multiplexed session); read them inline via transportReadExact + concatenate before decoding,
+            // else a >16 KiB block (large Set-Cookie / many headers) decoded only its first fragment →
+            // garbled headers. Common END_HEADERS case leaves blockData/blockLen at this frame → byte-identical.
+            const uint8_t* blockData = payload.span().data() + start;
+            size_t blockLen = headerEnd - start;
+            Vector<uint8_t> contBlock;
+            if (!(frameFlags & kFlagEndHeaders)) {
+                contBlock.append(std::span<const uint8_t>(blockData, blockLen));
+                bool contEnd = false;
+                while (!contEnd) {
+                    uint8_t chdr[9];
+                    if (!transportReadExact(m_transport, chdr, 9)) { markDeadAndFailAll(); return; }
+                    uint32_t clen, csid; uint8_t ctype, cflags;
+                    decodeFrameHeader(chdr, clen, ctype, cflags, csid);
+                    if (ctype != kFrameContinuation || csid != sid || clen > kMaxRecvFrameBytes) { markDeadAndFailAll(); return; }
+                    Vector<uint8_t> cpay(clen);
+                    if (clen > 0 && !transportReadExact(m_transport, cpay.mutableSpan().data(), clen)) { markDeadAndFailAll(); return; }
+                    contBlock.append(cpay.span());
+                    if (contBlock.size() > (static_cast<size_t>(1) << 20)) { markDeadAndFailAll(); return; }  // 1 MiB — CONTINUATION-flood DoS bound
+                    if (cflags & kFlagEndHeaders) contEnd = true;
+                }
+                blockData = contBlock.span().data();
+                blockLen = contBlock.size();
+            }
+            size_t cursor = 0;
+            while (cursor < blockLen) {
+                if (!hpackDecodeOneHeader(blockData, blockLen, cursor, decoded, hpackDyn))
                     break;
             }
             std::function<void(int, const Vector<std::pair<String, String>>&)> headersCb;
@@ -2275,9 +2302,35 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
                 // header block is [start, size - padLen). Mirror the §6.1 DATA-frame trim.
                 if (flags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
                 if (flags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
-                cursor = start;
-                while (cursor < headerEnd) {
-                    if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
+                // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10) — same pattern as the
+                // one-shot/readerLoop readers. A CONNECT-response header block spanning records is never legit
+                // (CONNECT responses are tiny) but an adversarial server could split it; reassemble the
+                // immediately-following CONTINUATION frames before decoding rather than mis-parsing :status.
+                // Common END_HEADERS case leaves blockData/blockLen at this frame → byte-identical.
+                const uint8_t* blockData = payload.span().data() + start;
+                size_t blockLen = headerEnd - start;
+                Vector<uint8_t> contBlock;
+                if (!(flags & kFlagEndHeaders)) {
+                    contBlock.append(std::span<const uint8_t>(blockData, blockLen));
+                    bool contEnd = false;
+                    while (!contEnd) {
+                        uint8_t chdr[9];
+                        if (!sslReadExact(nullptr, tp, chdr, 9)) return -1;
+                        uint32_t clen, csid; uint8_t ctype, cflags;
+                        decodeFrameHeader(chdr, clen, ctype, cflags, csid);
+                        if (ctype != kFrameContinuation || csid != kStreamId || clen > kMaxConnectFrameBytes) return -1;
+                        Vector<uint8_t> cpay(clen);
+                        if (clen > 0 && !sslReadExact(nullptr, tp, cpay.mutableSpan().data(), clen)) return -1;
+                        contBlock.append(cpay.span());
+                        if (contBlock.size() > (static_cast<size_t>(1) << 20)) return -1;  // 1 MiB — CONTINUATION-flood bound
+                        if (cflags & kFlagEndHeaders) contEnd = true;
+                    }
+                    blockData = contBlock.span().data();
+                    blockLen = contBlock.size();
+                }
+                cursor = 0;
+                while (cursor < blockLen) {
+                    if (!hpackDecodeOneHeader(blockData, blockLen, cursor, decoded, hpackDyn))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
