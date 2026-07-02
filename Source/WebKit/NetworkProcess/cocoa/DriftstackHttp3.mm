@@ -4644,6 +4644,7 @@ DriftstackHttp3Response DriftstackHttp3Session::execute(const DriftstackHttp3Req
     // callers multiplex over the one connection.
     auto p = std::make_shared<H3PendingReq>();
     p->request = request;
+    int64_t streamIdSnap = -1;
     {
         Locker l { m_lock };
         if (!m_alive) {
@@ -4658,17 +4659,25 @@ DriftstackHttp3Response DriftstackHttp3Session::execute(const DriftstackHttp3Req
             if (!st->cond.waitUntil(m_lock, deadline))
                 break; // timeout
         }
+        // egress audit wxzzaphvp (#12): snapshot the result WHILE HOLDING m_lock. On a timeout break, p stays
+        // in st->queue/st->inflight and the pump thread may still write p->response / p->done concurrently —
+        // reading or mutating p->response after releasing the lock (as before) was a data race on the shared
+        // H3PendingReq. Set the timeout fields + copy the response out under the lock, then return the snapshot
+        // (the pump's later writes to p->response cannot affect our copy).
+        if (!p->done) {
+            p->response.failed = true;
+            if (p->response.errorMessage.isEmpty())
+                p->response.errorMessage = "h3 pooled request timeout"_s;
+        }
+        resp = p->response;
+        streamIdSnap = p->streamId;
     }
-    if (!p->done) {
-        p->response.failed = true;
-        if (p->response.errorMessage.isEmpty())
-            p->response.errorMessage = "h3 pooled request timeout"_s;
-        WTFLogAlways("[Wave29-499.322/H3POOL] pooled request TIMEOUT (stream=%lld)", (long long)p->streamId);
-        return p->response;
-    }
-    WTFLogAlways("[Wave29-499.322/H3POOL] pooled request COMPLETE status=%d bodyLen=%zu (concurrent, stream=%lld)",
-        p->response.statusCode, p->response.body.size(), (long long)p->streamId);
-    return p->response;
+    if (resp.failed)
+        WTFLogAlways("[Wave29-499.322/H3POOL] pooled request TIMEOUT/failed (stream=%lld)", (long long)streamIdSnap);
+    else
+        WTFLogAlways("[Wave29-499.322/H3POOL] pooled request COMPLETE status=%d bodyLen=%zu (concurrent, stream=%lld)",
+            resp.statusCode, resp.body.size(), (long long)streamIdSnap);
+    return resp;
 }
 
 // Wave 29-499.240 — C-linkage smoke trigger callable from
