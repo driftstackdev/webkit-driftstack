@@ -314,6 +314,29 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
     }
 
     auto encodingMIMEType = toEncodingMimeType(options.type);
+#if PLATFORM(DRIFTSTACK)
+    // Cross-context coherence (A1 avif fix): a Family-A archetype (Safari ≤26.3) canvas.toBlob with
+    // image/avif produces PNG bytes AND normalizes the resulting Blob's type to "image/png" — the MAIN
+    // path (HTMLCanvasElement::toBlob ~1652-1670) does this but the worker did NOT → a Family-A worker
+    // emitted Blob.type=image/avif where main emitted image/png (a main-vs-worker toBlob tell; the Blob
+    // type is set from encodingMIMEType at the Blob::create below). ImageUtilitiesCG.cpp (V-090) already
+    // redirects avif→png BYTES; this matches the type field. Family-B (Safari 26.4+) emits image/avif
+    // natively → left intact. Env read LIVE. NOTE (drift): duplicates main's s_isFamilyAArchetypeToBlob,
+    // kept avif-SEPARATE from the ≤26.3 driftstackIsCanvasFamilyA per A1 (the avif boundary may later
+    // narrow to major<26, capture-gated); de-dup into a shared driftstackIsAvifToBlobFamilyA() helper is
+    // a follow-up (needs a launch-canvas re-verify → left to A1's rig-gid canvas harness so this build
+    // leaves the launch-critical main path untouched).
+    {
+        const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
+        String dsArchStr = dsArch ? String::fromUTF8(dsArch) : String();
+        bool dsIsFamilyAToBlob = dsArchStr.contains("safari17_"_s) || dsArchStr.contains("safari18_"_s)
+            || dsArchStr.contains("safari19_"_s) || dsArchStr.contains("safari26_0"_s)
+            || dsArchStr.contains("safari26_1"_s) || dsArchStr.contains("safari26_2"_s)
+            || dsArchStr.contains("safari26_3"_s);
+        if (dsIsFamilyAToBlob && equalLettersIgnoringASCIICase(encodingMIMEType, "image/avif"_s))
+            encodingMIMEType = "image/png"_s;
+    }
+#endif
     auto quality = qualityFromDouble(options.quality);
 
     RefPtr context = canvasBaseScriptExecutionContext();
