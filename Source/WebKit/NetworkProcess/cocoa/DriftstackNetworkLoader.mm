@@ -2919,7 +2919,18 @@ void DriftstackNetworkLoader::resume()
             }
 
             if (h2resp.failed) {
-                if (canRetry) {
+                // W3055 (FOUNDER westernunion): do NOT retry a failed request to a CHURNING 3rd-party
+                // origin. Session-replay/analytics beacon endpoints (e.g. ingest.quantummetric.com) close
+                // the h2 connection per beacon, so each of a page's ~85 beacons fails its pooled reuse ->
+                // a fresh SOCKS5+TLS handshake through the (slow) customer proxy; retrying DOUBLES that. The
+                // storm monopolises the egress workers/admission slots and STARVES the first-party document
+                // (westernunion) behind it -> pageLoad-timeout -> "won't load". These beacons are
+                // fire-and-forget (a real iPhone does not retry-storm them), so failing them fast returns the
+                // freed capacity to real content. Scoped to churning(W3046) AND 3rd-party, so first-party and
+                // healthy origins keep full retry resilience. Wire/fingerprint-neutral (retry pacing only).
+                String w3055Origin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
+                const bool churningBeacon = requestIsThirdParty && driftstackH2OriginChurning(w3055Origin);
+                if (canRetry && !churningBeacon) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for HTTP/2 transport to %s",
                         currentAttempt, url.host().toString().utf8().data());
                     Ref<DriftstackNetworkLoader> retryRef { *this };
@@ -2929,6 +2940,8 @@ void DriftstackNetworkLoader::resume()
                         });
                     return;
                 }
+                if (churningBeacon)
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3055] churning 3rd-party beacon %s failed — fail fast, NO retry (frees egress for first-party content)", w3055Origin.utf8().data());
                 WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url), h2resp.errorMessage, WebCore::ResourceError::Type::General);
                 if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
                 callOnMainRunLoop([protectedThis, error = std::move(error)]() mutable {

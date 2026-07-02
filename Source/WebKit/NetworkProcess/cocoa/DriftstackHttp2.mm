@@ -761,15 +761,22 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
             inflateEnd(&zs);
         }
     } else if (enc == "br"_s) {
+        // W3056 (audit): COMPRESSION_BROTLI returns 0 when the dst buffer is too SMALL (unlike zlib,
+        // which returns the filled count) — empirically verified on-box. So n==0 means "grow the
+        // buffer and retry", NOT a hard failure. The old `if (!n) break;` gave up after ONE attempt
+        // at cap=max(8*compressed,64KB), so every brotli body whose decompressed size exceeded ~8x
+        // fell through UNDECODED -> WebKit renders raw compressed bytes = blank/garbled page. brotli
+        // routinely hits 8:1–20:1 on HTML/CSS/JS, and the fork advertises `br` in Accept-Encoding, so
+        // Cloudflare/most CDNs serve it -> this broke the common case. Grow on n==0 too; only give up
+        // at the decompression-bomb cap (a genuinely-corrupt body grows to the cap then fails, bounded).
         size_t cap = std::max<size_t>(body.size() * 8, 64 * 1024);
-        for (int attempt = 0; attempt < 6; ++attempt) {
+        for (int attempt = 0; attempt < 12; ++attempt) {
             out.resize(cap);
             size_t n = compression_decode_buffer(out.mutableSpan().data(), cap,
                 body.span().data(), body.size(), nullptr, COMPRESSION_BROTLI);
             if (n > 0 && n < cap) { out.resize(n); ok = true; break; }  // n<cap ⇒ complete
-            if (!n) break;                                              // hard failure
-            if (cap >= kMaxDecompressedBytes) break;                    // W2140 decompression-bomb cap
-            cap = std::min(cap * 2, kMaxDecompressedBytes);             // n==cap ⇒ maybe truncated, grow
+            if (cap >= kMaxDecompressedBytes) break;                    // W2140 decompression-bomb cap (or corrupt input)
+            cap = std::min(cap * 2, kMaxDecompressedBytes);             // n==0 (dst too small) OR n==cap (maybe truncated) ⇒ grow
         }
     } else if (enc == "zstd"_s) {
         // W1515 — vendored zstd v1.5.7 decoder (NetworkProcess/cocoa/zstd/zstddeclib.c).
@@ -1120,7 +1127,12 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     headerEnd = payload.size() - padLen;
                 }
                 if (frameFlags & kFlagPriority) {
-                    if (payload.size() < payloadStart + 5) break;
+                    // W3057 (audit): guard the 5-byte priority field against headerEnd (the POST-padding
+                    // region end), NOT payload.size() — else a PADDED+PRIORITY HEADERS frame whose padLen
+                    // overlaps the priority/header region makes payloadStart exceed headerEnd, so
+                    // blockLen = headerEnd - payloadStart underflows to ~2^64 -> HPACK walks far OOB ->
+                    // NetworkProcess crash (all sessions) on one crafted frame from any origin.
+                    if (headerEnd < payloadStart + 5) break;
                     payloadStart += 5;
                 }
                 // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10). If END_HEADERS is
@@ -1759,7 +1771,7 @@ void DriftstackHttp2Session::readerLoop()
             // block is [start, size - padLen). Mirror the §6.1 DATA-frame trim (treating padLen as a
             // front offset desyncs HPACK → corrupted response headers).
             if (frameFlags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
-            if (frameFlags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
+            if (frameFlags & kFlagPriority) { if (headerEnd < start + 5) break; start += 5; }  // W3057: guard vs headerEnd (post-pad), not payload.size() — else blockLen underflow -> OOB crash
             // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10) — same as the one-shot
             // reader (webkit eb4010919a90). If END_HEADERS is not set the header block continues in
             // immediately-following CONTINUATION frames on the SAME stream (no interleaving allowed, even on
@@ -2328,7 +2340,7 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
                 // RFC 7540 §6.2 (W2528): pad length is a FRONT byte, padding is at the END; the
                 // header block is [start, size - padLen). Mirror the §6.1 DATA-frame trim.
                 if (flags & kFlagPadded) { if (payload.size() < 1) break; uint8_t padLen = payload[0]; if (static_cast<size_t>(padLen) + 1 > payload.size()) break; start = 1; headerEnd = payload.size() - padLen; }
-                if (flags & kFlagPriority) { if (payload.size() < start + 5) break; start += 5; }
+                if (flags & kFlagPriority) { if (headerEnd < start + 5) break; start += 5; }  // W3057: guard vs headerEnd (post-pad), not payload.size() — else blockLen underflow -> OOB crash
                 // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10) — same pattern as the
                 // one-shot/readerLoop readers. A CONNECT-response header block spanning records is never legit
                 // (CONNECT responses are tiny) but an adversarial server could split it; reassemble the

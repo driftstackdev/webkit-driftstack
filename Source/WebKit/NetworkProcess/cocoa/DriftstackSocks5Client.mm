@@ -125,6 +125,11 @@ static int connectToProxy(const Socks5Endpoint& proxy)
         WTFLogAlways("[Driftstack-EG-WK-1.8] connectToProxy: socket() failed errno=%d", errno);
         return -1;
     }
+    // W3058 (audit): SO_NOSIGPIPE — a send()/write() on this fd AFTER the proxy/relay closes the peer
+    // mid-write otherwise raises SIGPIPE, whose default action TERMINATES the whole NetworkProcess
+    // (killing EVERY concurrent customer session), not just this request. A real iPhone (CFNetwork)
+    // never dies on a peer half-close. Belt-and-suspenders with per-send MSG_NOSIGNAL where used.
+    { int one = 1; ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)); }
     // W1531: defensive timeout on the SOCKS5 CONNECT handshake recvs. The session
     // UDP probe (NetworkSessionCocoa) and the TLS-1.3 handshake reads already bound
     // their reads with SO_RCVTIMEO; connectToProxy() did not, leaving one unbounded
