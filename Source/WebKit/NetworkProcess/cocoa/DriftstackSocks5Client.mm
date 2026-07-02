@@ -335,6 +335,67 @@ bool DriftstackSocks5Client::sendConnectAndReadReply(int fd, const Socks5Endpoin
     outBndPort = (static_cast<uint16_t>(portBytes[0]) << 8) | portBytes[1];
     return true;
 }
+
+// W2900 REVISED-2 — DNS-over-TCP A-record query on `fd`, an OPEN TCP stream to a DNS resolver:53 that was
+// reached via a SOCKS5 CONNECT through the proxy. RFC 1035 §4.2.2 (2-byte length prefix). Parses the FIRST
+// A record → dotted-quad String (empty on any failure). This is how we resolve a hostname the proxy's own
+// resolver can't route (REP=0x03) WITHOUT a local getaddrinfo (sandbox-blocked in the NetworkProcess) and
+// WITHOUT UDP (the proxy has none): the DNS query rides a normal TCP CONNECT the proxy does allow, so it is
+// leak-free (resolved from the proxy's own network) + sandbox-safe + no-UDP-compatible.
+static String dnsQueryAOverTcp(int fd, const CString& host)
+{
+    if (!host.length() || host.length() > 253)
+        return String();
+    Vector<uint8_t> msg;
+    const uint8_t hdr[12] = { 0x13, 0x37, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    msg.append(std::span<const uint8_t> { hdr, sizeof(hdr) });
+    const char* h = host.data();
+    size_t n = host.length(), start = 0;
+    for (size_t i = 0; i <= n; ++i) {
+        if (i == n || h[i] == '.') {
+            size_t len = i - start;
+            if (!len || len > 63) return String();
+            msg.append(static_cast<uint8_t>(len));
+            for (size_t j = start; j < i; ++j) msg.append(static_cast<uint8_t>(h[j]));
+            start = i + 1;
+        }
+    }
+    msg.append(static_cast<uint8_t>(0)); // root label
+    msg.append(0x00); msg.append(0x01);  // QTYPE = A
+    msg.append(0x00); msg.append(0x01);  // QCLASS = IN
+    uint8_t lenPfx[2] = { static_cast<uint8_t>((msg.size() >> 8) & 0xFF), static_cast<uint8_t>(msg.size() & 0xFF) };
+    if (!sendAll(fd, lenPfx, 2) || !sendAll(fd, msg.span().data(), msg.size()))
+        return String();
+    uint8_t rLen[2];
+    if (!recvAll(fd, rLen, 2))
+        return String();
+    size_t rn = (static_cast<size_t>(rLen[0]) << 8) | rLen[1];
+    if (rn < 12 || rn > 4096)
+        return String();
+    Vector<uint8_t> resp;
+    resp.grow(rn);
+    if (!recvAll(fd, resp.mutableSpan().data(), rn))
+        return String();
+    const uint8_t* d = resp.span().data();
+    uint16_t ancount = (static_cast<uint16_t>(d[6]) << 8) | d[7];
+    if (!ancount)
+        return String();
+    size_t i = 12;
+    while (i < rn && d[i]) i += 1 + d[i]; // skip QNAME (no compression in our own question)
+    i += 1 + 4;                           // null label + QTYPE + QCLASS
+    for (uint16_t a = 0; a < ancount && i + 10 <= rn; ++a) {
+        if ((d[i] & 0xC0) == 0xC0) i += 2;                                  // compressed NAME pointer
+        else { while (i < rn && d[i]) i += 1 + d[i]; i += 1; }              // labels
+        if (i + 10 > rn) break;
+        uint16_t rtype = (static_cast<uint16_t>(d[i]) << 8) | d[i + 1];
+        uint16_t rdlen = (static_cast<uint16_t>(d[i + 8]) << 8) | d[i + 9];
+        i += 10;
+        if (rtype == 1 && rdlen == 4 && i + 4 <= rn)
+            return makeString(unsigned(d[i]), '.', unsigned(d[i + 1]), '.', unsigned(d[i + 2]), '.', unsigned(d[i + 3]));
+        i += rdlen;
+    }
+    return String();
+}
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 
 // RFC 1928 §4 + §6: TCP CONNECT. Hostname dests use ATYP=0x03 (DOMAINNAME) —
@@ -410,34 +471,42 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
         bool unreachable = (rep == Socks5::kReplyNetworkUnreachable || rep == Socks5::kReplyHostUnreachable);
         bool canRetry = unreachable && kind == DestAddrKind::Hostname && attempt < kMaxConnectAttempts;
         if (canRetry) {
-            // W2900 REVISED (founder westernunion live, 2026-07-02): the proxy's hostname resolution is
-            // DETERMINISTICALLY broken for some dual-stack hosts — NOT a transient AAAA pick as the prior
-            // comment assumed. VERIFIED live against the founder's nodemaven gate (IPv4-only egress, NO
-            // UDP — UDP-ASSOCIATE REP=0x02): westernunion.com as ATYP=0x03 (proxy-side DNS) REP=0x03s
-            // EVERY time (its resolver yields an IPv4-mapped/AAAA form it can't route on IPv4-only
-            // egress), while a raw ATYP=0x01 CONNECT to the resolved IPv4 (23.1.33.x) succeeds EVERY
-            // time. The old retry re-sent ATYP=0x03 hoping for a fresh A pick — it never lands. A real
-            // iPhone on a no-UDP SOCKS5 proxy resolves the host on its OWN network and sends the IPv4
-            // (the proxy has no UDP → no remote DNS), which is why a real iPhone loads westernunion and
-            // the fork (proxy-side hostname resolution) did not. So: resolve the hostname to an IPv4
-            // LOCALLY (AF_INET only — never the AAAA the IPv4-only proxy can't route) and retry the
-            // CONNECT as an IPv4 literal (ATYP=0x01). Fires ONLY on a genuine proxy-resolution FAILURE
-            // (the common case = proxy resolves fine → ATYP=0x03, no local DNS); forcing AF_INET is
-            // iPhone-faithful on an IPv4-only-egress proxy.
-            struct addrinfo hints { };
-            hints.ai_family = AF_INET;      // IPv4 ONLY — the IPv4-only-egress proxy cannot route AAAA
-            hints.ai_socktype = SOCK_STREAM;
-            struct addrinfo* aiRes = nullptr;
-            char ipv4buf[INET_ADDRSTRLEN] = { };
-            if (getaddrinfo(destUtf8.data(), nullptr, &hints, &aiRes) == 0 && aiRes) {
-                auto* sin = reinterpret_cast<struct sockaddr_in*>(aiRes->ai_addr);
-                inet_ntop(AF_INET, &sin->sin_addr, ipv4buf, sizeof(ipv4buf));
+            // W2900 REVISED-2 (founder westernunion live, 2026-07-02): the proxy's hostname resolution is
+            // DETERMINISTICALLY broken for some dual-stack hosts — nodemaven (IPv4-only egress, NO UDP:
+            // UDP-ASSOCIATE REP=0x02) REP=0x03s westernunion.com as ATYP=0x03 EVERY time (its resolver
+            // yields an IPv4-mapped/AAAA form it can't route), while ATYP=0x01 to the resolved IPv4
+            // succeeds EVERY time (both verified live). A real iPhone on a no-UDP proxy resolves the host
+            // on its OWN network and sends the IPv4. Local getaddrinfo is NOT usable here — the
+            // NetworkProcess SANDBOX blocks it (proxy-only egress by design; verified live: getaddrinfo
+            // FAILED in the fork while succeeding in an unsandboxed process). So resolve via DNS-over-TCP
+            // THROUGH the proxy: it has no UDP but DOES allow a TCP CONNECT to a public resolver:53
+            // (verified: CONNECT 1.1.1.1:53 OK → westernunion.com=66.218.161.27). Leak-free (resolved from
+            // the proxy's own network, geo-matched), sandbox-safe, no-UDP-compatible. Then retry the
+            // original CONNECT as an IPv4 literal (ATYP=0x01). Fires ONLY on a genuine proxy-resolution
+            // FAILURE (common case unchanged = ATYP=0x03 proxy-side, no local DNS).
+            String resolvedV4;
+            static const char* const kDnsResolvers[] = { "1.1.1.1", "8.8.8.8" };
+            for (const char* dnsIp : kDnsResolvers) {
+                if (m_impl->socketFd >= 0) { ::close(m_impl->socketFd); m_impl->socketFd = -1; }
+                m_impl->handshakeOk = false;
+                if (performHandshake() != Socks5Result::Success)
+                    continue;
+                Socks5Endpoint dnsDest;
+                dnsDest.host = String::fromLatin1(dnsIp);
+                dnsDest.port = 53;
+                uint8_t drep = Socks5::kReplyGeneralFailure;
+                String dbnd;
+                uint16_t dbport = 0;
+                if (sendConnectAndReadReply(m_impl->socketFd, dnsDest, DestAddrKind::IPv4Literal, drep, dbnd, dbport)
+                    && drep == Socks5::kReplySucceeded) {
+                    resolvedV4 = dnsQueryAOverTcp(m_impl->socketFd, destUtf8);
+                    if (!resolvedV4.isEmpty())
+                        break;
+                }
             }
-            if (aiRes)
-                freeaddrinfo(aiRes);
-            if (ipv4buf[0]) {
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x via proxy — resolved to IPv4 %s locally, retrying as ATYP=0x01 (proxy is IPv4-only + no UDP; iPhone-faithful)",
-                    destUtf8.data(), unsigned(rep), ipv4buf);
+            if (!resolvedV4.isEmpty()) {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x — resolved to IPv4 %s via DNS-over-TCP through the proxy, retrying as ATYP=0x01 (proxy no-UDP + can't resolve the hostname; leak-free, sandbox-safe)",
+                    destUtf8.data(), unsigned(rep), resolvedV4.utf8().data());
                 if (m_impl->socketFd >= 0) {
                     ::close(m_impl->socketFd);
                     m_impl->socketFd = -1;
@@ -449,12 +518,12 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
                         static_cast<int>(h), destUtf8.data());
                     return h;
                 }
-                effectiveDest.host = String::fromLatin1(ipv4buf);   // IPv4 dotted-quad is ASCII
+                effectiveDest.host = resolvedV4;
                 effectiveKind = DestAddrKind::IPv4Literal;
                 continue;
             }
-            // Local IPv4 resolution failed → fall through to fail-fast (no infinite retry; preserves W2868).
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x — local IPv4 resolve FAILED, cannot retry as literal",
+            // DNS-over-TCP-via-proxy resolve failed → fall through to fail-fast (no infinite retry; W2868).
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x — DNS-over-TCP-via-proxy resolve FAILED, cannot retry as literal",
                 destUtf8.data(), unsigned(rep));
         }
 
