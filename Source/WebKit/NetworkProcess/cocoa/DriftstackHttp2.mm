@@ -1843,6 +1843,9 @@ void DriftstackHttp2Session::readerLoop()
                 dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
             }
             std::optional<FinishedAsync> dataFinished;
+            // egress audit wxzzaphvp #10 — batched WINDOW_UPDATE increments computed under m_lock,
+            // emitted under m_writeLock after the block (no lock nesting; matches the existing structure).
+            uint32_t streamWuInc = 0, connWuInc = 0;
             {
                 Locker locker { m_lock };
                 if (auto it = m_streams.find(sid); it != m_streams.end()) {
@@ -1867,6 +1870,13 @@ void DriftstackHttp2Session::readerLoop()
                     it->value->resp.body.append(dataSpan);
                     if (it->value->asyncCallbacks)
                         it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // progress → extend (ported .354 semantic)
+                    // egress audit wxzzaphvp #10 — STREAM window accounting (window/4 cadence, iOS-faithful).
+                    // Mid-stream only: on EndStream the stream is closing (no further DATA) so no stream WU.
+                    it->value->recvSinceWU += dataSpan.size();
+                    if (!(frameFlags & kFlagEndStream) && it->value->recvSinceWU >= kDriftstackStreamWUThreshold) {
+                        streamWuInc = static_cast<uint32_t>(it->value->recvSinceWU);
+                        it->value->recvSinceWU = 0;
+                    }
                     if (frameFlags & kFlagEndStream) {
                         it->value->complete = true;
                         if (it->value->asyncCallbacks) {
@@ -1876,20 +1886,37 @@ void DriftstackHttp2Session::readerLoop()
                         m_cond.notifyAll();
                     }
                 }
+                // egress audit wxzzaphvp #10 — CONNECTION window accounting (window/2 cadence), summed
+                // across ALL streams, EVERY DATA frame (even for an unknown/closed stream: those bytes
+                // were still consumed from the connection send-window). The cap-exceed path above breaks
+                // out of the switch before here, so it still skips replenishment (server window closes).
+                m_connRecvSinceWU += dataSpan.size();
+                if (m_connRecvSinceWU >= kDriftstackConnWUThreshold) {
+                    connWuInc = static_cast<uint32_t>(m_connRecvSinceWU);
+                    m_connRecvSinceWU = 0;
+                }
             }
             if (dataFinished)
                 deliverFinishedAsync({ std::move(*dataFinished) });
-            // Replenish flow-control windows (connection + stream) by the FULL
-            // frame length so large/streamed responses don't stall.
-            if (length) {
+            // egress audit wxzzaphvp #10 — iOS-faithful BATCHED WINDOW_UPDATE cadence (matches the
+            // one-shot + ConnectStream readers + gt http2_windowupdate_midstream_cadence): replenish the
+            // STREAM window at window/4 and the CONNECTION window at window/2 — NOT one WU per DATA frame
+            // (the prior per-frame emission was a non-Safari wire tell on the pooled path). The thresholds
+            // sit well below our advertised receive windows (stream/4 of 2 MiB, conn/2 of 10 MiB), so a
+            // large/streamed response can never stall — same no-deadlock guarantee as the per-frame path.
+            if (streamWuInc || connWuInc) {
                 Locker w { m_writeLock };
                 uint8_t wu[13];
-                uint32_t inc = length;
-                encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
-                wu[9] = (inc >> 24) & 0xff; wu[10] = (inc >> 16) & 0xff; wu[11] = (inc >> 8) & 0xff; wu[12] = inc & 0xff;
-                transportWriteAll(m_transport, wu, 13); // connection (stream 0)
-                encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, sid);
-                transportWriteAll(m_transport, wu, 13); // this stream
+                if (streamWuInc) {
+                    encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, sid);
+                    wu[9] = (streamWuInc >> 24) & 0xff; wu[10] = (streamWuInc >> 16) & 0xff; wu[11] = (streamWuInc >> 8) & 0xff; wu[12] = streamWuInc & 0xff;
+                    transportWriteAll(m_transport, wu, 13); // this stream
+                }
+                if (connWuInc) {
+                    encodeFrameHeader(wu, 4, kFrameWindowUpdate, 0, 0);
+                    wu[9] = (connWuInc >> 24) & 0xff; wu[10] = (connWuInc >> 16) & 0xff; wu[11] = (connWuInc >> 8) & 0xff; wu[12] = connWuInc & 0xff;
+                    transportWriteAll(m_transport, wu, 13); // connection (stream 0)
+                }
             }
             break;
         }

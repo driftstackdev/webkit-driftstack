@@ -243,6 +243,12 @@ private:
         // idle-progress deadline, so the reader ports it here — updated on every HEADERS/DATA
         // notify point, swept opportunistically each time the reader processes a frame.
         MonotonicTime idleDeadline;
+        // egress audit wxzzaphvp #10 — per-stream bytes consumed since this stream's last
+        // WINDOW_UPDATE, for the iOS-faithful batched cadence (replenish at window/4). The
+        // one-shot/ConnectStream readers already batch; the pooled reader used to emit a WU
+        // per DATA frame (a non-Safari wire tell) — this tracks the stream accumulator so the
+        // pooled path matches. Guarded by m_lock (only touched in the reader's DATA handler).
+        uint64_t recvSinceWU { 0 };
     };
 
     std::unique_ptr<DriftstackTLS13Client> m_tls;       // owned; outlives the reader
@@ -254,6 +260,11 @@ private:
     HashMap<uint32_t, std::unique_ptr<Stream>> m_streams WTF_GUARDED_BY_LOCK(m_lock);
     uint32_t m_nextStreamId WTF_GUARDED_BY_LOCK(m_lock) { 1 };
     bool m_alive WTF_GUARDED_BY_LOCK(m_lock) { true };
+    // egress audit wxzzaphvp #10 — connection-level bytes consumed since the last CONNECTION
+    // WINDOW_UPDATE (stream 0), summed across ALL multiplexed streams, for the iOS-faithful
+    // batched cadence (replenish at window/2). Guarded by m_lock (accumulated in the reader's
+    // DATA handler alongside m_streams).
+    uint64_t m_connRecvSinceWU WTF_GUARDED_BY_LOCK(m_lock) { 0 };
     RefPtr<Thread> m_readerThread;
 };
 
