@@ -312,6 +312,12 @@ void CanvasRenderingContext2D::strokeText(const String& text, double x, double y
     else
         driftstackOpSequenceRecorder().recordStrokeText(text, x, y);
 #endif
+    // Cross-context coherence (2026-07-01): record lastFillText on strokeText exactly as fillText does
+    // (line ~303) and as the worker OffscreenCanvasRenderingContext2D::strokeText already does (:213). A
+    // stroke-only text canvas otherwise keys the V-241/V-510 canonical lookup + the !lastFillText().isEmpty()
+    // AFP-fallback gate on empty (shape-only) in the main frame but on the text in a worker → a correlatable
+    // main-vs-worker divergence. Cross-context-coherence audit finding #3.
+    canvasBase().recordLastFillText(text);
     drawTextInternal(text, x, y, false, maxWidth);
 }
 
