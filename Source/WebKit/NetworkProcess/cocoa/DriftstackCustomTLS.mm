@@ -667,80 +667,89 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     return record;
 }
 
-// Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
-// egress bing P-521 HRR (2026-07-02): CH2 for an HRR retry on the server-requested EC group
-// (keyShareGroup: P-256 0x0017 / P-384 0x0018 / P-521 0x0019). Only the key_share extension's group +
-// pubkey differ per curve; every other byte stays iPhone-exact (a real iPhone offers all three groups
-// and answers the HRR in kind). Was driftstackBuildIPhoneClientHelloP256 (P-256-only).
-Vector<uint8_t> driftstackBuildIPhoneClientHelloHRR(const String& sni,
+// egress bing/Akamai HRR (2026-07-02) — CH2 for an HRR retry, byte-surgery on the EXACT CH1
+// handshake message (RFC 8446 §4.1.2/§4.1.4). CH1 is preserved VERBATIM except: (1) the key_share
+// extension (0x0033) is replaced with a single EC entry for the server-requested group, and
+// (2) the HRR's cookie (0x002c) is echoed if present. client_random / session_id / GREASE / cipher
+// order / every other extension are physically copied from CH1's wire bytes — a real iPhone resends
+// CH1 unmodified except key_share. The prior builder (driftstackBuildIPhoneClientHelloHRR) regenerated
+// a fresh client_random/session_id/GREASE, which strict servers (bing/Akamai/F5) reject — that was the
+// multi-day bing.com "read ServerHello record failed" after the HRR. Returns a full TLS record; an
+// EMPTY Vector on parse failure (caller treats as a hard error). ch1HandshakeMsg = 0x01 || len24 || body.
+Vector<uint8_t> driftstackBuildCH2FromCH1(const Vector<uint8_t>& ch1HandshakeMsg,
     uint16_t keyShareGroup,
     const Vector<uint8_t>& ecPublicKey,
-    Vector<uint8_t>& outClientRandom)
+    const Vector<uint8_t>& cookie)
 {
-    outClientRandom.resize(32);
-    (void)SecRandomCopyBytes(kSecRandomDefault, 32, outClientRandom.mutableSpan().data());
+    const auto& in = ch1HandshakeMsg;
+    const size_t N = in.size();
 
-    Vector<uint8_t> sessionId(32);
-    (void)SecRandomCopyBytes(kSecRandomDefault, 32, sessionId.mutableSpan().data());
+    // Handshake header: type(1)=0x01 ClientHello + length(3). Body follows.
+    if (N < 4 || in[0] != kTLSHandshakeTypeClientHello)
+        return { };
+    size_t off = 4;
+    // legacy_version(2) + client_random(32)
+    if (off + 2 + 32 > N) return { };
+    off += 2 + 32;
+    // legacy_session_id: u8 len + bytes
+    if (off + 1 > N) return { };
+    uint8_t sidLen = in[off]; off += 1;
+    if (off + sidLen > N) return { };
+    off += sidLen;
+    // cipher_suites: u16 len + bytes
+    if (off + 2 > N) return { };
+    uint16_t csLen = static_cast<uint16_t>((in[off] << 8) | in[off + 1]); off += 2;
+    if (off + csLen > N) return { };
+    off += csLen;
+    // legacy_compression_methods: u8 len + bytes
+    if (off + 1 > N) return { };
+    uint8_t compLen = in[off]; off += 1;
+    if (off + compLen > N) return { };
+    off += compLen;
+    // extensions: u16 len + TLVs. [4, prefixLen) = version..compression (copied verbatim).
+    if (off + 2 > N) return { };
+    const size_t prefixLen = off;
+    uint16_t extBlockLen = static_cast<uint16_t>((in[off] << 8) | in[off + 1]); off += 2;
+    const size_t extBlockStart = off;
+    const size_t extBlockEnd = off + extBlockLen;
+    if (extBlockEnd > N) return { };
 
-    uint16_t greasePrimary = pickGreaseValue();
-    uint16_t greaseSecondary = pickGreaseValue();
-    while (greaseSecondary == greasePrimary)
-        greaseSecondary = pickGreaseValue();
-    // Wave 29-499.328 — HRR CH2 key_share (P-256) carries no GREASE, so supported_groups'
-    // GREASE is standalone here; still use a valid GREASE value.
-    uint16_t greaseGroup = pickGreaseValue();
-    // iOS draws the cipher-suites GREASE INDEPENDENTLY of the leading-extension GREASE
-    // (0/12 real-device captures have them equal; the fork previously reused greasePrimary
-    // for both, a 100%-correlated raw-bytes tell). Use a separate greaseCipher, distinct
-    // from the primary (leading-ext), secondary (trailing-ext) and group GREASE values.
-    uint16_t greaseCipher = pickGreaseValue();
-    while (greaseCipher == greasePrimary || greaseCipher == greaseSecondary || greaseCipher == greaseGroup)
-        greaseCipher = pickGreaseValue();
+    // Walk the extension TLVs to find key_share (0x0033).
+    bool ksFound = false;
+    size_t ksStart = 0, ksTotal = 0;
+    for (size_t p = extBlockStart; p + 4 <= extBlockEnd; ) {
+        uint16_t etype = static_cast<uint16_t>((in[p] << 8) | in[p + 1]);
+        uint16_t elen = static_cast<uint16_t>((in[p + 2] << 8) | in[p + 3]);
+        if (p + 4 + elen > extBlockEnd) return { };   // malformed
+        if (etype == 0x0033) { ksStart = p; ksTotal = 4 + static_cast<size_t>(elen); ksFound = true; }
+        p += 4 + elen;
+    }
+    if (!ksFound) return { };   // no key_share to swap → cannot build CH2
 
-    // P1 — CH2 mirrors CH1 except key_share (RFC 8446 §4.1.2), so carry the same 18.x
-    // deltas (cipher trio reorder + supported_groups MLKEM drop + padding) for pre-26.
-    const bool preSafari26 = driftstackArchetypeIsPreSafari26();
-
-    Vector<uint8_t> ciphers;
-    appendU16(ciphers, greaseCipher);
-    if (preSafari26) {
-        appendU16(ciphers, 0x1301);
-        appendU16(ciphers, 0x1302);
-        appendU16(ciphers, 0x1303);
-        for (size_t i = 4; i < kIPhoneCipherCount; ++i)
-            appendU16(ciphers, kIPhoneCiphers[i]);
-    } else {
-        for (size_t i = 1; i < kIPhoneCipherCount; ++i)
-            appendU16(ciphers, kIPhoneCiphers[i]);
+    // Replacement key_share (single EC entry, no GREASE — RFC 8446 §4.1.4) + echoed cookie.
+    Vector<uint8_t> newKeyShare = makeExtKeyShareECGroup(keyShareGroup, ecPublicKey);
+    Vector<uint8_t> cookieExt;
+    if (!cookie.isEmpty()) {
+        Vector<uint8_t> cookieBody;
+        appendVecU16Len(cookieBody, cookie);   // opaque cookie<1..2^16-1>
+        cookieExt = makeExtension(0x002c, cookieBody);
     }
 
-    Vector<uint8_t> extensions;
-    extensions.append(makeExtGREASE(greasePrimary).span());
-    extensions.append(makeExtServerName(sni).span());
-    extensions.append(makeExtExtendedMasterSecret().span());
-    extensions.append(makeExtRenegotiationInfo().span());
-    extensions.append(makeExtSupportedGroups(greaseGroup, preSafari26).span());
-    extensions.append(makeExtEcPointFormats().span());
-    extensions.append(makeExtALPN().span());
-    extensions.append(makeExtStatusRequest().span());
-    extensions.append(makeExtSignatureAlgorithms().span());
-    extensions.append(makeExtSCT().span());
-    extensions.append(makeExtKeyShareECGroup(keyShareGroup, ecPublicKey).span());  // ← HRR key_share (P-256/384/521)
-    extensions.append(makeExtPSKKeyExchangeModes().span());
-    extensions.append(makeExtSupportedVersions(preSafari26).span());
-    extensions.append(makeExtCompressCertificate().span());
-    extensions.append(makeExtGREASE(greaseSecondary).span());
-    if (preSafari26)
-        extensions.append(makeExtPadding().span());
+    // Reassemble the extensions block: [before key_share] + newKeyShare + cookie + [after key_share].
+    // Cookie position default = immediately after key_share (RFC-position-agnostic → bing/Akamai
+    // accept it; a real-iPhone HRR capture will pin Apple's exact slot — one-line move here).
+    Vector<uint8_t> newExts;
+    newExts.append(in.span().subspan(extBlockStart, ksStart - extBlockStart));
+    newExts.append(newKeyShare.span());
+    if (!cookieExt.isEmpty())
+        newExts.append(cookieExt.span());
+    newExts.append(in.span().subspan(ksStart + ksTotal, extBlockEnd - (ksStart + ksTotal)));
 
+    // Reframe: body = [version..compression verbatim] + u16(newExts.size()) + newExts.
     Vector<uint8_t> body;
-    appendU16(body, kTLSVersionTLS12);
-    body.append(outClientRandom.span());
-    appendU8LenBlob(body, sessionId.span().data(), sessionId.size());
-    appendVecU16Len(body, ciphers);
-    body.append(0x01); body.append(0x00);
-    appendVecU16Len(body, extensions);
+    body.append(in.span().subspan(4, prefixLen - 4));
+    appendU16(body, static_cast<uint16_t>(newExts.size()));
+    body.append(newExts.span());
 
     Vector<uint8_t> handshake;
     handshake.append(kTLSHandshakeTypeClientHello);
@@ -755,8 +764,8 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHRR(const String& sni,
     appendU16(record, static_cast<uint16_t>(handshake.size()));
     record.append(handshake.span());
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.216] CH2 (HRR retry, P-256 keyshare) built: %zu bytes",
-        record.size());
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.353] CH2 byte-surgery: group=0x%04x ecPub=%zu cookie=%zu ch1=%zu -> CH2=%zu bytes (client_random/session_id/GREASE preserved)",
+        keyShareGroup, ecPublicKey.size(), cookie.size(), N, record.size());
     return record;
 }
 

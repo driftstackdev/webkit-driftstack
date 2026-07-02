@@ -53,6 +53,10 @@ struct TLS13ServerHello {
     // Server signals HRR via fixed random value SHA256("HelloRetryRequest").
     // When isHelloRetryRequest=true, keyShareGroup is the group server WANTS.
     bool isHelloRetryRequest { false };
+    // egress bing/Akamai HRR (2026-07-02) — RFC 8446 §4.2.2 cookie extension (0x002c).
+    // When the HRR carries a cookie, the client MUST echo it unmodified in CH2 (RFC 8446
+    // §4.1.4). Empty when absent (bing sends a key_share-only HRR; Akamai/F5 send a cookie).
+    Vector<uint8_t> cookie;
 };
 
 // Parse a TLS 1.3 ServerHello from a record's handshake body (after the

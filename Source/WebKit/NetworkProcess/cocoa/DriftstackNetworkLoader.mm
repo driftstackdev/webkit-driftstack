@@ -403,8 +403,9 @@ static void initDriftstackSslCtx()
     });
 }
 
-[[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8, std::unique_ptr<DriftstackTLS13Client>& outCustomClient)
+[[maybe_unused]] static SSL* driftstackTLSConnect(int fd, const char* hostUtf8, std::unique_ptr<DriftstackTLS13Client>& outCustomClient, bool& outPermanentFailure)
 {
+    outPermanentFailure = false;
     // Wave 29-499.176 — if DRIFTSTACK_PATHB_V2_CUSTOM_TLS=1, send iPhone-
     // byte-exact ClientHello via DriftstackTLS13Client BEFORE the library
     // handshake. This places the iPhone-matched bytes on the wire so
@@ -427,6 +428,9 @@ static void initDriftstackSslCtx()
             return reinterpret_cast<SSL*>(&sentinel);
         }
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.193] Custom TLS handshake failed: %s", client->errorMessage().utf8().data());
+        // egress HRR (2026-07-02): propagate the fast-fail signal (a deterministic post-HRR CH2
+        // reject) BEFORE `client` is destroyed, so resume()'s retry loop can skip 8 identical CH2s.
+        outPermanentFailure = client->permanentFailure();
         // Wave 29-499.350 — do NOT fall back to LibreSSL when custom TLS is enabled.
         // Two reasons: (1) CRASH — the LibreSSL fallback uses the shared global
         // g_driftstackSslCtx; under the CONCURRENT loaderQueue (e.g. browserleaks.com/tls
@@ -2526,10 +2530,13 @@ void DriftstackNetworkLoader::resume()
         // thread_local). Lives for this resume() invocation only; moved into the
         // h2 session on the pooled path, reset on the one-shot path.
         std::unique_ptr<DriftstackTLS13Client> customTLSClient;
+        bool tlsPermanentFailure = false;   // egress HRR (2026-07-02): set true on a deterministic post-HRR CH2 reject
         if (isHttps) {
-            ssl = driftstackTLSConnect(socketFd, host.utf8().data(), customTLSClient);
+            ssl = driftstackTLSConnect(socketFd, host.utf8().data(), customTLSClient, tlsPermanentFailure);
             if (!ssl) {
-                if (canRetry) {
+                if (tlsPermanentFailure)
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3054] TLS CH2 deterministically rejected by %s (post-HRR alert) — fail fast, NO retry", host.utf8().data());
+                if (canRetry && !tlsPermanentFailure) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for TLS handshake to %s",
                         currentAttempt, host.utf8().data());
                     Ref<DriftstackNetworkLoader> retryRef { *this };

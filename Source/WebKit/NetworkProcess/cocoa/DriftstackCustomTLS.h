@@ -96,15 +96,20 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     Vector<uint8_t>& outClientRandom,
     const Vector<uint8_t>& x25519PubKeyB = Vector<uint8_t>());   // 32 bytes — keypair B (standalone 0x001D); empty → reuse A
 
-// Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
-// Per RFC 8446 §4.1.2: CH2 mirrors CH1 except key_share + early_data + pre_shared_key.
-// Builder takes a custom key_share group + entry bytes (P-256 = 65 bytes uncompressed pubkey).
-// egress bing P-521 HRR: CH2 for an HRR retry on the server-requested EC group (P-256 0x0017 /
-// P-384 0x0018 / P-521 0x0019); ecPublicKey is the uncompressed pubkey for that curve (65/97/133 bytes).
-Vector<uint8_t> driftstackBuildIPhoneClientHelloHRR(const String& sni,
+// egress bing/Akamai HRR (2026-07-02) — CH2 for an HRR retry, byte-surgery on the EXACT CH1
+// handshake message (RFC 8446 §4.1.2/§4.1.4). CH1 is preserved verbatim EXCEPT: (1) the key_share
+// extension (0x0033) is replaced with a single EC entry for keyShareGroup (P-256 0x0017 /
+// P-384 0x0018 / P-521 0x0019; ecPublicKey = uncompressed pubkey 65/97/133 bytes), and (2) an
+// echoed cookie (0x002c) is inserted when the HRR sent one. client_random / session_id / GREASE /
+// cipher order / every other extension are physically copied from CH1's wire bytes — a real iPhone
+// resends CH1 unmodified except key_share. Returns a full TLS record (5B header + handshake msg);
+// an EMPTY Vector on parse failure. ch1HandshakeMsg = the CH1 handshake message (0x01 || len24 || body).
+// Supersedes driftstackBuildIPhoneClientHelloHRR (which regenerated fresh random/GREASE — rejected
+// by strict servers, the multi-day bing.com failure).
+Vector<uint8_t> driftstackBuildCH2FromCH1(const Vector<uint8_t>& ch1HandshakeMsg,
     uint16_t keyShareGroup,
     const Vector<uint8_t>& ecPublicKey,
-    Vector<uint8_t>& outClientRandom);
+    const Vector<uint8_t>& cookie);
 
 // Wave 29-499.348 — iPhone-exact QUIC ClientHello (raw handshake msg for the Initial
 // CRYPTO frame; no TLS record header). For the custom QUIC-TLS backend (replaces

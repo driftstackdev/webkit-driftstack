@@ -283,6 +283,41 @@ bool DriftstackTLS13Client::sendClientHello()
     return true;
 }
 
+// egress HRR (2026-07-02) — RFC 8446 §6 alert descriptions, so a handshake failure surfaces the
+// actual reason (e.g. illegal_parameter/decode_error on a rejected CH2) instead of the generic
+// "read ServerHello record failed" that masked the multi-day bing.com failure.
+static ASCIILiteral driftstackAlertName(uint8_t desc)
+{
+    switch (desc) {
+    case 0: return "close_notify"_s;
+    case 10: return "unexpected_message"_s;
+    case 20: return "bad_record_mac"_s;
+    case 22: return "record_overflow"_s;
+    case 40: return "handshake_failure"_s;
+    case 42: return "bad_certificate"_s;
+    case 43: return "unsupported_certificate"_s;
+    case 44: return "certificate_revoked"_s;
+    case 45: return "certificate_expired"_s;
+    case 46: return "certificate_unknown"_s;
+    case 47: return "illegal_parameter"_s;
+    case 48: return "unknown_ca"_s;
+    case 49: return "access_denied"_s;
+    case 50: return "decode_error"_s;
+    case 51: return "decrypt_error"_s;
+    case 70: return "protocol_version"_s;
+    case 71: return "insufficient_security"_s;
+    case 80: return "internal_error"_s;
+    case 86: return "inappropriate_fallback"_s;
+    case 90: return "user_canceled"_s;
+    case 109: return "missing_extension"_s;
+    case 110: return "unsupported_extension"_s;
+    case 112: return "unrecognized_name"_s;
+    case 116: return "certificate_required"_s;
+    case 120: return "no_application_protocol"_s;
+    default: return "unknown"_s;
+    }
+}
+
 bool DriftstackTLS13Client::receiveServerHello()
 {
     uint8_t type;
@@ -324,7 +359,21 @@ bool DriftstackTLS13Client::receiveServerHello()
         if (!n) hexbuf[0] = '\0';
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.322] receiveServerHello bad record: type=0x%02x version=0x%04x bodyLen=%zu first=%s",
             type, version, body.size(), hexbuf);
-        m_errorMessage = "Expected handshake record (0x16) with handshake header"_s;
+        if (type == 0x15 && body.size() >= 2) {
+            // egress HRR (2026-07-02): a TLS alert. Surface the level+description so the failure is
+            // identifiable. If it lands AFTER our HRR (m_hrrSeen), it is a deterministic reject of
+            // CH2 (same reject on every fresh exit) → mark permanent so the loader fails fast rather
+            // than firing 8 identical CH2s. A CH1-phase alert stays retryable (flaky-proxy resilience).
+            uint8_t level = body[0];
+            uint8_t desc = body[1];
+            m_errorMessage = makeString("TLS alert level="_s, static_cast<unsigned>(level),
+                " description="_s, static_cast<unsigned>(desc), " ("_s, driftstackAlertName(desc),
+                ") after "_s, m_hrrSeen ? "CH2"_s : "CH1"_s);
+            if (m_hrrSeen)
+                m_permanentFailure = true;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.353] %s", m_errorMessage.utf8().data());
+        } else
+            m_errorMessage = "Expected handshake record (0x16) with handshake header"_s;
         return false;
     }
 
@@ -503,18 +552,18 @@ bool DriftstackTLS13Client::receiveServerHello()
         m_transcriptBytes.append(synthetic.span());
         m_transcriptBytes.append(hrrBytes.span());
 
-        // Build new ClientHello with P-256 keyshare (TODO: keep iPhone bytes
-        // exactly, only swap key_share extension. For now use the same builder
-        // but it'll generate fresh GREASE/random — server may accept).
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR retry: synthetic transcript built (CH1 hash %zu bytes), HRR bytes %zu, sending CH2 with P-256 keyshare",
-            ch1Hash.size(), hrrBytes.size());
+        // egress bing/Akamai HRR (2026-07-02): CH2 = byte-exact CH1 with ONLY the key_share swapped
+        // to the server-requested EC group + the HRR cookie echoed (RFC 8446 §4.1.2/§4.1.4). Byte-
+        // surgery on ch1Only preserves client_random/session_id/GREASE/cipher-order EXACTLY — a real
+        // iPhone resends CH1 unmodified except key_share. (The prior builder regenerated fresh
+        // random/GREASE, which strict servers — bing/Akamai/F5 — reject → the multi-day failure.)
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.353] HRR retry: synthetic transcript built (CH1 hash %zu bytes), HRR bytes %zu, cookie %zu bytes, building CH2 for group 0x%04x",
+            ch1Hash.size(), hrrBytes.size(), sh.cookie.size(), sh.keyShareGroup);
 
-        // Wave 29-499.216 — build CH2 with P-256 keyshare + send
-        Vector<uint8_t> ch2Random;
-        Vector<uint8_t> ch2Record = driftstackBuildIPhoneClientHelloHRR(m_sniHostname,
-            sh.keyShareGroup, m_p256Keypair.publicKey, ch2Random);
+        Vector<uint8_t> ch2Record = driftstackBuildCH2FromCH1(ch1Only,
+            sh.keyShareGroup, m_p256Keypair.publicKey, sh.cookie);
         if (ch2Record.size() <= 5) {
-            m_errorMessage = "CH2 build failed"_s;
+            m_errorMessage = "CH2 byte-surgery failed (could not locate/replace CH1 key_share)"_s;
             return false;
         }
         // Append CH2 to transcript (handshake bytes only, skip record header)

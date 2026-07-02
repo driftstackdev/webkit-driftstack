@@ -71,6 +71,11 @@ public:
 
     const String& errorMessage() const { return m_errorMessage; }
 
+    // egress HRR (2026-07-02): true when the failure is a deterministic post-HRR TLS alert (a CH2
+    // rejected identically on every fresh exit) — the loader then fails fast instead of 8x identical
+    // retries (mirrors the W2868 destUnreachable fast-fail). CH1-phase alerts stay retryable.
+    bool permanentFailure() const { return m_permanentFailure; }
+
 private:
     int m_fd { -1 };
     bool m_appReadBlockingRestored { false };  // Wave .352 — reset handshake recv-timeout once on first app read
@@ -98,6 +103,7 @@ private:
     Vector<uint8_t> m_transcriptHashThroughCert;    // W2202 L3: Transcript-Hash(CH..Certificate), captured in 0x0b, verified in 0x0f
     bool m_gotCertVerify { false };                 // W2202 L3: set true ONLY after a CertificateVerify SUCCESSFULLY verifies — the Finished arm REQUIRES this (a MITM that omits 0x0f must be rejected, not silently accepted)
     bool m_hrrSeen { false };                       // W2208: true once a HelloRetryRequest was processed — a SECOND HRR is rejected (RFC 8446 §4.1.4) to bound receiveServerHello()'s recursion (hostile-peer stack-exhaustion DoS defense)
+    bool m_permanentFailure { false };              // egress HRR (2026-07-02): set on a post-HRR (CH2) TLS alert; a deterministic reject → loader fails fast, no 8x retry. See permanentFailure().
 
     // Key schedule
     TLS13KeySchedule m_keySchedule;

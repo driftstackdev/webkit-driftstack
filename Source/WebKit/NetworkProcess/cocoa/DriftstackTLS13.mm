@@ -25,6 +25,7 @@ namespace {
 [[maybe_unused]] constexpr uint8_t kHandshakeTypeServerHello = 0x02;
 constexpr uint16_t kExtSupportedVersions = 43;
 constexpr uint16_t kExtKeyShare = 51;
+constexpr uint16_t kExtCookie = 44;   // 0x002c — RFC 8446 §4.2.2 (echoed into CH2 on HRR)
 
 // Read exactly N bytes from fd; returns false on EOF/error. A failure here is a NORMAL,
 // frequent occurrence at fleet scale (any flaky proxy exit, any closed/reset connection during
@@ -147,12 +148,24 @@ bool driftstackParseServerHello(const uint8_t* data, size_t len, TLS13ServerHell
                     memcpy(out.keyShareKey.mutableSpan().data(), data + off + 4, kxLen);
                 }
             }
+        } else if (extType == kExtCookie) {
+            // egress bing/Akamai HRR (2026-07-02) — RFC 8446 §4.2.2: cookie ext_data = u16
+            // cookie_len + cookie bytes. The client MUST echo it unmodified in CH2 (RFC 8446
+            // §4.1.4), so capture it here (the HRR is parsed by this same function). Bounds are
+            // safe: line 130 already guarantees off+extLen <= extsEnd <= len.
+            if (extLen >= 2) {
+                uint16_t cookieLen = static_cast<uint16_t>((data[off] << 8) | data[off + 1]);
+                if (static_cast<size_t>(2 + cookieLen) <= extLen) {
+                    out.cookie.resize(cookieLen);
+                    memcpy(out.cookie.mutableSpan().data(), data + off + 2, cookieLen);
+                }
+            }
         }
         off += extLen;
     }
 
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.172] ServerHello parsed: cipher=0x%04x version=0x%04x keyShareGroup=0x%04x keyLen=%zu",
-        out.cipherSuite, out.selectedVersion, out.keyShareGroup, out.keyShareKey.size());
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.172] ServerHello parsed: cipher=0x%04x version=0x%04x keyShareGroup=0x%04x keyLen=%zu HRR=%d cookieLen=%zu",
+        out.cipherSuite, out.selectedVersion, out.keyShareGroup, out.keyShareKey.size(), out.isHelloRetryRequest, out.cookie.size());
 
     return true;
 }
