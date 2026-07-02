@@ -2930,7 +2930,16 @@ void DriftstackNetworkLoader::resume()
                 // healthy origins keep full retry resilience. Wire/fingerprint-neutral (retry pacing only).
                 String w3055Origin = makeString(url.host().toString(), ':', static_cast<unsigned>(url.port().value_or(443)));
                 const bool churningBeacon = requestIsThirdParty && driftstackH2OriginChurning(w3055Origin);
-                if (canRetry && !churningBeacon) {
+                // W3062 (audit): never auto-retry a non-idempotent request (POST/PATCH) that MAY have been
+                // executed — the h2 HEADERS+body were already transmitted, so a blind retry DOUBLE-SUBMITS
+                // (double payment / double form post). A real iPhone never re-POSTs a sent request. Retry a
+                // non-idempotent method ONLY if the server PROVABLY did not process it (h2 GOAWAY on a stream
+                // above last-processed -> "not processed by server").
+                const bool idempotentMethod = equalIgnoringASCIICase(httpMethod, "GET"_s) || equalIgnoringASCIICase(httpMethod, "HEAD"_s)
+                    || equalIgnoringASCIICase(httpMethod, "OPTIONS"_s) || equalIgnoringASCIICase(httpMethod, "PUT"_s)
+                    || equalIgnoringASCIICase(httpMethod, "DELETE"_s) || equalIgnoringASCIICase(httpMethod, "TRACE"_s);
+                const bool unsafeReplay = !idempotentMethod && !h2resp.errorMessage.contains("not processed"_s);
+                if (canRetry && !churningBeacon && !unsafeReplay) {
                     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.271] retry attempt=%d for HTTP/2 transport to %s",
                         currentAttempt, url.host().toString().utf8().data());
                     Ref<DriftstackNetworkLoader> retryRef { *this };
@@ -3270,14 +3279,28 @@ _Pragma("clang diagnostic pop")
             CFRelease(writeStream);
         }
 
-        if (!responseBytes || [responseBytes length] == 0)
-            return;
+        // W3061 (audit): the h1 terminal path used bare `return;` on an empty/malformed response,
+        // which NEVER completed the load (no didReceiveResponse, no error) -> the request hangs
+        // forever and WebKit's pageLoad-timeout eventually fires on a blank resource (the "loads then
+        // silently stops" symptom). Deliver a proper error instead so WebKit fails/settles the resource.
+        auto failH1 = [&](ASCIILiteral reason) {
+            if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+            WebCore::ResourceError err(String("DriftstackNetworkLoader"_s), 0, URL(url), reason, WebCore::ResourceError::Type::General);
+            callOnMainRunLoop([protectedThis, err = std::move(err)]() mutable {
+                RefPtr task = protectedThis->protectedTask();
+                if (!task) return;
+                RefPtr client = task->client();
+                if (!client) return;
+                WebCore::NetworkLoadMetrics metrics;
+                client->didCompleteWithError(err, metrics);
+            });
+        };
+        if (!responseBytes || [responseBytes length] == 0) { failH1("empty HTTP/1.1 response"_s); return; }
 
         // Parse status + headers
         NSData* boundary = [@"\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding];
         NSRange boundaryRange = [responseBytes rangeOfData:boundary options:0 range:NSMakeRange(0, [responseBytes length])];
-        if (boundaryRange.location == NSNotFound)
-            return;
+        if (boundaryRange.location == NSNotFound) { failH1("malformed HTTP/1.1 response (no header terminator)"_s); return; }
 
         NSData* headerBytes = [responseBytes subdataWithRange:NSMakeRange(0, boundaryRange.location)];
         NSUInteger bodyOffset = boundaryRange.location + boundaryRange.length;
@@ -3285,8 +3308,7 @@ _Pragma("clang diagnostic pop")
         NSString* headerStr = [[NSString alloc] initWithData:headerBytes encoding:NSUTF8StringEncoding];
 
         NSArray<NSString*>* headerLines = [headerStr componentsSeparatedByString:@"\r\n"];
-        if ([headerLines count] < 1)
-            return;
+        if ([headerLines count] < 1) { failH1("malformed HTTP/1.1 response (no status line)"_s); return; }
 
         NSString* statusLine = headerLines[0];
         NSArray<NSString*>* statusParts = [statusLine componentsSeparatedByString:@" "];
@@ -3347,6 +3369,7 @@ _Pragma("clang diagnostic pop")
                         else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
                         else break;                     // ';' chunk-ext or trailing ws ends the size token
                         chunkSize = chunkSize * 16 + d; anyHex = true;
+                        if (chunkSize > n) { anyHex = false; break; }  // W3060 (audit): a chunk can't exceed the buffered body n; caps chunkSize so a size_t overflow can't wrap past the truncation clamp below -> OOB read / over-alloc crash
                     }
                     if (!anyHex) break;                 // malformed size line
                     i = j + 2;                          // past the size line's CRLF
@@ -3370,6 +3393,25 @@ _Pragma("clang diagnostic pop")
         WebKit::driftstackDecodeContentEncoding(h1body, h1headers);  // .331 chokepoint — pure-h1 (W1517)
         for (auto& [k, v] : h1headers)
             response.setHTTPHeaderField(k, v);
+        // W3059 (audit): the h1 response was constructed with a HARDCODED text/html mimeType, and
+        // setHTTPHeaderField(Content-Type) does NOT update the cached mimeType — so CSS/JS/JSON/images
+        // from HTTP/1.1 origins were mis-typed as HTML (no styling, no script execution -> broken/blank
+        // render, the h2 path already parses this at ~2963). Parse the real Content-Type + charset.
+        for (auto& [k, v] : h1headers) {
+            if (k.convertToASCIILowercase() == "content-type"_s) {
+                size_t semi = v.find(';');
+                String mime = (semi == WTF::notFound ? v : v.substring(0, static_cast<unsigned>(semi))).convertToASCIILowercase();
+                if (!mime.isEmpty()) response.setMimeType(WTF::move(mime));
+                size_t cs = v.findIgnoringASCIICase("charset="_s);
+                if (cs != WTF::notFound) {
+                    String charset = v.substring(static_cast<unsigned>(cs) + 8);
+                    size_t end = charset.find(';');
+                    if (end != WTF::notFound) charset = charset.substring(0, static_cast<unsigned>(end));
+                    if (!charset.isEmpty()) response.setTextEncodingName(WTF::move(charset));
+                }
+                break;
+            }
+        }
         // PathB v2 egress Set-Cookie WRITE — raw un-folded Set-Cookie from the h1 parsed header lines
         // (each Set-Cookie: line is one h1headers entry; the content-encoding decode above strips only
         // content-encoding/length, never Set-Cookie).
