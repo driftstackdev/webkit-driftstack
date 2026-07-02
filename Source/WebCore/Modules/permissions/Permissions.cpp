@@ -315,6 +315,15 @@ void Permissions::query(JSC::Strong<JSC::JSObject> permissionDescriptorValue, DO
             }
 #endif
 
+#if ENABLE(MEDIA_STREAM)
+            // Cross-context coherence (A1 fp #2): mirror the WINDOW-path camera/mic quirk upgrade
+            // (~:253-255) in the worker query path — on a quirk origin the window returns 'granted'
+            // for camera/microphone (Prompt→Granted) but the DedicatedWorker/SharedWorker fell through
+            // at 'prompt' → a main-vs-worker permissions incoherence. document is captured in this lambda.
+            if (document->quirks().shouldEnableCameraAndMicrophonePermissionStateQuirk() && (permissionDescriptor.name == PermissionName::Camera || permissionDescriptor.name == PermissionName::Microphone) && *permissionState == PermissionState::Prompt)
+                permissionState = PermissionState::Granted;
+#endif
+
             ScriptExecutionContext::postTaskTo(contextIdentifier, [promise = WTF::move(promise), permissionState, permissionDescriptor, source, page = WTF::move(page)](auto& context) mutable {
                 promise.resolve(PermissionStatus::create(context, *permissionState, permissionDescriptor, source, WTF::move(page)));
             });
