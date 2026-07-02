@@ -1406,6 +1406,18 @@ int LocalDOMWindow::outerWidth() const
 int LocalDOMWindow::innerHeight() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // Cross-context coherence (A1 fp #4): a SUBFRAME (iframe) must report ITS OWN layout-viewport
+    // CSS height, not the top-frame archetype pin — a real iPhone's iframe returns its own inner
+    // dims, and returning the archetype-global 714 in a subframe is a main-vs-subframe tell. Only
+    // the MAIN frame carries the archetype-pinned viewport; a non-main-frame mirrors the upstream
+    // (#else) computation below. (Task #94 fixed the top-frame cluster; the subframe branch was absent.)
+    if (RefPtr subFrame = this->frame(); subFrame && !subFrame->isMainFrame()) {
+        if (RefPtr ownerElement = frameElement())
+            protect(ownerElement->document())->updateLayoutIfDimensionsOutOfDate(*ownerElement, { DimensionsCheck::Height });
+        if (RefPtr view = subFrame->view())
+            return view->mapFromLayoutToCSSUnits(static_cast<int>(view->unobscuredContentRectIncludingScrollbars().height()));
+        return 0;
+    }
     // V-074: archetype iPhone 16 Pro / iOS 18.7 Safari 26.4: layout viewport
     // height with default URL bar chrome = 714 CSS pixels (874 - 160).
     //
@@ -1488,6 +1500,16 @@ int LocalDOMWindow::innerHeight() const
 int LocalDOMWindow::innerWidth() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // Cross-context coherence (A1 fp #4): a SUBFRAME (iframe) reports ITS OWN layout-viewport CSS
+    // width, not the top-frame archetype pin (402) — matches a real iPhone + the upstream (#else)
+    // computation. Only the MAIN frame is archetype-pinned.
+    if (RefPtr subFrame = this->frame(); subFrame && !subFrame->isMainFrame()) {
+        if (RefPtr ownerElement = frameElement())
+            protect(ownerElement->document())->updateLayoutIfDimensionsOutOfDate(*ownerElement, { DimensionsCheck::Width });
+        if (RefPtr view = subFrame->view())
+            return view->mapFromLayoutToCSSUnits(static_cast<int>(view->unobscuredContentRectIncludingScrollbars().width()));
+        return 0;
+    }
     // V-074: archetype iPhone 16 Pro inner width = 402 CSS pixels.
     //
     // Wave 29-408.4 (Driftstack 2026-05-20): pages WITHOUT `<meta viewport>`
