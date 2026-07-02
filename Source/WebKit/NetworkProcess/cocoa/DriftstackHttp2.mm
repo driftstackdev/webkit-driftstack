@@ -1123,9 +1123,49 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
                     if (payload.size() < payloadStart + 5) break;
                     payloadStart += 5;
                 }
-                cursor = payloadStart;
-                while (cursor < headerEnd) {
-                    if (!hpackDecodeOneHeader(payload.span().data(), headerEnd, cursor, decoded, hpackDyn))
+                // egress audit wxzzaphvp (#3): CONTINUATION reassembly (RFC 7540 §6.10). If END_HEADERS is
+                // NOT set, the header block continues in immediately-following CONTINUATION frames on the
+                // SAME stream (a large block — big Set-Cookie / many headers — exceeds one 16 KiB frame). The
+                // decode used to run on only this frame's fragment → garbled/truncated response headers.
+                // CONTINUATION MUST immediately follow (no interleaving) and the body/flow-control phase
+                // (which is what populates pendingFrames) hasn't started, so read them inline off the wire
+                // and concatenate before decoding. Common case (END_HEADERS set) leaves blockData/blockLen
+                // pointing at this frame's block — byte-identical to the single-frame path.
+                const uint8_t* blockData = payload.span().data() + payloadStart;
+                size_t blockLen = headerEnd - payloadStart;
+                Vector<uint8_t> contBlock;
+                if (!(frameFlags & kFlagEndHeaders)) {
+                    contBlock.append(std::span<const uint8_t>(blockData, blockLen));
+                    bool contEnd = false;
+                    while (!contEnd) {
+                        uint8_t chdr[9];
+                        if (!sslReadExact(ssl, transport, chdr, 9)) {
+                            resp.failed = true; resp.errorMessage = "CONTINUATION header read failed"_s; return resp;
+                        }
+                        uint32_t clen, csid; uint8_t ctype, cflags;
+                        decodeFrameHeader(chdr, clen, ctype, cflags, csid);
+                        if (ctype != kFrameContinuation || csid != streamId) {
+                            resp.failed = true; resp.errorMessage = "expected CONTINUATION on the header stream (PROTOCOL_ERROR)"_s; return resp;
+                        }
+                        if (clen > kMaxRecvFrameBytes) {
+                            resp.failed = true; resp.errorMessage = "CONTINUATION exceeds max receive frame size"_s; return resp;
+                        }
+                        Vector<uint8_t> cpay(clen);
+                        if (clen > 0 && !sslReadExact(ssl, transport, cpay.mutableSpan().data(), clen)) {
+                            resp.failed = true; resp.errorMessage = "CONTINUATION payload read failed"_s; return resp;
+                        }
+                        contBlock.append(cpay.span());
+                        if (contBlock.size() > (static_cast<size_t>(1) << 20)) {  // 1 MiB — bound a CONTINUATION flood (DoS)
+                            resp.failed = true; resp.errorMessage = "header block exceeds 1 MiB (CONTINUATION flood)"_s; return resp;
+                        }
+                        if (cflags & kFlagEndHeaders) contEnd = true;
+                    }
+                    blockData = contBlock.span().data();
+                    blockLen = contBlock.size();
+                }
+                cursor = 0;
+                while (cursor < blockLen) {
+                    if (!hpackDecodeOneHeader(blockData, blockLen, cursor, decoded, hpackDyn))
                         break;
                 }
                 for (auto& [k, v] : decoded) {
