@@ -25,6 +25,7 @@
 #import <errno.h>
 #import <netinet/in.h>
 #import <sys/socket.h>
+#import <netdb.h>
 #import <fcntl.h>   // W2744: O_NONBLOCK for the bounded non-blocking connect
 #import <poll.h>    // W2744: poll() connect deadline
 #import <time.h>    // W2747: clock_gettime(CLOCK_MONOTONIC) for the EINTR-safe connect deadline
@@ -369,13 +370,18 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
         return Socks5Result::DomainTooLong;
     DestAddrKind kind = classifyDest(destUtf8);
 
+    // W2900 REVISED: the effective destination/kind can switch from the original hostname (ATYP=0x03,
+    // proxy-side resolution) to a LOCALLY-resolved IPv4 literal (ATYP=0x01) on the unreachable-retry
+    // below — for proxies whose own resolver can't route the hostname (see the retry comment).
+    Socks5Endpoint effectiveDest = destination;
+    DestAddrKind effectiveKind = kind;
     const int kMaxConnectAttempts = (kind == DestAddrKind::Hostname) ? 2 : 1;
     for (int attempt = 1; attempt <= kMaxConnectAttempts; ++attempt) {
         int fd = m_impl->socketFd;
         uint8_t rep = Socks5::kReplyGeneralFailure;
         String bndHost;
         uint16_t bndPort = 0;
-        bool replyOk = sendConnectAndReadReply(fd, destination, kind, rep, bndHost, bndPort);
+        bool replyOk = sendConnectAndReadReply(fd, effectiveDest, effectiveKind, rep, bndHost, bndPort);
 
         if (replyOk && rep == Socks5::kReplySucceeded) {
             out.host = bndHost;
@@ -384,8 +390,8 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
             WTFLogAlways("[Driftstack-EG-WK-1.9] tcpConnect: success — dest=%s:%u via proxy, BND=%s:%u, ATYP=0x%02x sent%s (attempt %d/%d, no local DNS leak)",
                 destUtf8.data(), unsigned(destination.port),
                 bndHost.utf8().data(), unsigned(bndPort),
-                unsigned(kind == DestAddrKind::IPv4Literal ? Socks5::kAtypIpv4 : kind == DestAddrKind::IPv6Literal ? Socks5::kAtypIpv6 : Socks5::kAtypDomain),
-                kind == DestAddrKind::Hostname ? " (domain)" : " (literal)",
+                unsigned(effectiveKind == DestAddrKind::IPv4Literal ? Socks5::kAtypIpv4 : effectiveKind == DestAddrKind::IPv6Literal ? Socks5::kAtypIpv6 : Socks5::kAtypDomain),
+                effectiveKind == DestAddrKind::Hostname ? " (domain)" : " (literal)",
                 attempt, kMaxConnectAttempts);
             return Socks5Result::Success;
         }
@@ -404,23 +410,52 @@ Socks5Result DriftstackSocks5Client::tcpConnect(const Socks5Endpoint& destinatio
         bool unreachable = (rep == Socks5::kReplyNetworkUnreachable || rep == Socks5::kReplyHostUnreachable);
         bool canRetry = unreachable && kind == DestAddrKind::Hostname && attempt < kMaxConnectAttempts;
         if (canRetry) {
-            // W2900: the proxy's per-resolution AAAA-vs-A pick failed this time. Drop the proxy
-            // socket and re-handshake so the next CONNECT triggers a fresh proxy-side resolution
-            // (overwhelmingly IPv4 on an IPv4-only-egress proxy). Still ATYP=0x03 — no local DNS leak.
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x via proxy — re-resolving over a FRESH proxy connection (one IPv4-forcing retry, ATYP=0x03, no leak)",
+            // W2900 REVISED (founder westernunion live, 2026-07-02): the proxy's hostname resolution is
+            // DETERMINISTICALLY broken for some dual-stack hosts — NOT a transient AAAA pick as the prior
+            // comment assumed. VERIFIED live against the founder's nodemaven gate (IPv4-only egress, NO
+            // UDP — UDP-ASSOCIATE REP=0x02): westernunion.com as ATYP=0x03 (proxy-side DNS) REP=0x03s
+            // EVERY time (its resolver yields an IPv4-mapped/AAAA form it can't route on IPv4-only
+            // egress), while a raw ATYP=0x01 CONNECT to the resolved IPv4 (23.1.33.x) succeeds EVERY
+            // time. The old retry re-sent ATYP=0x03 hoping for a fresh A pick — it never lands. A real
+            // iPhone on a no-UDP SOCKS5 proxy resolves the host on its OWN network and sends the IPv4
+            // (the proxy has no UDP → no remote DNS), which is why a real iPhone loads westernunion and
+            // the fork (proxy-side hostname resolution) did not. So: resolve the hostname to an IPv4
+            // LOCALLY (AF_INET only — never the AAAA the IPv4-only proxy can't route) and retry the
+            // CONNECT as an IPv4 literal (ATYP=0x01). Fires ONLY on a genuine proxy-resolution FAILURE
+            // (the common case = proxy resolves fine → ATYP=0x03, no local DNS); forcing AF_INET is
+            // iPhone-faithful on an IPv4-only-egress proxy.
+            struct addrinfo hints { };
+            hints.ai_family = AF_INET;      // IPv4 ONLY — the IPv4-only-egress proxy cannot route AAAA
+            hints.ai_socktype = SOCK_STREAM;
+            struct addrinfo* aiRes = nullptr;
+            char ipv4buf[INET_ADDRSTRLEN] = { };
+            if (getaddrinfo(destUtf8.data(), nullptr, &hints, &aiRes) == 0 && aiRes) {
+                auto* sin = reinterpret_cast<struct sockaddr_in*>(aiRes->ai_addr);
+                inet_ntop(AF_INET, &sin->sin_addr, ipv4buf, sizeof(ipv4buf));
+            }
+            if (aiRes)
+                freeaddrinfo(aiRes);
+            if (ipv4buf[0]) {
+                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x via proxy — resolved to IPv4 %s locally, retrying as ATYP=0x01 (proxy is IPv4-only + no UDP; iPhone-faithful)",
+                    destUtf8.data(), unsigned(rep), ipv4buf);
+                if (m_impl->socketFd >= 0) {
+                    ::close(m_impl->socketFd);
+                    m_impl->socketFd = -1;
+                }
+                m_impl->handshakeOk = false;
+                auto h = performHandshake();
+                if (h != Socks5Result::Success) {
+                    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] re-handshake to proxy failed (%d) on IPv4-literal retry for %s",
+                        static_cast<int>(h), destUtf8.data());
+                    return h;
+                }
+                effectiveDest.host = String::fromLatin1(ipv4buf);   // IPv4 dotted-quad is ASCII
+                effectiveKind = DestAddrKind::IPv4Literal;
+                continue;
+            }
+            // Local IPv4 resolution failed → fall through to fail-fast (no infinite retry; preserves W2868).
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] hostname %s REP=0x%02x — local IPv4 resolve FAILED, cannot retry as literal",
                 destUtf8.data(), unsigned(rep));
-            if (m_impl->socketFd >= 0) {
-                ::close(m_impl->socketFd);
-                m_impl->socketFd = -1;
-            }
-            m_impl->handshakeOk = false;
-            auto h = performHandshake();
-            if (h != Socks5Result::Success) {
-                WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2900] re-handshake to proxy failed (%d) on IPv4-forcing retry for %s",
-                    static_cast<int>(h), destUtf8.data());
-                return h;
-            }
-            continue;
         }
 
         // No retry: an IP-literal dest, or the hostname retry already failed. Surface the
