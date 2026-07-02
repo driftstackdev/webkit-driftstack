@@ -431,17 +431,26 @@ bool DriftstackTLS13Client::receiveServerHello()
             return false;
         }
         m_hrrSeen = true;
-        if (sh.keyShareGroup != 0x0017 /*P-256*/) {
-            m_errorMessage = makeString("HRR requested non-P-256 group 0x"_s,
-                hex(sh.keyShareGroup, 4), " (only P-256 supported in HRR retry)"_s);
+        // egress bing P-521 HRR (2026-07-02): accept the EC groups a real iPhone offers in
+        // supported_groups — P-256 (0x0017), P-384 (0x0018), P-521 (0x0019). bing.com HRRs to P-521;
+        // the prior code only did P-256 → the handshake failed after 7 fruitless retries. A real iPhone
+        // answers the HRR with a key_share for the requested curve, so this is iPhone-faithful.
+        int hrrNid = 0;
+        switch (sh.keyShareGroup) {
+        case 0x0017: hrrNid = kDriftstackNIDP256; break;
+        case 0x0018: hrrNid = kDriftstackNIDP384; break;
+        case 0x0019: hrrNid = kDriftstackNIDP521; break;
+        default:
+            m_errorMessage = makeString("HRR requested unsupported group 0x"_s,
+                hex(sh.keyShareGroup, 4), " (only P-256/P-384/P-521 supported in HRR retry)"_s);
             return false;
         }
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR detected (server wants P-256). Retrying ClientHello with P-256 keyshare.");
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.215] HRR detected (server wants group 0x%04x). Retrying ClientHello with matching EC keyshare.", sh.keyShareGroup);
 
-        // Generate P-256 keypair
-        m_p256Keypair = driftstackP256Generate();
+        // Generate the keypair for the requested curve (P256Keypair is curve-agnostic: EC key + pubkey).
+        m_p256Keypair = driftstackECGenerate(hrrNid);
         if (!m_p256Keypair.ok) {
-            m_errorMessage = "P-256 keypair generation failed"_s;
+            m_errorMessage = makeString("HRR EC keypair generation failed for group 0x"_s, hex(sh.keyShareGroup, 4));
             return false;
         }
 
@@ -502,8 +511,8 @@ bool DriftstackTLS13Client::receiveServerHello()
 
         // Wave 29-499.216 — build CH2 with P-256 keyshare + send
         Vector<uint8_t> ch2Random;
-        Vector<uint8_t> ch2Record = driftstackBuildIPhoneClientHelloP256(m_sniHostname,
-            m_p256Keypair.publicKey, ch2Random);
+        Vector<uint8_t> ch2Record = driftstackBuildIPhoneClientHelloHRR(m_sniHostname,
+            sh.keyShareGroup, m_p256Keypair.publicKey, ch2Random);
         if (ch2Record.size() <= 5) {
             m_errorMessage = "CH2 build failed"_s;
             return false;
@@ -577,26 +586,30 @@ bool DriftstackTLS13Client::receiveServerHello()
             m_errorMessage = "X25519 ECDH derivation failed"_s;
             return false;
         }
-    } else if (sh.keyShareGroup == 0x0017) {
-        // egress audit wxzzaphvp (#7): HelloRetryRequest → P-256 (secp256r1). When a server rejects our
-        // PQ (X25519MLKEM768) + X25519 key shares it sends an HRR requesting 0x0017; the CH2 path
-        // (~line 442) generates m_p256Keypair and sends its public key, and this (CH2) ServerHello
-        // carries the server's P-256 key_share. There was NO 0x0017 derivation branch → it fell through
-        // to the else ("Unsupported key_share group 0x0017") → the handshake ALWAYS failed after an
-        // HRR→P-256 (a real "site won't load" for servers that don't support our key shares and prefer
-        // P-256). Derive the ECDH shared from the server's 65-byte uncompressed point via the CH2 keypair.
+    } else if (sh.keyShareGroup == 0x0017 || sh.keyShareGroup == 0x0018 || sh.keyShareGroup == 0x0019) {
+        // egress audit wxzzaphvp (#7) + bing P-521 (2026-07-02): after an HRR the server's (CH2)
+        // ServerHello carries its key_share for the group it requested — P-256 (0x0017, 65-byte point),
+        // P-384 (0x0018, 97-byte), or P-521 (0x0019, 133-byte). The CH2 path (~:442) generated
+        // m_p256Keypair for that curve; derive the ECDH shared from the server's uncompressed point via
+        // the same keypair. (Without P-384/P-521 here, bing.com — which HRRs to P-521 — always failed
+        // the handshake; driftstackECComputeShared derives the field size from the point, covering all
+        // three. The prior code only handled P-256 → the else branch rejected P-384/P-521.)
         if (!m_p256Keypair.ok) {
-            m_errorMessage = "server selected P-256 (0x0017) but no CH2 P-256 keypair was generated"_s;
+            m_errorMessage = makeString("server selected EC group 0x"_s, hex(sh.keyShareGroup, 4),
+                " but no CH2 EC keypair was generated"_s);
             return false;
         }
-        if (sh.keyShareKey.size() != 65) {
-            m_errorMessage = makeString("P-256 key_share must be a 65-byte uncompressed point, got "_s,
+        size_t expectPoint = (sh.keyShareGroup == 0x0017) ? 65 : (sh.keyShareGroup == 0x0018) ? 97 : 133;
+        if (sh.keyShareKey.size() != expectPoint) {
+            m_errorMessage = makeString("EC key_share group 0x"_s, hex(sh.keyShareGroup, 4),
+                " must be a "_s, String::number(expectPoint), "-byte uncompressed point, got "_s,
                 String::number(sh.keyShareKey.size()));
             return false;
         }
-        m_ecdhShared = driftstackP256ComputeShared(m_p256Keypair, sh.keyShareKey);
-        if (m_ecdhShared.size() != 32) {
-            m_errorMessage = "P-256 ECDH derivation failed"_s;
+        m_ecdhShared = driftstackECComputeShared(m_p256Keypair, sh.keyShareKey);
+        size_t expectShared = (sh.keyShareGroup == 0x0017) ? 32 : (sh.keyShareGroup == 0x0018) ? 48 : 66;
+        if (m_ecdhShared.size() != expectShared) {
+            m_errorMessage = makeString("EC ECDH derivation failed for group 0x"_s, hex(sh.keyShareGroup, 4));
             return false;
         }
     } else {

@@ -99,8 +99,11 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
 // Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
 // Per RFC 8446 §4.1.2: CH2 mirrors CH1 except key_share + early_data + pre_shared_key.
 // Builder takes a custom key_share group + entry bytes (P-256 = 65 bytes uncompressed pubkey).
-Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
-    const Vector<uint8_t>& p256PublicKey,      // 65 bytes uncompressed
+// egress bing P-521 HRR: CH2 for an HRR retry on the server-requested EC group (P-256 0x0017 /
+// P-384 0x0018 / P-521 0x0019); ecPublicKey is the uncompressed pubkey for that curve (65/97/133 bytes).
+Vector<uint8_t> driftstackBuildIPhoneClientHelloHRR(const String& sni,
+    uint16_t keyShareGroup,
+    const Vector<uint8_t>& ecPublicKey,
     Vector<uint8_t>& outClientRandom);
 
 // Wave 29-499.348 — iPhone-exact QUIC ClientHello (raw handshake msg for the Initial

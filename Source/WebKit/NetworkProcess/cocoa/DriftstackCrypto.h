@@ -98,6 +98,16 @@ void driftstackP256Free(P256Keypair&);
 // peerPublic = 65 bytes uncompressed (0x04 + 32X + 32Y).
 Vector<uint8_t> driftstackP256ComputeShared(const P256Keypair&, const Vector<uint8_t>& peerPublic);
 
+// egress bing P-521 HRR — generic EC keygen/ECDH for HRR retries on any offered curve (P-256 415 /
+// P-384 715 / P-521 716). driftstackECGenerate returns a P256Keypair (curve-agnostic: EC key + the
+// uncompressed pubkey sized by the group); driftstackECComputeShared derives the field size from the
+// peer pubkey. Frees via driftstackP256Free (same EC_KEY). P-384/P-521 NIDs for callers:
+static constexpr int kDriftstackNIDP256 = 415; // NID_X9_62_prime256v1
+static constexpr int kDriftstackNIDP384 = 715; // NID_secp384r1
+static constexpr int kDriftstackNIDP521 = 716; // NID_secp521r1
+P256Keypair driftstackECGenerate(int nid);
+Vector<uint8_t> driftstackECComputeShared(const P256Keypair&, const Vector<uint8_t>& peerPublic);
+
 // === AES-256-GCM ===
 
 // Encrypt plaintext with 32-byte key + 12-byte nonce. AAD is the record

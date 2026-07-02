@@ -304,18 +304,22 @@ Vector<uint8_t> makeExtSCT()
 }
 
 // Wave 29-499.216 — key_share with P-256 only (HRR retry CH2 per RFC 8446)
-Vector<uint8_t> makeExtKeyShareP256(const Vector<uint8_t>& p256PubKey)
+// egress bing P-521 HRR (2026-07-02): HRR CH2 key_share for the server-requested EC group. Generalizes
+// the P-256-only version to P-384 (0x0018, 97-byte pubkey) + P-521 (0x0019, 133-byte) so the fork can
+// answer any HRR a real iPhone would (it offers P-256/384/521 in supported_groups). No GREASE in the HRR
+// CH2 key_share (RFC 8446 §4.1.4 — most clients strip it). The group + pubkey length are the ONLY bytes
+// that differ from the P-256 case; the rest of CH2 stays iPhone-byte-exact via the shared builder.
+Vector<uint8_t> makeExtKeyShareECGroup(uint16_t group, const Vector<uint8_t>& ecPubKey)
 {
     Vector<uint8_t> list;
-    // P-256 only (no GREASE in HRR retry — per RFC 8446 §4.1.4 ambiguity, most clients
-    // strip GREASE from CH2 keyshare)
-    appendU16(list, 0x0017);  // secp256r1
-    appendU16(list, 0x0041);  // length = 65 (uncompressed P-256 pubkey)
-    list.append(p256PubKey.span());
+    appendU16(list, group);
+    appendU16(list, static_cast<uint16_t>(ecPubKey.size()));
+    list.append(ecPubKey.span());
     Vector<uint8_t> body;
     appendVecU16Len(body, list);
     return makeExtension(51, body);
 }
+
 
 // key_share (51) — iPhone offers GREASE+empty + X25519MLKEM768+pubkey + X25519+pubkey
 // For .171 scaffold: include GREASE+empty + X25519+pubkey only (skip MLKEM since
@@ -664,8 +668,13 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
 }
 
 // Wave 29-499.216 — CH2 for HRR retry with P-256 keyshare
-Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
-    const Vector<uint8_t>& p256PublicKey,
+// egress bing P-521 HRR (2026-07-02): CH2 for an HRR retry on the server-requested EC group
+// (keyShareGroup: P-256 0x0017 / P-384 0x0018 / P-521 0x0019). Only the key_share extension's group +
+// pubkey differ per curve; every other byte stays iPhone-exact (a real iPhone offers all three groups
+// and answers the HRR in kind). Was driftstackBuildIPhoneClientHelloP256 (P-256-only).
+Vector<uint8_t> driftstackBuildIPhoneClientHelloHRR(const String& sni,
+    uint16_t keyShareGroup,
+    const Vector<uint8_t>& ecPublicKey,
     Vector<uint8_t>& outClientRandom)
 {
     outClientRandom.resize(32);
@@ -717,7 +726,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloP256(const String& sni,
     extensions.append(makeExtStatusRequest().span());
     extensions.append(makeExtSignatureAlgorithms().span());
     extensions.append(makeExtSCT().span());
-    extensions.append(makeExtKeyShareP256(p256PublicKey).span());  // ← P-256 keyshare (HRR)
+    extensions.append(makeExtKeyShareECGroup(keyShareGroup, ecPublicKey).span());  // ← HRR key_share (P-256/384/521)
     extensions.append(makeExtPSKKeyExchangeModes().span());
     extensions.append(makeExtSupportedVersions(preSafari26).span());
     extensions.append(makeExtCompressCertificate().span());

@@ -707,6 +707,57 @@ Vector<uint8_t> driftstackP256ComputeShared(const P256Keypair& kp, const Vector<
     return shared;
 }
 
+// egress bing P-521 HRR (2026-07-02): generic EC keygen/ECDH for HRR retries on P-384 (group 0x0018)
+// and P-521 (0x0019), not just P-256 (0x0017). bing.com HRRs to P-521 (0x0019) — a group a real iPhone
+// offers in supported_groups (GREASE + X25519MLKEM768 + X25519 + P-256/384/521) and answers with the
+// matching key_share; the prior HRR path only did P-256, so the fork failed bing's handshake (7 retries).
+// Same BoringSSL EC calls as driftstackP256Generate, parameterized by curve NID; the uncompressed pubkey
+// (P-256:65 / P-384:97 / P-521:133) and shared-secret (32/48/66) sizes are derived from the group, so
+// one pair of helpers covers all three curves. Additive — driftstackP256Generate/ComputeShared unchanged.
+// (Curve NIDs live in DriftstackCrypto.h as kDriftstackNIDP256/384/521; callers pass the nid.)
+P256Keypair driftstackECGenerate(int nid)
+{
+    P256Keypair kp;
+    if (!driftstackCryptoInit()) return kp;
+    auto& f = cryptoFns();
+    if (!f.ec_key_new_by_curve_name || !f.ec_key_generate_key) return kp;
+    void* eckey = f.ec_key_new_by_curve_name(nid);
+    if (!eckey) return kp;
+    if (f.ec_key_generate_key(eckey) != 1) { f.ec_key_free(eckey); return kp; }
+    const void* point = f.ec_key_get0_public_key(eckey);
+    const void* group = f.ec_key_get0_group(eckey);
+    uint8_t buf[256] = { }; // P-521 uncompressed = 133 bytes; 256 is ample
+    size_t pubLen = f.ec_point_point2oct(group, point, kPointConvUncompressed, buf, sizeof(buf), nullptr);
+    if (!pubLen || pubLen > sizeof(buf)) { f.ec_key_free(eckey); return kp; }
+    kp.publicKey.append(std::span<const uint8_t> { buf, pubLen });
+    kp.ecKey = eckey;
+    kp.ok = true;
+    return kp;
+}
+
+Vector<uint8_t> driftstackECComputeShared(const P256Keypair& kp, const Vector<uint8_t>& peerPublic)
+{
+    // peerPublic = 0x04 || X || Y → field bytes = (len-1)/2 (P-256:32 / P-384:48 / P-521:66)
+    if (!kp.ok || !kp.ecKey || peerPublic.size() < 3 || peerPublic[0] != 0x04 || ((peerPublic.size() - 1) & 1))
+        return {};
+    size_t fieldBytes = (peerPublic.size() - 1) / 2;
+    auto& f = cryptoFns();
+    if (!f.ec_point_new || !f.ec_point_oct2point || !f.ecdh_compute_key || !f.ec_key_get0_group)
+        return {};
+    const void* group = f.ec_key_get0_group(kp.ecKey);
+    void* peerPoint = f.ec_point_new(group);
+    if (!peerPoint) return {};
+    if (f.ec_point_oct2point(group, peerPoint, peerPublic.span().data(), peerPublic.size(), nullptr) != 1) {
+        f.ec_point_free(peerPoint);
+        return {};
+    }
+    Vector<uint8_t> shared(fieldBytes);
+    int rc = f.ecdh_compute_key(shared.mutableSpan().data(), fieldBytes, peerPoint, kp.ecKey, nullptr);
+    f.ec_point_free(peerPoint);
+    if (rc != static_cast<int>(fieldBytes)) return {};
+    return shared;
+}
+
 // === AES-256-GCM ===
 
 // a74622fc-256 (egress audit wxzzaphvp CRITICAL): AES-256-GCM (cipher 0x1302) must NOT use the
