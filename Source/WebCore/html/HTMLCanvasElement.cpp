@@ -1646,8 +1646,13 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
     // type). Empirical: BS iPhone 16 Pro Safari 18.6 n=3 cumrig captures show
     // canvas.toBlobMIMETypes['image/avif'] = {type: 'image/png', size: 304}.
     // ImageUtilitiesCG.cpp encoder already redirects avif/heic → png bytes
-    // (V-090 Track 6); this patch matches Family A's Blob.type normalization.
-    // Family B (Safari 26.4+) emits image/avif natively, so leaves type intact.
+    // (V-090 Track 6); this patch matches the Blob.type normalization.
+    // BOUNDARY = MAJOR<26 (capture-CONFIRMED 2026-07-02, 30+ real-device aio toBlobMIMETypes):
+    // Safari 26.0/26.2/26.3 (iPhone 14/15/17 families) ALL return toBlob('image/avif').type =
+    // image/avif natively; ONLY Safari 18.x/17.x return image/png. So 26.0-26.3 are Family-B-like
+    // (keep type=avif) — the prior ≤26.3 predicate (incl safari26_0/1/2/3) WRONGLY normalized them to
+    // png = a per-archetype tell across the whole 26.0-26.3 band. This is the avif band-delete
+    // (boundary-registry canvas_avif_toblob_boundary), resolved to major<26 by real captures.
     // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
     const bool s_isFamilyAArchetypeToBlob = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
@@ -1656,10 +1661,12 @@ ExceptionOr<void> HTMLCanvasElement::toBlob(Ref<BlobCallback>&& callback, const 
         return sv.find("safari17_") != std::string_view::npos
             || sv.find("safari18_") != std::string_view::npos
             || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari26_0") != std::string_view::npos
-            || sv.find("safari26_1") != std::string_view::npos
-            || sv.find("safari26_2") != std::string_view::npos
-            || sv.find("safari26_3") != std::string_view::npos;
+            || sv.find("safari20_") != std::string_view::npos
+            || sv.find("safari21_") != std::string_view::npos
+            || sv.find("safari22_") != std::string_view::npos
+            || sv.find("safari23_") != std::string_view::npos
+            || sv.find("safari24_") != std::string_view::npos
+            || sv.find("safari25_") != std::string_view::npos;
     }();
     // image/avif only (Family A Safari 18.6 supports image/heic natively but
     // not image/avif). Empirical FA REF: image/heic → type=image/heic;

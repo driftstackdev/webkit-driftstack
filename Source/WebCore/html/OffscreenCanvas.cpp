@@ -327,12 +327,17 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
     // a follow-up (needs a launch-canvas re-verify → left to A1's rig-gid canvas harness so this build
     // leaves the launch-critical main path untouched).
     {
+        // BOUNDARY = MAJOR<26 (capture-CONFIRMED 2026-07-02, 30+ real-device aio toBlobMIMETypes: Safari
+        // 26.0/26.2/26.3 all return type=image/avif natively; only <26 returns image/png). Mirrors the main
+        // path (HTMLCanvasElement.cpp). The prior ≤26.3 form (incl safari26_0/1/2/3) wrongly normalized
+        // 26.0-26.3 → png. Kept avif-SEPARATE from driftstackIsCanvasFamilyA (canvas-pixel stays ≤26.3).
         const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
         String dsArchStr = dsArch ? String::fromUTF8(dsArch) : String();
         bool dsIsFamilyAToBlob = dsArchStr.contains("safari17_"_s) || dsArchStr.contains("safari18_"_s)
-            || dsArchStr.contains("safari19_"_s) || dsArchStr.contains("safari26_0"_s)
-            || dsArchStr.contains("safari26_1"_s) || dsArchStr.contains("safari26_2"_s)
-            || dsArchStr.contains("safari26_3"_s);
+            || dsArchStr.contains("safari19_"_s) || dsArchStr.contains("safari20_"_s)
+            || dsArchStr.contains("safari21_"_s) || dsArchStr.contains("safari22_"_s)
+            || dsArchStr.contains("safari23_"_s) || dsArchStr.contains("safari24_"_s)
+            || dsArchStr.contains("safari25_"_s);
         if (dsIsFamilyAToBlob && equalLettersIgnoringASCIICase(encodingMIMEType, "image/avif"_s))
             encodingMIMEType = "image/png"_s;
     }
