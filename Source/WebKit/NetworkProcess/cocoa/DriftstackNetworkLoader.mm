@@ -3279,11 +3279,28 @@ _Pragma("clang diagnostic pop")
             CFRelease(writeStream);
         }
 
-        // W3061 (audit): the h1 terminal path used bare `return;` on an empty/malformed response,
-        // which NEVER completed the load (no didReceiveResponse, no error) -> the request hangs
-        // forever and WebKit's pageLoad-timeout eventually fires on a blank resource (the "loads then
-        // silently stops" symptom). Deliver a proper error instead so WebKit fails/settles the resource.
+        // W3061 (audit) + W3063 (founder): the h1 terminal path used bare `return;` on an empty/malformed
+        // response, which NEVER completed the load (no didReceiveResponse, no error) -> the request hangs
+        // forever ("loads then silently stops"). But an empty h1 response is usually TRANSIENT (the server
+        // closed the connection with no reply / a keep-alive race), so a real browser RETRIES it on a fresh
+        // connection and succeeds — surfacing a hard error on the first empty read is itself a regression
+        // ("new error: empty HTTP/1.1 response"). So: retry on a fresh connection for idempotent methods
+        // (bounded by kMaxAttempts), and only deliver the error after retries are exhausted OR for a
+        // non-idempotent method (never re-POST a possibly-executed request). Always log the host for RCA.
         auto failH1 = [&](ASCIILiteral reason) {
+            const bool idempotent = equalIgnoringASCIICase(httpMethod, "GET"_s) || equalIgnoringASCIICase(httpMethod, "HEAD"_s)
+                || equalIgnoringASCIICase(httpMethod, "OPTIONS"_s) || equalIgnoringASCIICase(httpMethod, "PUT"_s)
+                || equalIgnoringASCIICase(httpMethod, "DELETE"_s) || equalIgnoringASCIICase(httpMethod, "TRACE"_s);
+            const bool willRetry = canRetry && idempotent;
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3063] h1 %s host=%s method=%s attempt=%d -> %s",
+                reason.characters(), url.host().toString().utf8().data(), httpMethod.utf8().data(), currentAttempt,
+                willRetry ? "retry (transient)" : "deliver error (exhausted/non-idempotent)");
+            if (willRetry) {
+                Ref<DriftstackNetworkLoader> retryRef { *this };
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, retryDelayMs * NSEC_PER_MSEC),
+                    dispatch_get_main_queue(), ^{ if (!retryRef->m_cancelled) retryRef->resume(); });
+                return;
+            }
             if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
             WebCore::ResourceError err(String("DriftstackNetworkLoader"_s), 0, URL(url), reason, WebCore::ResourceError::Type::General);
             callOnMainRunLoop([protectedThis, err = std::move(err)]() mutable {
