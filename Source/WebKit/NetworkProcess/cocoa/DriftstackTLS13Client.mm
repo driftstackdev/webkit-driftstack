@@ -715,6 +715,11 @@ int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
         m_appReadBlockingRestored = true;
         struct timeval tv { .tv_sec = 0, .tv_usec = 0 };
         setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        // W3064 (audit): also clear the 8s SO_SNDTIMEO that DriftstackSocks5Client::connectToProxy set
+        // for the SOCKS5 handshake and which LEAKED into the data phase — a large upload (POST body) over
+        // a slow proxy would abort mid-write at 8s where a real iPhone blocks-and-succeeds. Restore
+        // blocking writes for the app-data phase (matches the SO_RCVTIMEO restore above).
+        setsockopt(m_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }
     if (m_isTLS12) {
         if (m_t12ReadBuffer.isEmpty()) {
@@ -1326,6 +1331,14 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord(int depth)
     pt.removeLast();
 
     if (innerType == 0x17) {
+        // W3065 (audit): a ZERO-LENGTH application_data record is legal (RFC 8446 §5.4). Returning an
+        // empty pt here is WRONG — the caller (read()) treats an empty return as EOF and TRUNCATES the
+        // response (blank/broken page). Read the NEXT record instead, bounded by the same depth guard as
+        // the 0x16 branch; reserve the empty return strictly for a true readTLSRecord failure (real EOF).
+        if (pt.isEmpty()) {
+            if (depth >= 32) { m_errorMessage = "too many empty app-data records — rejecting (DoS defense)"_s; return {}; }
+            return readApplicationRecord(depth + 1);
+        }
         return pt;  // application_data
     } else if (innerType == 0x16) {
         // Post-handshake message (NewSessionTicket, KeyUpdate). Append to
