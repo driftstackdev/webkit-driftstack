@@ -379,14 +379,32 @@ void OffscreenCanvas::convertToBlob(ImageEncodeOptions&& options, Ref<DeferredPr
             opSeqSha = ctx2D->driftstackOpSequenceSHA256(w, h);
         }
         auto macForkDataURL = makeString("data:image/png;base64,"_s, base64Encoded(blobData.span()));
-        auto substitute = Driftstack::v510AtlasLookupPublic(macForkDataURL, opSeqSha);
-        bool fromV510 = !substitute.isNull();
-        if (substitute.isNull()) {
-            // Exact (dims+lastFillText) match only — dim-only fallback removed (it
-            // returned a wrong canvas for uncovered states; native is device-exact).
+        // Cross-context coherence (A1 fp #1): the V-510 atlas is family-BLIND. An UNCONDITIONAL
+        // v510AtlasLookupPublic() on a Family-A archetype (≤26.3) serves Family-B bytes (57186fab)
+        // where the MAIN path (HTMLCanvasElement.cpp:1725-1745) tries the family-correct canonical
+        // FIRST and SKIPS the family-blind V-510. Mirror that dsConsultAtlas guard here so the WORKER
+        // (OffscreenCanvas.convertToBlob) matches main. On Family-B (incl the 26.4 launch) dsConsultAtlas
+        // is true → V-510-first UNCHANGED (this is a NO-OP on the launch archetype). Env read LIVE.
+        const bool dsCanvasFamilyA = driftstackIsCanvasFamilyA();
+        const char* dsFuzzAtlasPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
+        const bool dsConsultAtlas = !dsCanvasFamilyA || (dsFuzzAtlasPath && dsFuzzAtlasPath[0]);
+        String substitute;
+        bool fromV510 = false;
+        if (!dsConsultAtlas) {
+            // Family-A, no FA atlas path: family-correct canonical FIRST, SKIP the family-blind V-510.
             const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
             if (canonical)
                 substitute = String::fromUTF8(canonical);
+        } else {
+            substitute = Driftstack::v510AtlasLookupPublic(macForkDataURL, opSeqSha);
+            fromV510 = !substitute.isNull();
+            if (substitute.isNull()) {
+                // Exact (dims+lastFillText) match only — dim-only fallback removed (it
+                // returned a wrong canvas for uncovered states; native is device-exact).
+                const char* canonical = lookupCanvasFp10xCanonicalWithText(width(), height(), lastFillText());
+                if (canonical)
+                    substitute = String::fromUTF8(canonical);
+            }
         }
         static constexpr ASCIILiteral kPNGPrefix = "data:image/png;base64,"_s;
         if (!substitute.isNull() && substitute.startsWith(kPNGPrefix)) {
