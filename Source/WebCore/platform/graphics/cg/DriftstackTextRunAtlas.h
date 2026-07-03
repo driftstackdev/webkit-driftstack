@@ -196,6 +196,17 @@ private:
 
 StringView driftstackCurrentTextSource();
 
+// #42 keycap: a CANVAS-LEVEL color-emoji source stack, pushed for the WHOLE synchronous fillText (across
+// the display-list record + deconstruct REPLAY) so the color-emoji dispatch can recover the source
+// cluster's seq_hash even when the run reaches the platform drawGlyphs hook via the deconstruct-recorder
+// replay — outside the per-run DriftstackCurrentTextSourceScope (which is destroyed after RECORD). This is
+// SEPARATE from the text-source slot and read ONLY by the color-gated emoji dispatch → glyphHash-safe by
+// construction (does not change what the text/glyph atlas or glyphHash c587ed44 see). A stack so nested
+// canvas text draws restore correctly.
+void driftstackPushColorEmojiSource(StringView);
+void driftstackPopColorEmojiSource();
+StringView driftstackCurrentColorEmojiSource();
+
 // #42 multi-codepoint color-emoji (DSPGCA2): the per-glyph COLOR atlas keys multi-codepoint
 // emoji clusters (ZWJ / skin-tone / keycap / VS16 / tag-seq) by FNV-1a-32 of the cluster's
 // UTF-8 bytes (single codepoints are length-1 sequences → byte-identical to the old codepoint

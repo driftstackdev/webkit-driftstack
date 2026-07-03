@@ -133,6 +133,11 @@ namespace WebCore {
 void driftstackPushCanvasTextDraw();
 void driftstackPopCanvasTextDraw();
 void driftstackResetCanvasTextNativeFallback();
+// #42 keycap: carry the fillText source cluster across the whole synchronous draw (record + deconstruct
+// replay) so the color-emoji dispatch can serve keycap/text-shaped clusters that reach the platform hook
+// with an empty per-run text-source. Read only by the color dispatch → glyphHash-safe.
+void driftstackPushColorEmojiSource(StringView);
+void driftstackPopColorEmojiSource();
 bool driftstackCanvasTextNativeFallbackOccurred();
 }
 #endif
@@ -3517,9 +3522,9 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
     // canvas fingerprint stays bit-identical while on-screen HTML text (which
     // reaches drawGlyphs WITHOUT this scope) renders natively → no black boxes.
     struct DriftstackCanvasTextGuard {
-        DriftstackCanvasTextGuard() { driftstackPushCanvasTextDraw(); }
-        ~DriftstackCanvasTextGuard() { driftstackPopCanvasTextDraw(); }
-    } driftstackCanvasTextGuard;
+        explicit DriftstackCanvasTextGuard(StringView src) { driftstackPushCanvasTextDraw(); driftstackPushColorEmojiSource(src); }
+        ~DriftstackCanvasTextGuard() { driftstackPopColorEmojiSource(); driftstackPopCanvasTextDraw(); }
+    } driftstackCanvasTextGuard { textRun.text() };
 #endif
 
     auto& fontCascade = this->fontProxy()->fontCascade();

@@ -680,6 +680,36 @@ void driftstackResetCanvasTextNativeFallback()
     canvasTextDepthSlot()->nativeFallback = false;
 }
 
+// #42 keycap: canvas-level color-emoji source stack (owning copies). Pushed for the whole synchronous
+// fillText so the color-emoji dispatch can recover the cluster seq_hash during the deconstruct REPLAY.
+// Read ONLY by the color-gated emoji dispatch → does not feed the text/glyph atlas or glyphHash.
+struct ColorEmojiSourceSlot {
+    Vector<String> stack;
+};
+static ThreadSpecific<ColorEmojiSourceSlot>& colorEmojiSourceSlot()
+{
+    static NeverDestroyed<ThreadSpecific<ColorEmojiSourceSlot>> slot;
+    return slot.get();
+}
+
+void driftstackPushColorEmojiSource(StringView source)
+{
+    colorEmojiSourceSlot()->stack.append(source.toString());
+}
+
+void driftstackPopColorEmojiSource()
+{
+    auto& stack = colorEmojiSourceSlot()->stack;
+    if (!stack.isEmpty())
+        stack.removeLast();
+}
+
+StringView driftstackCurrentColorEmojiSource()
+{
+    auto& stack = colorEmojiSourceSlot()->stack;
+    return stack.isEmpty() ? StringView { } : StringView { stack.last() };
+}
+
 void driftstackMarkCanvasTextNativeFallback()
 {
     canvasTextDepthSlot()->nativeFallback = true;

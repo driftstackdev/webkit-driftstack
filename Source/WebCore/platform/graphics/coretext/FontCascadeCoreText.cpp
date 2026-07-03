@@ -497,6 +497,8 @@ static bool driftstackCanvasColorEmojiFullyServable(const Font& font, std::span<
     bool haveSourceSeqHash = false;
     if (seqKeyed) {
         StringView src = driftstackCurrentTextSource();
+        if (src.isEmpty())
+            src = driftstackCurrentColorEmojiSource(); // #42 keycap: recover the cluster source on the deconstruct-recorder replay path
         if (!src.isEmpty()) {
             sourceSeqHash = driftstackSeqHashForUtf8(src);
             haveSourceSeqHash = true;
@@ -1383,6 +1385,8 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 bool haveSourceSeqHash = false;
                 if (seqKeyed) {
                     StringView src = driftstackCurrentTextSource();
+                    if (src.isEmpty())
+                        src = driftstackCurrentColorEmojiSource(); // #42 keycap: recover the cluster source on the deconstruct-recorder REPLAY path, where the per-run text-source is already destroyed
                     if (!src.isEmpty()) {
                         sourceSeqHash = driftstackSeqHashForUtf8(src);
                         haveSourceSeqHash = true;
