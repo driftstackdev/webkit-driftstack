@@ -671,6 +671,15 @@ static NSData* readAllFromCFStream(CFReadStreamRef readStream, const String& met
 {
     NSMutableData* data = [NSMutableData data];
     uint8_t buffer[4096];
+    // W3085 (audit wxbeah3ef): the customTLS/BoringSSL h1 loops got a 60s idle deadline (W3051/W2988)
+    // and the h2/h3 transports cap the body at 128MB, but this plaintext-http CFStream fallback had
+    // NEITHER. A no-framing keep-alive server that stalls without FIN busy-looped here forever (pinned
+    // GCD worker + admission slot); a hostile/huge chunked or Content-Length body accumulated unbounded
+    // → NetworkProcess OOM. Bound both: 60s no-progress → stop; 128MB total → stop (return the bounded
+    // body; truncation beats OOMing the shared multi-tenant NetworkProcess).
+    static const NSUInteger kH1MaxBodyBytes = 128u * 1024u * 1024u;
+    const Seconds kH1Idle = Seconds(60);
+    MonotonicTime idleDeadline = MonotonicTime::now() + kH1Idle;
     while (true) {
         CFIndex n = CFReadStreamRead(readStream, buffer, sizeof(buffer));
         if (n < 0) return nil;
@@ -680,12 +689,16 @@ static NSData* readAllFromCFStream(CFReadStreamRef readStream, const String& met
             if (status == kCFStreamStatusAtEnd || status == kCFStreamStatusClosed)
                 break;
             if (status == kCFStreamStatusError) return nil;
+            if (MonotonicTime::now() >= idleDeadline)   // W3085: 60s no-progress → abandon (was unbounded)
+                break;
             // Not yet at EOF, more data may arrive; brief sleep then retry
             [NSThread sleepForTimeInterval:0.01];
-            // Bail out after stream has been opened a long time with no progress
             continue;
         }
         [data appendBytes:buffer length:n];
+        idleDeadline = MonotonicTime::now() + kH1Idle;   // W3085: progress → extend the no-progress window
+        if ([data length] > kH1MaxBodyBytes)             // W3085: 128MB cap → OOM guard (match h2/h3)
+            break;
         // W3069 — keep-alive-safe: stop once the full HTTP/1.1 message is framed. With
         // Connection: keep-alive (W3068) the server won't FIN, so waiting for EOF above would
         // hang until the idle timeout. Falls back to read-until-EOF when the response declares
@@ -1128,23 +1141,36 @@ static HashMap<String, RefPtr<WebKit::DriftstackHttp2Session>>& driftstackH2Pool
 // origin churns >= kH2ChurnThreshold, STOP pooling it (skip reuse + skip re-adopt) so its beacons go DIRECT
 // (one connect each, no wasted failed-reuse) — halves the storm + stops the adopt/fail loop. Reset on any
 // successful pooled reuse (origin recovered). Process-global; guarded by the existing pool lock.
-static HashMap<String, unsigned>& driftstackH2ChurnMap()
+static HashMap<String, std::pair<unsigned, MonotonicTime>>& driftstackH2ChurnMap()
 {
-    static NeverDestroyed<HashMap<String, unsigned>> m;
+    static NeverDestroyed<HashMap<String, std::pair<unsigned, MonotonicTime>>> m;
     return m.get();
 }
 static constexpr unsigned kH2ChurnThreshold = 3;
+// W3084 (audit wxbeah3ef): the breaker must SELF-HEAL. A churning origin SKIPS the pool, so it
+// takes no further strikes — without a decay it latches OPEN for the whole (long-lived, per-customer-
+// session) NetworkProcess, permanently denying H2 reuse/multiplexing to an origin that only had a
+// transient GOAWAY burst (a deploy/restart) and has since fully recovered. Every subresource then
+// pays a fresh SOCKS5+TLS handshake through the slow customer proxy — the exact "loads slowly"
+// symptom W3046 was meant to prevent, now inverted and permanent. Decay: once no NEW strike has
+// landed within kH2ChurnCooldown, report not-churning so ONE pooled reuse re-probes the origin — a
+// recovered origin's reuse succeeds → NoteHealthy clears it; a chronic GOAWAY beacon's reuse
+// re-fails → NoteChurn re-arms the breaker (≤1 re-probe per cooldown = negligible vs the original storm).
+static const Seconds kH2ChurnCooldown = Seconds(45);
 [[maybe_unused]] static bool driftstackH2OriginChurning(const String& origin)
 {
     Locker locker { driftstackH2PoolLock() };
     auto it = driftstackH2ChurnMap().find(origin);
-    return it != driftstackH2ChurnMap().end() && it->value >= kH2ChurnThreshold;
+    if (it == driftstackH2ChurnMap().end() || it->value.first < kH2ChurnThreshold)
+        return false;
+    return MonotonicTime::now() - it->value.second < kH2ChurnCooldown;   // W3084 decay → self-heal
 }
 [[maybe_unused]] static void driftstackH2NoteChurn(const String& origin)
 {
     Locker locker { driftstackH2PoolLock() };
-    auto& n = driftstackH2ChurnMap().add(origin, 0u).iterator->value;
-    if (n < 100000u) ++n;
+    auto& e = driftstackH2ChurnMap().add(origin, std::pair<unsigned, MonotonicTime> { 0u, MonotonicTime::now() }).iterator->value;
+    if (e.first < 100000u) ++e.first;
+    e.second = MonotonicTime::now();   // W3084: refresh the strike time so a chronic churner stays tripped
 }
 [[maybe_unused]] static void driftstackH2NoteHealthy(const String& origin)
 {
@@ -2508,14 +2534,38 @@ void DriftstackNetworkLoader::resume()
                         accumPtr->body.append(std::span<const uint8_t> { data, length });
                     };
                     Ref<DriftstackNetworkLoader> protectedThisForRetry { *this };
-                    cb.onComplete = [accum, finishH2Response, protectedThisForRetry, origin](bool failed, const String& errorMessage) mutable {
+                    cb.onComplete = [accum, finishH2Response, protectedThisForRetry, origin, httpMethod, url](bool failed, const String& errorMessage) mutable {
                         if (failed) {
                             accum->failed = true;
                             if (accum->errorMessage.isEmpty()) accum->errorMessage = errorMessage;
                         }
+                        const String h2PooledErr = accum->errorMessage;   // W3088: capture BEFORE finishH2Response consumes accum
                         if (finishH2Response(std::move(*accum)))
                             return; // handled (success delivered, or task already gone)
                         driftstackH2NoteChurn(origin);   // W3046: count the churn; a persistently-GOAWAY origin trips the breaker (skip pool)
+                        // W3088 (audit wxbeah3ef): re-entering resume() re-sends the request on a fresh connection
+                        // → a double-submit for a non-idempotent method the server may have already processed. Same
+                        // idempotency gate as the sync path: only re-enter (retry fresh) for idempotent / provably-
+                        // not-processed; otherwise deliver the error without re-sending.
+                        const bool idempotentMethod = equalIgnoringASCIICase(httpMethod, "GET"_s) || equalIgnoringASCIICase(httpMethod, "HEAD"_s)
+                            || equalIgnoringASCIICase(httpMethod, "OPTIONS"_s) || equalIgnoringASCIICase(httpMethod, "PUT"_s)
+                            || equalIgnoringASCIICase(httpMethod, "DELETE"_s) || equalIgnoringASCIICase(httpMethod, "TRACE"_s);
+                        if (!idempotentMethod && !h2PooledErr.contains("not processed"_s)) {
+                            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3088] pooled h2 submitAsync failed for %s on non-idempotent %s that MAY have executed — NOT re-sending (avoid double-submit), delivering error", origin.utf8().data(), httpMethod.utf8().data());
+                            if (!protectedThisForRetry->tryBeginCompletion()) return;  // Wave .325 single-completion guard
+                            WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url),
+                                h2PooledErr.isEmpty() ? String("h2 pooled reuse failed (non-idempotent, not retried to avoid double-submit)"_s) : h2PooledErr,
+                                WebCore::ResourceError::Type::General);
+                            callOnMainRunLoop([protectedThisForRetry, error = std::move(error)]() mutable {
+                                RefPtr task = protectedThisForRetry->protectedTask();
+                                if (!task) return;
+                                RefPtr client = task->client();
+                                if (!client) return;
+                                WebCore::NetworkLoadMetrics metrics;
+                                client->didCompleteWithError(error, metrics);
+                            });
+                            return;
+                        }
                         WTFLogAlways("[Wave29-499.321/H2POOL] pooled session submitAsync failed for %s — re-entering resume() for fresh connect", origin.utf8().data());
                         callOnMainRunLoop([protectedThisForRetry] {
                             if (!protectedThisForRetry->m_cancelled)
@@ -2530,11 +2580,39 @@ void DriftstackNetworkLoader::resume()
                 RefPtr task = protectedTask();
                 if (!task) return;
                 }
+                const String h2PooledErr = h2resp.errorMessage;   // W3088: capture BEFORE finishH2Response consumes h2resp
                 if (finishH2Response(std::move(h2resp)))
                     return;
-                // Pooled session failed (e.g. GOAWAY mid-flight) — fall through
-                // to a fresh connection.
+                // Pooled session failed (e.g. GOAWAY mid-flight).
                 driftstackH2NoteChurn(origin);   // W3046: count the churn; a persistently-GOAWAY origin trips the breaker (skip pool)
+                // W3088 (audit wxbeah3ef): the h2 HEADERS+body were ALREADY transmitted on the pooled stream,
+                // which the server MAY have processed (RST/GOAWAY/conn-loss AFTER the request landed). Falling
+                // through to a FRESH connection re-sends the identical body → a double-submit for a non-idempotent
+                // method (double payment / double form post / duplicated write). Mirror the W3062 guard: fall
+                // through (retry on a fresh connection) ONLY for an idempotent method OR a provably-not-processed
+                // failure; otherwise deliver the error WITHOUT re-sending — a real iPhone never re-POSTs a sent request.
+                {
+                    const bool idempotentMethod = equalIgnoringASCIICase(httpMethod, "GET"_s) || equalIgnoringASCIICase(httpMethod, "HEAD"_s)
+                        || equalIgnoringASCIICase(httpMethod, "OPTIONS"_s) || equalIgnoringASCIICase(httpMethod, "PUT"_s)
+                        || equalIgnoringASCIICase(httpMethod, "DELETE"_s) || equalIgnoringASCIICase(httpMethod, "TRACE"_s);
+                    if (!idempotentMethod && !h2PooledErr.contains("not processed"_s)) {
+                        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3088] pooled h2 reuse failed for %s on non-idempotent %s that MAY have executed — NOT re-sending on a fresh connection (avoid double-submit), delivering error", origin.utf8().data(), httpMethod.utf8().data());
+                        if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+                        Ref<DriftstackNetworkLoader> protectedThisDS { *this };
+                        WebCore::ResourceError error(String("DriftstackNetworkLoader"_s), 0, URL(url),
+                            h2PooledErr.isEmpty() ? String("h2 pooled reuse failed (non-idempotent, not retried to avoid double-submit)"_s) : h2PooledErr,
+                            WebCore::ResourceError::Type::General);
+                        callOnMainRunLoop([protectedThisDS, error = std::move(error)]() mutable {
+                            RefPtr task = protectedThisDS->protectedTask();
+                            if (!task) return;
+                            RefPtr client = task->client();
+                            if (!client) return;
+                            WebCore::NetworkLoadMetrics metrics;
+                            client->didCompleteWithError(error, metrics);
+                        });
+                        return;
+                    }
+                }
                 WTFLogAlways("[Wave29-499.321/H2POOL] pooled session execute failed for %s — fresh connect", origin.utf8().data());
             }
         }
@@ -3231,10 +3309,41 @@ void DriftstackNetworkLoader::resume()
         // CFStream fallback only used when BoringSSL is unavailable
         CFReadStreamRef readStream = nullptr;
         CFWriteStreamRef writeStream = nullptr;
+        // W3087 (audit wxbeah3ef): the CFStream (plaintext-http) setup-failure branches below previously
+        // bare-returned → the load hung forever (no didReceiveResponse/error) + the admission slot stayed
+        // pinned until task teardown (the W2200/W3061/W3063 bug class). Route them through the same
+        // idempotent-retry-then-error policy failH1 uses (failH1 itself is defined only after the request
+        // is sent, so this mirrors it for the pre-send setup phase).
+        [[maybe_unused]] auto failCFSetup = [&](ASCIILiteral reason) {
+            const bool idempotent = equalIgnoringASCIICase(httpMethod, "GET"_s) || equalIgnoringASCIICase(httpMethod, "HEAD"_s)
+                || equalIgnoringASCIICase(httpMethod, "OPTIONS"_s) || equalIgnoringASCIICase(httpMethod, "PUT"_s)
+                || equalIgnoringASCIICase(httpMethod, "DELETE"_s) || equalIgnoringASCIICase(httpMethod, "TRACE"_s);
+            if (canRetry && idempotent) {
+                Ref<DriftstackNetworkLoader> retryRef { *this };
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, retryDelayMs * NSEC_PER_MSEC),
+                    dispatch_get_main_queue(), ^{ if (!retryRef->m_cancelled) retryRef->resume(); });
+                return;
+            }
+            if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+            WebCore::ResourceError err(String("DriftstackNetworkLoader"_s), 0, URL(url), reason, WebCore::ResourceError::Type::General);
+            Ref<DriftstackNetworkLoader> protectedThisCF { *this };
+            callOnMainRunLoop([protectedThisCF, err = std::move(err)]() mutable {
+                RefPtr task = protectedThisCF->protectedTask();
+                if (!task) return;
+                RefPtr client = task->client();
+                if (!client) return;
+                WebCore::NetworkLoadMetrics metrics;
+                client->didCompleteWithError(err, metrics);
+            });
+        };
         if (!useBoringSSL) {
             CFStreamCreatePairWithSocket(kCFAllocatorDefault, socketFd, &readStream, &writeStream);
-            if (!readStream || !writeStream)
+            if (!readStream || !writeStream) {
+                if (readStream) CFRelease(readStream);
+                if (writeStream) CFRelease(writeStream);
+                failCFSetup("CFStream socket-pair create failed"_s);
                 return;
+            }
             CFReadStreamSetProperty(readStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
             CFWriteStreamSetProperty(writeStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanFalse);
         }
@@ -3284,6 +3393,7 @@ _Pragma("clang diagnostic pop")
             if (!CFWriteStreamOpen(writeStream) || !CFReadStreamOpen(readStream)) {
                 CFRelease(readStream);
                 CFRelease(writeStream);
+                failCFSetup("CFStream open failed"_s);   // W3087 — complete the load, don't bare-return-hang
                 return;
             }
             for (int i = 0; i < 100; i++) {
@@ -3294,6 +3404,7 @@ _Pragma("clang diagnostic pop")
             if (CFWriteStreamGetStatus(writeStream) != kCFStreamStatusOpen) {
                 CFRelease(readStream);
                 CFRelease(writeStream);
+                failCFSetup("CFStream write-stream open timeout"_s);   // W3087 — complete the load, don't bare-return-hang
                 return;
             }
         }
@@ -3382,6 +3493,14 @@ _Pragma("clang diagnostic pop")
                 httpMethod.utf8().data(), host.utf8().data(), requestBody.size(), (unsigned long)[reqData length]);
 
         NSData* responseBytes = nil;
+        // W3086 (audit wxbeah3ef): cap the h1 response body at 128MB. The h2/h3 transports enforce a
+        // 128MB kMaxBodyBytes, but the custom-TLS/BoringSSL h1 read loops accumulated `respMutable`
+        // UNBOUNDED, so a hostile or huge origin (endless Transfer-Encoding: chunked body, or
+        // Content-Length: 10GB — which driftstackH1MessageComplete reads in full) that a real iPhone
+        // never downloads could OOM the shared multi-tenant NetworkProcess, taking down networking for
+        // every tab/session on the node. Overflow → hard-fail (no retry; a re-download re-overflows).
+        bool h1BodyOverflow = false;
+        static const NSUInteger kH1MaxRespBytes = 128u * 1024u * 1024u;
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
         if (customTLSClient) {
             // Wave 29-499.355 — HTTP/1.1 over the CUSTOM TLS client. When PathB v2
@@ -3451,6 +3570,7 @@ _Pragma("clang diagnostic pop")
                 int n = customTLSClient->read(readBuf, sizeof(readBuf));
                 if (n <= 0) break;
                 [respMutable appendBytes:readBuf length:static_cast<NSUInteger>(n)];
+                if ([respMutable length] > kH1MaxRespBytes) { h1BodyOverflow = true; break; } // W3086: 128MB OOM guard
                 if (h1DeadlineActive)
                     h1IdleDeadline = MonotonicTime::now() + kH1IdleTimeout; // progress → extend the window
                 // W3069 — keep-alive-safe: stop on the message framing (the server won't FIN on
@@ -3485,6 +3605,7 @@ _Pragma("clang diagnostic pop")
                     break;
                 }
                 [respMutable appendBytes:readBuf length:n];
+                if ([respMutable length] > kH1MaxRespBytes) { h1BodyOverflow = true; break; } // W3086: 128MB OOM guard
                 // W3069 — keep-alive-safe: stop on the HTTP/1.1 message framing (the server won't
                 // FIN on Connection: keep-alive). Unframed responses return false → keep reading
                 // until ssl_read reports FIN/close_notify above.
@@ -3498,14 +3619,33 @@ _Pragma("clang diagnostic pop")
 #endif
         {
             CFIndex written = writeAllToCFStream(writeStream, reqData);
-            if (written < 0) {
-                CFRelease(readStream);
-                CFRelease(writeStream);
-                return;
-            }
-            responseBytes = readAllFromCFStream(readStream, httpMethod); // W3069 — framing-aware read (keep-alive-safe)
+            // W3087 (audit wxbeah3ef): a write failure previously did a bare `return;` → the load hung
+            // forever (no didReceiveResponse, no error) + the admission slot stayed pinned until task
+            // teardown. Leave responseBytes nil and fall through to the failH1 handler below (retry on an
+            // idempotent method / deliver a terminal error), like every other h1 terminal path.
+            if (written >= 0)
+                responseBytes = readAllFromCFStream(readStream, httpMethod); // W3069 — framing-aware read (keep-alive-safe)
             CFRelease(readStream);
             CFRelease(writeStream);
+        }
+
+        // W3086 (audit wxbeah3ef): the custom-TLS / BoringSSL h1 read loop hit the 128MB body cap. Hard-fail
+        // (a re-download would re-overflow, so NO retry) with the single-completion guard — never OOM the
+        // shared NetworkProcess by accumulating an unbounded/hostile body.
+        if (h1BodyOverflow) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3086] h1 response exceeded 128MB cap host=%s method=%s — hard-failing (OOM guard, no retry)", host.utf8().data(), httpMethod.utf8().data());
+            if (!tryBeginCompletion()) return;  // Wave .325 single-completion guard
+            Ref<DriftstackNetworkLoader> protectedThisOom { *this };
+            WebCore::ResourceError err(String("DriftstackNetworkLoader"_s), 0, URL(url), "response body exceeds 128MB limit"_s, WebCore::ResourceError::Type::General);
+            callOnMainRunLoop([protectedThisOom, err = std::move(err)]() mutable {
+                RefPtr task = protectedThisOom->protectedTask();
+                if (!task) return;
+                RefPtr client = task->client();
+                if (!client) return;
+                WebCore::NetworkLoadMetrics metrics;
+                client->didCompleteWithError(err, metrics);
+            });
+            return;
         }
 
         // W3061 (audit) + W3063 (founder): the h1 terminal path used bare `return;` on an empty/malformed
