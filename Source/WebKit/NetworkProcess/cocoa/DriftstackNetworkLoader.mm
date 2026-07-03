@@ -497,6 +497,130 @@ static void initDriftstackSslCtx()
 #endif // DRIFTSTACK_HAS_BORINGSSL
 
 // Forward declare helper bodies used in resume()
+// W3069 — HTTP/1.1 keep-alive-safe read framing. Returns true once the FULL response
+// message is buffered in [buf, len). With Connection: keep-alive (W3068) the server does
+// NOT close after the response, so a read-until-FIN loop would block until the idle
+// timeout. The h1 read loops call this incrementally (after each read) and stop on the
+// message framing instead of on EOF:
+//   • no-body responses (HEAD request; 1xx/204/304 status, RFC 7230 §3.3.3) → done at the
+//     header terminator regardless of any Content-Length,
+//   • Transfer-Encoding: chunked → done once the terminating 0-size chunk (+ trailer CRLF)
+//     is present (takes precedence over Content-Length per RFC 7230 §3.3.3),
+//   • Content-Length: N → done once N body bytes follow the header terminator,
+//   • otherwise (neither framing, or the server answered Connection: close) → returns false
+//     forever so the caller falls back to read-until-FIN (bounded by the existing idle
+//     deadline). Never inspects bytes past what the message frames; safe to over-call.
+static bool driftstackH1MessageComplete(const uint8_t* buf, size_t len, const String& method)
+{
+    // Locate the header terminator CRLFCRLF.
+    size_t hdrEnd = 0;
+    bool haveHdrEnd = false;
+    if (len >= 4) {
+        for (size_t i = 3; i < len; ++i) {
+            if (buf[i - 3] == '\r' && buf[i - 2] == '\n' && buf[i - 1] == '\r' && buf[i] == '\n') {
+                hdrEnd = i + 1;
+                haveHdrEnd = true;
+                break;
+            }
+        }
+    }
+    if (!haveHdrEnd)
+        return false; // headers not fully received yet
+
+    // Parse status + framing headers from the header block (ASCII; same idiom as the WS handshake parse).
+    String headerBlock = String::fromUTF8(std::span<const uint8_t> { buf, hdrEnd });
+    Vector<String> lines = headerBlock.split("\r\n"_s);
+    if (lines.isEmpty())
+        return false;
+    Vector<String> statusParts = lines[0].split(' ');
+    int statusCode = statusParts.size() >= 2 ? parseInteger<int>(statusParts[1]).value_or(0) : 0;
+    long long contentLength = -1;
+    bool chunked = false;
+    for (size_t i = 1; i < lines.size(); ++i) {
+        size_t colon = lines[i].find(':');
+        if (colon == notFound)
+            continue;
+        String name = lines[i].left(colon).trim(deprecatedIsSpaceOrNewline);
+        String value = lines[i].substring(colon + 1).trim(deprecatedIsSpaceOrNewline);
+        if (equalIgnoringASCIICase(name, "content-length"_s)) {
+            if (contentLength < 0)
+                contentLength = parseInteger<long long>(value).value_or(-1); // first valid Content-Length wins
+        } else if (equalIgnoringASCIICase(name, "transfer-encoding"_s)) {
+            if (value.containsIgnoringASCIICase("chunked"_s))
+                chunked = true;
+        }
+    }
+
+    const size_t bodyStart = hdrEnd;
+    const size_t bodyLen = len - bodyStart;
+
+    // No message body regardless of framing headers (RFC 7230 §3.3.3) — else a HEAD/204/304
+    // with a Content-Length that describes the would-be GET body would wait for bytes that
+    // never arrive on keep-alive.
+    if (equalIgnoringASCIICase(method, "HEAD"_s)
+        || (statusCode >= 100 && statusCode < 200) || statusCode == 204 || statusCode == 304)
+        return true;
+
+    if (chunked) {
+        // Walk the chunk framing (mirrors the downstream de-chunker) until the 0-size last
+        // chunk + its trailing (possibly empty) trailer section terminates the message.
+        const uint8_t* p = buf + bodyStart;
+        size_t n = bodyLen, i = 0;
+        while (i < n) {
+            size_t j = i;
+            while (j + 1 < n && !(p[j] == '\r' && p[j + 1] == '\n'))
+                ++j;
+            if (j + 1 >= n)
+                return false; // chunk-size line not fully buffered
+            size_t chunkSize = 0;
+            bool anyHex = false;
+            for (size_t k = i; k < j; ++k) {
+                uint8_t c = p[k];
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else break; // ';' chunk-ext / trailing ws ends the size token
+                chunkSize = chunkSize * 16 + d;
+                anyHex = true;
+                if (chunkSize > n)
+                    return false; // bigger than everything buffered → wait for more (also caps overflow)
+            }
+            if (!anyHex)
+                return false; // malformed size line → let read-until-FIN / idle deadline bound it
+            i = j + 2; // past the size-line CRLF
+            if (!chunkSize) {
+                // last-chunk: optional trailers, then a terminating empty line.
+                while (i < n) {
+                    size_t t = i;
+                    while (t + 1 < n && !(p[t] == '\r' && p[t + 1] == '\n'))
+                        ++t;
+                    if (t + 1 >= n)
+                        return false; // trailer line not fully buffered
+                    if (t == i)
+                        return true; // empty line → end of trailers → message complete
+                    i = t + 2;
+                }
+                return false; // terminating CRLF not yet buffered
+            }
+            if (i + chunkSize + 2 > n)
+                return false; // chunk data + its trailing CRLF not fully buffered
+            i += chunkSize;
+            if (!(p[i] == '\r' && p[i + 1] == '\n'))
+                return false; // broken framing → wait for more / FIN
+            i += 2;
+        }
+        return false; // ran out of buffered bytes before the 0-size last chunk
+    }
+
+    if (contentLength >= 0)
+        return static_cast<long long>(bodyLen) >= contentLength;
+
+    // Neither Content-Length nor chunked (or the server chose Connection: close) → the
+    // message is delimited by connection close; keep reading until FIN (caller's fallback).
+    return false;
+}
+
 static CFIndex writeAllToCFStream(CFWriteStreamRef writeStream, NSData* data)
 {
     CFIndex total = 0;
@@ -516,7 +640,7 @@ static CFIndex writeAllToCFStream(CFWriteStreamRef writeStream, NSData* data)
     return total;
 }
 
-static NSData* readAllFromCFStream(CFReadStreamRef readStream)
+static NSData* readAllFromCFStream(CFReadStreamRef readStream, const String& method)
 {
     NSMutableData* data = [NSMutableData data];
     uint8_t buffer[4096];
@@ -535,6 +659,12 @@ static NSData* readAllFromCFStream(CFReadStreamRef readStream)
             continue;
         }
         [data appendBytes:buffer length:n];
+        // W3069 — keep-alive-safe: stop once the full HTTP/1.1 message is framed. With
+        // Connection: keep-alive (W3068) the server won't FIN, so waiting for EOF above would
+        // hang until the idle timeout. Falls back to read-until-EOF when the response declares
+        // neither Content-Length nor chunked framing (returns false forever there).
+        if (driftstackH1MessageComplete((const uint8_t*)[data bytes], [data length], method))
+            break;
     }
     return data;
 }
@@ -1875,8 +2005,14 @@ void DriftstackNetworkLoader::resume()
         }
     }
     const bool canRetry = (currentAttempt < kMaxAttempts) && withinRetryBudget;
-    int64_t retryDelayMs = static_cast<int64_t>(150) << (currentAttempt - 1);
-    if (retryDelayMs > 600) retryDelayMs = 600;
+    int64_t retryBaseMs = static_cast<int64_t>(150) << (currentAttempt - 1);
+    if (retryBaseMs > 600) retryBaseMs = 600;
+    // W3067 (slow-proxy tuning): add equal-jitter (half fixed + half random) so retries DESYNCHRONIZE.
+    // Without jitter, many subresources that failed at the same instant (a flaky proxy blip / one dead
+    // exit) all retry in lockstep -> a thundering herd that re-hammers the already-struggling proxy and
+    // makes the blip worse. Spreading each retry over [base/2, base] is the standard resilient-client
+    // behavior under flaky networks (AWS backoff guidance). Pure timing — wire/fingerprint-neutral.
+    int64_t retryDelayMs = retryBaseMs / 2 + static_cast<int64_t>(arc4random_uniform(static_cast<uint32_t>(retryBaseMs / 2) + 1));
 
     Ref protectedThis { *this };
     dispatch_async(loaderQueue(), ^{
@@ -3149,18 +3285,53 @@ _Pragma("clang diagnostic pop")
         // Empty => ITP blocked all cookies => the `if (!cookieHeader.isEmpty())` below injects no Cookie line.
         String cookieHeader = driftstackCookieHeader;
 
+        // W3068 — iPhone-Safari-faithful HTTP/1.1 request framing. The prior builder forwarded
+        // WebKit's LOWERCASE header map in WebKit's own order and hardcoded `Connection: close`
+        // — NOT Safari's h1 wire shape, and a JA4H tell that made 3rd-party endpoints reject the
+        // request (branch.io / js.adsrvr.org / cloudfront / unagi.amazon.com returned zero bytes).
+        // Build from the SAME ordered header vector the h2 builder emits (JA4H-verified iPhone-17
+        // raw-wire order: sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site,
+        // sec-fetch-mode, accept-language, priority, accept-encoding — reused so the order is not
+        // re-invented) and apply the captured h1 framing transform:
+        //   1) drop the h2 pseudo-headers (the extraHeaders vector carries none),
+        //   2) Title-Case every header name (WebKit stores lowercase; Safari h1 sends Title-Case),
+        //   3) Host FIRST (immediately after the request-line),
+        //   4) Connection: keep-alive LAST (never `close` — that is a bot tell),
+        //   5) Cookie PENULTIMATE (immediately before Connection, i.e. after Accept-Encoding),
+        //   6) Upgrade-Insecure-Requests is NOT emitted: real Safari sends it only on http://
+        //      document/iframe navigations, and this path is always over TLS (https),
+        //   7) Accept-Encoding: gzip, deflate, br, zstd + the per-dest Priority header are already
+        //      carried by the h2 vector.
+        // keep-alive means the server won't close after the response — the read loops below stop
+        // on the message framing (W3069), not on FIN. An empty body is passed to the h2 builder
+        // purely to harvest the ordered header vector; this path forwards headers only (sending a
+        // request body over pure-h1 is unchanged from before — it was not sent previously either).
+        auto h1Req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, Vector<uint8_t> { }, host, cookieHeader);
+        auto titleCaseHeaderName = [](const String& lower) -> String {
+            // Title-Case = capitalize the first letter + each letter after '-'.
+            StringBuilder tc;
+            bool atWordStart = true;
+            for (unsigned i = 0; i < lower.length(); ++i) {
+                char16_t c = lower[i];
+                if (atWordStart && c >= 'a' && c <= 'z')
+                    c = static_cast<char16_t>(c - 'a' + 'A');
+                tc.append(c);
+                atWordStart = (c == '-');
+            }
+            return tc.toString();
+        };
         StringBuilder rb;
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);
-        rb.append("Host: "_s, host, "\r\n"_s);
-        rb.append("Connection: close\r\n"_s);
-        if (!cookieHeader.isEmpty())
-            rb.append("Cookie: "_s, cookieHeader, "\r\n"_s);
-        for (auto& header : httpHeaders) {
-            String lower = header.key.convertToASCIILowercase();
-            if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s)
+        rb.append("Host: "_s, host, "\r\n"_s); // Host FIRST
+        for (auto& [name, value] : h1Req.extraHeaders) {
+            // Cookie is emitted penultimate (below); UIR is never emitted on this https path.
+            if (equalIgnoringASCIICase(name, "cookie"_s) || equalIgnoringASCIICase(name, "upgrade-insecure-requests"_s))
                 continue;
-            rb.append(header.key, ": "_s, header.value, "\r\n"_s);
+            rb.append(titleCaseHeaderName(name), ": "_s, value, "\r\n"_s);
         }
+        if (!cookieHeader.isEmpty())
+            rb.append("Cookie: "_s, cookieHeader, "\r\n"_s); // PENULTIMATE — immediately before Connection
+        rb.append("Connection: keep-alive\r\n"_s);           // LAST — never `close`
         rb.append("\r\n"_s);
         auto requestStr = rb.toString().utf8();
         NSData* reqData = [NSData dataWithBytes:requestStr.data() length:requestStr.length()];
@@ -3185,8 +3356,11 @@ _Pragma("clang diagnostic pop")
                 writeBytes += n;
                 writeRemaining -= static_cast<size_t>(n);
             }
-            // Connection: close (set above) → server closes after the full response;
-            // read() returns <= 0 on close_notify / FIN, terminating the loop.
+            // W3069: the request now sends Connection: keep-alive (W3068), so the server does
+            // NOT close after the response — driftstackH1MessageComplete() below terminates the
+            // loop on the HTTP/1.1 message framing (Content-Length / chunked / no-body). A
+            // read() returning <= 0 (close_notify / FIN — e.g. the server chose Connection:
+            // close, or an unframed body) still terminates the loop as before.
             // W2341 (task #58): poll in 1s slices + re-check m_cancelled so a cancel
             // mid-response (or a server that never closes) can't park this block in
             // recv() forever (the thread+fd leak). On cancel the partial response is
@@ -3234,6 +3408,11 @@ _Pragma("clang diagnostic pop")
                 [respMutable appendBytes:readBuf length:static_cast<NSUInteger>(n)];
                 if (h1DeadlineActive)
                     h1IdleDeadline = MonotonicTime::now() + kH1IdleTimeout; // progress → extend the window
+                // W3069 — keep-alive-safe: stop on the message framing (the server won't FIN on
+                // Connection: keep-alive). Unframed responses return false → fall through to the
+                // FIN / idle-deadline paths above.
+                if (driftstackH1MessageComplete((const uint8_t*)[respMutable bytes], [respMutable length], httpMethod))
+                    break;
             }
             responseBytes = respMutable;
         } else if (useBoringSSL) {
@@ -3261,6 +3440,11 @@ _Pragma("clang diagnostic pop")
                     break;
                 }
                 [respMutable appendBytes:readBuf length:n];
+                // W3069 — keep-alive-safe: stop on the HTTP/1.1 message framing (the server won't
+                // FIN on Connection: keep-alive). Unframed responses return false → keep reading
+                // until ssl_read reports FIN/close_notify above.
+                if (driftstackH1MessageComplete((const uint8_t*)[respMutable bytes], [respMutable length], httpMethod))
+                    break;
             }
             responseBytes = respMutable;
             if (f.ssl_shutdown) f.ssl_shutdown(ssl);
@@ -3274,7 +3458,7 @@ _Pragma("clang diagnostic pop")
                 CFRelease(writeStream);
                 return;
             }
-            responseBytes = readAllFromCFStream(readStream);
+            responseBytes = readAllFromCFStream(readStream, httpMethod); // W3069 — framing-aware read (keep-alive-safe)
             CFRelease(readStream);
             CFRelease(writeStream);
         }
