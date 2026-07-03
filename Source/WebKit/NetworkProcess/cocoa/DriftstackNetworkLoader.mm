@@ -3323,18 +3323,36 @@ _Pragma("clang diagnostic pop")
         StringBuilder rb;
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);
         rb.append("Host: "_s, host, "\r\n"_s); // Host FIRST
+        bool sawContentLength = false;
         for (auto& [name, value] : h1Req.extraHeaders) {
             // Cookie is emitted penultimate (below); UIR is never emitted on this https path.
             if (equalIgnoringASCIICase(name, "cookie"_s) || equalIgnoringASCIICase(name, "upgrade-insecure-requests"_s))
                 continue;
+            if (equalIgnoringASCIICase(name, "content-length"_s))
+                sawContentLength = true;
             rb.append(titleCaseHeaderName(name), ": "_s, value, "\r\n"_s);
         }
+        // W3070 — POST/PUT body over pure-h1. The builder harvests headers via an EMPTY body to the
+        // h2 vector, so a body method to a TLS1.2/http1.1-only origin (unagi.amazon.com and other
+        // older stacks a real iPhone POSTs to fine) previously went out with Content-Length: N (WebKit
+        // forwards it) but ZERO body bytes → the server waited for a body that never arrived → empty
+        // response / load fail. Append the real body bytes (below), and add a Content-Length fallback
+        // only if WebKit didn't already forward one (it normally does for a body method).
+        if (!requestBody.isEmpty() && !sawContentLength)
+            rb.append("Content-Length: "_s, String::number(requestBody.size()), "\r\n"_s);
         if (!cookieHeader.isEmpty())
             rb.append("Cookie: "_s, cookieHeader, "\r\n"_s); // PENULTIMATE — immediately before Connection
         rb.append("Connection: keep-alive\r\n"_s);           // LAST — never `close`
         rb.append("\r\n"_s);
         auto requestStr = rb.toString().utf8();
-        NSData* reqData = [NSData dataWithBytes:requestStr.data() length:requestStr.length()];
+        NSMutableData* reqData = [NSMutableData dataWithBytes:requestStr.data() length:requestStr.length()];
+        if (!requestBody.isEmpty()) {
+            auto bodySpan = requestBody.span(); // WTF-safe buffer accessor (Vector::data() is private)
+            [reqData appendBytes:bodySpan.data() length:bodySpan.size()]; // W3070 — h1 request body after the header terminator
+        }
+        if (!equalIgnoringASCIICase(httpMethod, "GET"_s)) // W3070 diag: verify body-method h1 requests carry their body on the wire
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3070] h1 %s to %s: body=%zuB, reqData(total)=%luB",
+                httpMethod.utf8().data(), host.utf8().data(), requestBody.size(), (unsigned long)[reqData length]);
 
         NSData* responseBytes = nil;
 #if defined(DRIFTSTACK_HAS_BORINGSSL) && DRIFTSTACK_HAS_BORINGSSL
