@@ -1486,9 +1486,14 @@ static DriftstackHttp2Response driftstackHttp2ExecuteImpl(void* ssl, const Drift
         }
     }
 
-    // Wave 29-499.200 — log response body to syslog for fingerprint extraction
-    // (NetworkProcess sandbox blocks /tmp writes; logs go through XPC).
-    {
+    // Wave 29-499.200 / capture-gated (privacy) — log the response body to syslog for on-demand
+    // fingerprint extraction ONLY when DRIFTSTACK_CAPTURE_H2_BODIES is set (+ its __XPC_ twin for the
+    // NetworkProcess XPC sandbox). Default OFF: prod one-shot requests must NOT write customer page
+    // content to syslog (privacy), and ~125 WTFLogAlways lines per 100 KB body is a perf drag. No
+    // capture pipeline consumes these lines anymore — the raw-h1 / h2-headers capture SERVERS
+    // (captures/v1/raw-h1-capture-server.js, operations/h2-headers-capture) superseded syslog scraping.
+    static const bool captureH2Bodies = getenv("DRIFTSTACK_CAPTURE_H2_BODIES") != nullptr;
+    if (captureH2Bodies) {
         const auto& body = resp.body;
         for (size_t off = 0; off < body.size(); off += 800) {
             size_t chunk = std::min(static_cast<size_t>(800), body.size() - off);
