@@ -172,10 +172,13 @@ private:
     Vector<uint8_t> m_clientRandom;            // 32 bytes, saved from ClientHello
     Vector<uint8_t> m_serverRandom;            // 32 bytes, from ServerHello
     Vector<uint8_t> m_t12MasterSecret;         // 48 bytes
-    Vector<uint8_t> m_t12ClientKey;            // 16 (AES-128)
-    Vector<uint8_t> m_t12ServerKey;            // 16
-    Vector<uint8_t> m_t12ClientFixedIV;        // 4 (implicit nonce prefix)
-    Vector<uint8_t> m_t12ServerFixedIV;        // 4
+    // W3071: sizes now follow the negotiated suite — enc key 16 (AES-128-GCM) / 32 (AES-256-GCM,
+    // ChaCha20); fixed IV 4 (GCM implicit-nonce prefix) / 12 (ChaCha20, RFC 7905). See t12CipherEncKeyLen
+    // / t12CipherFixedIvLen and the key_block split in doTLS12Handshake.
+    Vector<uint8_t> m_t12ClientKey;            // 16 (AES-128) or 32 (AES-256 / ChaCha20)   W3071
+    Vector<uint8_t> m_t12ServerKey;            // 16 or 32                                    W3071
+    Vector<uint8_t> m_t12ClientFixedIV;        // 4 (GCM implicit prefix) or 12 (ChaCha20)    W3071
+    Vector<uint8_t> m_t12ServerFixedIV;        // 4 or 12                                     W3071
     uint64_t m_t12ClientSeq { 0 };
     uint64_t m_t12ServerSeq { 0 };
     Vector<uint8_t> m_t12ReadBuffer;           // leftover decrypted app bytes
