@@ -702,7 +702,7 @@
 // attr + orientationchange event + ChromeClient::deviceOrientation()); WebChromeClient implements the value
 // for !IOS_FAMILY (returns 0 = portrait, matching a portrait iPhone). The IDL [Conditional] is dropped in
 // DOMWindow+Compat.idl since the IDL preprocessor does not see WTF_PLATFORM_DRIFTSTACK (f7e9e741 pattern).
-#if !defined(ENABLE_ORIENTATION_EVENTS) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK))
+#if !defined(ENABLE_ORIENTATION_EVENTS) && (PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)) // V-ORIENTATION-EVENTS-DS
 #define ENABLE_ORIENTATION_EVENTS 1
 #endif
 
