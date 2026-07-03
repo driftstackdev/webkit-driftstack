@@ -182,6 +182,7 @@ private:
     uint64_t m_t12ClientSeq { 0 };
     uint64_t m_t12ServerSeq { 0 };
     Vector<uint8_t> m_t12ReadBuffer;           // leftover decrypted app bytes
+    bool m_t12ReadFatal { false };             // W3075 — a 1.2 record failed AEAD auth (bad_record_mac) / was malformed; read() must return -1 (error) not 0 (EOF), and stay failed
 
     // Internal helpers
     bool sendClientHello();

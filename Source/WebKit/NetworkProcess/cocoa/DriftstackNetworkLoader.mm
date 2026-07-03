@@ -502,7 +502,10 @@ static void initDriftstackSslCtx()
 // NOT close after the response, so a read-until-FIN loop would block until the idle
 // timeout. The h1 read loops call this incrementally (after each read) and stop on the
 // message framing instead of on EOF:
-//   • no-body responses (HEAD request; 1xx/204/304 status, RFC 7230 §3.3.3) → done at the
+//   • leading interim 1xx responses (100 Continue / 103 Early Hints) are SKIPPED (W3073): a 1xx is
+//     interim (RFC 7230 §3.3 / RFC 8297) and is followed by another response, so framing is done on
+//     the FINAL (>=200) response, not the 1xx block,
+//   • no-body FINAL responses (HEAD request; 204/304 status, RFC 7230 §3.3.3) → done at the
 //     header terminator regardless of any Content-Length,
 //   • Transfer-Encoding: chunked → done once the terminating 0-size chunk (+ trailer CRLF)
 //     is present (takes precedence over Content-Length per RFC 7230 §3.3.3),
@@ -512,28 +515,51 @@ static void initDriftstackSslCtx()
 //     deadline). Never inspects bytes past what the message frames; safe to over-call.
 static bool driftstackH1MessageComplete(const uint8_t* buf, size_t len, const String& method)
 {
-    // Locate the header terminator CRLFCRLF.
-    size_t hdrEnd = 0;
-    bool haveHdrEnd = false;
-    if (len >= 4) {
-        for (size_t i = 3; i < len; ++i) {
-            if (buf[i - 3] == '\r' && buf[i - 2] == '\n' && buf[i - 1] == '\r' && buf[i] == '\n') {
-                hdrEnd = i + 1;
-                haveHdrEnd = true;
-                break;
+    // W3073 — locate the FINAL response's header block, SKIPPING any leading interim 1xx blocks. A
+    // 1xx (100 Continue / 103 Early Hints, RFC 7230 §3.3 / RFC 8297) is INTERIM: its own header
+    // terminator does NOT end the message — another (>=200) response follows. Framing the message on
+    // the 1xx block would stop the read loop before the real 200+body arrives (empty/broken page).
+    // So advance a start offset past each 1xx header block and re-parse from the next one.
+    size_t hdrEnd = 0;          // index just past the FINAL block's CRLFCRLF (== body start)
+    int statusCode = 0;
+    Vector<String> lines;
+    size_t blockStart = 0;
+    for (;;) {
+        // Locate the header terminator CRLFCRLF at/after blockStart.
+        bool haveHdrEnd = false;
+        if (len >= blockStart + 4) {
+            for (size_t i = blockStart + 3; i < len; ++i) {
+                if (buf[i - 3] == '\r' && buf[i - 2] == '\n' && buf[i - 1] == '\r' && buf[i] == '\n') {
+                    hdrEnd = i + 1;
+                    haveHdrEnd = true;
+                    break;
+                }
             }
         }
-    }
-    if (!haveHdrEnd)
-        return false; // headers not fully received yet
+        if (!haveHdrEnd)
+            return false; // (final) headers not fully received yet
 
-    // Parse status + framing headers from the header block (ASCII; same idiom as the WS handshake parse).
-    String headerBlock = String::fromUTF8(std::span<const uint8_t> { buf, hdrEnd });
-    Vector<String> lines = headerBlock.split("\r\n"_s);
-    if (lines.isEmpty())
-        return false;
-    Vector<String> statusParts = lines[0].split(' ');
-    int statusCode = statusParts.size() >= 2 ? parseInteger<int>(statusParts[1]).value_or(0) : 0;
+        // W3074 — decode header bytes with a Latin-1 FALLBACK, not strict UTF-8. HTTP/1.1 field
+        // values may legally carry obs-text (0x80-0xFF ISO-8859-1, RFC 7230 §3.2.6 — legacy
+        // Content-Disposition filename, Set-Cookie, Server). String::fromUTF8 returns a NULL String
+        // on any non-UTF-8 byte → split() empty → lines.isEmpty() → the message is unframable forever
+        // (60s stall / permanent hang). A real iPhone decodes headers as Latin-1.
+        String headerBlock = String::fromUTF8WithLatin1Fallback(std::span<const uint8_t> { buf + blockStart, hdrEnd - blockStart });
+        lines = headerBlock.split("\r\n"_s);
+        if (lines.isEmpty())
+            return false;
+        Vector<String> statusParts = lines[0].split(' ');
+        statusCode = statusParts.size() >= 2 ? parseInteger<int>(statusParts[1]).value_or(0) : 0;
+        // W3073 — interim 1xx → skip this block and re-frame on the next. A non-1xx status (incl. an
+        // unparseable 0) is the FINAL response; fall through to frame on it.
+        if (statusCode >= 100 && statusCode < 200) {
+            blockStart = hdrEnd;
+            continue;
+        }
+        break;
+    }
+
+    // Parse framing headers from the FINAL response block's lines only.
     long long contentLength = -1;
     bool chunked = false;
     for (size_t i = 1; i < lines.size(); ++i) {
@@ -556,9 +582,10 @@ static bool driftstackH1MessageComplete(const uint8_t* buf, size_t len, const St
 
     // No message body regardless of framing headers (RFC 7230 §3.3.3) — else a HEAD/204/304
     // with a Content-Length that describes the would-be GET body would wait for bytes that
-    // never arrive on keep-alive.
+    // never arrive on keep-alive. W3073 — 1xx is handled above (skipped, never terminal here); the
+    // genuine no-body terminals are the FINAL response's own HEAD/204/304.
     if (equalIgnoringASCIICase(method, "HEAD"_s)
-        || (statusCode >= 100 && statusCode < 200) || statusCode == 204 || statusCode == 304)
+        || statusCode == 204 || statusCode == 304)
         return true;
 
     if (chunked) {
@@ -3518,13 +3545,46 @@ _Pragma("clang diagnostic pop")
 
         // Parse status + headers
         NSData* boundary = [@"\r\n\r\n" dataUsingEncoding:NSUTF8StringEncoding];
-        NSRange boundaryRange = [responseBytes rangeOfData:boundary options:0 range:NSMakeRange(0, [responseBytes length])];
-        if (boundaryRange.location == NSNotFound) { failH1("malformed HTTP/1.1 response (no header terminator)"_s); return; }
-
-        NSData* headerBytes = [responseBytes subdataWithRange:NSMakeRange(0, boundaryRange.location)];
-        NSUInteger bodyOffset = boundaryRange.location + boundaryRange.length;
+        // W3073 — skip any leading interim 1xx response blocks (100 Continue / 103 Early Hints,
+        // RFC 7230 §3.3 / RFC 8297) so the DELIVERED status line + headers + body are the FINAL
+        // (>=200) response, not the interim one. Mirrors driftstackH1MessageComplete's framing skip:
+        // each 1xx is a complete header block that is followed by another response, so splitting on
+        // the FIRST \r\n\r\n would hand the renderer the 103's headers + the real 200 response as
+        // "body". Scans block-by-block until a non-1xx (or unparseable) status.
+        NSData* headerBytes = nil;
+        NSUInteger bodyOffset = 0;
+        {
+            NSUInteger scanStart = 0;
+            for (;;) {
+                NSRange r = [responseBytes rangeOfData:boundary options:0 range:NSMakeRange(scanStart, [responseBytes length] - scanStart)];
+                if (r.location == NSNotFound) { failH1("malformed HTTP/1.1 response (no header terminator)"_s); return; }
+                NSData* blockBytes = [responseBytes subdataWithRange:NSMakeRange(scanStart, r.location - scanStart)];
+                // W3074 — decode with a Latin-1 FALLBACK (obs-text safe): a status line is ASCII, but
+                // preceding folded field bytes may be obs-text and would nil a strict-UTF-8 decode.
+                NSString* blockStr = [[NSString alloc] initWithData:blockBytes encoding:NSUTF8StringEncoding];
+                if (!blockStr) blockStr = [[NSString alloc] initWithData:blockBytes encoding:NSISOLatin1StringEncoding];
+                int blockStatus = 0;
+                NSArray<NSString*>* blockLines = [blockStr componentsSeparatedByString:@"\r\n"];
+                if ([blockLines count] >= 1) {
+                    NSArray<NSString*>* sp = [blockLines[0] componentsSeparatedByString:@" "];
+                    blockStatus = ([sp count] >= 2) ? [sp[1] intValue] : 0;
+                }
+                if (blockStatus >= 100 && blockStatus < 200) {
+                    scanStart = r.location + r.length; // interim → skip this block, scan for the next
+                    continue;
+                }
+                headerBytes = blockBytes;
+                bodyOffset = r.location + r.length;
+                break;
+            }
+        }
         NSData* bodyBytes = [responseBytes subdataWithRange:NSMakeRange(bodyOffset, [responseBytes length] - bodyOffset)];
+        // W3074 — obs-text (0x80-0xFF ISO-8859-1, RFC 7230 §3.2.6) in a legacy Content-Disposition
+        // filename / Set-Cookie / Server value nils a strict NSUTF8StringEncoding decode → the whole
+        // response fails to parse. Fall back to NSISOLatin1StringEncoding (a real iPhone decodes
+        // headers as Latin-1). Body bytes stay raw — only header parsing changes.
         NSString* headerStr = [[NSString alloc] initWithData:headerBytes encoding:NSUTF8StringEncoding];
+        if (!headerStr) headerStr = [[NSString alloc] initWithData:headerBytes encoding:NSISOLatin1StringEncoding];
 
         NSArray<NSString*>* headerLines = [headerStr componentsSeparatedByString:@"\r\n"];
         if ([headerLines count] < 1) { failH1("malformed HTTP/1.1 response (no status line)"_s); return; }

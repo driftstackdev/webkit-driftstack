@@ -23,6 +23,7 @@
 #if PLATFORM(DRIFTSTACK)
 
 #import <errno.h>
+#import <optional>   // W3075 — std::optional AEAD success/failure channel for t12OpenRecord
 #import <poll.h>
 #import <stdlib.h>   // BUG-42 Fix #4: atof for DRIFTSTACK_EGRESS_HANDSHAKE_DEADLINE_SECS
 #import <string.h>
@@ -722,8 +723,15 @@ int DriftstackTLS13Client::read(uint8_t* buf, size_t maxLen)
         setsockopt(m_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }
     if (m_isTLS12) {
+        // W3075 — a prior record failed AEAD auth (bad_record_mac): stay failed, never resume as
+        // a clean EOF that would truncate/complete the response as if the peer closed.
+        if (m_t12ReadFatal) return -1;
         if (m_t12ReadBuffer.isEmpty()) {
             auto pt = readTLS12Record();
+            // W3075 — distinguish a fatal decrypt/auth error from a genuine transport close:
+            // readTLS12Record sets m_t12ReadFatal on a bad_record_mac → return -1 (error). An
+            // empty pt WITHOUT the fatal flag is a real close_notify/FIN → return 0 (EOF).
+            if (m_t12ReadFatal) return -1;
             if (pt.isEmpty()) return 0;
             m_t12ReadBuffer = std::move(pt);
         }
@@ -1554,9 +1562,15 @@ Vector<uint8_t> t12SealRecord(uint16_t cipher, const Vector<uint8_t>& key, const
 
 // W3071 — open a TLS 1.2 record PAYLOAD (bytes AFTER the 5-byte header) → plaintext. `seq` is our
 // local receive counter (used for the AAD, and — ChaCha only — the nonce). For GCM the explicit
-// nonce is taken FROM THE WIRE (first 8 bytes), per RFC 5288, not from `seq`. Returns empty on
-// malformed input or AEAD auth failure. Shared by the server-Finished + readTLS12Record paths.
-Vector<uint8_t> t12OpenRecord(uint16_t cipher, const Vector<uint8_t>& key, const Vector<uint8_t>& fixedIV,
+// nonce is taken FROM THE WIRE (first 8 bytes), per RFC 5288, not from `seq`. Shared by the
+// server-Finished + readTLS12Record paths.
+// W3075 — returns std::optional to give AEAD auth a success/failure channel INDEPENDENT of the
+// plaintext length: std::nullopt = malformed record OR AEAD auth failure (bad_record_mac); a
+// present-but-EMPTY vector = a genuinely-decrypted 0-length application_data record (RFC 5246
+// §6.2.1). The old `Vector` return conflated the two — an empty result meant BOTH "auth failed"
+// and "valid empty record", so the caller mistook a tampered record (and a legal empty record)
+// for a clean EOF and silently truncated the response.
+std::optional<Vector<uint8_t>> t12OpenRecord(uint16_t cipher, const Vector<uint8_t>& key, const Vector<uint8_t>& fixedIV,
     uint64_t seq, uint8_t contentType, const Vector<uint8_t>& payload)
 {
     Vector<uint8_t> seqBytes;
@@ -1564,7 +1578,7 @@ Vector<uint8_t> t12OpenRecord(uint16_t cipher, const Vector<uint8_t>& key, const
     const bool isChaCha = t12CipherIsChaCha(cipher);
     Vector<uint8_t> nonce, ct;
     if (isChaCha) {
-        if (payload.size() < 16) return { };   // tag floor (no explicit nonce on the wire)
+        if (payload.size() < 16) return std::nullopt;   // W3075 — tag floor (no explicit nonce on the wire) → malformed
         Vector<uint8_t> padded;
         padded.append(0x00); padded.append(0x00); padded.append(0x00); padded.append(0x00);
         padded.append(seqBytes.span());
@@ -1572,7 +1586,7 @@ Vector<uint8_t> t12OpenRecord(uint16_t cipher, const Vector<uint8_t>& key, const
             nonce.append(static_cast<uint8_t>(fixedIV[i] ^ padded[i]));
         ct.append(payload.span());             // whole payload = ciphertext || tag
     } else {
-        if (payload.size() < 8 + 16) return { };   // explicit_nonce(8) + tag(16) floor
+        if (payload.size() < 8 + 16) return std::nullopt;   // W3075 — explicit_nonce(8) + tag(16) floor → malformed
         nonce.append(fixedIV.span());              // fixed_iv(4)
         nonce.append(slice(payload, 0, 8).span()); // explicit(8) FROM THE WIRE
         ct = slice(payload, 8, payload.size() - 8);
@@ -1582,7 +1596,27 @@ Vector<uint8_t> t12OpenRecord(uint16_t cipher, const Vector<uint8_t>& key, const
     aad.append(seqBytes.span());
     aad.append(contentType); aad.append(0x03); aad.append(0x03);
     aad.append(static_cast<uint8_t>((ptLen >> 8) & 0xFF)); aad.append(static_cast<uint8_t>(ptLen & 0xFF));
-    return t12Aead(cipher, /*encrypt*/ false, key, nonce, ct, aad);
+    Vector<uint8_t> pt = t12Aead(cipher, /*encrypt*/ false, key, nonce, ct, aad);
+    if (!pt.isEmpty())
+        return pt;                                  // COMMON PATH — authentic, non-empty plaintext (byte-for-byte unchanged)
+    // W3075 — t12Aead returns empty for BOTH an AEAD auth FAILURE and a genuinely-decrypted
+    // 0-length record. Disambiguate: with ptLen>0 an authentic decrypt is never empty, so an
+    // empty result there is unambiguously an auth failure → nullopt. Only when ptLen==0 (a legal
+    // empty application_data record whose ciphertext is exactly the 16-byte tag) is it ambiguous;
+    // re-derive the tag over an empty plaintext (GCM/ChaCha are deterministic for a fixed
+    // key||nonce||aad — this recomputes exactly the decrypt's expected tag) and constant-time
+    // compare it to the record's tag. A match proves an authentic 0-length record; a mismatch is
+    // a tampered/forged empty record (bad_record_mac) → nullopt.
+    if (ptLen == 0 && ct.size() == 16) {
+        Vector<uint8_t> reTag = t12Aead(cipher, /*encrypt*/ true, key, nonce, Vector<uint8_t> { }, aad);
+        if (reTag.size() == 16) {
+            uint8_t diff = 0;
+            for (size_t i = 0; i < 16; ++i) diff |= static_cast<uint8_t>(reTag[i] ^ ct[i]);
+            if (!diff)
+                return Vector<uint8_t> { };         // authentic 0-length application_data record
+        }
+    }
+    return std::nullopt;                            // AEAD auth failure (bad_record_mac) / malformed
 }
 } // namespace
 
@@ -1901,12 +1935,16 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
             // W3071 — decrypt the server Finished (handshake content type 0x16, server seq 0) via the
             // shared suite-generic open helper: GCM strips the wire explicit_nonce(8); ChaCha (RFC 7905)
             // has none. Successful AEAD auth = the derived key schedule is correct.
-            Vector<uint8_t> pt = t12OpenRecord(sh.cipherSuite, m_t12ServerKey, m_t12ServerFixedIV,
+            // W3075 — t12OpenRecord now returns std::optional: std::nullopt = AEAD auth failure
+            // (== wrong key schedule here) / malformed; a present vector = decrypted plaintext (a
+            // real empty vs a failure is now distinguished — the server Finished is always the
+            // 16-byte handshake message, never empty, but the check no longer conflates them).
+            std::optional<Vector<uint8_t>> pt = t12OpenRecord(sh.cipherSuite, m_t12ServerKey, m_t12ServerFixedIV,
                 m_t12ServerSeq, /*contentType*/ 0x16, recBody);
             m_t12ServerSeq++;
-            if (pt.isEmpty()) { m_errorMessage = "TLS1.2: server Finished decrypt failed (key schedule wrong)"_s; return false; }
+            if (!pt) { m_errorMessage = "TLS1.2: server Finished decrypt failed (key schedule wrong)"_s; return false; }
             serverFinished = true;
-            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS1.2 server Finished decrypted OK (%zuB) — handshake verified, keys correct.", pt.size());
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS1.2 server Finished decrypted OK (%zuB) — handshake verified, keys correct.", pt->size());
         }
     }
     if (!serverFinished) { m_errorMessage = "TLS1.2: never received server Finished"_s; return false; }
@@ -1955,12 +1993,30 @@ Vector<uint8_t> DriftstackTLS13Client::readTLS12Record(int depth)
         return {};
     }
     // W3071 — open application-data (content type 0x17) via the shared suite-generic helper: GCM takes
-    // the explicit nonce from the wire; ChaCha20-Poly1305 (RFC 7905) derives it from the seq. Empty =
-    // malformed / auth failure. On the AES-128-GCM path this is byte-for-byte the original logic.
-    Vector<uint8_t> pt = t12OpenRecord(m_negotiatedCipher, m_t12ServerKey, m_t12ServerFixedIV,
+    // the explicit nonce from the wire; ChaCha20-Poly1305 (RFC 7905) derives it from the seq. On the
+    // AES-128-GCM path a normal non-empty record is byte-for-byte the original logic (returned below).
+    std::optional<Vector<uint8_t>> pt = t12OpenRecord(m_negotiatedCipher, m_t12ServerKey, m_t12ServerFixedIV,
         m_t12ServerSeq, /*contentType*/ 0x17, body);
     m_t12ServerSeq++;
-    return pt;
+    // W3075 — nullopt = AEAD auth failure (bad_record_mac) / malformed. This is NOT an orderly
+    // close: mark the read stream fatally failed so read() returns -1 (error), not 0 (EOF). The
+    // old code returned an empty Vector here, which read() mapped to a clean EOF → a tampered
+    // record silently TRUNCATED the response as if the peer had closed.
+    if (!pt) {
+        m_t12ReadFatal = true;
+        m_errorMessage = "TLS1.2: application_data AEAD authentication failed (bad_record_mac)"_s;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3075] TLS1.2 app-data record failed AEAD auth (seq=%llu) — surfacing as read error, not EOF", (unsigned long long)(m_t12ServerSeq - 1));
+        return { };
+    }
+    // W3075 — a VALID 0-length application_data record (RFC 5246 §6.2.1 traffic-analysis
+    // countermeasure). Returning the empty vector would look like EOF to read() and truncate the
+    // stream prematurely; instead read the NEXT record, bounded by the same depth guard as the
+    // CCS/0x16 skip path above (mirrors the TLS 1.3 zero-length handling in readApplicationRecord).
+    if (pt->isEmpty()) {
+        if (depth >= 32) { WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3075] TLS1.2 empty app-data record flood (depth=%d) — rejecting (recursion DoS defense)", depth); m_t12ReadFatal = true; m_errorMessage = "TLS1.2: too many empty app-data records"_s; return { }; }
+        return readTLS12Record(depth + 1);
+    }
+    return std::move(*pt);
 }
 
 // === W2202 cert-validation Landing 3: CertificateVerify (0x0f) signature verification ===
