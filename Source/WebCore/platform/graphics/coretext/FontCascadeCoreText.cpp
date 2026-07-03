@@ -502,9 +502,23 @@ static bool driftstackCanvasColorEmojiFullyServable(const Font& font, std::span<
             haveSourceSeqHash = true;
         }
     }
+    // DIAG (2026-07-03, #42 keycap1 step-3): gated on DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG — logs the
+    // per-glyph dispatch so A3 can pin why keycap1 [0x31,0xFE0F,0x20E3] misses (is the shaped glyph
+    // colorGlyphType!=Color = a text-path glyph the color serve skips, or is it Color but the seq_hash
+    // lookup misses?). Behavior-neutral when the env is unset.
+    static const bool s_dsColorDiag = std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG") != nullptr;
+    if (s_dsColorDiag) {
+        WTFLogAlways("[V-COLOR-DIAG] servable-guard: glyphs=%zu ptSizeQ4=%u seqKeyed=%d haveSourceSeqHash=%d sourceSeqHash=0x%08x",
+            glyphs.size(), static_cast<unsigned>(ptSizeQ4), static_cast<int>(seqKeyed), static_cast<int>(haveSourceSeqHash), sourceSeqHash);
+    }
     bool sourceConsumed = false; // the whole-source cluster hash serves at most one glyph (mirrors V-COLOR)
     for (size_t i = 0; i < glyphs.size(); ++i) {
         Glyph g = glyphs[i];
+        if (s_dsColorDiag) {
+            char32_t dcp = font.driftstackCodepointForColorGlyph(g);
+            WTFLogAlways("[V-COLOR-DIAG]   glyph[%zu]=%u colorGlyphType=%s codepointForColorGlyph=0x%x",
+                i, static_cast<unsigned>(g), font.colorGlyphType(g) == ColorGlyphType::Color ? "Color" : "Outline/text", static_cast<unsigned>(dcp));
+        }
         if (font.colorGlyphType(g) != ColorGlyphType::Color)
             continue; // non-color glyphs go through the normal path; only color glyphs matter for the guard
         std::optional<DriftstackPerGlyphColorAtlasEntry> hit;
