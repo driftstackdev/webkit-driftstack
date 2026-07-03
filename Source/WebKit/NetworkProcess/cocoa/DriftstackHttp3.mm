@@ -627,6 +627,7 @@ struct DriftstackQuicConn {
         Vector<std::pair<Vector<uint8_t>, Vector<uint8_t>>> headers;
         Vector<uint8_t> body;
         bool complete { false };
+        size_t headerCost { 0 };   // W3089 — per-stream header-section cost; the aggregate h3HeaderCost is reset per-request, this bounds the pump-harvested slot->headers
     };
     Lock h3StreamsLock;
     HashMap<int64_t, std::unique_ptr<H3Stream>> h3Streams WTF_GUARDED_BY_LOCK(h3StreamsLock);
@@ -1869,6 +1870,15 @@ static int driftstackH3RecvHeader(nghttp3_conn* /*conn*/, int64_t streamId,
             return -1;
         }
         auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
+        // W3089 (audit w8kcmzb6k): cap the PER-STREAM header section directly. The .359 aggregate cap
+        // on qc->h3HeaderCost is RESET per-request (driftstackHttp3SubmitRequest) while the pooled pump
+        // HARVESTS slot->headers — so a held-open stream + sibling submits re-grant fresh 16MB windows →
+        // unbounded slot->headers → OOM. Bound each stream independently (return -1 → nghttp3 fatal → fail over).
+        slot->headerCost += nv.len + vv.len + 32;
+        if (slot->headerCost > kMaxH3HeaderBytes) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3089] h3 PER-STREAM header section exceeds 16MB cap — aborting stream %lld", (long long)streamId);
+            return -1;
+        }
         if (statusCode >= 0)
             slot->status = statusCode;
         slot->headers.append({ Vector<uint8_t>(nameBuf), Vector<uint8_t>(valBuf) });
@@ -1908,6 +1918,14 @@ static int driftstackH3RecvData(nghttp3_conn* /*conn*/, int64_t streamId,
             return -1;
         }
         auto& slot = qc->h3Streams.ensure(streamId + 1, [] { return makeUniqueWithoutFastMallocCheck<DriftstackQuicConn::H3Stream>(); }).iterator->value;
+        // W3089 (audit w8kcmzb6k): cap the PER-STREAM body directly. The .358 aggregate cap on
+        // qc->h3ResponseBody is RESET per-request (driftstackHttp3SubmitRequest.clear()) while the pooled
+        // pump HARVESTS slot->body — so a held-open stream + sibling submits re-grant fresh 128MB windows →
+        // unbounded slot->body → NetworkProcess OOM. Bound each stream independently.
+        if (slot->body.size() + datalen > kMaxH3BodyBytes) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3089] h3 PER-STREAM body exceeds 128MB cap — aborting stream %lld", (long long)streamId);
+            return -1;
+        }
         slot->body.append(std::span<const uint8_t> { data, datalen });
     }
     return 0;
