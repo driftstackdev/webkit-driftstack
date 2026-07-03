@@ -217,7 +217,24 @@ std::optional<PlatformMediaCapabilitiesInfo> validateDoViParameters(const DoViPa
     if (hasAlphaChannel)
         return std::nullopt;
 
+    // DIAG (2026-07-03): A3's box-test shows the dvh1-p5 force didn't change the output — so either this
+    // function isn't reached for the test config, or the gate below nullopts it. Gated on DRIFTSTACK_DOVI_DIAG;
+    // if NO [V-DOVI-DIAG] ENTER line fires for dovi_dvh1_p5_1080p, decodingInfo takes a different path entirely.
+    static const bool s_dsDoViDiag = std::getenv("DRIFTSTACK_DOVI_DIAG") != nullptr;
+    if (s_dsDoViDiag) {
+        WTFLogAlways("[V-DOVI-DIAG] validateDoViParameters ENTER: codec=%d profileID=%u levelID=%u alpha=%d hdr=%d",
+            static_cast<int>(parameters.codec), static_cast<unsigned>(parameters.bitstreamProfileID),
+            static_cast<unsigned>(parameters.bitstreamLevelID), static_cast<int>(hasAlphaChannel), static_cast<int>(hdrSupport));
+    }
+
 #if PLATFORM(DRIFTSTACK)
+    if (s_dsDoViDiag) {
+        bool gatePass = (parameters.codec == DoViParameters::Codec::HVC1 && parameters.bitstreamProfileID == 5);
+        WTFLogAlways("[V-DOVI-DIAG] DRIFTSTACK gate: codec==HVC1(%d) && profileID==5(%d) => %s",
+            static_cast<int>(parameters.codec == DoViParameters::Codec::HVC1),
+            static_cast<int>(parameters.bitstreamProfileID == 5),
+            gatePass ? "PASS → forcing {true,true,true}" : "FAIL → nullopt (dvh1-p5 UNDER-report if this is dvh1.05)");
+    }
     // Driftstack: the real iPhone (17 / iOS 18.7 / Safari 26.x) MediaCapabilities.decodingInfo reports
     // Dolby Vision supported ONLY for the dvh1 (HVC1) brand at profile 5. BS-captured (decinfo-iPhone_17,
     // 5 configs): dvh1.05.06 + dvh1.05.09 = {supported,smooth,powerEfficient} all true; dvhe.05.06 /
