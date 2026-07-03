@@ -226,6 +226,18 @@ std::optional<PlatformMediaCapabilitiesInfo> validateDoViParameters(const DoViPa
     // fingerprint tell (A3-confirmed live on daemon 48920: fork dvhe.08.07=true vs iPhone false).
     if (!(parameters.codec == DoViParameters::Codec::HVC1 && parameters.bitstreamProfileID == 5))
         return std::nullopt;
+    // The real iPhone-17 / iOS-18.7 / Safari-26.x reports dvh1 (HVC1) profile-5 DoVi
+    // {supported, smooth, powerEfficient} = all TRUE (decinfo-iPhone_17: dvh1.05.06 + dvh1.05.09). FORCE it
+    // and RETURN here — do NOT fall through to the host VideoToolbox capability check below
+    // (VTCopyHEVCDecoderCapabilitiesDictionary + supportedProfiles/supportedLevels + isHardwareAccelerated),
+    // which is HOST-DEPENDENT: a fleet Mac whose VT lacks a dvh1-p5 DoVi decoder (e.g. a headless M-series
+    // box) UNDER-reports supported=false, and even on the success path powerEfficient=isHardwareAccelerated
+    // leaks the host's hardware-vs-software DoVi decode path — both diverge from the iPhone's unconditional
+    // true (A3 box-confirmed 2026-07-03: dovi_dvh1_p5_1080p expected true, host-VT returned false on the
+    // M2-Pro box). The gate just above already removed the OVER-report (dvhe brand / profile-8); this closes
+    // the UNDER-report + the powerEfficient host-leak so dvh1-p5 DoVi decodingInfo is host-independent and
+    // byte-matches the device on any fleet chip.
+    return { { true, true, true } };
 #endif
 
     if (hdrSupport) {
