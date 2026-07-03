@@ -1647,6 +1647,7 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
     uint16_t serverCurve = 0;
     Vector<uint8_t> serverEcPub;
     bool gotSKE = false, gotSHD = false;
+    bool gotCertRequest = false; // W3072 — server sent CertificateRequest (0x0d) → we owe an (empty) client Certificate
     Vector<uint8_t> acc;
 
     // W2202 L4: TLS 1.2 server authentication (workflow w2tykgdqj finding #6). Without this the 1.2 fallback
@@ -1771,7 +1772,9 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
                         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W2202] TLS1.2 SKE signature OK for %s", m_sniHostname.utf8().data());
                     }
                 }
-            } else if (t == 0x0e)
+            } else if (t == 0x0d) // W3072 — CertificateRequest: a real iPhone answers with an (empty) client
+                gotCertRequest = true; // Certificate before ClientKeyExchange (RFC 5246 §7.4.6), else mTLS servers reject
+            else if (t == 0x0e)
                 gotSHD = true;
             off += 4 + l;
         }
@@ -1798,6 +1801,22 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
     if (preMaster.isEmpty()) { m_errorMessage = "TLS1.2: ECDH produced empty shared secret"_s; return false; }
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.340] TLS1.2 ECDHE curve=0x%04x serverPub=%zuB clientPub=%zuB preMaster=%zuB",
         serverCurve, serverEcPub.size(), clientEcPub.size(), preMaster.size());
+
+    // W3072 — the server sent a CertificateRequest (0x0d). RFC 5246 §7.4.6: the client MUST answer with a
+    // Certificate message; with no client cert to offer (a real iPhone in a normal browse has none) it sends
+    // an EMPTY certificate_list. Sent BEFORE ClientKeyExchange and appended to the transcript in that exact
+    // position so the session_hash / Finished match. NO CertificateVerify follows (that's only when a cert IS
+    // sent). Servers that merely REQUEST a client cert then proceed; a strict mTLS-required server still
+    // rejects — exactly as it would a real, certless iPhone.
+    if (gotCertRequest) {
+        const uint8_t emptyCert[7] = { 0x0b, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00 }; // Certificate: msg_len=3, cert_list_len=0
+        m_transcriptBytes.append(std::span<const uint8_t>(emptyCert, sizeof(emptyCert)));
+        Vector<uint8_t> rec; rec.append(0x16); rec.append(0x03); rec.append(0x03);
+        rec.append(0x00); rec.append(static_cast<uint8_t>(sizeof(emptyCert)));
+        rec.append(std::span<const uint8_t>(emptyCert, sizeof(emptyCert)));
+        if (!writeAll(m_fd, rec.span().data(), rec.size())) { m_errorMessage = "TLS1.2 send empty client Certificate failed"_s; return false; }
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3072] TLS1.2 CertificateRequest → sent empty client Certificate (RFC 5246 §7.4.6) for %s", m_sniHostname.utf8().data());
+    }
 
     // ClientKeyExchange (0x10): ECDHE public = pub_len(1) + pub. Build + send + add to
     // transcript FIRST, because with extended_master_secret (RFC 7627) the master secret
