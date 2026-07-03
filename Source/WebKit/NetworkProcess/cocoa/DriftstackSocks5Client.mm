@@ -90,20 +90,46 @@ static bool sendAll(int fd, const uint8_t* buf, size_t len)
 
 // Blocking-read exactly `len` bytes. Returns true on complete success,
 // false on EOF or socket error. Used for fixed-size SOCKS5 reply frames.
-static bool recvAll(int fd, uint8_t* buf, size_t len)
+// W3079 (audit) — bound the TOTAL wall-clock read time of one logical op. The per-recv SO_RCVTIMEO
+// the callers set (connectToProxy 8s / udpAssociate 4s) is an INACTIVITY bound that RESETS on every
+// recv delivering ≥1 byte, so a malicious proxy dribbling 1 byte per <cap window could stretch a
+// single recvAll(len) to ~len*cap (the BND.ADDR domain read → ~34 min, the DNS-over-TCP response read
+// → ~9 h), pinning a NetworkProcess thread with NO total deadline (only connect() had one). Stamp a
+// CLOCK_MONOTONIC deadline at entry and squeeze SO_RCVTIMEO to min(callerPerRecvCap, remaining) before
+// each recv so the total can't overrun `overallSeconds` regardless of drip. The caller's per-recv cap
+// (and thus the normal fast path, where the whole reply arrives well inside the budget) is preserved:
+// its SO_RCVTIMEO is snapshotted via getsockopt and restored on exit.
+static bool recvAll(int fd, uint8_t* buf, size_t len, double overallSeconds = 10.0)
 {
+    struct timespec startTs { };
+    clock_gettime(CLOCK_MONOTONIC, &startTs);
+    // Snapshot the caller's per-recv SO_RCVTIMEO (0,0 => the caller left it un-timed/blocking) so we
+    // cap each recv at min(it, remaining) and restore it on exit.
+    struct timeval callerTv { 0, 0 };
+    socklen_t callerTvLen = sizeof(callerTv);
+    ::getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &callerTv, &callerTvLen);
+    double perRecvCap = static_cast<double>(callerTv.tv_sec) + static_cast<double>(callerTv.tv_usec) / 1e6; // 0 => no caller cap
+    bool ok = true;
     size_t off = 0;
     while (off < len) {
+        struct timespec nowTs { };
+        clock_gettime(CLOCK_MONOTONIC, &nowTs);
+        double remaining = overallSeconds - (static_cast<double>(nowTs.tv_sec - startTs.tv_sec) + static_cast<double>(nowTs.tv_nsec - startTs.tv_nsec) / 1e9);
+        if (remaining <= 0) { ok = false; break; } // total budget exhausted → fast failure
+        double cap = (perRecvCap > 0 && perRecvCap < remaining) ? perRecvCap : remaining;
+        struct timeval tv { static_cast<time_t>(cap), static_cast<suseconds_t>((cap - static_cast<double>(static_cast<time_t>(cap))) * 1e6) };
+        if (!tv.tv_sec && !tv.tv_usec) tv.tv_usec = 1000; // never (0,0) — that means "block forever"
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         ssize_t n = ::recv(fd, buf + off, len - off, 0);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return false;
+            ok = false; break; // incl. EAGAIN/EWOULDBLOCK on a per-recv or total-deadline timeout
         }
-        if (n == 0)
-            return false;
+        if (n == 0) { ok = false; break; } // EOF
         off += static_cast<size_t>(n);
     }
-    return true;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &callerTv, sizeof(callerTv)); // restore the caller's per-recv cap
+    return ok;
 }
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 

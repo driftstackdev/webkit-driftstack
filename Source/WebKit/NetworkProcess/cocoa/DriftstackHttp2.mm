@@ -425,7 +425,13 @@ static bool hpackDecodeInteger(const uint8_t* data, size_t len, size_t& cursor, 
     uint32_t m = 0;
     while (cursor < len) {
         uint8_t b = data[cursor++];
-        value += (uint32_t(b & 0x7f)) << m;
+        // W3082 (RFC 7541 §5.1): reject an integer whose true value exceeds 2^32 instead of
+        // silently truncating/wrapping it and returning `true` with a bogus value. Detect a lost
+        // high bit in the shift (`(add >> m) != continuation-bits`) AND an accumulation overflow
+        // (`value > UINT32_MAX - add`) — either means the varint is out of range → decoding error.
+        uint32_t add = uint32_t(b & 0x7f) << m;
+        if ((add >> m) != uint32_t(b & 0x7f) || value > UINT32_MAX - add) return false;
+        value += add;
         if (!(b & 0x80)) return true;
         m += 7;
         if (m >= 32) return false;
@@ -1677,7 +1683,12 @@ void DriftstackHttp2Session::readerLoop()
         }
         deliverFinishedAsync(std::move(finished));
     };
-
+    // W3083 REVERTED — the poll-gate + idle-sweep polled m_tls->pollReadable, but the pooled reader
+    // reads through m_transport (a DriftstackHttp2Transport), NOT m_tls — so the poll never reflected the
+    // reader's real read source and returned no-data while the server's response sat unread → EVERY pooled
+    // stream stalled (status=0, body=0) → connection churn (cloudflare: 188 handshakes, 0 render). The
+    // idle-deadline gap it targeted (a stalled ASYNC stream; async-delivery is off in the current prod
+    // hooks) is DEFERRED to a correct m_transport-based watchdog. Read the next frame directly, as before.
     for (;;) {
         uint8_t hdr[9];
         if (!transportReadExact(m_transport, hdr, 9)) { markDeadAndFailAll(); return; }
@@ -1843,7 +1854,14 @@ void DriftstackHttp2Session::readerLoop()
                             it->value->asyncHeadersDelivered = true; // so DATA-end/RST/GOAWAY finish paths don't re-call onHeaders
                         }
                     }
-                    if (frameFlags & kFlagEndStream) { it->value->complete = true; m_cond.notifyAll(); }
+                    // W3076: the async headers-only branch above (asyncCallbacks set + END_STREAM)
+                    // already set complete=true, moved the callbacks into headersOnlyFinished, and
+                    // m_streams.remove(sid) — DESTROYING the Stream and invalidating `it`. Running
+                    // this then would be a use-after-free write through the freed iterator. Skip it
+                    // when that branch fired (it delivers via callbacks; there is no m_cond waiter to
+                    // notify). The synchronous execute() path (asyncCallbacks null → stream NOT
+                    // removed) still needs this to mark complete + wake its m_cond waiter.
+                    if ((frameFlags & kFlagEndStream) && !headersOnlyFinished) { it->value->complete = true; m_cond.notifyAll(); }
                 }
             }
             if (headersCb)
@@ -1861,6 +1879,7 @@ void DriftstackHttp2Session::readerLoop()
                 dataSpan = dataSpan.subspan(1, dataSpan.size() - 1 - padLen);
             }
             std::optional<FinishedAsync> dataFinished;
+            bool skipWindowUpdate = false; // W3078 — set on the body-cap-exceeded branch so the terminal callback is still delivered (via the L1917 path) while the stream + conn window replenish stay skipped
             // egress audit wxzzaphvp #10 — batched WINDOW_UPDATE increments computed under m_lock,
             // emitted under m_writeLock after the block (no lock nesting; matches the existing structure).
             uint32_t streamWuInc = 0, connWuInc = 0;
@@ -1883,35 +1902,46 @@ void DriftstackHttp2Session::readerLoop()
                             m_streams.remove(sid);
                         }
                         m_cond.notifyAll();
-                        break;
-                    }
-                    it->value->resp.body.append(dataSpan);
-                    if (it->value->asyncCallbacks)
-                        it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // progress → extend (ported .354 semantic)
-                    // egress audit wxzzaphvp #10 — STREAM window accounting (window/4 cadence, iOS-faithful).
-                    // Mid-stream only: on EndStream the stream is closing (no further DATA) so no stream WU.
-                    it->value->recvSinceWU += dataSpan.size();
-                    if (!(frameFlags & kFlagEndStream) && it->value->recvSinceWU >= kDriftstackStreamWUThreshold) {
-                        streamWuInc = static_cast<uint32_t>(it->value->recvSinceWU);
-                        it->value->recvSinceWU = 0;
-                    }
-                    if (frameFlags & kFlagEndStream) {
-                        it->value->complete = true;
-                        if (it->value->asyncCallbacks) {
-                            dataFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), it->value->asyncHeadersDelivered });
-                            m_streams.remove(sid);
+                        // W3078 (was `break;`) — the early break exited the switch BEFORE the
+                        // `if (dataFinished) deliverFinishedAsync(...)` below, so onComplete never
+                        // fired → the async request hung forever + leaked the callback state. Set a
+                        // flag instead and fall through to that delivery; the `else` skips the (now
+                        // removed) stream's body/window work, and the flag skips the CONNECTION
+                        // window replenish so the server's send window still closes (the break's
+                        // original intent). streamWuInc/connWuInc stay 0 → no WINDOW_UPDATE emitted.
+                        skipWindowUpdate = true;
+                    } else {
+                        it->value->resp.body.append(dataSpan);
+                        if (it->value->asyncCallbacks)
+                            it->value->idleDeadline = MonotonicTime::now() + Seconds(60); // progress → extend (ported .354 semantic)
+                        // egress audit wxzzaphvp #10 — STREAM window accounting (window/4 cadence, iOS-faithful).
+                        // Mid-stream only: on EndStream the stream is closing (no further DATA) so no stream WU.
+                        it->value->recvSinceWU += dataSpan.size();
+                        if (!(frameFlags & kFlagEndStream) && it->value->recvSinceWU >= kDriftstackStreamWUThreshold) {
+                            streamWuInc = static_cast<uint32_t>(it->value->recvSinceWU);
+                            it->value->recvSinceWU = 0;
                         }
-                        m_cond.notifyAll();
+                        if (frameFlags & kFlagEndStream) {
+                            it->value->complete = true;
+                            if (it->value->asyncCallbacks) {
+                                dataFinished.emplace(FinishedAsync { std::exchange(*it->value->asyncCallbacks, {}), std::move(it->value->resp), it->value->asyncHeadersDelivered });
+                                m_streams.remove(sid);
+                            }
+                            m_cond.notifyAll();
+                        }
                     }
                 }
                 // egress audit wxzzaphvp #10 — CONNECTION window accounting (window/2 cadence), summed
                 // across ALL streams, EVERY DATA frame (even for an unknown/closed stream: those bytes
-                // were still consumed from the connection send-window). The cap-exceed path above breaks
-                // out of the switch before here, so it still skips replenishment (server window closes).
-                m_connRecvSinceWU += dataSpan.size();
-                if (m_connRecvSinceWU >= kDriftstackConnWUThreshold) {
-                    connWuInc = static_cast<uint32_t>(m_connRecvSinceWU);
-                    m_connRecvSinceWU = 0;
+                // were still consumed from the connection send-window). W3078: the cap-exceed path sets
+                // skipWindowUpdate so it still skips replenishment (server window closes) — same intent
+                // as the original early `break`, but now reached via fall-through so onComplete fires.
+                if (!skipWindowUpdate) {
+                    m_connRecvSinceWU += dataSpan.size();
+                    if (m_connRecvSinceWU >= kDriftstackConnWUThreshold) {
+                        connWuInc = static_cast<uint32_t>(m_connRecvSinceWU);
+                        m_connRecvSinceWU = 0;
+                    }
                 }
             }
             if (dataFinished)
@@ -2219,7 +2249,14 @@ int DriftstackHttp2ConnectStream::open(const DriftstackHttp2ConnectRequest& req)
     // cleanly rather than eating a 400 like postman-echo, which negotiates h2 but
     // doesn't support 8441).
     bool seenServerSettings = false;
+    // W3080 (DoS): bound the pre-SETTINGS frame COUNT — mirrors the pre-HEADERS guard (W2134)
+    // in the very next loop. A server that never sends SETTINGS but floods PING/WINDOW_UPDATE/
+    // unknown frames would otherwise spin this worker thread forever (per-frame length is already
+    // capped at kMaxConnectFrameBytes; a legit server sends a handful of frames before SETTINGS).
+    int preSettingsFrames = 0;
     while (!seenServerSettings) {
+        if (++preSettingsFrames > 100000)
+            return -1;
         uint8_t hdr[9];
         if (!sslReadExact(nullptr, tp, hdr, 9))
             return -1;

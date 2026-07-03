@@ -1004,23 +1004,31 @@ static AesPrimitives& aesPrim()
 
 static bool resolveAes()
 {
-    auto& p = aesPrim();
-    if (p.ready) return true;
-    // Wave .300 — explicitly dlopen libssl.48 BEFORE dlsym. If we use RTLD_DEFAULT
-    // before libssl.48 is loaded, dlsym hits libwebrtc.dylib's bundled BoringSSL
-    // AES_encrypt which has incompatible key-schedule format and produces wrong
-    // ciphertext (cc96aeb8… instead of 66e94bd4… for AES_ECB(0, 0)).
-    static void* hSsl = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
-    if (!hSsl) {
-        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] dlopen libssl.48 FAILED for AES resolution");
-        return false;
-    }
-    p.setKey = reinterpret_cast<AesSetKeyFn>(dlsym(hSsl, "AES_set_encrypt_key"));
-    p.encrypt = reinterpret_cast<AesEncFn>(dlsym(hSsl, "AES_encrypt"));
-    p.ready = p.setKey && p.encrypt;
-    WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] resolveAes from libssl.48: setKey=%p encrypt=%p ready=%d",
-        (void*)p.setKey, (void*)p.encrypt, p.ready);
-    return p.ready;
+    // W3081 — publish the dlsym'd AES pointers + ready flag with proper ordering. The prior code read
+    // `ready` and wrote setKey/encrypt/ready with NO synchronization, so on weakly-ordered arm64 a
+    // second concurrent thread could observe ready==true BEFORE the setKey/encrypt stores were visible
+    // → a NULL function-pointer call → NetworkProcess crash. dispatch_once runs the resolution exactly
+    // once behind a full barrier (same idiom as driftstackCryptoInit / the MLKEM lock this path missed),
+    // and every later call is a barrier-ordered no-op load of the already-published state.
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        auto& p = aesPrim();
+        // Wave .300 — explicitly dlopen libssl.48 BEFORE dlsym. If we use RTLD_DEFAULT
+        // before libssl.48 is loaded, dlsym hits libwebrtc.dylib's bundled BoringSSL
+        // AES_encrypt which has incompatible key-schedule format and produces wrong
+        // ciphertext (cc96aeb8… instead of 66e94bd4… for AES_ECB(0, 0)).
+        void* hSsl = dlopen("/usr/lib/libssl.48.dylib", RTLD_NOW | RTLD_GLOBAL);
+        if (!hSsl) {
+            WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] dlopen libssl.48 FAILED for AES resolution");
+            return;
+        }
+        p.setKey = reinterpret_cast<AesSetKeyFn>(dlsym(hSsl, "AES_set_encrypt_key"));
+        p.encrypt = reinterpret_cast<AesEncFn>(dlsym(hSsl, "AES_encrypt"));
+        p.ready = p.setKey && p.encrypt;
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.300] resolveAes from libssl.48: setKey=%p encrypt=%p ready=%d",
+            (void*)p.setKey, (void*)p.encrypt, p.ready);
+    });
+    return aesPrim().ready;
 }
 
 // GF(2^128) multiplication, NIST SP 800-38D §6.3 (right-shift method).

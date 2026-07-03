@@ -1275,28 +1275,43 @@ int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t le
 {
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] writeAppRecord len=%zu cipher=0x%04x clientAppKey.size=%zu seqNum=%llu",
         len, m_negotiatedCipher, m_clientAppKey.key.size(), (unsigned long long)m_clientAppKey.seqNum);
-    // Wave 29-499.180 — encrypt app data with client_app_key (AES-256-GCM).
-    // Inner plaintext: data + inner_type 0x17 (application_data).
-    Vector<uint8_t> inner;
-    inner.append(std::span<const uint8_t>(data, len));
-    inner.append(0x17);  // inner content_type
+    // W3077 — RFC 8446 §5.2: TLSInnerPlaintext MUST be ≤ 2^14 (16384) bytes. A single caller write
+    // larger than that (a >16 KiB POST body on the h1 custom-TLS path, or a >16 KiB WebSocket frame)
+    // would make a compliant server reply record_overflow (alert 22), and a >~64 KiB write would
+    // truncate the 2-byte record-length field (static_cast<uint8_t>(encLen>>8)) → wire framing desync.
+    // Emit one record per ≤16384-byte plaintext chunk, each with its own seal + sequence-number
+    // increment + length header, and return the TOTAL bytes consumed so the caller's send loop still
+    // sees the full length. A single-record write (len ≤ 16384, incl. the AES-128-GCM common path) is
+    // byte-identical to the prior one-record code; the do/while preserves the len==0 case too (one
+    // empty application_data record).
+    constexpr size_t kMaxTLSRecordPlaintext = 16384;
+    size_t off = 0;
+    do {
+        size_t chunk = std::min(len - off, kMaxTLSRecordPlaintext);
+        // Wave 29-499.180 — encrypt app data with client_app_key (AES-256-GCM).
+        // Inner plaintext: data + inner_type 0x17 (application_data).
+        Vector<uint8_t> inner;
+        inner.append(std::span<const uint8_t>(data + off, chunk));
+        inner.append(0x17);  // inner content_type
 
-    size_t encLen = inner.size() + 16;
-    Vector<uint8_t> aad;
-    aad.append(0x17);
-    aad.append(0x03); aad.append(0x03);
-    aad.append(static_cast<uint8_t>(encLen >> 8));
-    aad.append(static_cast<uint8_t>(encLen & 0xFF));
+        size_t encLen = inner.size() + 16;
+        Vector<uint8_t> aad;
+        aad.append(0x17);
+        aad.append(0x03); aad.append(0x03);
+        aad.append(static_cast<uint8_t>(encLen >> 8));
+        aad.append(static_cast<uint8_t>(encLen & 0xFF));
 
-    auto nonce = TLS13KeySchedule::recordNonce(m_clientAppKey.iv, m_clientAppKey.seqNum);
-    m_clientAppKey.seqNum++;
-    auto ct = aesGcmEncrypt(m_negotiatedCipher, m_clientAppKey.key, nonce, inner, aad);
-    if (ct.size() != encLen) return -1;
+        auto nonce = TLS13KeySchedule::recordNonce(m_clientAppKey.iv, m_clientAppKey.seqNum);
+        m_clientAppKey.seqNum++;
+        auto ct = aesGcmEncrypt(m_negotiatedCipher, m_clientAppKey.key, nonce, inner, aad);
+        if (ct.size() != encLen) return -1;
 
-    Vector<uint8_t> record;
-    record.append(aad.span());
-    record.append(ct.span());
-    if (!writeAll(m_fd, record.span().data(), record.size())) return -1;
+        Vector<uint8_t> record;
+        record.append(aad.span());
+        record.append(ct.span());
+        if (!writeAll(m_fd, record.span().data(), record.size())) return -1;
+        off += chunk;
+    } while (off < len);
     return static_cast<int>(len);
 }
 
@@ -1961,19 +1976,31 @@ bool DriftstackTLS13Client::doTLS12Handshake(const TLS13ServerHello& sh)
 
 int DriftstackTLS13Client::writeTLS12Record(const uint8_t* data, size_t len, uint8_t contentType)
 {
-    // W3071 — seal via the shared suite-generic helper (branches on m_negotiatedCipher): GCM prepends
-    // the 8-byte explicit nonce; ChaCha20-Poly1305 (RFC 7905) does not. `payload` is the record body
-    // AFTER the 5-byte header. On the AES-128-GCM path this reproduces the original wire bytes exactly.
-    Vector<uint8_t> payload = t12SealRecord(m_negotiatedCipher, m_t12ClientKey, m_t12ClientFixedIV,
-        m_t12ClientSeq, contentType, std::span<const uint8_t>(data, len));
-    if (payload.isEmpty()) return -1;
-    m_t12ClientSeq++;
+    // W3077 — chunk into ≤16384-byte TLS records (RFC 5246 §6.2.1 TLSPlaintext / RFC 8446 §5.2). A
+    // single caller write >16 KiB would else be one oversized record (record_overflow alert 22) or,
+    // >~64 KiB, truncate the 2-byte length field below → wire framing desync. Each chunk gets its own
+    // seal + seq increment; return the TOTAL bytes consumed. len ≤ 16384 (incl. the AES-128-GCM common
+    // path and the small client-Finished 0x16 record) is byte-identical to the prior single-record
+    // write; the do/while preserves the len==0 case too.
+    constexpr size_t kMaxTLSRecordPlaintext = 16384;
+    size_t off = 0;
+    do {
+        size_t chunk = std::min(len - off, kMaxTLSRecordPlaintext);
+        // W3071 — seal via the shared suite-generic helper (branches on m_negotiatedCipher): GCM prepends
+        // the 8-byte explicit nonce; ChaCha20-Poly1305 (RFC 7905) does not. `payload` is the record body
+        // AFTER the 5-byte header. On the AES-128-GCM path this reproduces the original wire bytes exactly.
+        Vector<uint8_t> payload = t12SealRecord(m_negotiatedCipher, m_t12ClientKey, m_t12ClientFixedIV,
+            m_t12ClientSeq, contentType, std::span<const uint8_t>(data + off, chunk));
+        if (payload.isEmpty()) return -1;
+        m_t12ClientSeq++;
 
-    Vector<uint8_t> rec; rec.append(contentType); rec.append(0x03); rec.append(0x03);
-    rec.append(static_cast<uint8_t>((payload.size() >> 8) & 0xFF));
-    rec.append(static_cast<uint8_t>(payload.size() & 0xFF));
-    rec.append(payload.span());
-    if (!writeAll(m_fd, rec.span().data(), rec.size())) return -1;
+        Vector<uint8_t> rec; rec.append(contentType); rec.append(0x03); rec.append(0x03);
+        rec.append(static_cast<uint8_t>((payload.size() >> 8) & 0xFF));
+        rec.append(static_cast<uint8_t>(payload.size() & 0xFF));
+        rec.append(payload.span());
+        if (!writeAll(m_fd, rec.span().data(), rec.size())) return -1;
+        off += chunk;
+    } while (off < len);
     return static_cast<int>(len);
 }
 
