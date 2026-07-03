@@ -1389,7 +1389,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     }
                 }
                 bool sourceConsumed = false; // the whole-source cluster hash serves at most one glyph
-                struct ColorPlan { bool hit; const uint8_t* pixels; };
+                struct ColorPlan { bool hit; const uint8_t* pixels; bool suppress = false; };
                 Vector<ColorPlan, 64> cplans;
                 cplans.reserveInitialCapacity(glyphs.size());
                 unsigned colorHits = 0;
@@ -1430,6 +1430,28 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     }
                     cplans.append(plan);
                 }
+                // #42 keycap/©®™ residual (2026-07-03): a color-emoji CLUSTER the Mac shaped to TEXT glyphs
+                // (keycap "<digit>️⃣", and ©®™) never resolves colorGlyphType==Color above, so
+                // nothing is served and it renders as the native Mac text glyph != the iPhone color emoji
+                // (keycap1 confirmed by A3: zero [V-COLOR] blit line, native-render Δ at all sizes).
+                // detectSequence recognizes the cluster + sets driftstackCurrentTextSource, so if the DSPGCA2
+                // atlas HAS a cell for the whole-source seq_hash — proving the iPhone renders THIS exact
+                // source as a color emoji — serve that one cell for the whole run regardless of the shaped
+                // glyphs' color type. The atlas-HIT is the SAFE discriminator: a bare digit (no VS16+keycap)
+                // has no cell → miss → falls through to native text (correct, unchanged); the keycap cluster
+                // has a cell → served. Canvas-only (the guard above) + seqKeyed (DSPGCA2) + only when no
+                // per-glyph color hit already covered it. One emoji per fillText on the fingerprint surface,
+                // so the whole run IS this cluster → serve once at the anchor (cplans[0]) + suppress the rest.
+                if (seqKeyed && !colorHits && haveSourceSeqHash && !sourceConsumed && !cplans.isEmpty()) {
+                    if (auto clusterHit = colorAtlas.lookup(0, ptSizeQ4, sourceSeqHash, 0)) {
+                        cplans[0].hit = true;
+                        cplans[0].pixels = clusterHit->pixels;
+                        ++colorHits;
+                        sourceConsumed = true;
+                        for (size_t i = 1; i < cplans.size(); ++i)
+                            cplans[i].suppress = true;
+                    }
+                }
                 if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
                     StringView dsrc = driftstackCurrentTextSource();
                     unsigned u0 = dsrc.length() > 0 ? dsrc[0] : 0;
@@ -1462,6 +1484,8 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         ctRunAdvances.clear();
                     };
                     for (size_t i = 0; i < glyphs.size(); ++i) {
+                        if (cplans[i].suppress)
+                            continue; // part of a cluster served whole by cplans[0] — do NOT native-render it
                         if (!cplans[i].hit) {
                             if (ctRunGlyphs.isEmpty())
                                 ctRunStart = FloatPoint(positions[i].x, positions[i].y);
