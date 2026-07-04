@@ -2110,6 +2110,22 @@ uint32_t DriftstackHttp2Session::sendRequestFrames(const DriftstackHttp2Request&
         sendOk = transportWriteAll(m_transport, fh, 9) && transportWriteAll(m_transport, hb.span().data(), hb.size());
         WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.343] pooled execute: sent HEADERS on stream %u (%s) sendOk=%d path=%s",
             streamId, hasBody ? "with body" : "END_STREAM", sendOk ? 1 : 0, request.path.utf8().data());
+        // item-17 verify: env-gated hex dump of the emitted HeaderBlockFragment (== the wire bytes
+        // sent above). Lets A3 drive the fork DIRECT to a same-origin-heavy h2 site + decode the log
+        // (hpack-rep-decode.py hex mode) to byte-verify the stateful encoder without a cert'd
+        // reflector. Behavior-neutral: only formats when DRIFTSTACK_HPACK_DIAG is set.
+        if (getenv("DRIFTSTACK_HPACK_DIAG")) {
+            static const char kHexDigits[] = "0123456789abcdef";
+            Vector<char> hexBuf;
+            hexBuf.reserveInitialCapacity(hb.size() * 2 + 1);
+            for (uint8_t byte : hb.span()) {
+                hexBuf.append(kHexDigits[byte >> 4]);
+                hexBuf.append(kHexDigits[byte & 0x0f]);
+            }
+            hexBuf.append('\0');
+            WTFLogAlways("[Driftstack-HPACK-DIAG] stream=%u hbf=%zuB path=%s hex=%s",
+                streamId, hb.size(), request.path.utf8().data(), hexBuf.span().data());
+        }
         if (sendOk && hasBody) {
             uint8_t dh[9];
             encodeFrameHeader(dh, request.body.size(), kFrameData, kFlagEndStream, streamId);
