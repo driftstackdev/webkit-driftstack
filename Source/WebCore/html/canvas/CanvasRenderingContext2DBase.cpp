@@ -139,6 +139,9 @@ void driftstackResetCanvasTextNativeFallback();
 void driftstackPushColorEmojiSource(StringView);
 void driftstackPopColorEmojiSource();
 bool driftstackCanvasTextNativeFallbackOccurred();
+// #42 keycap1: per-draw color-serve flag (reset here around the draw; set by the V-COLOR serve).
+void driftstackResetColorEmojiServed();
+bool driftstackColorEmojiServedThisDraw();
 // #42 keycap1 (approach-a, defined in FontCascadeCoreText.cpp): serve a text-shaped color-emoji
 // cluster's atlas cell directly to the readback when it native-rendered (deconstruct-serve missed
 // the on-canvas path). Returns true if served.
@@ -3586,8 +3589,11 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
         // buffer path AND the fontProxy.drawBidiText path. Scoped to the readback ctx `c` (not the
         // shadow/mask/composite scratch buffers).
         bool dsReadback = (&context == c);
-        if (dsReadback)
+        if (dsReadback) {
             driftstackResetCanvasTextNativeFallback();
+            driftstackResetColorEmojiServed(); // #42 keycap1: cleared here so any deconstruct-path serve
+                                               // (built pre-drawText) doesn't count — only THIS readback draw.
+        }
         FloatPoint dsPen = point; // glyph pen for the #42 fallback serve (updated in the buffer path)
 #endif
         if (cachedShapedText) {
@@ -3627,16 +3633,20 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
         // (flag FALSE) → skip. Diag is env-INDEPENDENT (dsCanvasVerbose propagation to the fork was
         // unproven) — logs only for non-ASCII sources to limit noise, pinning path-reached + fallback.
         if (dsReadback) {
-            bool dsNF = driftstackCanvasTextNativeFallbackOccurred();
+            bool dsColorServed = driftstackColorEmojiServedThisDraw();
             auto dsSrc = textRun.text();
             bool dsNonAscii = false;
             for (unsigned di = 0; di < dsSrc.length(); ++di) { if (dsSrc[di] > 0x7F) { dsNonAscii = true; break; } }
             if (dsNonAscii) {
                 unsigned u0 = dsSrc.length() > 0 ? dsSrc[0] : 0, u1 = dsSrc.length() > 1 ? dsSrc[1] : 0, u2 = dsSrc.length() > 2 ? dsSrc[2] : 0;
-                WTFLogAlways("[Driftstack-#42-DT] drawText nativeFallback=%d cached=%d srcLen=%u u=[%04X %04X %04X] pt=%.1f pen=(%.1f,%.1f)",
-                    dsNF, cachedShapedText ? 1 : 0, dsSrc.length(), u0, u1, u2, fontCascade.size(), dsPen.x(), dsPen.y());
+                WTFLogAlways("[Driftstack-#42-DT] drawText colorServed=%d nativeFallback=%d cached=%d srcLen=%u u=[%04X %04X %04X] pt=%.1f pen=(%.1f,%.1f)",
+                    dsColorServed, driftstackCanvasTextNativeFallbackOccurred(), cachedShapedText ? 1 : 0, dsSrc.length(), u0, u1, u2, fontCascade.size(), dsPen.x(), dsPen.y());
             }
-            if (dsNF) {
+            // #42 keycap1: serve an in-atlas cluster that was NOT color-served this draw (keycap1 text-
+            // shapes → colorServed FALSE → serve; the 25 color glyphs → colorServed TRUE → skip → no
+            // double-serve). Gated on non-ASCII source so plain text skips the seqHash+lookup entirely;
+            // the serve is still a no-op (returns false, no clear) for non-atlas non-ASCII text.
+            if (!dsColorServed && dsNonAscii) {
                 GraphicsContextStateSaver dsSaver(context);
                 bool dsServed = driftstackServeColorEmojiClusterToContext(context, dsSrc, dsPen, fontCascade.size());
                 if (dsNonAscii)

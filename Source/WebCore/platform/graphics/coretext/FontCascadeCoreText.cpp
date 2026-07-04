@@ -1551,6 +1551,10 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         sourceSeqHash, dsrc.length(), u0, u1, u2, static_cast<double>(ptSize));
                 }
                 if (colorHits > 0) {
+                    // #42 keycap1: mark that a color glyph was served this canvas draw, so the drawText
+                    // canvas-level fallback does NOT also serve (avoids a double-serve for the 25). keycap1
+                    // text-shapes → reaches here with colorHits=0 → never marked → the fallback fires.
+                    driftstackMarkColorEmojiServed();
                     // Per-glyph cursor positions (CTM coords; mirrors the V-090 block).
                     Vector<CGPoint, 64> positions;
                     positions.reserveInitialCapacity(glyphs.size());

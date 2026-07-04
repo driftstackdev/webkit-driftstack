@@ -288,6 +288,12 @@ bool driftstackInCanvasTextDraw();
 void driftstackResetCanvasTextNativeFallback();
 void driftstackMarkCanvasTextNativeFallback();
 bool driftstackCanvasTextNativeFallbackOccurred();
+// #42 keycap1: per-draw color-serve flag (see DriftstackTextRunAtlas.cpp). Set by the V-COLOR serve;
+// the canvas drawText fallback serves an in-atlas cluster only when NOT set (keycap1 text-shapes →
+// never color-served → fallback fires; the 25 color glyphs serve → set → skip).
+void driftstackResetColorEmojiServed();
+void driftstackMarkColorEmojiServed();
+bool driftstackColorEmojiServedThisDraw();
 
 } // namespace WebCore
 

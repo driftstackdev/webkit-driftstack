@@ -650,6 +650,10 @@ namespace {
 struct CanvasTextDepthSlot {
     unsigned depth { 0 };
     bool nativeFallback { false };   // #79: set when a canvas-text glyph fell to native CT raster
+    bool colorServed { false };      // #42 keycap1: set when the V-COLOR per-glyph serve served a color
+                                     // glyph this draw. The drawText fallback serves an in-atlas cluster
+                                     // ONLY when this is FALSE (keycap1 text-shapes → never color-served
+                                     // → fallback fires; the 25 color glyphs serve → skip → no double).
 };
 ThreadSpecific<CanvasTextDepthSlot>& canvasTextDepthSlot()
 {
@@ -678,6 +682,24 @@ bool driftstackInCanvasTextDraw()
 void driftstackResetCanvasTextNativeFallback()
 {
     canvasTextDepthSlot()->nativeFallback = false;
+}
+
+// #42 keycap1: per-draw "the V-COLOR per-glyph serve served a color glyph" flag. Reset at the
+// drawText top; set by the V-COLOR serve (FontCascadeCoreText.cpp) on colorHits>0; read at the
+// drawText bottom to decide whether the canvas-level fallback serves an in-atlas cluster.
+void driftstackResetColorEmojiServed()
+{
+    canvasTextDepthSlot()->colorServed = false;
+}
+
+void driftstackMarkColorEmojiServed()
+{
+    canvasTextDepthSlot()->colorServed = true;
+}
+
+bool driftstackColorEmojiServedThisDraw()
+{
+    return canvasTextDepthSlot()->colorServed;
 }
 
 // #42 keycap: canvas-level color-emoji source stack (owning copies). Pushed for the whole synchronous
