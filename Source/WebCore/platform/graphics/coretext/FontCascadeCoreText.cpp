@@ -544,6 +544,62 @@ static bool driftstackCanvasColorEmojiFullyServable(const Font& font, std::span<
     }
     return true; // every complex-color glyph is atlas-servable → safe to fall through to the V-COLOR serve
 }
+
+// #42 keycap1 (approach-a): shared byte-exact color-emoji atlas-cell blit, factored to be IDENTICAL
+// to the V-COLOR per-glyph serve below. Premultiplies the captured UNpremultiplied 64x64 RGBA cell
+// for kCGImageAlphaPremultipliedLast + draws it SourceOver at the pen-relative (pen-8, pen-46) anchor.
+static void driftstackBlitColorEmojiCell(GraphicsContext& context, const uint8_t* cellRGBA, FloatPoint pen)
+{
+    std::array<uint8_t, 64 * 64 * 4> rgba;
+    auto src = unsafeMakeSpan(cellRGBA, 64 * 64 * 4);
+    auto dst = unsafeMakeSpan(rgba.data(), 64 * 64 * 4);
+    for (size_t px = 0; px < 64 * 64; ++px) {
+        unsigned a = src[px * 4 + 3];
+        dst[px * 4 + 0] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 0]) * a + 127) / 255);
+        dst[px * 4 + 1] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 1]) * a + 127) / 255);
+        dst[px * 4 + 2] = static_cast<uint8_t>((static_cast<unsigned>(src[px * 4 + 2]) * a + 127) / 255);
+        dst[px * 4 + 3] = static_cast<uint8_t>(a);
+    }
+    RetainPtr<CFDataRef> rgbaData = adoptCF(CFDataCreate(kCFAllocatorDefault, rgba.data(), 64 * 64 * 4));
+    RetainPtr<CGDataProviderRef> dataProvider = adoptCF(CGDataProviderCreateWithCFData(rgbaData.get()));
+    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+    RetainPtr<CGImageRef> glyphImg = adoptCF(CGImageCreate(64, 64, 8, 32, 64 * 4, colorSpace.get(),
+        kCGImageAlphaPremultipliedLast, dataProvider.get(), nullptr, false, kCGRenderingIntentDefault));
+    if (!glyphImg)
+        return;
+    RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
+    if (!nativeImg)
+        return;
+    FloatRect destRect(pen.x() - 8.0, pen.y() - 46.0, 64, 64);
+    FloatRect srcRect(0, 0, 64, 64);
+    context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
+}
+
+// #42 keycap1 (approach-a): serve a color-emoji cluster's atlas cell DIRECTLY to a canvas context —
+// the canvas-level fallback for TEXT-SHAPED clusters (keycap1 [0x31,0xFE0F,0x20E3]) that deconstruct-
+// serve OFF the readback + native-render on it. The 25 single color-glyphs already serve on-canvas via
+// the V-COLOR per-glyph path below, so they never reach here (the caller gates on the native-fallback
+// flag = FALSE for them). Returns true if an atlas cell was served. glyphHash-safe (canvas-only, only
+// fires on a native-fallback color-emoji cluster; separate from the text-glyph path).
+bool driftstackServeColorEmojiClusterToContext(GraphicsContext& context, StringView source, FloatPoint pen, float ptSize)
+{
+    static const bool s_enabled = std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS") && std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")[0] == '1';
+    if (!s_enabled || source.isEmpty())
+        return false;
+    auto& colorAtlas = DriftstackPerGlyphColorAtlas::singleton();
+    if (!colorAtlas.isLoaded() || colorAtlas.version() < 2)
+        return false;
+    uint16_t ptSizeQ4 = static_cast<uint16_t>(std::lround(ptSize * 16.0f));
+    uint32_t seqHash = driftstackSeqHashForUtf8(source);
+    auto hit = colorAtlas.lookup(0, ptSizeQ4, seqHash, 0);
+    if (!hit)
+        return false; // no cell for this cluster — do NOT clear (avoid a blank hole)
+    // Clear the native-rendered keycap in the cell FIRST (only now that a cell is confirmed), so the
+    // SourceOver blit lands over transparent = the captured cell exactly (no AA-bleed composite).
+    context.clearRect(FloatRect(pen.x() - 8.0, pen.y() - 46.0, 64, 64));
+    driftstackBlitColorEmojiCell(context, hit->pixels, pen);
+    return true;
+}
 #endif
 
 void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& anchorPoint, FontSmoothingMode smoothingMode)

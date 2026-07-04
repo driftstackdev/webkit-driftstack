@@ -139,6 +139,10 @@ void driftstackResetCanvasTextNativeFallback();
 void driftstackPushColorEmojiSource(StringView);
 void driftstackPopColorEmojiSource();
 bool driftstackCanvasTextNativeFallbackOccurred();
+// #42 keycap1 (approach-a, defined in FontCascadeCoreText.cpp): serve a text-shaped color-emoji
+// cluster's atlas cell directly to the readback when it native-rendered (deconstruct-serve missed
+// the on-canvas path). Returns true if served.
+bool driftstackServeColorEmojiClusterToContext(GraphicsContext&, StringView, FloatPoint, float);
 }
 #endif
 #include "TextUtil.h"
@@ -3597,7 +3601,30 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
                 } else {
                     FloatPoint startPoint = point + WebCore::size(glyphBuffer.initialAdvance());
                     // F.1.B-6: pass source text for composite emoji detection on Driftstack.
+#if PLATFORM(DRIFTSTACK)
+                    // #42 keycap1 (approach-a): measure THIS draw's native-fallback so a text-shaped
+                    // color-emoji cluster that deconstruct-serves OFF the readback + native-renders on
+                    // it (keycap1 [0x31,0xFE0F,0x20E3]) is served directly. Only the readback ctx `c`
+                    // (not shadow/mask/composite scratch buffers). The 25 single color-glyphs serve
+                    // on-canvas via the per-glyph path → native-fallback FALSE → never reach here.
+                    bool dsReadback = (&context == c);
+                    if (dsReadback)
+                        driftstackResetCanvasTextNativeFallback();
+#endif
                     fontCascade.drawGlyphBuffer(context, glyphBuffer, startPoint, FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady, textRun.text());
+#if PLATFORM(DRIFTSTACK)
+                    if (dsReadback && driftstackCanvasTextNativeFallbackOccurred()) {
+                        // The cluster native-rendered → serve its atlas cell byte-exactly at the SAME pen
+                        // the 25 single color-glyphs serve at. The serve clears the native keycap in the
+                        // cell FIRST (only if an atlas cell exists) so the blit lands over transparent =
+                        // the cell exactly (no AA-bleed, and no blank hole on a lookup miss).
+                        GraphicsContextStateSaver dsSaver(context);
+                        bool dsServed = driftstackServeColorEmojiClusterToContext(context, textRun.text(), startPoint, fontCascade.size());
+                        if (dsCanvasVerbose())
+                            WTFLogAlways("[Driftstack-#42-keycap-fallback] native-fallback color cluster served=%d srcLen=%u pt=%.1f pen=(%.1f,%.1f)",
+                                dsServed, textRun.text().length(), fontCascade.size(), startPoint.x(), startPoint.y());
+                    }
+#endif
                 }
             }
         } else
