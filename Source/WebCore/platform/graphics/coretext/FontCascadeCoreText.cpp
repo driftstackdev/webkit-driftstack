@@ -294,8 +294,12 @@ static void showGlyphsWithAdvances(const FloatPoint& point, const Font& font, CG
     // #79: this is the native Mac CoreText raster — the fallback when the per-glyph atlas
     // serves bailed. In a canvas-text-draw scope it means the run was NOT fully atlas-served,
     // so the readback-recompose must NOT apply its rt2 (which assumes iPhone-canonical coverage).
-    if (driftstackInCanvasTextDraw())
+    if (driftstackInCanvasTextDraw()) {
         driftstackMarkCanvasTextNativeFallback();
+        // #42 keycap1 step-9 diag (unconditional, env-independent): which glyph native-rendered in a
+        // canvas-text-draw — confirms whether keycap1 marks native-fallback so the drawText fallback fires.
+        WTFLogAlways("[Driftstack-#42-NF] native-fallback MARK glyphs=%zu g0=%u", glyphs.size(), glyphs.empty() ? 0u : static_cast<unsigned>(glyphs[0]));
+    }
 #endif
 #if PLATFORM(DRIFTSTACK)
     // V-602 LAYER-4 DIAG (env-gated DRIFTSTACK_V602_DIAG=1): log the CTFont
@@ -581,6 +585,9 @@ static void driftstackBlitColorEmojiCell(GraphicsContext& context, const uint8_t
 // the V-COLOR per-glyph path below, so they never reach here (the caller gates on the native-fallback
 // flag = FALSE for them). Returns true if an atlas cell was served. glyphHash-safe (canvas-only, only
 // fires on a native-fallback color-emoji cluster; separate from the text-glyph path).
+// -Wmissing-prototypes: this non-static fn is called cross-TU (CanvasRenderingContext2DBase.cpp) but
+// has no shared header, so declare a prototype in this TU right before the definition (Mac==box).
+bool driftstackServeColorEmojiClusterToContext(GraphicsContext&, StringView, FloatPoint, float);
 bool driftstackServeColorEmojiClusterToContext(GraphicsContext& context, StringView source, FloatPoint pen, float ptSize)
 {
     static const bool s_enabled = std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS") && std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")[0] == '1';

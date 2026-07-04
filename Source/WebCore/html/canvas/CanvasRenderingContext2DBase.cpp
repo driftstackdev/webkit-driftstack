@@ -3579,6 +3579,17 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
     }
 
     auto drawText = [&](GraphicsContext& context, const FloatPoint& point) {
+#if PLATFORM(DRIFTSTACK)
+        // #42 keycap1 (approach-a): reset the canvas-text native-fallback flag around THIS draw so a
+        // text-shaped color-emoji cluster that deconstruct-serves OFF the readback + native-renders on
+        // it (keycap1 [0x31,0xFE0F,0x20E3]) can be served directly at the bottom — covers BOTH the
+        // buffer path AND the fontProxy.drawBidiText path. Scoped to the readback ctx `c` (not the
+        // shadow/mask/composite scratch buffers).
+        bool dsReadback = (&context == c);
+        if (dsReadback)
+            driftstackResetCanvasTextNativeFallback();
+        FloatPoint dsPen = point; // glyph pen for the #42 fallback serve (updated in the buffer path)
+#endif
         if (cachedShapedText) {
             const auto& glyphBuffer = cachedShapedText->textShapingResult.glyphBuffer;
             if (!cachedShapedText->textShapingResult.glyphBuffer.isEmpty()) {
@@ -3602,33 +3613,38 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
                     FloatPoint startPoint = point + WebCore::size(glyphBuffer.initialAdvance());
                     // F.1.B-6: pass source text for composite emoji detection on Driftstack.
 #if PLATFORM(DRIFTSTACK)
-                    // #42 keycap1 (approach-a): measure THIS draw's native-fallback so a text-shaped
-                    // color-emoji cluster that deconstruct-serves OFF the readback + native-renders on
-                    // it (keycap1 [0x31,0xFE0F,0x20E3]) is served directly. Only the readback ctx `c`
-                    // (not shadow/mask/composite scratch buffers). The 25 single color-glyphs serve
-                    // on-canvas via the per-glyph path → native-fallback FALSE → never reach here.
-                    bool dsReadback = (&context == c);
-                    if (dsReadback)
-                        driftstackResetCanvasTextNativeFallback();
+                    dsPen = startPoint;
 #endif
                     fontCascade.drawGlyphBuffer(context, glyphBuffer, startPoint, FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady, textRun.text());
-#if PLATFORM(DRIFTSTACK)
-                    if (dsReadback && driftstackCanvasTextNativeFallbackOccurred()) {
-                        // The cluster native-rendered → serve its atlas cell byte-exactly at the SAME pen
-                        // the 25 single color-glyphs serve at. The serve clears the native keycap in the
-                        // cell FIRST (only if an atlas cell exists) so the blit lands over transparent =
-                        // the cell exactly (no AA-bleed, and no blank hole on a lookup miss).
-                        GraphicsContextStateSaver dsSaver(context);
-                        bool dsServed = driftstackServeColorEmojiClusterToContext(context, textRun.text(), startPoint, fontCascade.size());
-                        if (dsCanvasVerbose())
-                            WTFLogAlways("[Driftstack-#42-keycap-fallback] native-fallback color cluster served=%d srcLen=%u pt=%.1f pen=(%.1f,%.1f)",
-                                dsServed, textRun.text().length(), fontCascade.size(), startPoint.x(), startPoint.y());
-                    }
-#endif
                 }
             }
         } else
             fontProxy.drawBidiText(context, textRun, point, FontCascade::CustomFontNotReadyAction::UseFallbackIfFontNotReady);
+#if PLATFORM(DRIFTSTACK)
+        // #42 keycap1 (approach-a) fallback + step-9 UNCONDITIONAL diag (covers BOTH draw paths). A
+        // text-shaped color-emoji cluster (keycap1) native-renders on the readback (native-fallback
+        // TRUE) → serve its atlas cell directly at dsPen. The 25 single color-glyphs serve on-canvas
+        // (flag FALSE) → skip. Diag is env-INDEPENDENT (dsCanvasVerbose propagation to the fork was
+        // unproven) — logs only for non-ASCII sources to limit noise, pinning path-reached + fallback.
+        if (dsReadback) {
+            bool dsNF = driftstackCanvasTextNativeFallbackOccurred();
+            auto dsSrc = textRun.text();
+            bool dsNonAscii = false;
+            for (unsigned di = 0; di < dsSrc.length(); ++di) { if (dsSrc[di] > 0x7F) { dsNonAscii = true; break; } }
+            if (dsNonAscii) {
+                unsigned u0 = dsSrc.length() > 0 ? dsSrc[0] : 0, u1 = dsSrc.length() > 1 ? dsSrc[1] : 0, u2 = dsSrc.length() > 2 ? dsSrc[2] : 0;
+                WTFLogAlways("[Driftstack-#42-DT] drawText nativeFallback=%d cached=%d srcLen=%u u=[%04X %04X %04X] pt=%.1f pen=(%.1f,%.1f)",
+                    dsNF, cachedShapedText ? 1 : 0, dsSrc.length(), u0, u1, u2, fontCascade.size(), dsPen.x(), dsPen.y());
+            }
+            if (dsNF) {
+                GraphicsContextStateSaver dsSaver(context);
+                bool dsServed = driftstackServeColorEmojiClusterToContext(context, dsSrc, dsPen, fontCascade.size());
+                if (dsNonAscii)
+                    WTFLogAlways("[Driftstack-#42-keycap-fallback] served=%d srcLen=%u pt=%.1f pen=(%.1f,%.1f)",
+                        dsServed, dsSrc.length(), fontCascade.size(), dsPen.x(), dsPen.y());
+            }
+        }
+#endif
     };
 
 #if USE(CG)
