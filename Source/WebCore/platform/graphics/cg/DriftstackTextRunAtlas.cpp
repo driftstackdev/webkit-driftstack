@@ -675,6 +675,39 @@ bool driftstackInCanvasTextDraw()
     return canvasTextDepthSlot()->depth > 0;
 }
 
+namespace {
+// #42 keycap1: per-thread depth of DrawGlyphsRecorder::drawNonOTSVGRun's
+// FontCascade::drawGlyphs(m_internalContext) call. >0 ⇒ the current color-emoji
+// blit is being RECORDED into the deconstruct display list (m_internalContext
+// delegate), where the run's local anchor is the DL origin (0,0) rather than the
+// on-canvas capture pen — so the standard −8/−46 cell offset lands off the
+// readback. Text-shaped clusters (keycap1) are deconstruct-ONLY and never get the
+// inline direct on-canvas serve single color glyphs do, so this is their only blit.
+struct DeconstructRecorderDepthSlot { unsigned depth { 0 }; };
+ThreadSpecific<DeconstructRecorderDepthSlot>& deconstructRecorderDepthSlot()
+{
+    static NeverDestroyed<ThreadSpecific<DeconstructRecorderDepthSlot>> slot;
+    return slot.get();
+}
+} // namespace
+
+void driftstackPushDeconstructRecorder()
+{
+    ++deconstructRecorderDepthSlot()->depth;
+}
+
+void driftstackPopDeconstructRecorder()
+{
+    auto& slot = *deconstructRecorderDepthSlot();
+    if (slot.depth)
+        --slot.depth;
+}
+
+bool driftstackInDeconstructRecorder()
+{
+    return deconstructRecorderDepthSlot()->depth > 0;
+}
+
 void driftstackResetCanvasTextNativeFallback()
 {
     canvasTextDepthSlot()->nativeFallback = false;

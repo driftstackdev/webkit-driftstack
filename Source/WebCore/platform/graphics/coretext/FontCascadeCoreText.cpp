@@ -1546,7 +1546,22 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         if (glyphImg) {
                             RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
                             if (nativeImg) {
-                                FloatRect destRect(positions[i].x - 8.0, positions[i].y - 46.0, 64, 64);
+                                // #42 keycap1: on the deconstruct-DL recording path (drawNonOTSVGRun →
+                                // FontCascade::drawGlyphs(m_internalContext)) the run's local anchor is the DL
+                                // origin (0,0), NOT the on-canvas capture pen, so the standard −8/−46 cell offset
+                                // lands the cell off the readback ([-8,110]). Text-shaped clusters (keycap1
+                                // [0x31,0xFE0F,0x20E3]) are deconstruct-ONLY and never get the inline direct
+                                // on-canvas serve that single color glyphs do, so this is their only blit. Anchor
+                                // the cell at the local origin so it lands [0,64] like the 25 passing emoji's direct
+                                // serve. (The 25 also emit this deconstruct blit but serve via their direct one, so
+                                // shifting it is a redundant same-pixel no-op for them.)
+                                double blitX = positions[i].x - 8.0;
+                                double blitY = positions[i].y - 46.0;
+                                if (driftstackInDeconstructRecorder()) {
+                                    blitX = positions[i].x;
+                                    blitY = positions[i].y;
+                                }
+                                FloatRect destRect(blitX, blitY, 64, 64);
                                 FloatRect srcRect(0, 0, 64, 64);
                                 // DIAG (2026-07-03, #42 keycap1 step-8): tag THIS atlas cell so A3 can find where it
                                 // lands in [V-COLOR-OWNER] (match atlasImg=%p to the OWNER img=%p). For keycap1
