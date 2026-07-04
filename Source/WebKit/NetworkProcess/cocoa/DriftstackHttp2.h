@@ -44,6 +44,7 @@
 #include <wtf/MonotonicTime.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/Threading.h>
+#include <utility>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
@@ -169,6 +170,49 @@ void driftstackDecodeContentEncoding(Vector<uint8_t>& body, Vector<std::pair<Str
 // loader threads submit requests on the SAME connection, each on its own h2
 // stream — exactly like a real browser (no per-request handshake). Used by the
 // connection pool in DriftstackNetworkLoader when ALPN selects "h2".
+// item-17 — per-connection HPACK ENCODER dynamic table (RFC 7541 §2.3.2/§4). Held as a session
+// member (mutated under m_writeLock in strict wire order) so a pooled/multiplexed connection warms
+// the dyn table + references entries by index like a real iPhone (298→28B collapse), instead of the
+// old stateless literal-without-indexing that re-sends flat ~298B every request (a passive tell).
+// Kept static-count-free (find* return a relative 0-based position; the encoder in DriftstackHttp2.mm
+// adds the HPACK static count) so it can be defined here for the member.
+struct HpackEncoderState {
+    Vector<std::pair<String, String>> dynTable; // index 0 = most recent
+    size_t dynSize { 0 };
+    size_t maxDynSize { 4096 }; // SETTINGS_HEADER_TABLE_SIZE default
+    bool firstReqDone { false };
+    bool sizeUpdateSent { false }; // DYN_SIZE_UPDATE→maxDynSize emitted once, on the first reused stream
+
+    int findFullDyn(const String& name, const String& value) const {
+        for (size_t i = 0; i < dynTable.size(); ++i) {
+            if (dynTable[i].first == name && dynTable[i].second == value)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+    int findNameDyn(const String& name) const {
+        for (size_t i = 0; i < dynTable.size(); ++i) {
+            if (dynTable[i].first == name)
+                return static_cast<int>(i);
+        }
+        return -1;
+    }
+    void evict() {
+        while (dynSize > maxDynSize && !dynTable.isEmpty()) {
+            auto& back = dynTable.last();
+            dynSize -= back.first.length() + back.second.length() + 32;
+            dynTable.removeLast();
+        }
+    }
+    void add(const String& name, const String& value) {
+        size_t entrySize = name.length() + value.length() + 32; // RFC 7541 §4.1
+        if (entrySize > maxDynSize) { dynTable.clear(); dynSize = 0; return; }
+        dynTable.insert(0, { name, value });
+        dynSize += entrySize;
+        evict();
+    }
+};
+
 class DriftstackHttp2Session : public ThreadSafeRefCounted<DriftstackHttp2Session> {
 public:
     // Create over an established, h2-ALPN-negotiated TLS connection. The session
@@ -255,6 +299,9 @@ private:
     std::unique_ptr<DriftstackSocks5Client> m_socks5;   // owned; holds the proxy fd
     DriftstackHttp2Transport m_transport;               // ctx = m_tls.get()
     Lock m_writeLock;   // serializes transport writes (HEADERS/DATA/ACKs)
+    // item-17: per-connection HPACK encoder dyn table. Mutated in sendRequestFrames while holding
+    // m_writeLock, in the SAME order the HEADERS hit the wire (so dyn-table state matches the peer's).
+    HpackEncoderState m_hpackEncoder WTF_GUARDED_BY_LOCK(m_writeLock);
     Lock m_lock;        // guards m_streams + m_alive + m_nextStreamId
     Condition m_cond;   // signals a stream completing/failing
     HashMap<uint32_t, std::unique_ptr<Stream>> m_streams WTF_GUARDED_BY_LOCK(m_lock);

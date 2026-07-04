@@ -410,6 +410,70 @@ static void hpackEncodeHeader(Vector<uint8_t>& out, const String& name, const St
     }
 }
 
+// item-17 — HPACK ENCODER dynamic table. The stateless hpackEncodeHeader above emits
+// literal-WITHOUT-indexing for every field, so on a pooled/multiplexed h2 connection every
+// reused request re-sends full literals (flat ~298B) — while a real iPhone warms a
+// per-connection dynamic table + references entries by index (captured 298→28B collapse on
+// conn 4, iPhone-17/26.5). That flat-size-every-req is a passive tell visible by frame length.
+// This replicates the captured per-field policy (verified byte-for-byte against
+// reference/realdevice-bs/h2-hpack-encoder-iPhone_17_...json via captures/v1/hpack-rep-decode.py):
+//   (name,value) in static  -> Indexed (static idx)
+//   (name,value) in dynamic  -> Indexed (dynamic idx)
+//   else :path               -> Literal WITHOUT indexing (never inserted; paths are unique)
+//   else cookie              -> Literal NEVER indexed
+//   else                     -> Literal WITH incremental indexing (inserted into the dyn table)
+// Name index prefers a static match, else a dynamic one, else a literal name. State is
+// per-connection + order-dependent → owned by the h2 session (HpackEncoderState m_hpackEncoder,
+// defined in DriftstackHttp2.h so it can be a session member), mutated under its write lock in
+// strict wire order (same discipline as HpackDecoderState below).
+
+// RFC 7541 §6.3 Dynamic Table Size Update: 001xxxxx prefix, 5-bit integer = new max size.
+static void hpackEncodeDynamicTableSizeUpdate(Vector<uint8_t>& out, uint32_t newMaxSize)
+{
+    hpackEncodeInteger(out, newMaxSize, 5, 0x20);
+}
+
+// Stateful HPACK header encode replicating the captured iPhone-17 per-field policy (see
+// HpackEncoderState). Mutates `enc` (must be called under the session write lock in wire order).
+static void hpackEncodeHeaderStateful(Vector<uint8_t>& out, HpackEncoderState& enc, const String& name, const String& value)
+{
+    // 1. (name,value) already in the STATIC table → Indexed Header Field (§6.1).
+    if (int fullStatic = hpackFindFullMatch(name, value)) {
+        hpackEncodeInteger(out, fullStatic, 7, 0x80);
+        return;
+    }
+    // 2. (name,value) already in the DYNAMIC table → Indexed Header Field (dynamic index).
+    if (int fullDynPos = enc.findFullDyn(name, value); fullDynPos >= 0) {
+        hpackEncodeInteger(out, kHpackStaticCount + fullDynPos, 7, 0x80);
+        return;
+    }
+    // 3. New (name,value): pick the representation by the captured policy. Name index prefers
+    //    static, else dynamic, else literal name.
+    int nameStatic = hpackFindNameOnly(name);
+    int nameDynPos = nameStatic ? -1 : enc.findNameDyn(name);
+    uint32_t nameIdx = nameStatic ? static_cast<uint32_t>(nameStatic) : (nameDynPos >= 0 ? static_cast<uint32_t>(kHpackStaticCount + nameDynPos) : 0);
+
+    if (name == "cookie"_s) {
+        // Literal Never Indexed (§6.2.3): 0001xxxx, 4-bit name index. Never inserted.
+        if (nameIdx) hpackEncodeInteger(out, nameIdx, 4, 0x10);
+        else { out.append(0x10); hpackEncodeString(out, name); }
+        hpackEncodeString(out, value);
+        return;
+    }
+    if (name == ":path"_s) {
+        // Literal Without Indexing (§6.2.2): 0000xxxx, 4-bit name index. Never inserted.
+        if (nameIdx) hpackEncodeInteger(out, nameIdx, 4, 0x00);
+        else { out.append(0x00); hpackEncodeString(out, name); }
+        hpackEncodeString(out, value);
+        return;
+    }
+    // Default: Literal With Incremental Indexing (§6.2.1): 01xxxxxx, 6-bit name index. Inserted.
+    if (nameIdx) hpackEncodeInteger(out, nameIdx, 6, 0x40);
+    else { out.append(0x40); hpackEncodeString(out, name); }
+    hpackEncodeString(out, value);
+    enc.add(name, value);
+}
+
 // HPACK integer decoding (RFC 7541 §5.1). Returns true on success, advances cursor.
 static bool hpackDecodeInteger(const uint8_t* data, size_t len, size_t& cursor, int prefixBits, uint32_t& value)
 {
@@ -1993,18 +2057,11 @@ uint32_t DriftstackHttp2Session::sendRequestFrames(const DriftstackHttp2Request&
         return 0;
     }
 
-    // Build the HEADERS block FIRST — the HPACK encoder is static-table-only (literal
-    // WITHOUT indexing; no dynamic table mutation) and writes to this per-call buffer, so it
-    // is stateless and needs no lock. The stream id lives in the FRAME header, not the block,
-    // so the block is id-independent.
-    // iPhone 17 pseudo-header order m,s,a,p (authority BEFORE path) — BS capture Wave .323.
+    // item-17: the HPACK encoder is now STATEFUL (per-connection dynamic table), so the block is
+    // encoded UNDER m_writeLock below — in the SAME strict order the HEADERS frames hit the wire —
+    // so m_hpackEncoder mutates in wire order (a pre-lock encode would race the dyn-table state
+    // across concurrent streams). The stream id still lives in the FRAME header, not the block.
     Vector<uint8_t> hb;
-    hpackEncodeHeader(hb, ":method"_s, request.method);
-    hpackEncodeHeader(hb, ":scheme"_s, request.scheme);
-    hpackEncodeHeader(hb, ":authority"_s, request.authority);
-    hpackEncodeHeader(hb, ":path"_s, request.path);
-    for (auto& [k, v] : request.extraHeaders)
-        hpackEncodeHeader(hb, k.convertToASCIILowercase(), v);
 
     bool hasBody = !request.body.isEmpty();
     bool sendOk = true;
@@ -2031,6 +2088,21 @@ uint32_t DriftstackHttp2Session::sendRequestFrames(const DriftstackHttp2Request&
             if (m_nextStreamId >= 0x7FFFFFFF) m_alive = false; // stream-id space nearly exhausted; retire after this
             m_streams.set(streamId, makeUniqueWithoutFastMallocCheck<Stream>());
         }
+        // item-17: encode the HEADERS block statefully, in wire order, under m_writeLock.
+        // DYN_SIZE_UPDATE→maxDynSize is emitted exactly once — on the first REUSED stream (the
+        // captured iPhone-17 emits it opening req2, not req1). iPhone 17 pseudo-header order
+        // m,s,a,p (authority BEFORE path) — BS capture Wave .323.
+        if (m_hpackEncoder.firstReqDone && !m_hpackEncoder.sizeUpdateSent) {
+            hpackEncodeDynamicTableSizeUpdate(hb, static_cast<uint32_t>(m_hpackEncoder.maxDynSize));
+            m_hpackEncoder.sizeUpdateSent = true;
+        }
+        hpackEncodeHeaderStateful(hb, m_hpackEncoder, ":method"_s, request.method);
+        hpackEncodeHeaderStateful(hb, m_hpackEncoder, ":scheme"_s, request.scheme);
+        hpackEncodeHeaderStateful(hb, m_hpackEncoder, ":authority"_s, request.authority);
+        hpackEncodeHeaderStateful(hb, m_hpackEncoder, ":path"_s, request.path);
+        for (auto& [k, v] : request.extraHeaders)
+            hpackEncodeHeaderStateful(hb, m_hpackEncoder, k.convertToASCIILowercase(), v);
+        m_hpackEncoder.firstReqDone = true;
         uint8_t fh[9];
         uint8_t flags = kFlagEndHeaders;
         if (!hasBody) flags |= kFlagEndStream;
