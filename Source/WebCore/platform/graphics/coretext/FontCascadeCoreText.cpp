@@ -1370,6 +1370,22 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     {
         static const bool s_colorEmojiAtlasEnabled = std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")
             && std::getenv("DRIFTSTACK_EMOJI_COLOR_ATLAS")[0] == '1';
+        // DIAG (2026-07-03, #42 keycap1 step-4): log the V-COLOR-block ENTRY state for EVERY drawGlyphs
+        // call so A3 can pin where keycap1 [0x31,0xFE0F,0x20E3] falls off — the block is gated on
+        // driftstackInCanvasTextDraw(); keycap1 shapes to a text cluster → DrawGlyphsMode::Deconstruct →
+        // the real draw happens at REPLAY where the canvas guard may already be popped (flag=0 → block
+        // SKIPPED, so no source-carry runs). Reads BOTH sources: textSrc (per-run, empty on replay) +
+        // colorSrc (the source-carry stack). Behavior-neutral: only logs when DIAG2 is set.
+        if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
+            StringView tsrc = driftstackCurrentTextSource();
+            StringView csrc = driftstackCurrentColorEmojiSource();
+            auto cpAt = [](StringView s, unsigned i) { return s.length() > i ? static_cast<unsigned>(s[i]) : 0u; };
+            WTFLogAlways("[V-COLOR-ENTRY] drawGlyphs glyphs=%zu g0=%u enabled=%d inCanvasTextDraw=%d textSrc(len=%u u=[%04X %04X %04X]) colorSrc(len=%u u=[%04X %04X %04X])",
+                glyphs.size(), glyphs.empty() ? 0u : static_cast<unsigned>(glyphs[0]),
+                static_cast<int>(s_colorEmojiAtlasEnabled), static_cast<int>(driftstackInCanvasTextDraw()),
+                tsrc.length(), cpAt(tsrc, 0), cpAt(tsrc, 1), cpAt(tsrc, 2),
+                csrc.length(), cpAt(csrc, 0), cpAt(csrc, 1), cpAt(csrc, 2));
+        }
         if (s_colorEmojiAtlasEnabled && driftstackInCanvasTextDraw() && glyphs.size() > 0) {
             auto& colorAtlas = DriftstackPerGlyphColorAtlas::singleton();
             if (colorAtlas.isLoaded()) {
@@ -1457,7 +1473,13 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     }
                 }
                 if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
+                    // #42 keycap1: show the EFFECTIVE source the serve used (per-run textSrc, else the
+                    // source-carry colorSrc) — on the deconstruct-replay path textSrc is empty so the
+                    // colorSrc carry is what identifies keycap1 [0x31,0xFE0F,0x20E3]. (Was reading only
+                    // driftstackCurrentTextSource() → empty u=[...] made keycap1's D2 line unidentifiable.)
                     StringView dsrc = driftstackCurrentTextSource();
+                    if (dsrc.isEmpty())
+                        dsrc = driftstackCurrentColorEmojiSource();
                     unsigned u0 = dsrc.length() > 0 ? dsrc[0] : 0;
                     unsigned u1 = dsrc.length() > 1 ? dsrc[1] : 0;
                     unsigned u2 = dsrc.length() > 2 ? dsrc[2] : 0;
