@@ -1548,6 +1548,14 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             if (nativeImg) {
                                 FloatRect destRect(positions[i].x - 8.0, positions[i].y - 46.0, 64, 64);
                                 FloatRect srcRect(0, 0, 64, 64);
+                                // DIAG (2026-07-03, #42 keycap1 step-8): tag THIS atlas cell so A3 can find where it
+                                // lands in [V-COLOR-OWNER] (match atlasImg=%p to the OWNER img=%p). For keycap1
+                                // (srcHash=0f93f260): if its atlasImg lands at [0,64]/readback → its cell reaches the
+                                // real canvas correctly (deeper: a different draw overwrites) → founder worth-it call;
+                                // if it lands at [-8,110]/off → the anchor is the bug → cheap fix. Behavior-neutral.
+                                if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2"))
+                                    WTFLogAlways("[V-COLOR-BLIT] i=%zu srcHash=%08x atlasImg=%p dest=(%.1f,%.1f) pt=%.1f",
+                                        i, sourceSeqHash, static_cast<void*>(glyphImg.get()), destRect.x(), destRect.y(), static_cast<double>(ptSize));
                                 context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
                             }
                         }
