@@ -398,10 +398,15 @@ void DrawGlyphsRecorder::recordDrawImage(CGRenderingStateRef, CGGStateRef gstate
     // at (0,0) (⇒ a lost-anchor coordinate bug). Behavior-neutral: only logs when DIAG2 is set.
     if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
         auto oc = m_owner.getCTM();
-        WTFLogAlways("[V-COLOR-OWNER] m_owner.drawNativeImage rect=(%.1f,%.1f %.0fx%.0f) imgsz=%.0fx%.0f ownerCTM=[%.3f %.3f %.3f %.3f %.1f %.1f]",
+        // step-7: also tag the context (&m_owner) + image (cgImage) identity. keycap1 emits TWO 64x64
+        // forwards (one lands [0,64] correct, one [-8,110] off) — same owner+same image ⇒ my one atlas
+        // cell drawn twice on one ctx (deeper: why doesn't the correct one composite); different owner ⇒
+        // two ctx/passes (which composites?); different image ⇒ one isn't the atlas cell.
+        WTFLogAlways("[V-COLOR-OWNER] m_owner.drawNativeImage rect=(%.1f,%.1f %.0fx%.0f) imgsz=%.0fx%.0f ownerCTM=[%.3f %.3f %.3f %.3f %.1f %.1f] owner=%p img=%p",
             rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
             static_cast<double>(image->size().width()), static_cast<double>(image->size().height()),
-            oc.a(), oc.b(), oc.c(), oc.d(), oc.e(), oc.f());
+            oc.a(), oc.b(), oc.c(), oc.d(), oc.e(), oc.f(),
+            static_cast<void*>(&m_owner), static_cast<void*>(cgImage));
     }
     m_owner.drawNativeImage(*image, FloatRect(rect), FloatRect { { }, image->size() }, ImagePaintingOptions { ImageOrientation::Orientation::OriginTopLeft });
 
