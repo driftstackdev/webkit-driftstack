@@ -44,12 +44,6 @@
 
 namespace WebCore {
 
-// #42 keycap1: defined in DriftstackTextRunAtlas.cpp (cg/, not includable here). Marks the
-// FontCascade::drawGlyphs(m_internalContext) call below as a deconstruct-DL recording so the
-// color-emoji blit anchors its cell on-canvas instead of at the DL-local (0,0) origin.
-void driftstackPushDeconstructRecorder();
-void driftstackPopDeconstructRecorder();
-
 static CGContextDelegateRef beginLayer(CGContextDelegateRef delegate, CGRenderingStateRef rstate, CGGStateRef gstate, CGRect rect, CFDictionaryRef, CGContextDelegateRef)
 {
     DrawGlyphsRecorder& recorder = *static_cast<DrawGlyphsRecorder*>(CGContextDelegateGetInfo(delegate));
@@ -499,9 +493,7 @@ void DrawGlyphsRecorder::drawOTSVGRun(const Font& font, std::span<const GlyphBuf
 void DrawGlyphsRecorder::drawNonOTSVGRun(const Font& font, std::span<const GlyphBufferGlyph> glyphs, std::span<const GlyphBufferAdvance> advances, const FloatPoint& startPoint, FontSmoothingMode smoothingMode)
 {
     prepareInternalContext(font, smoothingMode);
-    driftstackPushDeconstructRecorder();
     FontCascade::drawGlyphs(m_internalContext, font, glyphs, advances, startPoint, smoothingMode);
-    driftstackPopDeconstructRecorder();
     concludeInternalContext();
 }
 

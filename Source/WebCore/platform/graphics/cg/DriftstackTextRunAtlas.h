@@ -279,15 +279,6 @@ void driftstackPopCanvasTextDraw();
 // surface). The drawGlyphs hook gates glyph pixel substitution on this.
 bool driftstackInCanvasTextDraw();
 
-// #42 keycap1: pushed/popped around DrawGlyphsRecorder::drawNonOTSVGRun's
-// FontCascade::drawGlyphs(m_internalContext) call (DrawGlyphsRecorder.cpp forward-
-// declares these). True ⇒ the color-emoji blit is being recorded into the deconstruct
-// display list, whose local anchor is (0,0) not the on-canvas capture pen, so the
-// cell offset must be anchored on-canvas.
-void driftstackPushDeconstructRecorder();
-void driftstackPopDeconstructRecorder();
-bool driftstackInDeconstructRecorder();
-
 // #79 fully-served guard: the readback-recompose re-renders pure-simple-text + applies the
 // rt2 unpremult, which is byte-exact ONLY for glyphs the per-glyph atlas served. If ANY glyph
 // falls through to the native Mac CT raster (uncovered font/size/cp), rt2 on that native
