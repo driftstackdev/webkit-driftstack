@@ -391,6 +391,18 @@ void DrawGlyphsRecorder::recordDrawImage(CGRenderingStateRef, CGGStateRef gstate
     m_owner.scale(FloatSize(1, -1));
 
     auto image = NativeImage::create(cgImage);
+    // DIAG (2026-07-03, #42 keycap1 step-6): the FINAL composite target on m_owner (the real canvas /
+    // deconstruct display-list), AFTER updateCTM(gstate) + the y-flip above. deDrawImage forwards with
+    // an UNFLIPPED d=+1 CTM (two: -8/+46 anchor + identity) → this pins whether the image lands ON the
+    // canvas at the glyph position (⇒ the miss is downstream in m_owner recording/replay) or OFF-canvas /
+    // at (0,0) (⇒ a lost-anchor coordinate bug). Behavior-neutral: only logs when DIAG2 is set.
+    if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
+        auto oc = m_owner.getCTM();
+        WTFLogAlways("[V-COLOR-OWNER] m_owner.drawNativeImage rect=(%.1f,%.1f %.0fx%.0f) imgsz=%.0fx%.0f ownerCTM=[%.3f %.3f %.3f %.3f %.1f %.1f]",
+            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+            static_cast<double>(image->size().width()), static_cast<double>(image->size().height()),
+            oc.a(), oc.b(), oc.c(), oc.d(), oc.e(), oc.f());
+    }
     m_owner.drawNativeImage(*image, FloatRect(rect), FloatRect { { }, image->size() }, ImagePaintingOptions { ImageOrientation::Orientation::OriginTopLeft });
 
     // Undo the above y-flip to restore the context.
