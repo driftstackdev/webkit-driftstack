@@ -39,6 +39,7 @@
 #include "PathCG.h"
 
 #include <CoreText/CoreText.h>
+#include <cstdlib>
 #include <wtf/Vector.h>
 
 namespace WebCore {
@@ -69,6 +70,18 @@ static CGError drawGlyphs(CGContextDelegateRef delegate, CGRenderingStateRef rst
 static CGError drawImage(CGContextDelegateRef delegate, CGRenderingStateRef rstate, CGGStateRef gstate, CGRect rect, CGImageRef image)
 {
     DrawGlyphsRecorder& recorder = *static_cast<DrawGlyphsRecorder*>(CGContextDelegateGetInfo(delegate));
+    // DIAG (2026-07-03, #42 keycap1 step-5): the deconstruct-recorder is the ONLY thing routing image
+    // draws through this delegate, so an img=64x64 line here IS keycap1's V-COLOR atlas blit. Confirms
+    // whether deDrawImage FIRES for it (context.drawNativeImage reaches CGContextDrawImage on the
+    // delegate ctx) and at what rect/CTM it will land on m_owner — pins coordinate-fix vs callback-fix.
+    // Behavior-neutral: only logs when DIAG2 is set.
+    if (std::getenv("DRIFTSTACK_PERGLYPH_COLOR_ATLAS_DIAG2")) {
+        const CGAffineTransform* ctm = gstate ? CGGStateGetCTM(gstate) : nullptr;
+        WTFLogAlways("[V-COLOR-DEIMG] deDrawImage FIRED rect=(%.1f,%.1f %.0fx%.0f) img=%zux%zu ctm=[%.3f %.3f %.3f %.3f %.1f %.1f]",
+            rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+            CGImageGetWidth(image), CGImageGetHeight(image),
+            ctm ? ctm->a : 0.0, ctm ? ctm->b : 0.0, ctm ? ctm->c : 0.0, ctm ? ctm->d : 0.0, ctm ? ctm->tx : 0.0, ctm ? ctm->ty : 0.0);
+    }
     recorder.recordDrawImage(rstate, gstate, rect, image);
     return kCGErrorSuccess;
 }
