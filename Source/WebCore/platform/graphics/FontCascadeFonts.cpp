@@ -263,7 +263,7 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
         const Font& primary = m_realizedFallbackRanges[0].fontForFirstRange();
         if (!primary.supportsCodePoint('m')) {
             if (RefPtr<Font> designMatched = protect(FontCache::forCurrentThread())->systemFallbackForCharacterCluster(description, primary, IsForPlatformFont::No, FontCache::PreferColoredFont::No, StringView { "m"_s })) {
-                fontRanges = FontRanges(WTFMove(designMatched));
+                fontRanges = FontRanges(WTF::move(designMatched));
                 return fontRanges;
             }
         }
