@@ -1918,6 +1918,12 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  // browserleaks-DOM capture confirms the Helvetica natural rounding == the served value).
 
  { 0x2049, 2, 14, 21 },
+ // W3094 (divergence-hunt 2026-07-06): U+2049 DEFAULT generic (bucket 0) renders 12,21 (notdef -> Mac-only
+ // Lucida Grande) vs real iPhone 14,21 — byte-identical across 2 geomserve-table captures + fork-aio-
+ // iphone17_26_5=12,21. sans/serif/mono/fantasy natural already match; only the default diverges. Serve it
+ // like the served serif value. glyphHash-safe (U+2049 not in the 43-cp GCPS -> c587ed44 untouched). W2645
+ // U+301C-default precedent; render-fix-then-delete candidate (rule 5) once it renders emoji-presentation natively.
+ { 0x2049, 0, 14, 21 },
  // W2614 monospace (bucket 3) — Line/Paragraph separators U+2028/2029 (fork 0-width -> iOS 10):
  { 0x2028, 3, 10, 20 }, { 0x2029, 3, 10, 20 },
  // W2614 system-ui (bucket 6) — double exclamation/question-exclamation emoji-width:
@@ -1985,6 +1991,13 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x303D, 2, 21, 27 }, { 0x303D, 1, 21, 27 },
  { 0x303D, 3, 21, 27 }, { 0x303D, 4, 21, 27 }, { 0x303D, 5, 21, 30 }, { 0x303D, 6, 23, 21 }, { 0x303E, 2, 16, 21 }, { 0x303E, 1, 16, 21 },
  { 0x303E, 3, 16, 21 }, { 0x303E, 4, 16, 22 }, { 0x303E, 5, 16, 26 },
+ // W3094 (divergence-hunt 2026-07-06): the DEFAULT generic (bucket 0) diverges for both — fork renders U+303D
+ // 16,25 (real 21,27, emoji-presentation) + U+303E 16,23 (real 16,21) per fork-aio-iphone17_26_5; real is
+ // byte-identical across 2 geomserve-table captures. sans/mono/system-ui already match; only the default is
+ // unserved. Serve it like the W2645 U+301C-default precedent. glyphHash-safe (303D/303E NOT in the 43-cp
+ // GCPS -> c587ed44 untouched). Render-fix-then-delete candidate (rule 5) once these RGI symbols render
+ // emoji-presentation natively at the default generic.
+ { 0x303D, 0, 21, 27 }, { 0x303E, 0, 16, 21 },
 
 
 
