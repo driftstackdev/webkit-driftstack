@@ -6179,6 +6179,18 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // so 26.x stays exact) wired as EnabledBySetting on the 3 static methods. Real 18.6 lacks all
         // three (statics: getClientCapabilities/isUVPAA/parse*FromJSON only).
         settings.setWebAuthnSignalMethodsEnabled(false);
+        // FORM CONTROL REFRESH (iOS-26 form redesign; ENABLE(FORM_CONTROL_REFRESH) is Cocoa-default true, so
+        // the fork's one 26.x binary applies it on EVERY archetype). Real Safari <26 (Family-A 18.6) ships the
+        // PRE-refresh form-control defaults — the refresh shipped at 26.0. VERIFIED per-band (mm.uaStylesheet):
+        //   button.color        rgb(0,0,0)   >=26.0   vs  rgb(0,122,255)      @18.6
+        //   input.border-radius 0px          >=26.0   vs  5px                 @18.6
+        //   input.padding       '2px 5px'    >=26.0   vs  '2.2px 5.5px 3.3px' @18.6
+        //   submit.background    rgb(0,136,255) >=26.0 vs  rgb(0,122,255)      @18.6
+        // (button.color black confirmed on real 26.0/26.0.1/26.2/26.3/26.4/26.5; blue only on 18.6.) Turning the
+        // setting OFF for Family-A reverts all four to the html.css literals at once — the RenderThemeCocoa
+        // adjust*ForVectorBasedControls short-circuit on !formControlRefreshEnabled(). Family B (Safari 26.x,
+        // incl the ios18_6_safari26_x band + the 26.4 launch) keeps the Cocoa-default true. Divergence-hunt-2 W3097.
+        settings.setFormControlRefreshEnabled(false);
     } else {
         // P0 named-timeline CSS-property EXPOSURE fix (CSS.supports gate).
         // The named scroll/view timeline CSS *properties* (scroll-timeline-name,
