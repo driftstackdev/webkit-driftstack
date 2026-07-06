@@ -769,7 +769,32 @@ int DriftstackTLS13Client::pollReadable(int timeoutMs)
         return 0;  // timeout tick — caller re-checks its cancel flag and loops
     if (errno == EINTR)
         return 0;  // treat as a tick, not an error
-    return -1;
+    // W3090 (FOUNDER westernunion "empty http1/1 response", multi-day): poll() returns
+    // -1/EPERM ("Operation not permitted") on these SOCKS5-proxied sockets inside the
+    // sandboxed NetworkProcess. This h1 read loop was the ONLY remaining poll() caller
+    // (the h2 pooled reader dropped poll in W3083 and reads via blocking transportReadExact,
+    // which is why h2 always worked while http/1.1-only origins — content.westernunion.com
+    // and every h1 subresource — bailed with ZERO bytes read → the persistent empty-h1 error).
+    // Fall back to a timed MSG_PEEK recv: the SAME blocking recv() primitive the handshake and
+    // h2 reader use successfully, which detects readiness WITHOUT consuming bytes (record
+    // framing stays intact — the subsequent read()/readExact() reads the full record). Bounded
+    // by a temporary SO_RCVTIMEO so the caller still re-checks its cancel flag once per slice;
+    // restored to blocking (0) afterward for the record reads. poll() stays the fast path where
+    // it works, so environments where poll succeeds are byte-identical to before.
+    struct timeval tv { .tv_sec = timeoutMs / 1000, .tv_usec = (timeoutMs % 1000) * 1000 };
+    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    uint8_t peekByte = 0;
+    ssize_t pk = ::recv(m_fd, &peekByte, 1, MSG_PEEK);
+    int pkErrno = errno;
+    struct timeval zero { .tv_sec = 0, .tv_usec = 0 };
+    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &zero, sizeof(zero)); // restore blocking record reads
+    if (pk > 0)
+        return 1;   // bytes available (peeked, not consumed)
+    if (pk == 0)
+        return 1;   // peer closed — let read()/readExact surface the EOF/close
+    if (pkErrno == EAGAIN || pkErrno == EWOULDBLOCK || pkErrno == EINTR)
+        return 0;   // timeout tick — re-check cancel, loop
+    return -1;      // genuine socket error
 }
 
 void DriftstackTLS13Client::shutdown()
