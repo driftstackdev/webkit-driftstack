@@ -45,6 +45,12 @@ namespace {
 constexpr uint8_t kTLSRecordTypeHandshake = 0x16;
 constexpr uint8_t kTLSHandshakeTypeClientHello = 0x01;
 constexpr uint16_t kTLSVersionTLS12 = 0x0303;  // ClientHello legacy_version field
+// Initial-ClientHello record-layer version: a real iPhone emits 16 03 01 (TLS 1.0) on the OUTER record
+// header of the FIRST ClientHello (RFC 8446 §5.1 legacy_record_version compat); the body legacy_version stays
+// 0x0303. VERIFIED 16 03 01 across 6 box raw-tap captures (tls-cold-iPhone_17 + 5 tls-resume-iphone). JA3/JA4-
+// invisible (they parse the body legacy_version, not the 5-byte record header). CH2-after-HRR is NOT the
+// initial CH -> keeps 0x0303.
+constexpr uint16_t kTLSRecordVersionInitialCH = 0x0301;
 
 // iPhone Safari 26.0 cipher list (20 ciphers in exact order)
 // JA3 includes these in cipher_suites field.
@@ -548,7 +554,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     // Record header: type (1) + version (2) + length (2)
     Vector<uint8_t> record;
     record.append(kTLSRecordTypeHandshake);
-    appendU16(record, kTLSVersionTLS12);
+    appendU16(record, kTLSRecordVersionInitialCH);
     appendU16(record, static_cast<uint16_t>(handshake.size()));
     record.append(handshake.span());
 
@@ -658,7 +664,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
 
     Vector<uint8_t> record;
     record.append(kTLSRecordTypeHandshake);
-    appendU16(record, kTLSVersionTLS12);
+    appendU16(record, kTLSRecordVersionInitialCH);
     appendU16(record, static_cast<uint16_t>(handshake.size()));
     record.append(handshake.span());
 
