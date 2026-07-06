@@ -396,8 +396,23 @@ void PlatformSpeechSynthesizer::appendVoices(NSArray *voices)
                 const char* env = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!env || !env[0]) return false;
                 NSString* slug = [NSString stringWithUTF8String:env];
-                return ([slug containsString:@"iphone17"] || [slug containsString:@"iphone14pro"])
-                    && [slug containsString:@"ios18_7"];
+                // iOS 18.7 (Safari 26.4/26.5): iphone17-family + iphone14pro/promax = super-compact (W1414/W2556/W2560).
+                if (([slug containsString:@"iphone17"] || [slug containsString:@"iphone14pro"])
+                    && [slug containsString:@"ios18_7"])
+                    return true;
+                // ios18_6 Safari-26 BAND (divergence-hunt 2026-07-06): 16 real iPhone 17 Pro/Max captures
+                // (UA "iPhone OS 18_6 / Version/26.0", reference/realdevice-bs/aio-iPhone_17_Pro[_Max]-*) report
+                // com.apple.voice.super-compact.en-US.Samantha — the Samantha tier tracks the SAFARI-26 version,
+                // not the iOS-18.6 token (resolving W2274's "unverified at 18.6" exclusion for the CAPTURED
+                // iphone17 family). The archetype-env voices fix (driftstack 326f9dbb1) drops this band onto the
+                // host path (68 voices), so this remap is what makes its Samantha match real Version/26.x.
+                // BOUNDED to iphone17*+ios18_6+safari26 (the captured cell): iphone16pro is separately V-657
+                // `compact` and BS does not yield iphone16pro@Safari26, so never assume super-compact across the
+                // band's other models — they stay host-path pending their own capture.
+                if ([slug containsString:@"iphone17"] && [slug containsString:@"ios18_6"]
+                    && [slug containsString:@"safari26"])
+                    return true;
+                return false;
             }();
             if (needsSamanthaSuperCompact
                 && [identifier isEqualToString:@"com.apple.voice.compact.en-US.Samantha"])
