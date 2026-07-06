@@ -4578,6 +4578,15 @@ void WebPage::driftstackSynthesizeTapClickIfNeeded(const WebTouchEvent& touchEve
             WTF::MonotonicTime::now(), WebCore::ForceAtClick, WebCore::SyntheticClickType::OneFingerTap,
             WebCore::MouseEventInputSource::UserDriven };
     };
+    // W3095 (divergence-hunt-2 2026-07-06): a real iPhone fires a leading mouseover+mousemove BEFORE the
+    // mousedown on a tap — hadMousemoveBeforeMousedown=true, firstTapTypes=[touchstart, pointerup, touchend,
+    // mousemove, mousedown, mouseup, click] across all 4 tapeventseq-iPhone_17 refs (reference/realdevice-bs/
+    // tapeventseq-iPhone_17-1782699787437.json + siblings). Synthesizing only press+release omitted it -> a
+    // hadMousemoveBeforeMousedown headless-fleet tell. Fire one MouseMoved (button None, no click/force) at the
+    // tap point first; the eventHandler emits the mouseover (element entry) then mousemove, matching real order.
+    localMainFrame->eventHandler().handleMouseMoveEvent(WebCore::PlatformMouseEvent { tapPoint, tapPoint,
+        WebCore::MouseButton::None, WebCore::PlatformEvent::Type::MouseMoved, 0, { }, WTF::MonotonicTime::now(),
+        0, WebCore::SyntheticClickType::NoTap, WebCore::MouseEventInputSource::UserDriven });
     localMainFrame->eventHandler().handleMousePressEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MousePressed));
     localMainFrame->eventHandler().handleMouseReleaseEvent(synthMouseEvent(WebCore::PlatformEvent::Type::MouseReleased));
 }
