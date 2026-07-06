@@ -292,6 +292,24 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
                 fontRanges = FontRanges(WTF::move(designMatched));
                 return fontRanges;
             }
+        } else if (fontSelector && description.familyCount() && description.familyAt(0).kind == FontFamilyKind::Specified) {
+            // C arm (A3 box-iteration): SUBSTITUTED glyphless primaries — real ≤26.3 renders Monaco/Menlo as
+            // Courier (serif=562) and Lucida Grande as Verdana (serif=760). Their fork V-683 substitution resolves
+            // idx0 to Times (which HAS 'm'), so the !supportsCodePoint branch above misses them; detect by the
+            // SPECIFIED primary family name + insert the substitution target's ranges before the serif generic.
+            AtomString substitute;
+            const AtomString& primaryName = description.familyAt(0).name;
+            if (equalLettersIgnoringASCIICase(primaryName, "monaco"_s) || equalLettersIgnoringASCIICase(primaryName, "menlo"_s))
+                substitute = "courier"_s;
+            else if (equalLettersIgnoringASCIICase(primaryName, "lucida grande"_s))
+                substitute = "verdana"_s;
+            if (!substitute.isNull()) {
+                auto substituteRanges = fontSelector->fontRangesForFamily(description, FontFamily { substitute, FontFamilyKind::Specified });
+                if (!substituteRanges.isNull()) {
+                    fontRanges = substituteRanges;
+                    return fontRanges;
+                }
+            }
         }
     }
 #endif
