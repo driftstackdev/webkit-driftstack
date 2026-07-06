@@ -1569,6 +1569,31 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     // sec-fetch-dest, accept-encoding, sec-fetch-mode, user-agent, priority, accept-language) was a
     // wire tell. Header order does NOT affect the Akamai H2 hash (pseudo-only) but IS a distinct
     // JA4H / raw-frame fingerprint. Values are unchanged; only the emit order moved.
+    // W3068-CORS (JA4H tracker-path): real iPhone Safari keys the regular-header ORDER on
+    // sec-fetch-mode. A cross-origin fetch/XHR GET uses a DIFFERENT order than navigation, so emitting
+    // the nav order for a cors GET is a distinct JA4H tell on the fetch/beacon tracker path. Order
+    // verified from the iPhone-17 raw-wire capture (reference/realdevice-bs/
+    // tls-h1-secfetch-pertype-iPhone17-26_5-2026-07-03.json, cors GET cap #8): Pragma, Accept,
+    // Sec-Fetch-Site, Sec-Fetch-Mode, User-Agent, Referer, Sec-Fetch-Dest, Cache-Control,
+    // Accept-Language, Priority, Accept-Encoding. Values are unchanged; only the emit order differs.
+    // (cors POST/PUT — Content-Type/Origin/Content-Length mid-order — is a SEPARATE follow-up: the h1
+    // path harvests headers with an EMPTY body (W3070), so a mid-order Content-Length needs the real
+    // body size threaded into the builder; not done here to avoid re-triggering the W3070 hang.)
+    bool isCorsGet = (httpMethod == "GET"_s) && webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s;
+    if (isCorsGet) {
+        if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
+        h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
+        if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+        if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+        h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+        if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+        if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
+        if (webkitHdrs.contains("cache-control"_s)) h2req.extraHeaders.append({ "cache-control"_s, webkitHdrs.get("cache-control"_s) });
+        h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+        h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+            : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "*/*"_s)) });
+        h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+    } else {
     if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
     h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
     h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
@@ -1588,12 +1613,14 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     // (W1512). The PathB loader decodes gzip/deflate/br/zstd before WebKit sees the body (W2326). Real
     // iOS emits accept-encoding LAST of the regular headers (raw-wire reference).
     h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+    }
     for (auto& header : httpHeaders) {
         String lower = header.key.convertToASCIILowercase();
         if (lower == "host"_s || lower == "connection"_s || lower == "cookie"_s || lower.startsWith(':')
             || lower == "accept"_s || lower == "accept-encoding"_s || lower == "accept-language"_s
             || lower == "sec-fetch-site"_s || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
-            || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s)
+            || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s
+            || (isCorsGet && (lower == "pragma"_s || lower == "cache-control"_s)))
             continue;
         if (lower == "if-none-match"_s || lower == "if-modified-since"_s || lower == "if-match"_s
             || lower == "if-unmodified-since"_s || lower == "if-range"_s)
@@ -2348,6 +2375,24 @@ void DriftstackNetworkLoader::resume()
                 // TIER-4 wire H3 regular-header ORDER — same real-iPhone-17 raw-wire order as the H2
                 // builder above (sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site,
                 // sec-fetch-mode, accept-language, priority, accept-encoding). Values unchanged.
+                // W3068-CORS (JA4H tracker-path, mirror of the h2 builder): a cross-origin fetch/XHR
+                // GET uses a different regular-header order than nav. Same iPhone-17 raw-wire cors GET
+                // order. h3 has no extras loop, so pragma/cache-control are placed here only if present.
+                bool isCorsGet = (httpMethod == "GET"_s) && wk.get("sec-fetch-mode"_s) == "cors"_s;
+                if (isCorsGet) {
+                    if (wk.contains("pragma"_s)) h3req.extraHeaders.append({ "pragma"_s, wk.get("pragma"_s) });
+                    h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "*/*"_s) });
+                    if (wk.contains("sec-fetch-site"_s)) h3req.extraHeaders.append({ "sec-fetch-site"_s, wk.get("sec-fetch-site"_s) });
+                    if (wk.contains("sec-fetch-mode"_s)) h3req.extraHeaders.append({ "sec-fetch-mode"_s, wk.get("sec-fetch-mode"_s) });
+                    h3req.extraHeaders.append({ "user-agent"_s, wk.contains("user-agent"_s) ? wk.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+                    if (wk.contains("referer"_s)) h3req.extraHeaders.append({ "referer"_s, wk.get("referer"_s) });
+                    if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
+                    if (wk.contains("cache-control"_s)) h3req.extraHeaders.append({ "cache-control"_s, wk.get("cache-control"_s) });
+                    h3req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+                    h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s)
+                        : driftstackPathBPriorityHeader(wk.get("sec-fetch-dest"_s), orDefault("accept"_s, "*/*"_s)) });
+                    h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+                } else {
                 if (wk.contains("sec-fetch-dest"_s)) h3req.extraHeaders.append({ "sec-fetch-dest"_s, wk.get("sec-fetch-dest"_s) });
                 h3req.extraHeaders.append({ "user-agent"_s, wk.contains("user-agent"_s) ? wk.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
                 h3req.extraHeaders.append({ "accept"_s, orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s) });
@@ -2360,6 +2405,7 @@ void DriftstackNetworkLoader::resume()
                 h3req.extraHeaders.append({ "priority"_s, wk.contains("priority"_s) ? wk.get("priority"_s)
                     : driftstackPathBPriorityHeader(wk.get("sec-fetch-dest"_s), orDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
                 h3req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+                }
                 // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
                 if (!driftstackCookieHeader.isEmpty())
                     h3req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
@@ -2979,6 +3025,24 @@ void DriftstackNetworkLoader::resume()
             // TIER-4 wire H2 regular-header ORDER — real-iPhone-17 raw-wire (tls-full reference):
             // sec-fetch-dest, user-agent, accept, [referer], sec-fetch-site, sec-fetch-mode,
             // accept-language, priority, accept-encoding. Same order as the pool builder above.
+            // W3068-CORS (JA4H tracker-path, mirror of the driftstackBuildIphoneH2Request builder): a
+            // cross-origin fetch/XHR GET reorders the regular headers vs nav (same iPhone-17 raw-wire
+            // cors GET order); pragma/cache-control are placed in-template here + skipped in the loop.
+            bool isCorsGet = (httpMethod == "GET"_s) && webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s;
+            if (isCorsGet) {
+                if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
+                h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
+                if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+                if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+                h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+                if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+                if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
+                if (webkitHdrs.contains("cache-control"_s)) h2req.extraHeaders.append({ "cache-control"_s, webkitHdrs.get("cache-control"_s) });
+                h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+                h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+                    : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "*/*"_s)) });
+                h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+            } else {
             if (webkitHdrs.contains("sec-fetch-dest"_s))
                 h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
             h2req.extraHeaders.append({ "user-agent"_s,
@@ -3000,6 +3064,7 @@ void DriftstackNetworkLoader::resume()
                     : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"_s)) });
             h2req.extraHeaders.append({ "accept-encoding"_s,
                 driftstackPathBAcceptEncoding() });
+            }
 
             // Forward any OTHER WebKit headers (content-type for POST, etc.) —
             // preserved in their original positions (iPhone allows arbitrary
@@ -3011,7 +3076,8 @@ void DriftstackNetworkLoader::resume()
                     || lower == "accept"_s || lower == "accept-encoding"_s
                     || lower == "accept-language"_s || lower == "sec-fetch-site"_s
                     || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
-                    || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s)
+                    || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s
+                    || (isCorsGet && (lower == "pragma"_s || lower == "cache-control"_s)))
                     continue;
                 // Wave 29-499.261 — strip cache-validation headers. PathB v2
                 // has no client-side cache; If-None-Match / If-Modified-Since
