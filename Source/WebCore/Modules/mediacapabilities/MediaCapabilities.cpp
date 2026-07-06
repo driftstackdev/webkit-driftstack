@@ -28,6 +28,7 @@
 
 #include "ContentType.h"
 #include "DocumentPage.h"
+#include "DriftstackArchetypeConfig.h"
 #include "EventLoop.h"
 #include "JSDOMConvertDictionary.h"
 #include "JSDOMPromiseDeferred.h"
@@ -209,9 +210,20 @@ static void applyDriftstackHardwareCeiling(PlatformMediaCapabilitiesDecodingInfo
             info.smooth = false;
             info.powerEfficient = false;
         } else if (isMP4) {
-            info.supported = true;
-            info.smooth = true;
-            info.powerEfficient = true;
+            // VP9-in-MP4 decodingInfo is Safari-MAJOR-gated, chip-INDEPENDENT (divergence-hunt 2026-07-06,
+            // 3 real captures / 2 chip classes): real Safari <=25 (Family-A, every _safari18_6) reports
+            // {supported,smooth,powerEfficient} all-FALSE + canPlayType="" + MMS.isTypeSupported=false
+            // (all-three coherent-false); real Safari 26.x/27.x reports all-TRUE. The fork's MSE path ALREADY
+            // gates this via driftstackFamilyAVP9MSEUnsupported (SourceBufferParser/MediaSource), but this
+            // decodingInfo ceiling was UN-gated (forced true for every archetype) -> a Family-A session was
+            // INTERNALLY INCOHERENT (its own MMS said false, its decodingInfo said true) = a cross-check tell.
+            // Reuse the SAME shared predicate (v->contentType contains "vp09", predicate reads the archetype):
+            // Family-A -> all-false (matches real 18.x + restores MMS<->decodingInfo coherence); 26.x/27.x ->
+            // all-true (launch iphone17_ios18_7_safari26_4 + the ios18_6_safari26_x hybrid band unchanged).
+            bool famAUnsupported = driftstackFamilyAVP9MSEUnsupported(v->contentType);
+            info.supported = !famAUnsupported;
+            info.smooth = !famAUnsupported;
+            info.powerEfficient = !famAUnsupported;
         }
     }
 }
