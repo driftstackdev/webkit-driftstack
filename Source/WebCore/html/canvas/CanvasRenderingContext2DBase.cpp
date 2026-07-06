@@ -48,6 +48,7 @@
 // Source/WebCore/html/DriftstackCanvasFingerprint10xRGBA.mm.
 #include <bit>
 #include <cstdint>
+#include <string_view> // Family-A (Safari <26) measureText override gate — -Wunsafe-clean archetype parse (BaseAudioContext.cpp:381)
 #include <wtf/MonotonicTime.h>
 #include <wtf/Scope.h>
 #include <wtf/WallTime.h> // timing-fidelity virtual-clock skew accessors (Phase 5 op-charging)
@@ -3824,6 +3825,46 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
                 metrics->setIdeographicBaseline(-fontMetrics.descent() - offset.y());
                 metrics->setActualBoundingBoxLeft(0 - offset.x());
                 metrics->setActualBoundingBoxRight(canonical->mtWidth + offset.x());
+                return metrics;
+            }
+        }
+
+        // Family-A (Safari <26 / iOS 18.x) complexScripts: 8 measureText keys diverge from the 26.x
+        // kCanonicalMetrics (divergence-hunt 2026-07-06; real iPhone 16 / iOS 18.6 GT, 6/6 unanimous,
+        // cross-verified 2 captures). Consult the 18.6 overrides FIRST for a pre-26 archetype; a miss
+        // falls through to kCanonicalMetrics (identical for the ~55 non-divergent keys). LIVE getenv,
+        // NOT static-cached (the silently-inert-gate lesson) — -Wunsafe-clean parse copied from
+        // BaseAudioContext.cpp:384 (std::string_view, no libc strstr/atoi).
+        bool dsFamilyA186 = false;
+        if (const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE"); dsArch && dsArch[0]) {
+            std::string_view dsv(dsArch);
+            if (auto dsPos = dsv.find("safari"); dsPos != std::string_view::npos) {
+                dsv.remove_prefix(dsPos + 6);
+                int dsMajor = 0; size_t dsi = 0;
+                while (dsi < dsv.size() && dsv[dsi] >= '0' && dsv[dsi] <= '9') { dsMajor = dsMajor * 10 + (dsv[dsi] - '0'); ++dsi; }
+                dsFamilyA186 = (dsMajor && dsMajor < 26);
+            }
+        }
+        if (dsFamilyA186) {
+            for (const auto& entry : kCanonicalMetricsFamilyA186) {
+                auto entryTextView = StringView::fromLatin1(entry.text);
+                if (textUtf8.length() != entryTextView.length()) continue;
+                auto runText = StringView::fromLatin1(textUtf8.data());
+                if (runText != entryTextView) continue;
+                if (familyLower != StringView::fromLatin1(entry.family)) continue;
+                metrics->setWidth(entry.width);
+                FloatPoint offset = textOffset(entry.width, textRun.direction());
+                metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent);
+                metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent);
+                metrics->setFontBoundingBoxAscent(entry.fontBoundingBoxAscent - offset.y());
+                metrics->setFontBoundingBoxDescent(entry.fontBoundingBoxDescent + offset.y());
+                metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
+                metrics->setEmHeightDescent(fontMetrics.descent() + offset.y());
+                metrics->setHangingBaseline(fontMetrics.ascent() - offset.y());
+                metrics->setAlphabeticBaseline(-offset.y());
+                metrics->setIdeographicBaseline(-fontMetrics.descent() - offset.y());
+                metrics->setActualBoundingBoxLeft(0 - offset.x());
+                metrics->setActualBoundingBoxRight(entry.width + offset.x());
                 return metrics;
             }
         }

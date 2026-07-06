@@ -77,4 +77,21 @@ static const DriftstackMeasureTextOverride kCanonicalMetrics[] = {
     { "serif", "\xe0\xb8\xaa\xe0\xb8\xa7\xe0\xb8\xb1\xe0\xb8\xaa\xe0\xb8\x94\xe0\xb8\xb5", 32.681251525878906f, 12.140625f, 0.109375f, 13.0f, 4.0f },  // serif|thai_short
     { "serif", "\xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7", 19.0f, 13.640625f, 3.84375f, 13.0f, 4.0f },  // serif|zwj_emoji_family
 };
+
+// Family-A (Safari <26 / iOS 18.x) complexScripts 18.6 overrides — the 8 canvas.measureText keys whose
+// {width, actualBoundingBoxAscent, actualBoundingBoxDescent} diverge from the 26.x kCanonicalMetrics above.
+// Real iPhone 16 / iOS 18.6 ground truth (divergence-hunt 2026-07-06; 6/6 unanimous /aio captures, values
+// cross-verified across 2 captures; family+text bytes copied verbatim from the kCanonicalMetrics entries so
+// the scan matches identically). Consulted FIRST for a pre-26 archetype (miss falls through to kCanonicalMetrics)
+// per the Safari-major gate in CanvasRenderingContext2DBase.cpp. fontBoundingBox (14/4, serif 13/4) unchanged.
+static const DriftstackMeasureTextOverride kCanonicalMetricsFamilyA186[] = {
+    { "-apple-system", "\xe4\xb8\xad\xe6\x96\x87\xe6\xb5\x8b\xe8\xaf\x95\xef\xbc\x8c\xe8\xaf\xb7\xe6\xad\xa3\xe5\xb8\xb8\xe6\x98\xbe\xe7\xa4\xba", 134.2105255126953f, 10.859375f, 2.1875f, 14.0f, 4.0f },  // -apple-system|chinese_long  [Family-A 18.6]
+    { "-apple-system", "\xe4\xb8\xad\xe6\x96\x87\xe6\xb5\x8b\xe8\xaf\x95", 53.68421173095703f, 10.859375f, 1.40625f, 14.0f, 4.0f },  // -apple-system|chinese_simple  [Family-A 18.6]
+    { "-apple-system", "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x83\x86\xe3\x82\xb9\xe3\x83\x88", 92.64856719970703f, 10.828125f, 1.34375f, 14.0f, 4.0f },  // -apple-system|japanese_kanji  [Family-A 18.6]
+    { "-apple-system", "\x4d\x69\x78\x65\x64\x20\xe4\xb8\xad\xe6\x96\x87\x20\x41\x42\x43", 101.16241455078125f, 10.859375f, 1.40625f, 14.0f, 4.0f },  // -apple-system|mixed_cjk_latin  [Family-A 18.6]
+    { "-apple-system", "\xe0\xa4\xa6\xe0\xa5\x87\xe0\xa4\xb5\xe0\xa4\xa8\xe0\xa4\xbe\xe0\xa4\x97\xe0\xa4\xb0\xe0\xa5\x80\x20\xe0\xa4\xaa\xe0\xa4\xb0\xe0\xa5\x80\xe0\xa4\x95\xe0\xa5\x8d\xe0\xa4\xb7\xe0\xa4\xa3", 87.74510955810547f, 12.203125f, 1.921875f, 14.0f, 4.0f },  // -apple-system|devanagari  [Family-A 18.6]
+    { "-apple-system", "\xe0\xa6\xac\xe0\xa6\xbe\xe0\xa6\x82\xe0\xa6\xb2\xe0\xa6\xbe\x20\xe0\xa6\xaa\xe0\xa6\xb0\xe0\xa7\x80\xe0\xa6\x95\xe0\xa7\x8d\xe0\xa6\xb7\xe0\xa6\xbe", 76.83910369873047f, 12.875f, 0.25f, 14.0f, 4.0f },  // -apple-system|bengali  [Family-A 18.6]
+    { "sans-serif", "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x83\x86\xe3\x82\xb9\xe3\x83\x88", 97.30000305175781f, 11.515625f, 1.4375f, 14.0f, 4.0f },  // sans-serif|japanese_kanji  [Family-A 18.6]
+    { "serif", "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x83\x86\xe3\x82\xb9\xe3\x83\x88", 96.8800048828125f, 11.515625f, 1.4375f, 13.0f, 4.0f },  // serif|japanese_kanji  [Family-A 18.6]
+};
 } // namespace WebCore
