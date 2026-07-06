@@ -1866,8 +1866,84 @@ String DriftstackNetworkLoader::driftstackITPCookieHeader()
     return cookieHeader; // null/empty => ITP blocked all cookies => caller injects NO Cookie header
 }
 
+// W3093 (FOUNDER "no new-tab IP panel" / new-tab "PAGE FAILED TO LOAD"): the GUI sends a fixed new-tab
+// sentinel URL (driftstack.dev/newtab) which the box previously fetched THROUGH the SOCKS5 proxy — a
+// proxy hiccup blanked the whole tab. A2 Option-1: intercept the sentinel at the loader + serve a
+// self-contained, box-local panel with ZERO egress (no proxy hop → it can never fail to load). The
+// exit_identity (the IP/geo/tz + QUIC availability the world sees THROUGH the proxy) is baked in from
+// DRIFTSTACK_EXIT_IDENTITY_JSON, which the harness sets from the W3091-decoded assign block; when unset
+// (before A2's populate lands) the page renders with graceful placeholders.
+static bool driftstackIsNewTabSentinel(const URL& url)
+{
+    if (!url.protocolIs("https"_s))
+        return false;
+    auto host = url.host();
+    if (host != "driftstack.dev"_s && host != "www.driftstack.dev"_s)
+        return false;
+    auto path = url.path();
+    return path == "/newtab"_s || path == "/newtab/"_s;
+}
+
+static const char* kDriftstackNewTabHead = R"NT(<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>New Tab</title><style>:root{color-scheme:dark}*{box-sizing:border-box;-webkit-user-select:none;user-select:none}html,body{margin:0;height:100%}body{background:#0b0d12;color:#e8eaf0;font:15px/1.4 -apple-system,"SF Pro Text",system-ui,sans-serif;display:flex;align-items:center;justify-content:center;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom)}.card{width:100%;max-width:360px;background:#151922;border:1px solid #232a37;border-radius:18px;padding:22px 20px;box-shadow:0 10px 40px rgba(0,0,0,.4)}.brand{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b7488;margin:0 0 14px}.ip{font:600 30px/1.1 "SF Mono",ui-monospace,monospace;letter-spacing:-.01em;word-break:break-all;margin:0 0 4px}.loc{font-size:15px;color:#aab3c5;margin:0 0 18px;min-height:1.4em}.rows{display:grid;gap:10px}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 13px;background:#0f131b;border:1px solid #1e2530;border-radius:12px}.row .k{color:#7d879b;font-size:13px}.row .v{font-weight:600;text-align:right}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}.ok{background:#34c759}.off{background:#3a4152}.foot{margin:16px 2px 0;font-size:11px;color:#5a6379}.mono{font-family:"SF Mono",ui-monospace,monospace}</style>)NT";
+
+static const char* kDriftstackNewTabTail = R"NT(</head><body><main class="card" role="main"><p class="brand">Driftstack &middot; Session</p><p class="ip mono" id="ip">&mdash;</p><p class="loc" id="loc"></p><div class="rows"><div class="row"><span class="k">Timezone</span><span class="v" id="tz">&mdash;</span></div><div class="row"><span class="k">HTTP/3 &middot; QUIC</span><span class="v" id="quic">&mdash;</span></div><div class="row"><span class="k">Country</span><span class="v" id="country">&mdash;</span></div></div><p class="foot" id="foot"></p></main><script>(function(){var q=window.__DS_EXIT_IDENTITY||{};function set(id,v){var el=document.getElementById(id);if(el)el.textContent=v;}var ip=q.ip;set("ip",ip&&ip.length?ip:"No exit IP");var city=q.city,region=q.region,country=q.country;var parts=[city,region].filter(function(x){return x&&x.length;});set("loc",parts.length?parts.join(", "):(country?"":"Location unavailable"));set("tz",q.timezone||"—");set("country",country||"—");var qe=document.getElementById("quic");var quic=q.quic_ok;if(qe){if(quic===true)qe.innerHTML='<span class="dot ok"></span>Available';else if(quic===false)qe.innerHTML='<span class="dot off"></span>Unavailable';else qe.textContent="—";}var at=q.probed_at;if(at){var d=new Date(at);set("foot",isNaN(d.getTime())?"":("Verified "+d.toLocaleString()));}})();</script></body></html>)NT";
+
+// Build the served bytes = head + <script>window.__DS_EXIT_IDENTITY=<JSON>;</script> + tail. The JSON
+// comes from the env var (CP-sourced via the harness). Injection safety: it lands inside a <script>, so
+// reject any value carrying a `</` script-close tell and fall back to {} (placeholders).
+static String driftstackFromUTF8CStr(const char* s)
+{
+    return String::fromUTF8(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(s), strlen(s) });
+}
+
+static Vector<uint8_t> driftstackNewTabPanelBytes()
+{
+    const char* ei = getenv("DRIFTSTACK_EXIT_IDENTITY_JSON");
+    String json = (ei && *ei) ? driftstackFromUTF8CStr(ei) : String("{}"_s);
+    if (json.isNull() || json.contains("</"_s))
+        json = "{}"_s;
+    auto utf8 = makeString(driftstackFromUTF8CStr(kDriftstackNewTabHead),
+        "<script>window.__DS_EXIT_IDENTITY="_s, json, ";</script>"_s,
+        driftstackFromUTF8CStr(kDriftstackNewTabTail)).utf8();
+    Vector<uint8_t> out;
+    out.append(std::span<const uint8_t> { reinterpret_cast<const uint8_t*>(utf8.data()), utf8.length() });
+    return out;
+}
+
 void DriftstackNetworkLoader::resume()
 {
+    // W3093 — new-tab sentinel intercept. FIRST thing, before admission/egress: serve the box-local panel
+    // directly with no proxy hop (kills the new-tab "PAGE FAILED TO LOAD"). No admission slot is taken.
+    if (driftstackIsNewTabSentinel(m_request.url())) {
+        URL ntURL = m_request.url();
+        auto bytes = driftstackNewTabPanelBytes();
+        WebCore::ResourceResponse ntResponse { URL(ntURL), String("text/html"_s), static_cast<long long>(bytes.size()), String("UTF-8"_s) };
+        ntResponse.setHTTPStatusCode(200);
+        ntResponse.setHTTPHeaderField("content-type"_s, "text/html; charset=utf-8"_s);
+        ntResponse.setHTTPHeaderField("cache-control"_s, "no-store"_s);
+        auto ntBody = WebCore::SharedBuffer::create(bytes.span());
+        if (!tryBeginCompletion()) return;
+        Ref<DriftstackNetworkLoader> ntProtected { *this };
+        callOnMainRunLoop([ntProtected, ntResponse = WebCore::ResourceResponse(ntResponse), ntBody = std::move(ntBody)]() mutable {
+            RefPtr task = ntProtected->protectedTask();
+            if (!task) return;
+            RefPtr client = task->client();
+            if (!client) return;
+            client->didReceiveResponse(std::move(ntResponse), NegotiatedLegacyTLS::No, PrivateRelayed::No,
+                [ntProtected, ntBody = std::move(ntBody)](WebCore::PolicyAction action) mutable {
+                    if (action != WebCore::PolicyAction::Use) return;
+                    RefPtr task = ntProtected->protectedTask();
+                    if (!task) return;
+                    RefPtr client = task->client();
+                    if (!client) return;
+                    client->didReceiveData(ntBody.get());
+                    WebCore::NetworkLoadMetrics metrics;
+                    client->didCompleteWithError(WebCore::ResourceError(), metrics);
+                });
+        });
+        WTFLogAlways("[Driftstack-EG-WK-PathB-v2/W3093] served box-local new-tab panel (%zuB, no proxy hop)", bytes.size());
+        return;
+    }
     // BUG-42 Fix #2 (egress-reliability, gated) — process-wide concurrent-REQUEST
     // admission. MUST run FIRST, before any per-call work below (cookie header, body
     // flatten, ++m_attempt, retry-deadline stamping): on saturation we defer the WHOLE
