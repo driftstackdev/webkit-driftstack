@@ -594,6 +594,19 @@ const LocaleSet& intlCollatorAvailableLocales()
             String locale = languageTagForLocaleID(ucol_getAvailable(i), isImmortal);
             if (locale.isEmpty())
                 continue;
+#if PLATFORM(DRIFTSTACK)
+            // Host-ICU-skew-proof `blo` (divergence-hunt 2026-07-06): the band-conditional block below
+            // is the SOLE source of blo — it adds blo ONLY for >=26.4 (iOS ICU78). But LocaleSet is a
+            // LookupOnly RobinHood set (no remove()), so if the FLEET box ships a newer ICU (ICU78 — the
+            // d5cce2bb73 numberingSystem +1 already proved the 26.4-era fleet ICU carries newer entries)
+            // whose Collator set INCLUDES blo, the host add here would leak blo into EVERY band, and the
+            // <=26.3 archetypes (which must NOT have it) can no longer be scrubbed -> a per-minor Collator
+            // tell (Intl.Collator.supportedLocalesOf(['blo']) resolving on a 26.0/26.3 session). Never add
+            // the host's blo; the band-conditional add is authoritative. Mirrors the tols removeAll intent
+            // for a no-remove set. (Mac ICU76 lacks blo, so this is a no-op there; it only bites on ICU78.)
+            if (locale == "blo"_s)
+                continue;
+#endif
             availableLocales->add(locale);
             addScriptlessLocaleIfNeeded(availableLocales.get(), locale);
         }
