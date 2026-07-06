@@ -144,14 +144,19 @@ static Vector<MockMediaDevice> driftstackIPhoneDevices()
         // --- 5 cameras, EACH its own pre-hash group (persistentId used as groupId by the ctor). ---
         MockMediaDevice { "driftstack-iphone-cam-front-ultrawide"_s, "Front Ultra Wide Camera"_s, { }, true,
             driftstackCameraProps(VideoFacingMode::User, false) },
-        MockMediaDevice { "driftstack-iphone-cam-front"_s, "Front Camera"_s, { }, false,
-            driftstackCameraProps(VideoFacingMode::User, false) },
         MockMediaDevice { "driftstack-iphone-cam-back-dualwide"_s, "Back Dual Wide Camera"_s, { }, false,
             driftstackCameraProps(VideoFacingMode::Environment, false) },
         MockMediaDevice { "driftstack-iphone-cam-back-ultrawide"_s, "Back Ultra Wide Camera"_s, { }, false,
             driftstackCameraProps(VideoFacingMode::Environment, false) },
         MockMediaDevice { "driftstack-iphone-cam-back"_s, "Back Camera"_s, { }, false,
             driftstackCameraProps(VideoFacingMode::Environment, false) },
+        // W3096 (divergence-hunt-2 2026-07-06): the Front (non-ultrawide) camera enumerates LAST on a real
+        // iPhone, not 2nd — gumgrantedfull-iPhone_17 devicesAfterGrantFull videoinput order = [Front Ultra Wide,
+        // Back Dual Wide, Back Ultra Wide, Back Camera, Front Camera]. enumerateDevices preserves the mock
+        // insertion (Vector) order, so the Front Camera entry must be last. (Non-prod today: DRIFTSTACK_GETUSER-
+        // MEDIA_GRANTED is default-OFF in launch-env, but reorder for reverse-gate correctness + future enablement.)
+        MockMediaDevice { "driftstack-iphone-cam-front"_s, "Front Camera"_s, { }, false,
+            driftstackCameraProps(VideoFacingMode::User, false) },
 
         // --- 3 speakers, ALL sharing the audio pre-hash group (relatedMicrophoneId == audioGroup).
         // The first is the default → re-exposed as 'Default - Speaker' (deviceId literal "default")
