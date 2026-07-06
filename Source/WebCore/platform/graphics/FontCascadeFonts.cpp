@@ -45,10 +45,13 @@
 namespace WebCore {
 
 #if PLATFORM(DRIFTSTACK)
-// FONT-buildC (≤26.3): true when the archetype's Safari major is < 26 (Family-A / iOS 18.x). -Wunsafe-clean
+// FONT-buildC band = the exhaustive-font <=26.3 MINOR split (the canvas Family-A boundary in
+// operations/boundary-registry.json — canvas_2d_pixel/fingerprint10x .families.A = <=26.3, rule 7). Real
+// Safari 26.0/26.1/26.2/26.3 AND every 18.x detect the 17 Latin-less fonts (installedCount 131); 26.4+ = 114.
+// So: true when Safari major < 26 (Family-A 17/18/19), OR major==26 && minor <= 3. -Wunsafe-clean
 // std::string_view parse (mirrors BaseAudioContext.cpp:384; no libc strstr/atoi). LIVE getenv — the archetype
 // is a per-WebContent-session env var; not static-cached (the silently-inert-gate lesson).
-static bool driftstackSafariMajorBelow26()
+static bool driftstackSafariAtMost26_3()
 {
     const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
     if (!dsArch || !dsArch[0])
@@ -64,7 +67,24 @@ static bool driftstackSafariMajorBelow26()
         dsMajor = dsMajor * 10 + (dsv[i] - '0');
         ++i;
     }
-    return dsMajor && dsMajor < 26;
+    if (!dsMajor)
+        return false;
+    if (dsMajor < 26)
+        return true;
+    if (dsMajor > 26)
+        return false;
+    // major == 26: parse the minor after the '_' (e.g. "safari26_3" -> minor 3). <=3 = the FONT-buildC band.
+    if (i >= dsv.size() || dsv[i] != '_')
+        return false;
+    ++i;
+    int dsMinor = 0;
+    bool hasMinor = false;
+    while (i < dsv.size() && dsv[i] >= '0' && dsv[i] <= '9') {
+        dsMinor = dsMinor * 10 + (dsv[i] - '0');
+        ++i;
+        hasMinor = true;
+    }
+    return hasMinor && dsMinor <= 3;
 }
 #endif
 
@@ -259,7 +279,13 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
     // c587ed44 held; (b) Monaco + Lucida Grande are SUBSTITUTED primaries (idx0 resolves to Times per your
     // 3-context trace) so this !supportsCodePoint('m') condition MISSES them (they need 562/760) — add a
     // substitution-aware arm once the 13 pure-glyphless fonts land.
-    if (index == 1 && driftstackSafariMajorBelow26() && !m_realizedFallbackRanges.isEmpty()) {
+    // BUG-B fix (A3 box-iteration): fire ONLY when the author's fallback generic is SERIF (proportional). Real
+    // ≤26.3 diverges in the SERIF context only (glyphless serif→648-SF-Pro vs the serif generic 620); the mono
+    // context correctly falls to the monospace generic (Courier, 562) and sans is already SF Pro (648). Detect
+    // the serif generic via the 2nd SPECIFIED family (the exhaustive-font probe is `'<GlyphlessFont>', <generic>`).
+    if (index == 1 && driftstackSafariAtMost26_3() && !m_realizedFallbackRanges.isEmpty()
+        && description.familyCount() >= 2 && description.familyAt(1).isGeneric()
+        && description.familyAt(1).name == *familyNamesData->at(FamilyNamesIndex::SerifFamily)) {
         const Font& primary = m_realizedFallbackRanges[0].fontForFirstRange();
         if (!primary.supportsCodePoint('m')) {
             if (RefPtr<Font> designMatched = protect(FontCache::forCurrentThread())->systemFallbackForCharacterCluster(description, primary, IsForPlatformFont::No, FontCache::PreferColoredFont::No, StringView { "m"_s })) {
