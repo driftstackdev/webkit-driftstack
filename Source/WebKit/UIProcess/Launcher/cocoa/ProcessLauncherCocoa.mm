@@ -649,6 +649,12 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // NOT reach NetworkProcess; only this dsEnv[] entry does — same class as H3_POOL W2200/#52).
             { "DRIFTSTACK_EGRESS_CONCURRENCY", getenv("DRIFTSTACK_EGRESS_CONCURRENCY") },
             { "DRIFTSTACK_SOCKS5_UDP_PROXY", getenv("DRIFTSTACK_SOCKS5_UDP_PROXY") },
+            // W3093 — the new-tab panel's exit_identity (IP/geo/tz/QUIC) JSON. getenv()'d in the
+            // NetworkProcess (DriftstackNetworkLoader driftstackNewTabPanelBytes → the driftstack.dev/newtab
+            // intercept). The __XPC_ mirror does NOT reach the NP (see the DRIFTSTACK_EGRESS_CONCURRENCY note
+            // above), so without THIS dsEnv[] entry the harness-set var is null on the fleet → the panel
+            // silently renders placeholders in production (the W2823 inert-in-prod trap). Not a secret.
+            { "DRIFTSTACK_EXIT_IDENTITY_JSON", getenv("DRIFTSTACK_EXIT_IDENTITY_JSON") },
             // GRANTED-state DeviceMotion/DeviceOrientation synthesis gate. Read via static
             // getenv() in BOTH sandboxed-WebContent read sites — WebCore Page::Page (installs
             // the synthetic clients) and WebKit WebPage::shouldAllowDeviceOrientationAndMotionAccess
