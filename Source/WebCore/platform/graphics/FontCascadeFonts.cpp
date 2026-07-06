@@ -35,8 +35,38 @@
 #include "GlyphPage.h"
 #include "TextShapingResultAndDisplayList.h"
 #include <wtf/TZoneMallocInlines.h>
+#if PLATFORM(DRIFTSTACK)
+#include "Font.h"
+#include "FontRanges.h"
+#include <cstdlib>
+#include <string_view>
+#endif
 
 namespace WebCore {
+
+#if PLATFORM(DRIFTSTACK)
+// FONT-buildC (≤26.3): true when the archetype's Safari major is < 26 (Family-A / iOS 18.x). -Wunsafe-clean
+// std::string_view parse (mirrors BaseAudioContext.cpp:384; no libc strstr/atoi). LIVE getenv — the archetype
+// is a per-WebContent-session env var; not static-cached (the silently-inert-gate lesson).
+static bool driftstackSafariMajorBelow26()
+{
+    const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!dsArch || !dsArch[0])
+        return false;
+    std::string_view dsv(dsArch);
+    auto pos = dsv.find("safari");
+    if (pos == std::string_view::npos)
+        return false;
+    dsv.remove_prefix(pos + 6);
+    int dsMajor = 0;
+    size_t i = 0;
+    while (i < dsv.size() && dsv[i] >= '0' && dsv[i] <= '9') {
+        dsMajor = dsMajor * 10 + (dsv[i] - '0');
+        ++i;
+    }
+    return dsMajor && dsMajor < 26;
+}
+#endif
 
 class MixedFontGlyphPage {
     WTF_MAKE_TZONE_ALLOCATED_INLINE(MixedFontGlyphPage);
@@ -213,6 +243,32 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
             fontRanges = FontRanges(protect(FontCache::forCurrentThread())->lastResortFallbackFont(description));
         return fontRanges;
     }
+
+#if PLATFORM(DRIFTSTACK)
+    // FONT-buildC candidate (≤26.3, A1 divergence-hunt / Rule-BS capture 2026-07-06): real Safari <26 expands
+    // the cascade to insert the glyphless PRIMARY's design-matched CoreText system fallback at the FIRST
+    // fallback slot (index==1), BEFORE the author's next generic family. So a named primary that LACKS the
+    // requested Latin glyph (Geeza Pro/Damascus/Al Nile/… 'm') falls to SF Pro (648 — the primary's OWN CoreText
+    // fallback for that cluster) instead of the author `serif` generic (Times, 620) -> the exhaustive-font probe
+    // detects it (installedCount 114->131). Fork/26.4 goes straight to the author generic (unchanged, 114).
+    // glyphHash-SAFE: gated <26 so the 26.4 launch cascade is byte-untouched (A3 validates c587ed44 @26.4).
+    // Detect glyphless-named via !supportsCodePoint('m'): the 6 CSS generics (Times/SF Pro/Helvetica/Menlo/Snell/
+    // Zapfino) all HAVE 'm', so they never trigger — only a named glyphless primary does. Do NOT advance
+    // m_lastRealizedFallbackIndex — the author generic still realizes normally at the next index.
+    // ⚠️ CANDIDATE for A3's box loop: (a) verify serif→648 / installedCount 26.3→131 / 26.4→114-unchanged /
+    // c587ed44 held; (b) Monaco + Lucida Grande are SUBSTITUTED primaries (idx0 resolves to Times per your
+    // 3-context trace) so this !supportsCodePoint('m') condition MISSES them (they need 562/760) — add a
+    // substitution-aware arm once the 13 pure-glyphless fonts land.
+    if (index == 1 && driftstackSafariMajorBelow26() && !m_realizedFallbackRanges.isEmpty()) {
+        const Font& primary = m_realizedFallbackRanges[0].fontForFirstRange();
+        if (!primary.supportsCodePoint('m')) {
+            if (RefPtr<Font> designMatched = protect(FontCache::forCurrentThread())->systemFallbackForCharacterCluster(description, primary, IsForPlatformFont::No, FontCache::PreferColoredFont::No, StringView { "m"_s })) {
+                fontRanges = FontRanges(WTFMove(designMatched));
+                return fontRanges;
+            }
+        }
+    }
+#endif
 
     if (m_lastRealizedFallbackIndex < description.effectiveFamilyCount())
         fontRanges = realizeNextFallback(description, m_lastRealizedFallbackIndex, fontSelector);
