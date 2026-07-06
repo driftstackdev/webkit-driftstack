@@ -451,10 +451,21 @@ Vector<uint8_t> makeExtCompressCertificate()
     return makeExtension(27, body);
 }
 
-// GREASE empty extension
+// GREASE empty extension (the LEADING GREASE slot)
 Vector<uint8_t> makeExtGREASE(uint16_t greaseValue)
 {
     return makeExtension(greaseValue, Vector<uint8_t>());
+}
+
+// The TRAILING GREASE extension carries a single 0x00 body byte, while the leading GREASE stays empty — a real
+// iPhone / BoringSSL behavior (first GREASE ext empty, last GREASE ext one zero byte). Divergence-hunt-3
+// 2026-07-06, verified across box raw-tap ClientHello tails (...5a5a000100 / baba000100 / 1a1a000100 / 2a2a000100
+// vs the leading GREASE ...2a2a0000). JA3/JA4/peetprint strip GREASE so the prior wire audit missed it.
+Vector<uint8_t> makeExtGREASETrailing(uint16_t greaseValue)
+{
+    Vector<uint8_t> body;
+    body.append(0x00);
+    return makeExtension(greaseValue, body);
 }
 
 } // anonymous namespace
@@ -530,7 +541,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHello(const String& sni,
     extensions.append(makeExtPSKKeyExchangeModes().span());        // psk_key_exchange_modes (45)
     extensions.append(makeExtSupportedVersions(preSafari26).span());          // supported_versions (43)
     extensions.append(makeExtCompressCertificate().span());        // compress_certificate (27)
-    extensions.append(makeExtGREASE(greaseSecondary).span());      // GREASE-2
+    extensions.append(makeExtGREASETrailing(greaseSecondary).span());      // GREASE-2
     if (preSafari26)
         extensions.append(makeExtPadding().span());                // padding (21) — 18.x only, LAST (iOS emits padding AFTER the trailing GREASE)
 
@@ -642,7 +653,7 @@ Vector<uint8_t> driftstackBuildIPhoneClientHelloHybrid(const String& sni,
     extensions.append(makeExtPSKKeyExchangeModes().span());
     extensions.append(makeExtSupportedVersions(preSafari26).span());
     extensions.append(makeExtCompressCertificate().span());
-    extensions.append(makeExtGREASE(greaseSecondary).span());
+    extensions.append(makeExtGREASETrailing(greaseSecondary).span());
     if (preSafari26)
         // 18.x: padding extension (0x0015) PRESENT → JA4 ext-count 2014; emitted LAST (after the trailing GREASE) to match iOS wire order.
         extensions.append(makeExtPadding().span());
@@ -841,7 +852,7 @@ Vector<uint8_t> driftstackBuildIPhoneQuicClientHello(const String& sni,
     extensions.append(makeExtSupportedVersionsQuic().span());          // 002b — GREASE + TLS 1.3 only
     extensions.append(makeExtCompressCertificate().span());            // 001b — zlib
     extensions.append(makeExtQuicTransportParams(transportParams).span()); // 0039
-    extensions.append(makeExtGREASE(greaseSecondary).span());
+    extensions.append(makeExtGREASETrailing(greaseSecondary).span());
 
     Vector<uint8_t> body;
     appendU16(body, kTLSVersionTLS12);          // legacy_version
