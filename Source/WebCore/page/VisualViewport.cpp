@@ -175,13 +175,11 @@ double VisualViewport::height() const
                     if (!archetype || !archetype[0])
                         return 1741;
                     std::string_view sv { archetype };
+                    // Boundary 18.x→26.0 (mirrors LocalDOMWindow): byte-verified iphone17pro@26.0
+                    // no-meta = 1741 = Family-B, so safari26_0..26_3 fall through, not grouped w/ 18.x.
                     if (sv.find("safari17_") != std::string_view::npos
                         || sv.find("safari18_") != std::string_view::npos
-                        || sv.find("safari19_") != std::string_view::npos
-                        || sv.find("safari26_0") != std::string_view::npos
-                        || sv.find("safari26_1") != std::string_view::npos
-                        || sv.find("safari26_2") != std::string_view::npos
-                        || sv.find("safari26_3") != std::string_view::npos)
+                        || sv.find("safari19_") != std::string_view::npos)
                         return 1653;
                     return 1741;
                 }();
@@ -201,13 +199,10 @@ double VisualViewport::height() const
         if (!archetype || !archetype[0])
             return 714.0;
         std::string_view sv { archetype };
+        // Boundary 18.x→26.0 (meta path; config-shadowed but kept correct — mirrors LocalDOMWindow).
         if (sv.find("safari17_") != std::string_view::npos
             || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari26_0") != std::string_view::npos
-            || sv.find("safari26_1") != std::string_view::npos
-            || sv.find("safari26_2") != std::string_view::npos
-            || sv.find("safari26_3") != std::string_view::npos)
+            || sv.find("safari19_") != std::string_view::npos)
             return 678.0;
         return 714.0;
     }();

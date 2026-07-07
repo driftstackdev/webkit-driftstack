@@ -1437,16 +1437,15 @@ int LocalDOMWindow::innerHeight() const
                 if (!archetype || !archetype[0])
                     return 1741;
                 std::string_view sv { archetype };
-                // Family A (Safari ≤26.3): iPhone 16 Pro yields 1653
+                // Family A (PRE-26 Safari 17/18/19 ONLY): 1653. The no-meta chrome-height boundary is
+                // 18.x→26.0, NOT 26.3→26.4 — byte-verified 2026-07-07: iphone17pro @ Safari 26.0 no-meta
+                // win.innerHeight = 1741 (= Family-B), from envwide-iPhone_17_Pro-1783411833496.json. So
+                // safari26_0..26_3 must fall through to Family-B, not be grouped with the 18.x legacy height.
                 if (sv.find("safari17_") != std::string_view::npos
                     || sv.find("safari18_") != std::string_view::npos
-                    || sv.find("safari19_") != std::string_view::npos
-                    || sv.find("safari26_0") != std::string_view::npos
-                    || sv.find("safari26_1") != std::string_view::npos
-                    || sv.find("safari26_2") != std::string_view::npos
-                    || sv.find("safari26_3") != std::string_view::npos)
+                    || sv.find("safari19_") != std::string_view::npos)
                     return 1653;
-                // Family B (Safari 26.4+ launch): iPhone 17 yields 1741
+                // Family B (Safari 26.0+): iphone17@26.4 + iphone17pro@26.0 both yield 1741 (402 CSS-wide).
                 return 1741;
             }();
             return s_legacyHeight;
@@ -1466,13 +1465,11 @@ int LocalDOMWindow::innerHeight() const
         if (!archetype || !archetype[0])
             return 714;
         std::string_view sv { archetype };
+        // Boundary 18.x→26.0 (meta path; config-shadowed by the innerHeight() lookup above but kept
+        // correct so a config-less matrix model gets Family-B 714 for 26.0-26.3, not 678).
         if (sv.find("safari17_") != std::string_view::npos
             || sv.find("safari18_") != std::string_view::npos
-            || sv.find("safari19_") != std::string_view::npos
-            || sv.find("safari26_0") != std::string_view::npos
-            || sv.find("safari26_1") != std::string_view::npos
-            || sv.find("safari26_2") != std::string_view::npos
-            || sv.find("safari26_3") != std::string_view::npos)
+            || sv.find("safari19_") != std::string_view::npos)
             return 678;
         return 714;
     }();
