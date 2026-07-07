@@ -1576,14 +1576,41 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     // tls-h1-secfetch-pertype-iPhone17-26_5-2026-07-03.json, cors GET cap #8): Pragma, Accept,
     // Sec-Fetch-Site, Sec-Fetch-Mode, User-Agent, Referer, Sec-Fetch-Dest, Cache-Control,
     // Accept-Language, Priority, Accept-Encoding. Values are unchanged; only the emit order differs.
-    // (cors POST/PUT — Content-Type/Origin/Content-Length mid-order — is a SEPARATE follow-up: the h1
-    // path harvests headers with an EMPTY body (W3070), so a mid-order Content-Length needs the real
-    // body size threaded into the builder; not done here to avoid re-triggering the W3070 hang.)
+    // W3068-CORS-POST (JA4H tracker POST path): a cross-origin fetch/XHR/beacon WITH a body (POST/PUT/
+    // PATCH/DELETE) uses yet another order — Content-Type/Origin near the front, Content-Length at pos 7
+    // (mid). Verified from the iPhone-17 raw-wire capture (reference/realdevice-bs/
+    // tls-h1-secfetch-pertype-iPhone17-26_5-2026-07-03.json, cors POST cap #9; cross-checked vs
+    // raw-h1-iPhone_17-26-v3-post.json POST caps): Accept, Content-Type, Origin, Pragma, Sec-Fetch-Site,
+    // Content-Length, Sec-Fetch-Mode, User-Agent, Referer, Sec-Fetch-Dest, Cache-Control, Accept-Language,
+    // Priority, Accept-Encoding. Emitting the nav order for a cors POST is a distinct JA4H tell on the
+    // fetch/beacon tracker path. The h1 call-site (:3589) now threads the REAL requestBody so the
+    // mid-order Content-Length is the true size — NOT the W3070 empty-harvest 0 (the emit's trailing
+    // fallback CL is then correctly skipped via sawContentLength, and the body still sends once).
     bool isCorsGet = (httpMethod == "GET"_s) && webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s;
+    bool isCorsPost = webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s
+        && httpMethod != "GET"_s && httpMethod != "HEAD"_s;
     if (isCorsGet) {
         if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
         h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
         if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+        if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+        h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+        if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+        if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
+        if (webkitHdrs.contains("cache-control"_s)) h2req.extraHeaders.append({ "cache-control"_s, webkitHdrs.get("cache-control"_s) });
+        h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+        h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+            : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "*/*"_s)) });
+        h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+    } else if (isCorsPost) {
+        // cors POST/PUT/PATCH order (raw-wire cap #9). Content-Type/Origin/Content-Length carry the body;
+        // Content-Length = the real requestBody size (h1 threads it via the :3589 call-site).
+        h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
+        if (webkitHdrs.contains("content-type"_s)) h2req.extraHeaders.append({ "content-type"_s, webkitHdrs.get("content-type"_s) });
+        if (webkitHdrs.contains("origin"_s)) h2req.extraHeaders.append({ "origin"_s, webkitHdrs.get("origin"_s) });
+        if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
+        if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+        h2req.extraHeaders.append({ "content-length"_s, String::number(requestBody.size()) });
         if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
         h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
         if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
@@ -1620,7 +1647,8 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
             || lower == "accept"_s || lower == "accept-encoding"_s || lower == "accept-language"_s
             || lower == "sec-fetch-site"_s || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
             || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s
-            || (isCorsGet && (lower == "pragma"_s || lower == "cache-control"_s)))
+            || ((isCorsGet || isCorsPost) && (lower == "pragma"_s || lower == "cache-control"_s))
+            || (isCorsPost && (lower == "content-type"_s || lower == "origin"_s || lower == "content-length"_s)))
             continue;
         if (lower == "if-none-match"_s || lower == "if-modified-since"_s || lower == "if-match"_s
             || lower == "if-unmodified-since"_s || lower == "if-range"_s)
@@ -3029,10 +3057,30 @@ void DriftstackNetworkLoader::resume()
             // cross-origin fetch/XHR GET reorders the regular headers vs nav (same iPhone-17 raw-wire
             // cors GET order); pragma/cache-control are placed in-template here + skipped in the loop.
             bool isCorsGet = (httpMethod == "GET"_s) && webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s;
+            bool isCorsPost = webkitHdrs.get("sec-fetch-mode"_s) == "cors"_s
+                && httpMethod != "GET"_s && httpMethod != "HEAD"_s;
             if (isCorsGet) {
                 if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
                 h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
                 if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+                if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
+                h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
+                if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
+                if (webkitHdrs.contains("sec-fetch-dest"_s)) h2req.extraHeaders.append({ "sec-fetch-dest"_s, webkitHdrs.get("sec-fetch-dest"_s) });
+                if (webkitHdrs.contains("cache-control"_s)) h2req.extraHeaders.append({ "cache-control"_s, webkitHdrs.get("cache-control"_s) });
+                h2req.extraHeaders.append({ "accept-language"_s, driftstackPathBAcceptLanguage() });
+                h2req.extraHeaders.append({ "priority"_s, webkitHdrs.contains("priority"_s) ? webkitHdrs.get("priority"_s)
+                    : driftstackPathBPriorityHeader(webkitHdrs.get("sec-fetch-dest"_s), getOrDefault("accept"_s, "*/*"_s)) });
+                h2req.extraHeaders.append({ "accept-encoding"_s, driftstackPathBAcceptEncoding() });
+            } else if (isCorsPost) {
+                // cors POST/PUT/PATCH order (raw-wire cap #9); h2req.body=requestBody set above so
+                // Content-Length (mid-order) is the real size. Mirror of the shared h2 builder.
+                h2req.extraHeaders.append({ "accept"_s, getOrDefault("accept"_s, "*/*"_s) });
+                if (webkitHdrs.contains("content-type"_s)) h2req.extraHeaders.append({ "content-type"_s, webkitHdrs.get("content-type"_s) });
+                if (webkitHdrs.contains("origin"_s)) h2req.extraHeaders.append({ "origin"_s, webkitHdrs.get("origin"_s) });
+                if (webkitHdrs.contains("pragma"_s)) h2req.extraHeaders.append({ "pragma"_s, webkitHdrs.get("pragma"_s) });
+                if (webkitHdrs.contains("sec-fetch-site"_s)) h2req.extraHeaders.append({ "sec-fetch-site"_s, webkitHdrs.get("sec-fetch-site"_s) });
+                h2req.extraHeaders.append({ "content-length"_s, String::number(requestBody.size()) });
                 if (webkitHdrs.contains("sec-fetch-mode"_s)) h2req.extraHeaders.append({ "sec-fetch-mode"_s, webkitHdrs.get("sec-fetch-mode"_s) });
                 h2req.extraHeaders.append({ "user-agent"_s, webkitHdrs.contains("user-agent"_s) ? webkitHdrs.get("user-agent"_s) : driftstackPathBUserAgentFallback() });
                 if (webkitHdrs.contains("referer"_s)) h2req.extraHeaders.append({ "referer"_s, webkitHdrs.get("referer"_s) });
@@ -3077,7 +3125,8 @@ void DriftstackNetworkLoader::resume()
                     || lower == "accept-language"_s || lower == "sec-fetch-site"_s
                     || lower == "sec-fetch-dest"_s || lower == "sec-fetch-mode"_s
                     || lower == "user-agent"_s || lower == "priority"_s || lower == "referer"_s
-                    || (isCorsGet && (lower == "pragma"_s || lower == "cache-control"_s)))
+                    || ((isCorsGet || isCorsPost) && (lower == "pragma"_s || lower == "cache-control"_s))
+                    || (isCorsPost && (lower == "content-type"_s || lower == "origin"_s || lower == "content-length"_s)))
                     continue;
                 // Wave 29-499.261 — strip cache-validation headers. PathB v2
                 // has no client-side cache; If-None-Match / If-Modified-Since
@@ -3586,7 +3635,11 @@ _Pragma("clang diagnostic pop")
         // on the message framing (W3069), not on FIN. An empty body is passed to the h2 builder
         // purely to harvest the ordered header vector; this path forwards headers only (sending a
         // request body over pure-h1 is unchanged from before — it was not sent previously either).
-        auto h1Req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, Vector<uint8_t> { }, host, cookieHeader);
+        // W3068-CORS-POST: thread the REAL requestBody (was Vector<uint8_t>{ } — the W3070 empty harvest)
+        // so the cors-POST builder emits the mid-order Content-Length at its true size. The h1 wire still
+        // sends the body once from the OUTER requestBody (below); h1Req.body is unused by the h1 emit, and
+        // the trailing fallback Content-Length is skipped since the builder now emits it (sawContentLength).
+        auto h1Req = driftstackBuildIphoneH2Request(url, httpMethod, httpHeaders, requestBody, host, cookieHeader);
         auto titleCaseHeaderName = [](const String& lower) -> String {
             // Title-Case = capitalize the first letter + each letter after '-'.
             StringBuilder tc;
