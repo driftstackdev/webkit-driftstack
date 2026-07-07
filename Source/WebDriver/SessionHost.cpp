@@ -50,7 +50,12 @@ void SessionHost::inspectorDisconnected()
     errorResponse->setString("message"_s, "Session terminated without a reply"_s);
     for (auto messageID : copyToVector(m_commandRequests.keys())) {
         auto responseHandler = m_commandRequests.take(messageID);
-        responseHandler({ errorResponse , true });
+        // Guard the empty handler (same crash class as dispatchMessage): invoking one handler can
+        // re-entrantly complete/remove a sibling request still in this snapshot vector, so a later
+        // take() yields an empty WTF::Function — do not invoke it (operator() would null-deref). This
+        // path runs on browser-close/crash, so it must not itself crash. (Founder crash 2026-07-07.)
+        if (responseHandler)
+            responseHandler({ errorResponse , true });
     }
 
 #if ENABLE(WEBDRIVER_BIDI)
