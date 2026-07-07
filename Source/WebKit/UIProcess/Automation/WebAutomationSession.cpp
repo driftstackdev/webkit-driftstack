@@ -886,9 +886,14 @@ void WebAutomationSession::willShowJavaScriptDialog(WebPageProxy& page, const St
             }
         }
 #endif // ENABLE(WEBDRIVER_KEYBOARD_INTERACTIONS)
-    });
 
 #if ENABLE(WEBDRIVER_WHEEL_INTERACTIONS)
+        // Audit wcd979akh #1: this wheel-flush block was OUTSIDE the RunLoop-deferred dialog lambda (a misplaced
+        // `});` closed the lambda after the keyboard block), so it ran SYNCHRONOUSLY + unconditionally on every
+        // willShowJavaScriptDialog — bypassing the next-run-loop deferral AND the isShowingJavaScriptDialogOnPage
+        // re-check the mouse/keyboard blocks respect. A page popping a JS dialog from a scroll/wheel handler could
+        // resolve a scroll intent as SUCCEEDED before the wheel events actually flushed. Moved inside the lambda
+        // (the `});` now closes after this block) so it mirrors the mouse/keyboard flush handling.
         if (!m_pendingWheelEventsFlushedCallbacksPerPage.isEmpty()) {
             for (auto key : copyToVector(m_pendingWheelEventsFlushedCallbacksPerPage.keys())) {
                 auto callback = m_pendingWheelEventsFlushedCallbacksPerPage.take(key);
@@ -896,6 +901,7 @@ void WebAutomationSession::willShowJavaScriptDialog(WebPageProxy& page, const St
             }
         }
 #endif // ENABLE(WEBDRIVER_WHEEL_INTERACTIONS)
+    });
 }
     
 void WebAutomationSession::didEnterFullScreenForPage(const WebPageProxy&)
