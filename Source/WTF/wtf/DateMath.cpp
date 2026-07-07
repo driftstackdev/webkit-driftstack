@@ -673,6 +673,11 @@ double parseES5Date(std::span<const Latin1Character> dateString, bool& isLocalTi
     // 2-digit dates (isSingleDigit == false) are untouched.
     if (isSingleDigit) {
         if (const char* driftstackArchetype = getenv("DRIFTSTACK_ARCHETYPE")) {
+            // Raw C-string scan of the archetype env token. Actually bounds-safe (the inner 6-char
+            // compare breaks on the first mismatch, and NUL never matches a safariToken char, so it
+            // never reads past the terminator), but the compiler can't prove it — wrap to satisfy the
+            // fork's -Werror,-Wunsafe-buffer-usage without changing behaviour (A3 box build-fix 2026-07-07).
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
             static constexpr char safariToken[] = "safari";
             const char* safariDigits = nullptr;
             for (const char* cursor = driftstackArchetype; *cursor; ++cursor) {
@@ -695,6 +700,7 @@ double parseES5Date(std::span<const Latin1Character> dateString, bool& isLocalTi
                 if (safariMajor > 0 && safariMajor < 26)
                     return std::numeric_limits<double>::quiet_NaN();
             }
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
         }
     }
 #endif
