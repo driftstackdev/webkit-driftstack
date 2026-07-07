@@ -30,7 +30,7 @@
     Exposed=Window
 ] interface SVGScriptElement : SVGElement {
     [Reflect] attribute DOMString type;
-    [ReflectSetter] attribute boolean async;
+    [ReflectSetter, EnabledBySetting=Safari262PrototypeMembersEnabled] attribute boolean async;
 };
 
 SVGScriptElement includes SVGURIReference;

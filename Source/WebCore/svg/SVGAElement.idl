@@ -29,8 +29,8 @@
     readonly attribute SVGAnimatedString target;
 
     [Reflect] attribute DOMString hreflang;
-    [Reflect] attribute DOMString rel;
-    [SameObject, PutForwards=value] readonly attribute DOMTokenList relList;
+    [Reflect, EnabledBySetting=Safari262PrototypeMembersEnabled] attribute DOMString rel;
+    [SameObject, PutForwards=value, EnabledBySetting=Safari262PrototypeMembersEnabled] readonly attribute DOMTokenList relList;
     [Reflect] attribute DOMString type;
 };
 
