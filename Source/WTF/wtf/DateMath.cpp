@@ -661,6 +661,44 @@ double parseES5Date(std::span<const Latin1Character> dateString, bool& isLocalTi
     if (!dateString.empty())
         return std::numeric_limits<double>::quiet_NaN();
 
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK (cross-band value sweep 2026-07-07): WebKit began accepting single-digit
+    // date-only strings (YYYY-M-D parsed as local time, e.g. new Date('2026-3-4')) at
+    // Safari 26.0. Real iPhone <26.0 (Family-A, e.g. 18.6) returns NaN — verified as the
+    // ONLY engine.dateParsing field that flips at the 26.0 boundary (noPad=NaN@<=18.6 vs
+    // the parsed instant @26.0+; all other date formats match across the boundary). This is
+    // WTF-level (no JSC driftstackArchetypeSafariAtLeast here), so parse the archetype major
+    // from DRIFTSTACK_ARCHETYPE inline. Surgical: only the single-digit date-only path, only
+    // for a pre-26 archetype; 26.x and the unset launch default keep the parsed value, and
+    // 2-digit dates (isSingleDigit == false) are untouched.
+    if (isSingleDigit) {
+        if (const char* driftstackArchetype = getenv("DRIFTSTACK_ARCHETYPE")) {
+            static constexpr char safariToken[] = "safari";
+            const char* safariDigits = nullptr;
+            for (const char* cursor = driftstackArchetype; *cursor; ++cursor) {
+                bool matches = true;
+                for (int i = 0; i < 6; ++i) {
+                    if (cursor[i] != safariToken[i]) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (matches) {
+                    safariDigits = cursor + 6;
+                    break;
+                }
+            }
+            if (safariDigits) {
+                int safariMajor = 0;
+                for (const char* digit = safariDigits; *digit >= '0' && *digit <= '9'; ++digit)
+                    safariMajor = safariMajor * 10 + (*digit - '0');
+                if (safariMajor > 0 && safariMajor < 26)
+                    return std::numeric_limits<double>::quiet_NaN();
+            }
+        }
+    }
+#endif
+
     if (isSingleDigit)
         isLocalTime = true;
 
