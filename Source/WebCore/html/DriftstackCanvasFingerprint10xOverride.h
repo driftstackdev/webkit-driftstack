@@ -65180,6 +65180,18 @@ static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
     { "iphone17_ios18_7_safari26_4", 220, 30, "BrowserLeaks,com <canvas> 1.0", kCanvasFp10x_textArial14_220x30_iphone17_ios18_7_safari26_4, "text_arial14_220x30" },
     { "iphone16pro_ios18_6_safari18_6", 240, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjs_240x60_iphone16pro_ios18_6_safari18_6, "fpjs_240x60" },
     { "iphone16pro_ios18_6_safari18_6", 400, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_stripe_400x60_iphone16pro_ios18_6_safari18_6, "stripe_400x60" },
+    // canvas_2d_pixel_familyA / 2026-07-07 — 26.0-26.3 FLIP-BAND donor for the "Cwm fjordbank" fpjs (240x60)
+    // + stripe (400x60) scenes. Both are byte-uniform across ALL of Family-A (18.6 == 26.0 == 26.2 == 26.3),
+    // CAPTURE-PROVEN: the Stripe fraud canvas (v3-stripe-canvas, md5 61b7a151 / sha256 5e938e8f) is identical
+    // in 9 real-device captures spanning 18.6→26.3, and the FingerprintJS canvas (v3-fpjs-canvas, combinedHash
+    // 2ca31b25) is identical at 18.6 and 26.3. The 18.6 donor rows above carry explicit "_safari18_6" slugs
+    // (version-key 18006), so the V-790 SameSafariMinor guard BLOCKS a 26.0-26.3 requester (key 2600x) from
+    // borrowing them → native Mac render → a WRONG flip-band canvas. These familyA_safari26x sentinel rows
+    // key to -1 (rest "26x" has no "_<minor>"), so SameSafariMinor passes them for any same-family requester;
+    // their tag != "text_arial14_220x30" so the browserleaks sub-band tie-break is skipped — they serve the
+    // (band-uniform) 18.6 dataURL to the 26.0-26.3 band. 18.6 exact-match + 26.4/26.5 launch (Family-B) unchanged.
+    { "familyA_safari26x", 240, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjs_240x60_iphone16pro_ios18_6_safari18_6, "fpjs_240x60" },
+    { "familyA_safari26x", 400, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_stripe_400x60_iphone16pro_ios18_6_safari18_6, "stripe_400x60" },
 };
 
 // V-245 runtime archetype selector. Read `DRIFTSTACK_ARCHETYPE` env var
