@@ -256,6 +256,34 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
     auto& fontRanges = m_realizedFallbackRanges.last();
 
     if (!index) {
+#if PLATFORM(DRIFTSTACK)
+        // FONT-buildC substituted-primary arm (≤26.3, A3 box cascade-trace 2026-07-06): real Safari ≤26.3
+        // renders Monaco/Menlo as Courier (exhaustive-probe serif width 562) and Lucida Grande as Verdana
+        // (760) at the PRIMARY slot. On the fork, idx0's realizeNextFallback SKIPS these primaries (unusable
+        // in the serif context — A3 trace: idx=0 lastRealized=2 resolved='Times New Roman') and lands on the
+        // author serif generic = Times (620) — a per-minor tell (real 26.4 IS 620/Times; ≤26.3 is the
+        // substitute). The A+B index==1 arm below can't reach them: Times HAS 'm', so the shaper resolves at
+        // idx0 and never calls realizeFallbackRangesAt(index==1). Force the substitute at idx0 for ≤26.3 +
+        // serif author-generic. glyphHash-safe (gated ≤26.3 → the 26.4 launch idx0 cascade is byte-untouched).
+        if (fontSelector && driftstackSafariAtMost26_3()
+            && description.familyCount() >= 2 && description.familyAt(0).kind == FontFamilyKind::Specified
+            && description.familyAt(1).isGeneric()
+            && description.familyAt(1).name == *familyNamesData->at(FamilyNamesIndex::SerifFamily)) {
+            AtomString substitute;
+            const AtomString& primaryName = description.familyAt(0).name;
+            if (equalLettersIgnoringASCIICase(primaryName, "monaco"_s) || equalLettersIgnoringASCIICase(primaryName, "menlo"_s))
+                substitute = "courier"_s;
+            else if (equalLettersIgnoringASCIICase(primaryName, "lucida grande"_s))
+                substitute = "verdana"_s;
+            if (!substitute.isNull()) {
+                auto substituteRanges = fontSelector->fontRangesForFamily(description, FontFamily { substitute, FontFamilyKind::Specified });
+                if (!substituteRanges.isNull()) {
+                    fontRanges = WTF::move(substituteRanges);
+                    return fontRanges;
+                }
+            }
+        }
+#endif
         fontRanges = realizeNextFallback(description, m_lastRealizedFallbackIndex, fontSelector);
         if (fontRanges.isNull() && fontSelector)
             fontRanges = fontSelector->fontRangesForFamily(description, FontFamily { *familyNamesData->at(FamilyNamesIndex::StandardFamily), FontFamilyKind::Generic });
@@ -275,10 +303,10 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
     // Detect glyphless-named via !supportsCodePoint('m'): the 6 CSS generics (Times/SF Pro/Helvetica/Menlo/Snell/
     // Zapfino) all HAVE 'm', so they never trigger — only a named glyphless primary does. Do NOT advance
     // m_lastRealizedFallbackIndex — the author generic still realizes normally at the next index.
-    // ⚠️ CANDIDATE for A3's box loop: (a) verify serif→648 / installedCount 26.3→131 / 26.4→114-unchanged /
-    // c587ed44 held; (b) Monaco + Lucida Grande are SUBSTITUTED primaries (idx0 resolves to Times per your
-    // 3-context trace) so this !supportsCodePoint('m') condition MISSES them (they need 562/760) — add a
-    // substitution-aware arm once the 13 pure-glyphless fonts land.
+    // This arm handles the 13 PURE-glyphless fonts (their real primary realizes at idx0, 'm' misses, so
+    // index==1 IS reached). The 2 SUBSTITUTED primaries (Monaco/Menlo→Courier, Lucida Grande→Verdana) are
+    // handled in the index==0 block above — their idx0 skips straight to Times (which HAS 'm'), so the
+    // shaper resolves at idx0 and never calls index==1. A3 box-verified: the 13 land serif=648 here.
     // BUG-B fix (A3 box-iteration): fire ONLY when the author's fallback generic is SERIF (proportional). Real
     // ≤26.3 diverges in the SERIF context only (glyphless serif→648-SF-Pro vs the serif generic 620); the mono
     // context correctly falls to the monospace generic (Courier, 562) and sans is already SF Pro (648). Detect
@@ -292,25 +320,10 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
                 fontRanges = FontRanges(WTF::move(designMatched));
                 return fontRanges;
             }
-        } else if (fontSelector && description.familyCount() && description.familyAt(0).kind == FontFamilyKind::Specified) {
-            // C arm (A3 box-iteration): SUBSTITUTED glyphless primaries — real ≤26.3 renders Monaco/Menlo as
-            // Courier (serif=562) and Lucida Grande as Verdana (serif=760). Their fork V-683 substitution resolves
-            // idx0 to Times (which HAS 'm'), so the !supportsCodePoint branch above misses them; detect by the
-            // SPECIFIED primary family name + insert the substitution target's ranges before the serif generic.
-            AtomString substitute;
-            const AtomString& primaryName = description.familyAt(0).name;
-            if (equalLettersIgnoringASCIICase(primaryName, "monaco"_s) || equalLettersIgnoringASCIICase(primaryName, "menlo"_s))
-                substitute = "courier"_s;
-            else if (equalLettersIgnoringASCIICase(primaryName, "lucida grande"_s))
-                substitute = "verdana"_s;
-            if (!substitute.isNull()) {
-                auto substituteRanges = fontSelector->fontRangesForFamily(description, FontFamily { substitute, FontFamilyKind::Specified });
-                if (!substituteRanges.isNull()) {
-                    fontRanges = WTF::move(substituteRanges);
-                    return fontRanges;
-                }
-            }
         }
+        // Monaco/Menlo/Lucida Grande (SUBSTITUTED primaries whose idx0 skips to the serif generic = Times,
+        // which HAS 'm') are handled by the substituted-primary arm in the index==0 block above — their
+        // primary resolves at idx0 (Courier/Verdana), so realizeFallbackRangesAt(index==1) is never reached.
     }
 #endif
 
