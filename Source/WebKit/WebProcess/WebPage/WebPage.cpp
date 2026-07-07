@@ -6173,6 +6173,11 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // Enabled flag (default true so 26.x stays exact) wired as EnabledBySetting on the attribute.
         // Real 18.6 lacks scrollMargin (root/rootMargin/thresholds only).
         settings.setIntersectionObserverScrollMarginEnabled(false);
+        // ImageCapture.prototype.grabFrame — upstream ImageCapture.idl had NO per-member gate.
+        // Driftstack-added ImageCaptureGrabFrameEnabled (default true so 26.x stays exact) wired as
+        // EnabledBySetting on grabFrame. Real 18.6 ImageCapture has 5 members (takePhoto/... no
+        // grabFrame); added at 26.0 -> hide it for Family-A so 18.6 proto-count is 5 not 6 (hunt-7).
+        settings.setImageCaptureGrabFrameEnabled(false);
         // PublicKeyCredential.signalAllAcceptedCredentials / signalCurrentUserDetails /
         // signalUnknownCredential (WebAuthn credential-signal statics) — upstream PublicKeyCredential
         // .idl had NO settings gate. Driftstack-added WebAuthnSignalMethodsEnabled flag (default true

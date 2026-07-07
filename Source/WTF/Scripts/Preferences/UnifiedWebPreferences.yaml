@@ -3847,6 +3847,20 @@ ImageCaptureEnabled:
       "PLATFORM(COCOA)": true
       default: false
 
+ImageCaptureGrabFrameEnabled:
+  type: bool
+  status: stable
+  category: media
+  humanReadableName: "ImageCapture grabFrame"
+  humanReadableDescription: "Expose ImageCapture.prototype.grabFrame (per-archetype gate; real Safari 18.6 lacks it, added at 26.0)"
+  defaultValue:
+    WebKitLegacy:
+      default: true
+    WebKit:
+      default: true
+    WebCore:
+      default: true
+
 ImageControlsEnabled:
   type: bool
   status: unstable
