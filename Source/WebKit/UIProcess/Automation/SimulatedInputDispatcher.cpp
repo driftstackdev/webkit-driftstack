@@ -127,7 +127,8 @@ void SimulatedInputDispatcher::keyFrameTransitionDurationTimerFired()
 
     if (isKeyFrameTransitionComplete()) {
         auto finish = std::exchange(m_keyFrameTransitionCompletionHandler, nullptr);
-        finish(std::nullopt);
+        if (finish)
+            finish(std::nullopt);
     }
 }
 
@@ -166,7 +167,8 @@ void SimulatedInputDispatcher::transitionToNextInputSourceState()
 {
     if (isKeyFrameTransitionComplete()) {
         auto finish = std::exchange(m_keyFrameTransitionCompletionHandler, nullptr);
-        finish(std::nullopt);
+        if (finish)
+            finish(std::nullopt);
         return;
     }
 
@@ -181,7 +183,8 @@ void SimulatedInputDispatcher::transitionToNextInputSourceState()
     transitionInputSourceToState(inputSource, postStateEntry.second, [this, protectedThis = Ref { *this }](std::optional<AutomationCommandError> error) {
         if (error) {
             auto finish = std::exchange(m_keyFrameTransitionCompletionHandler, nullptr);
-            finish(error);
+            if (finish)
+                finish(error);
             return;
         }
 
@@ -513,7 +516,13 @@ void SimulatedInputDispatcher::finishDispatching(std::optional<AutomationCommand
     // https://github.com/w3c/webdriver/issues/1772 for ongoing discussion:
     m_client.clearDoubleClicks();
 #endif
-    finish(error);
+    // finishDispatching can be re-entered (e.g. cancel() racing a still-pending dispatch timer that
+    // fires after the run already completed). m_runCompletionHandler is exchanged to null above, so a
+    // second entry sees an empty handler — do NOT invoke it (empty WTF::Function::operator() null-
+    // derefs). A duplicate finish is a correct no-op (the response was already sent). Paired with the
+    // SessionHost empty-response guard — founder crash 2026-07-07.
+    if (finish)
+        finish(error);
 }
 
 } // namespace Webkit

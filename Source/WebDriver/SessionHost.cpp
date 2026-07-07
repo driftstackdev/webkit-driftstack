@@ -107,6 +107,17 @@ void SessionHost::dispatchMessage(const String& message)
 
     auto responseHandler = m_commandRequests.take(*sequenceID);
     ASSERT(responseHandler);
+    if (!responseHandler) {
+        // A response arrived for a sequence id with no pending request: the request was already
+        // completed (a duplicate / re-sent backend response) or m_commandRequests was cleared during
+        // session teardown. In a release build the empty WTF::Function must NOT be invoked —
+        // operator() on an empty Function null-derefs (SIGSEGV at 0x0). Drop the stray response
+        // instead of crashing. (Founder crash 2026-07-07 MiniBrowser-2026-07-07-101915.ips: an
+        // in-flight interaction-sequence response raced a cancel/teardown → duplicate response for
+        // one id → empty handler → crash at this dispatch site.)
+        RELEASE_LOG_ERROR(SessionHost, "SessionHost::dispatchMessage: no pending request for id %ld — dropping stray response", static_cast<long>(*sequenceID));
+        return;
+    }
 
     CommandResponse response;
     if (auto errorObject = messageObject->getObject("error"_s)) {
