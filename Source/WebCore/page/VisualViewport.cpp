@@ -125,6 +125,19 @@ double VisualViewport::pageTop() const
 double VisualViewport::width() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // Cross-context coherence (A1 fp #4, VisualViewport half — box-confirmed by A3 sweep w4zl6svqu
+    // 2026-07-07): a SUBFRAME's visualViewport.width must equal ITS OWN inner/layout viewport, NOT the
+    // top-frame archetype pin. LocalDOMWindow::innerWidth() already frame-scopes this (fp #4, 39c858a373)
+    // and scale() already guards isMainFrame; width()/height() were the un-mirrored half — inside an
+    // iframe vv returned the TOP pin (402/980) while innerWidth returned the frame box = a main-vs-subframe
+    // tell (a real iPhone is coherent: subframe vv == its own inner in every frame). Delegate to
+    // innerWidth() rather than re-deriving, so the two can never drift apart again (this bug was caused by
+    // width() being written independently from innerWidth()).
+    if (RefPtr subFrame = this->frame(); subFrame && !subFrame->isMainFrame()) {
+        if (RefPtr ownerWindow = this->window())
+            return static_cast<double>(ownerWindow->innerWidth());
+        return 0;
+    }
     // W2987: mirror LocalDOMWindow::innerWidth()'s no-meta-viewport desktop-fallback branch so
     // visualViewport.width stays EQUAL to innerWidth on a no-<meta viewport> page. On real iPhone a
     // no-meta page lays out at the 980 CSS-px desktop fallback → innerWidth==visualViewport.width==980
@@ -159,6 +172,17 @@ double VisualViewport::width() const
 double VisualViewport::height() const
 {
 #if PLATFORM(DRIFTSTACK)
+    // Cross-context coherence (A1 fp #4, VisualViewport half — box-confirmed by A3 sweep w4zl6svqu
+    // 2026-07-07): a SUBFRAME's visualViewport.height must equal ITS OWN inner/layout viewport, NOT the
+    // top-frame archetype pin. innerHeight() already frame-scopes this (fp #4) + scale() guards isMainFrame;
+    // this getter was the un-mirrored half (iframe vv.height returned the TOP pin 714/1741 while innerHeight
+    // returned the frame box = a main-vs-subframe coherence tell; real iPhone: vv==inner in every frame).
+    // Delegate to innerHeight() so the two can never drift apart again.
+    if (RefPtr subFrame = this->frame(); subFrame && !subFrame->isMainFrame()) {
+        if (RefPtr ownerWindow = this->window())
+            return static_cast<double>(ownerWindow->innerHeight());
+        return 0;
+    }
     // W2556 (dispatch audit #2): mirror LocalDOMWindow::innerHeight()'s no-meta-viewport legacy
     // branch so visualViewport.height stays EQUAL to innerHeight on a no-<meta viewport> page (they
     // are equal on real iPhone — see the comment below). Without this, innerHeight returned the legacy
