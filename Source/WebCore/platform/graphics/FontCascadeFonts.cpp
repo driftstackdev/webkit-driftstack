@@ -306,7 +306,7 @@ const FontRanges& FontCascadeFonts::realizeFallbackRangesAt(const FontCascadeDes
             if (!substitute.isNull()) {
                 auto substituteRanges = fontSelector->fontRangesForFamily(description, FontFamily { substitute, FontFamilyKind::Specified });
                 if (!substituteRanges.isNull()) {
-                    fontRanges = substituteRanges;
+                    fontRanges = WTF::move(substituteRanges);
                     return fontRanges;
                 }
             }
