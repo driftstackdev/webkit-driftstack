@@ -65192,6 +65192,17 @@ static constexpr CanvasFp10xCanonicalEntry kCanvasFp10xCanonicalTable[] = {
     // (band-uniform) 18.6 dataURL to the 26.0-26.3 band. 18.6 exact-match + 26.4/26.5 launch (Family-B) unchanged.
     { "familyA_safari26x", 240, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjs_240x60_iphone16pro_ios18_6_safari18_6, "fpjs_240x60" },
     { "familyA_safari26x", 400, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_stripe_400x60_iphone16pro_ios18_6_safari18_6, "stripe_400x60" },
+    // canvas_2d_pixel_familyB / 2026-07-07 — Safari 26.5 donor for the fpjs (240x60) + stripe (400x60)
+    // scenes. Family-B is byte-uniform 26.4 == 26.5, CAPTURE-PROVEN: v3-stripe-canvas md5 57186fab in 48
+    // captures (22×26.4 + 26×26.5) and v3-fpjs-canvas combinedHash 86eca81d (4 captures) are identical.
+    // The only Family-B donor above is keyed 26004 (26.4), so V-790 SameSafariMinor BLOCKS a 26.5 requester
+    // (key 26005) → native Mac render. This 26.5-keyed donor (26005) serves the 26.4 dataURL and is
+    // borrowable by ANY 26.5-model requester (same-minor key 26005 → SameSafariMinor passes) via the
+    // fallback, while the 26.4 launch requester (26004) still can NOT borrow it (26004 != 26005) — so the
+    // V-790 "safari26_5-only lent to a safari26_4 archetype" prohibition is preserved. A future 26.6 (26006)
+    // also stays native until captured. 26.4 launch exact-match + the Family-A rows unchanged.
+    { "iphone17_ios18_7_safari26_5", 240, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_fpjs_240x60_iphone17_ios18_7_safari26_4, "fpjs_240x60" },
+    { "iphone17_ios18_7_safari26_5", 400, 60, "Cwm fjordbank glyphs vext quiz, 😃", kCanvasFp10x_stripe_400x60_iphone17_ios18_7_safari26_4, "stripe_400x60" },
 };
 
 // V-245 runtime archetype selector. Read `DRIFTSTACK_ARCHETYPE` env var
