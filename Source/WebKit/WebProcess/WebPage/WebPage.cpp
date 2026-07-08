@@ -6212,6 +6212,19 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // adjust*ForVectorBasedControls short-circuit on !formControlRefreshEnabled(). Family B (Safari 26.x,
         // incl the ios18_6_safari26_x band + the 26.4 launch) keeps the Cocoa-default true. Divergence-hunt-2 W3097.
         settings.setFormControlRefreshEnabled(false);
+        // MONOSPACE default font-size band-key (nonform-divergence-hunt C0-C2/C4; A3 box-REVERSE bus 5791-5793).
+        // code/pre/tt/kbd/samp/xmp/plaintext/listing carry font-family:monospace (single generic) with no
+        // explicit font-size → useFixedDefaultSize()=true (FontCascadeDescription.h:90) → their default size
+        // resolves from settings.defaultFixedFontSize (StyleFontSizeFunctions::fontSizeForKeyword +
+        // StyleBuilderState::updateFontForGenericFamilyChange). Safari 26 raised the iOS fixed-font default
+        // 13→16: real code/pre = 13px @18.6 vs 16px @26.4 (A3 box-verified BOTH bands). The MiniBrowser/harness
+        // embedder pins DefaultFixedFontSize=16 for the fork's one 26.x binary (updatePreferencesGenerated at
+        // line ~5740 above), so Family-A (18.6) served 16px where real 18.6 = 13px. Re-apply the 18.6-era fixed
+        // default (13) for Family-A HERE — updatePreferences runs it after updatePreferencesGenerated, so it is
+        // the last word and overrides the pinned 16; the 26.x branch leaves it at 16 (real 26.4 already correct
+        // — DO NOT touch). Also auto-restores pre's margin-block:1em-derived margins to 13px @18.6 in one shot
+        // (no separate margin override — that would double-fix and desync the margin from the font-size).
+        settings.setDefaultFixedFontSize(13);
     } else {
         // P0 named-timeline CSS-property EXPOSURE fix (CSS.supports gate).
         // The named scroll/view timeline CSS *properties* (scroll-timeline-name,
