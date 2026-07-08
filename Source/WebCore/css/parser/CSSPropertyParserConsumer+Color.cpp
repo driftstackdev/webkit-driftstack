@@ -573,6 +573,33 @@ static bool NODELETE hasNonCalculatedZeroPercentage(const CSS::ColorMix::Compone
     return false;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm driftstackArchetypeSafariAtLeast;
+// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
+static bool driftstackColorMixArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
+
 static std::optional<CSS::Color> consumeColorMixFunction(CSSParserTokenRange& range, ColorParserState& state)
 {
     // color-mix() = color-mix( <color-interpolation-method> , [ <color> && <percentage [0,100]>? ]#{2})
@@ -583,6 +610,17 @@ static std::optional<CSS::Color> consumeColorMixFunction(CSSParserTokenRange& ra
     auto args = consumeFunction(range);
 
     std::optional<ColorInterpolationMethod> colorInterpolationMethod = CSS::defaultInterpolationMethodForColorMix;
+#if PLATFORM(DRIFTSTACK)
+    // Family-A (Safari <26): real iPhone REJECTS color-mix without an explicit <color-interpolation-method> (the
+    // CSS Color 5 grammar requires it); newer WebKit (this fork + real Safari 26.x) leniently defaults to OKLab.
+    // Match real 18.6's STRICT parser — reject the no-space form for Safari <26, so the fork's Family-A parser ==
+    // real 18.6's (e.g. `select option:disabled { color: color-mix(currentColor 50%, transparent) }` (html.css:1210)
+    // drops → the option keeps its inherited color = real). 26.x + the unset launch default keep the lenient
+    // default (launch clean). A3 REVERSE bus 6003-6026 byte-verified: real 18.6 rejects → option:disabled = inherited
+    // blue; NO -internal-auto-base regression (the arg1 branch survives an invalid arg2, real-18.6-proven).
+    if (args.peek().id() != CSSValueIn && !driftstackColorMixArchetypeSafariAtLeast(26, 0))
+        return std::nullopt;
+#endif
     if (args.peek().id() == CSSValueIn) {
         colorInterpolationMethod = consumeColorInterpolationMethod(args, state.propertyParserState);
         if (!colorInterpolationMethod)
