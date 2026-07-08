@@ -182,6 +182,15 @@ float fontSizeForKeyword(unsigned keywordID, bool shouldUseFixedDefaultSize, con
 #else
     int mediumSize = shouldUseFixedDefaultSize ? settings.defaultFixedFontSize : settings.defaultFontSize;
 #endif
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK_DEBUG_MONO diagnostic (A3 ask bus 5831): fires only on the monospace keyword path — shows
+    // whether this hook runs for code/pre, the getenv-archetype result, and the chosen mediumSize (13 vs 16).
+    if (getenv("DRIFTSTACK_DEBUG_MONO") && shouldUseFixedDefaultSize) {
+        const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
+        WTFLogAlways("[DS_MONO] fontSizeForKeyword kw=%u UFDS=1 atLeast26_0=%d fixedDefault=%d mediumSize=%d arch=%s",
+            keywordID, driftstackMonospaceArchetypeSafariAtLeast(26, 0) ? 1 : 0, settings.defaultFixedFontSize, mediumSize, dsa ? dsa : "(null)");
+    }
+#endif
     if (mediumSize >= fontSizeTableMin && mediumSize <= fontSizeTableMax) {
         // Look up the entry in the table.
         int row = mediumSize - fontSizeTableMin;

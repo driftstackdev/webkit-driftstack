@@ -242,6 +242,17 @@ void BuilderState::updateFontForGenericFamilyChange()
         return parentFont.useFixedDefaultSize() ? childFont.specifiedSize() / fixedScaleFactor : childFont.specifiedSize() * fixedScaleFactor;
     }();
 
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK_DEBUG_MONO diagnostic (nonform-hunt monospace fix, A3 ask bus 5831): disambiguates why
+    // code/pre stayed 16px @18.6 after the fontSizeForKeyword band-key — prints whether this entry fires
+    // for monospace (child.UFDS=1 parent.UFDS=0), which sub-path (keyword vs scale), and the resulting size.
+    if (getenv("DRIFTSTACK_DEBUG_MONO")) {
+        const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
+        WTFLogAlways("[DS_MONO] genericFamilyChange child.UFDS=%d parent.UFDS=%d keywordId=%d specified=%.1f -> size=%.1f arch=%s",
+            childFont.useFixedDefaultSize(), parentFont.useFixedDefaultSize(),
+            static_cast<int>(childFont.keywordSizeAsIdentifier()), childFont.specifiedSize(), size, dsa ? dsa : "(null)");
+    }
+#endif
     auto newFontDescription = childFont;
     setFontSize(newFontDescription, size);
     m_style.setFontDescriptionWithoutUpdate(WTF::move(newFontDescription));
