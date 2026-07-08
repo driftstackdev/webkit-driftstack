@@ -551,6 +551,18 @@ static NSInteger driftstackWarmTabsN(void)
     if (!containerView || !_tabManager)
         return nil;
     [self driftEnsureWarmTabMemoryPressureSource];   // arm the pressure safety-valve on first warm tab
+    // First automation tab: REUSE the pristine initial tab (awakeFromNib registers tab 0) rather than
+    // orphaning it. Otherwise tab0 stays a live-but-unused hidden WebContent that occupies a warm slot (so
+    // N=2 would leave 0 real warm tabs) and can never be evicted (it's never entered the LRU). Detect the
+    // pristine-initial state as exactly one tab with an empty LRU (nothing automation-claimed yet); claim it
+    // into the LRU + hand it back so requestNewWebViewWithOptions marks IT controlledByAutomation.
+    if (_tabManager.count == 1 && (!_warmTabLRU || _warmTabLRU.count == 0)) {
+        WKWebView *initial = _tabManager.activeWebView;
+        if (initial) {
+            [self driftNoteWarmTabActive:initial];
+            return initial;
+        }
+    }
     WKWebView *wv = [[WKWebView alloc] initWithFrame:[containerView bounds] configuration:_configuration];
     [wv setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     wv.hidden = YES;
