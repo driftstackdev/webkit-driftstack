@@ -1702,6 +1702,19 @@ void RenderThemeMac::adjustSearchFieldStyle(RenderStyle& style, const Element* e
     UNUSED_PARAM(element);
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // The fork emulates iOS, not Mac desktop. Family-A (Safari <26 / 18.6, FormControlRefresh OFF) search
+    // fields must use the iOS-equivalent styling (RenderThemeCocoa: pre-refresh 5px border-radius via the
+    // applyCommonNonCapsule helper + the html.css 1px border + base padding/height), NOT the Mac desktop
+    // resetBorder + 2px-inset + 19px searchFieldSizes below — which gave input_search border-radius 0px /
+    // padding-left 1px / height 19px @18.6 where real iOS = 5px / 5.5px-2.2px / 21.48px (A3 band-parity
+    // box-REVERSE 2026-07-08; my earlier fix in RenderThemeCocoa never ran because THIS Mac override
+    // intercepts @18.6). The refresh-ON (26.x) path already delegates to Cocoa above; do the same for
+    // Family-A. LAUNCH-SAFE: the 26.4 launch is refresh-ON → handled above, never reaches here. W3097-forms.
+    RenderThemeCocoa::adjustSearchFieldStyle(style, element);
+    return;
+#endif
+
     // Override border.
     style.resetBorder();
     auto borderWidth = 2_css_px * style.usedZoom();
