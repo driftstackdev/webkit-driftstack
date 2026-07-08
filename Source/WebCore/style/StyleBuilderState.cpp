@@ -217,23 +217,51 @@ void BuilderState::updateFontForZoomChange()
     setFontDescriptionFontSize(m_style.fontDescription().specifiedSize());
 }
 
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm driftstackArchetypeSafariAtLeast;
+// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
+static bool driftstackBuilderStateArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
+
 void BuilderState::updateFontForGenericFamilyChange()
 {
     const auto& childFont = m_style.fontDescription();
 
 #if PLATFORM(DRIFTSTACK)
-    // Monospace (code/pre/tt/kbd/samp etc.) reach here with an ABSOLUTE keyword size (medium) already resolved to
-    // the PROPORTIONAL default (16) upstream, so the plain isAbsoluteSize early-return SKIPS the monospace fixed-
-    // default rescale — leaving 16px where real Safari 18.6 = 13px (fixed default 13) and 26.4 = 16px. (DEBUG_MONO
-    // render bus 5890: code/pre hit here with child.UFDS=1 parent.UFDS=0 isAbsoluteSize=1 keywordId=98[medium], and
-    // NO other path re-resolves them.) For a generic-family CHANGE to/from monospace that carries a KEYWORD size,
-    // do NOT early-return — fall through so the keyword branch (Style::fontSizeForKeyword, which carries the
-    // Family-A defaultFixedFontSize=13 band-key) re-resolves it. Non-keyword absolute sizes (explicit px,
-    // keywordId==0) still early-return. Launch-safe: @26.4 fontSizeForKeyword(medium,true)=defaultFixedFontSize(16)
-    // =16 (unchanged); only Family-A (Safari <26) shifts to 13 via the fontSizeForKeyword gate.
-    bool dsMonospaceKeywordFamilyChange = childFont.keywordSizeAsIdentifier()
+    // FAMILY-A (Safari <26) monospace ONLY. code/pre reach here with an ABSOLUTE keyword size (medium) already
+    // resolved to the PROPORTIONAL 16 upstream, so the isAbsoluteSize early-return SKIPS the fixed-default rescale
+    // → 16px where real 18.6 = 13px (defaultFixedFontSize=13). Bypass the early-return for a Family-A monospace
+    // generic-family CHANGE carrying a keyword size → the keyword branch resolves fontSizeForKeyword(medium,true)=
+    // defaultFixedFontSize=13. ⚠️ 26.x is NOT bypassed: the fork's defaultFixedFontSize is 13 on BOTH bands (NOT
+    // embedder-pinned 16 — A3 REVERSE bus 5911 proved bypassing @26.4 dropped it 16→13), and real 26.4 code/pre=16px
+    // comes from the PROPORTIONAL early-return, so 26.x MUST keep the early-return. LAUNCH-SAFE BY CONSTRUCTION.
+    // (DEBUG_MONO bus 5890: code/pre hit here child.UFDS=1 parent.UFDS=0 isAbsoluteSize=1 keywordId=98[medium], no
+    // other path re-resolves them.) Non-keyword absolute sizes (explicit px, keywordId==0) still early-return.
+    bool dsFamilyAMonospaceKeywordChange = !driftstackBuilderStateArchetypeSafariAtLeast(26, 0)
+        && childFont.keywordSizeAsIdentifier()
         && childFont.useFixedDefaultSize() != parentStyle().fontDescription().useFixedDefaultSize();
-    if (childFont.isAbsoluteSize() && !dsMonospaceKeywordFamilyChange)
+    if (childFont.isAbsoluteSize() && !dsFamilyAMonospaceKeywordChange)
         return;
 #else
     if (childFont.isAbsoluteSize())
