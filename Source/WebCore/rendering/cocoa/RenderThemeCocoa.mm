@@ -5277,6 +5277,16 @@ void RenderThemeCocoa::adjustSliderTrackStyle(RenderStyle& style, const Element*
 #if ENABLE(FORM_CONTROL_REFRESH)
     if (adjustSliderTrackStyleForVectorBasedControls(style, element))
         return;
+#if PLATFORM(DRIFTSTACK)
+    // Family-A (refresh off): real iOS applies the slider-track border-radius via
+    // RenderThemeIOS::adjustSliderTrackStyle = defaultTrackRadius (defaultTrackThickness 4.0 / 2 = 2px,
+    // RenderThemeIOS.mm:654-655) — a UNIVERSAL constexpr (dimension-independent, not a rule-5 lie-table). The
+    // fork's Cocoa path misses it, so input[type=range] @18.6 was border-radius:0 where real Safari 18.6 = 2px
+    // (real 26.x = 0px matches the refresh path). VERIFIED via band-parity box-REVERSE (A3 2026-07-08): fork
+    // 0px vs real 2px. Set UNCONDITIONALLY to mirror RenderThemeIOS::adjustSliderTrackStyle (which does not
+    // guard on hasExplicitlySetBorderRadius, unlike the text-control applyCommonNonCapsule helper).
+    style.setBorderRadius({ 2_css_px, 2_css_px });
+#endif
 #endif
 
     RenderTheme::adjustSliderTrackStyle(style, element);
