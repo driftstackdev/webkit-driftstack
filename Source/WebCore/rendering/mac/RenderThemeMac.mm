@@ -1793,9 +1793,20 @@ void RenderThemeMac::adjustSearchFieldDecorationPartStyle(RenderStyle& style, co
 #endif
 
 #if PLATFORM(DRIFTSTACK)
-    // Family-A: iOS-sized search decoration via Cocoa, not the Mac sizes below (search-field height overshoot,
-    // see adjustSearchFieldCancelButtonStyle). LAUNCH-SAFE: 26.4 is refresh-ON → handled above. W3097-forms.
-    RenderThemeCocoa::adjustSearchFieldDecorationPartStyle(style, element);
+    // Family-A: replicate RenderThemeIOS::adjustSearchFieldDecorationPartStyle (RenderThemeIOS.mm:1918) — the
+    // search decoration (magnifying glass) is 1em square + 4px margin-end. NOT a Cocoa delegate: Cocoa's
+    // refresh-off path falls to the EMPTY base RenderTheme::adjustSearchFieldDecorationPartStyle (no size,
+    // undersizes it); the Mac sizeForSystemFont sizes below oversize it (+5px search-field height @18.6, A3
+    // band-parity box-REVERSE). This 1em decoration is what drives the real iOS search-field height 21.484375px.
+    // LAUNCH-SAFE: 26.4 is refresh-ON → handled above. W3097-forms.
+    if (element) {
+        constexpr auto searchFieldDecorationEmSize = 1.0f;
+        constexpr auto searchFieldDecorationMargin = 4_css_px;
+        auto size = Style::PreferredSize::Fixed { Style::emToPx<float>(searchFieldDecorationEmSize, style) };
+        style.setWidth(size);
+        style.setHeight(size);
+        style.setMarginEnd(searchFieldDecorationMargin);
+    }
     return;
 #endif
 
