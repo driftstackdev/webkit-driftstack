@@ -326,6 +326,20 @@ void RenderTheme::adjustStyle(RenderStyle& style, const RenderStyle& parentStyle
     if (!supportsBoxShadow(style))
         style.setBoxShadow(CSS::Keyword::None { });
 
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK_DEBUG_FORMS (off by default; stderr only; logic byte-identical): dump the POST-CASCADE
+    // (pre-theme-adjust) form-control style + the finalized appearance, so an A3 debug render localizes each
+    // Family-A band-parity divergence to cascade-vs-theme. Compare against the band-parity gate's FINAL
+    // (post-theme) values. Cracks input_submit.font-weight (700 vs 400: is the pre-refresh bold in the
+    // cascade here, or set later by the theme?) + confirms the search/file appearance. W3097-forms 2026-07-08.
+    if (element && ::getenv("DRIFTSTACK_DEBUG_FORMS")) {
+        WTFLogAlways("[DS_FORMS] <%s> appearance=%d postCascade fontWeight=%.0f",
+            element->localName().string().utf8().data(),
+            static_cast<int>(appearance),
+            static_cast<float>(style.fontDescription().weight()));
+    }
+#endif
+
     switch (appearance) {
     case StyleAppearance::Checkbox:
         return adjustCheckboxStyle(style, element);
