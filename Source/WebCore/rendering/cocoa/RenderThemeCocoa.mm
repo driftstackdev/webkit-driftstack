@@ -4980,6 +4980,17 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
         fontDescription.setWeight(boldWeightValue());
         style.setFontDescription(WTF::move(fontDescription));
     }
+    // Family-A: the file input renders with Button appearance (A3 DS_FORMS: appearance=8) but real Safari 18.6
+    // gives it the pre-refresh 5px border-radius (input_file.border-radius 5px@18.6 vs 0px@26.4 — band-parity
+    // box-REVERSE) = the SAME flat applyCommonNonCapsule 5px the text-controls get, NOT the button 10px (which
+    // is constant BOTH bands — so this is FILE-specific, dimension-independent, not a rule-5 lie-table). Because
+    // the file input routes through adjustButtonStyle (Button appearance), the text-field/textarea helper never
+    // reached it → 0px. Apply the 5px here (explicitRadius=0 so the author guard passes; the border-radius
+    // helper is defined later in the file so inline it). LAUNCH-SAFE: 26.4 is refresh-ON → early-return above.
+    if (RefPtr input = dynamicDowncast<HTMLInputElement>(element); input && input->isFileUpload()) {
+        if (!style.hasExplicitlySetBorderRadius())
+            style.setBorderRadius({ 5_css_px, 5_css_px });
+    }
 #endif
 }
 
