@@ -274,6 +274,24 @@ void RenderTheme::adjustStyle(RenderStyle& style, const RenderStyle& parentStyle
 {
     auto autoAppearance = autoAppearanceForElement(style, element);
     auto appearance = adjustAppearanceForElement(style, parentStyle, element, autoAppearance);
+
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: real Safari 18.6 gives input[type=file] a 5px border-radius; Safari 26.x = 0px (input_file
+    // .border-radius 5px@18.6 / 0px@26.4 — band-parity box-REVERSE). The file input has appearance:None
+    // (autoAppearanceForElement), so NO theme adjuster runs (the None early-return below fires) and the fork's
+    // newer html.css has no file border-radius rule → the fork served 0px on BOTH bands. -internal-auto-base
+    // can't band-key it: isBaseAppearance() is false for appearance:None (StyleSubstitutionResolver.cpp:690) so
+    // it would pick the 5px on BOTH bands = a 26.4 launch regression (the date/time trap). Set the pre-refresh
+    // 5px HERE, before the None early-return, gated on !formControlRefreshEnabled(). LAUNCH-SAFE BY CONSTRUCTION:
+    // at 26.x refresh is ON → skipped → stays 0px, matching real 26.4. Author-set radius still wins. W3097-forms.
+    if (element && !element->document().settings().formControlRefreshEnabled()) {
+        if (RefPtr input = dynamicDowncast<HTMLInputElement>(element); input && input->isFileUpload()) {
+            if (!style.hasExplicitlySetBorderRadius())
+                style.setBorderRadius({ 5_css_px, 5_css_px });
+        }
+    }
+#endif
+
     if (appearance == StyleAppearance::None || appearance == StyleAppearance::Base)
         return;
 

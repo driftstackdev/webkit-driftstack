@@ -4968,13 +4968,6 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
     RenderTheme::adjustButtonStyle(style, element);
 
 #if PLATFORM(DRIFTSTACK)
-    // W3097-forms DIAGNOSTIC (off by default, stderr): the file border-radius set below is INERT (A3 box-REVERSE:
-    // input_file still 0px @18.6 though the submit-bold in this same branch works). Trace whether adjustButtonStyle
-    // reaches the file input + isFileUpload()'s value + the pre-set explicit-radius, so an A3 render localizes it.
-    if (RefPtr dbg = dynamicDowncast<HTMLInputElement>(element); dbg && ::getenv("DRIFTSTACK_DEBUG_FORMS"))
-        WTFLogAlways("[DS_FORMS_BTN] adjustButtonStyle <%s> isFileUpload=%d isSubmit=%d explicitRadius=%d",
-            element->localName().string().utf8().data(), dbg->isFileUpload() ? 1 : 0, dbg->isSubmitButton() ? 1 : 0, style.hasExplicitlySetBorderRadius() ? 1 : 0);
-
     // Family-A (Safari <26 / 18.6): real Safari bolds the submit button (input_submit font-weight 700;
     // regular button + input[type=button] stay 400 — verified BOTH bands via band-parity box-REVERSE). The
     // base RenderTheme::adjustButtonStyle above applied RenderThemeMac::controlFont (the Mac system font at
@@ -4987,17 +4980,9 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
         fontDescription.setWeight(boldWeightValue());
         style.setFontDescription(WTF::move(fontDescription));
     }
-    // Family-A: the file input renders with Button appearance (A3 DS_FORMS: appearance=8) but real Safari 18.6
-    // gives it the pre-refresh 5px border-radius (input_file.border-radius 5px@18.6 vs 0px@26.4 — band-parity
-    // box-REVERSE) = the SAME flat applyCommonNonCapsule 5px the text-controls get, NOT the button 10px (which
-    // is constant BOTH bands — so this is FILE-specific, dimension-independent, not a rule-5 lie-table). Because
-    // the file input routes through adjustButtonStyle (Button appearance), the text-field/textarea helper never
-    // reached it → 0px. Apply the 5px here (explicitRadius=0 so the author guard passes; the border-radius
-    // helper is defined later in the file so inline it). LAUNCH-SAFE: 26.4 is refresh-ON → early-return above.
-    if (RefPtr input = dynamicDowncast<HTMLInputElement>(element); input && input->isFileUpload()) {
-        if (!style.hasExplicitlySetBorderRadius())
-            style.setBorderRadius({ 5_css_px, 5_css_px });
-    }
+    // NOTE: the file-input border-radius is NOT handled here — input[type=file] has appearance:None
+    // (autoAppearanceForElement), so it never reaches adjustButtonStyle. It is set in RenderTheme::adjustStyle
+    // before the None early-return instead (W3097-forms; the 1740a4bc27 attempt here was inert).
 #endif
 }
 
