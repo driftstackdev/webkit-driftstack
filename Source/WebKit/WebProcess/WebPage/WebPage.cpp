@@ -5951,6 +5951,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // matches the real per-minor surface (26.4 hides both; 26.5 exposes them). Only `onend` is gated —
     // onbegin/onrepeat pre-existed in 26.4 (W534).
     settings.setSafari265PrototypeMembersEnabled(driftstackArchetypeSafariAtLeast(26, 5));
+    // :open pseudo-class (CSS.supports('selector(:open)')) is a Safari-26.5-era feature — per-minor BS
+    // captures 2026-07-08 (iPhone 15→26.2, iPhone 14 Pro→26.3, iPhone 17→26.4/26.5) show real iPhone
+    // serves it FALSE at 18.6/26.0-26.4 and TRUE only at 26.5. OpenPseudoClassEnabled defaults true so the
+    // 26.x build over-exposed it below 26.5 (incl. the 26.4 LAUNCH target). Version-key like Origin/Safari265:
+    // enabled only for >=26.5 archetypes. (Supersedes the earlier Family-A-only gate, which wrongly left it
+    // exposed on 26.0-26.4.)
+    settings.setOpenPseudoClassEnabled(driftstackArchetypeSafariAtLeast(26, 5));
 #if ENABLE(TEXT_AUTOSIZING)
     // -webkit-text-size-adjust is enable-if ENABLE_TEXT_AUTOSIZING (on for Cocoa) + settings-flag
     // textAutosizingEnabled, which defaults TRUE on PLATFORM(IOS_FAMILY) but FALSE off-iOS — so the
@@ -6074,11 +6081,8 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // true so the 26.x-era build parses them; real iPhone Safari 18.6 does NOT (dual-band BS capture
         // 2026-07-08: false@18.6, true@26.5). Gate off on Family A to match. 26.x keeps the default true.
         settings.setCSSTreeCountingFunctionsEnabled(false);
-        // CSS.supports('selector(:open)') — the :open pseudo-class (details/dialog/select open state).
-        // OpenPseudoClassEnabled defaults true so the 26.x-era build supports it; real iPhone Safari 18.6
-        // does NOT (dual-band BS capture 2026-07-08: false@18.6 [confirmed on the launch archetype, not just
-        // 18.4], true@26.5). Gate off on Family A to match. 26.x keeps the default true.
-        settings.setOpenPseudoClassEnabled(false);
+        // (:open pseudo-class is gated in the 26.5-era version-gate section above via
+        // driftstackArchetypeSafariAtLeast(26,5) — real serves it false@18.6/26.0-26.4, true@26.5 — NOT here.)
 
         // Wave 29-406 §11.A.7 — WebCodecs Audio hide on Family A.
         // Empirical BS Automate 2026-05-19: AudioData, AudioDecoder,
