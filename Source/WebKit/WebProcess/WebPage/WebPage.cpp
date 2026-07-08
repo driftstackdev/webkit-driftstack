@@ -6074,6 +6074,11 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // true so the 26.x-era build parses them; real iPhone Safari 18.6 does NOT (dual-band BS capture
         // 2026-07-08: false@18.6, true@26.5). Gate off on Family A to match. 26.x keeps the default true.
         settings.setCSSTreeCountingFunctionsEnabled(false);
+        // CSS.supports('selector(:open)') — the :open pseudo-class (details/dialog/select open state).
+        // OpenPseudoClassEnabled defaults true so the 26.x-era build supports it; real iPhone Safari 18.6
+        // does NOT (dual-band BS capture 2026-07-08: false@18.6 [confirmed on the launch archetype, not just
+        // 18.4], true@26.5). Gate off on Family A to match. 26.x keeps the default true.
+        settings.setOpenPseudoClassEnabled(false);
 
         // Wave 29-406 §11.A.7 — WebCodecs Audio hide on Family A.
         // Empirical BS Automate 2026-05-19: AudioData, AudioDecoder,
