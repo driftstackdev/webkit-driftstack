@@ -183,6 +183,8 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
 - (void)driftSelectTab:(NSButton *)sender;
 - (void)driftCloseTab:(NSButton *)sender;
 - (void)driftOverviewNewTab:(id)sender;
+- (void)driftNoteWarmTabActive:(WKWebView *)webView;
+- (void)driftEvictWarmTabsBeyondN;
 @end
 
 // Driftstack: multi-tab MODEL for the iOS-26 chrome (gated DRIFTSTACK_SAFARI_CHROME) — the (B)
@@ -309,10 +311,24 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
 }
 @end
 
+#if PLATFORM(DRIFTSTACK)
+// Driftstack warm-tabs (doc 151 §2.3): N = 1 active + (N-1) warm live tabs. Default 2 (the common "switch back
+// to where I just was" case, comfortably under the 1800 MB overuse ceiling); overridable via
+// DRIFTSTACK_WARM_TABS_N for the N=3 promotion experiment (behind the RSS-ceiling-vs-N coupling, §2.3). Never
+// below 1 — the active tab is never evictable. Read live (process-stable but cheap; can't go stale).
+static NSInteger driftstackWarmTabsN(void)
+{
+    const char *raw = getenv("DRIFTSTACK_WARM_TABS_N");
+    NSInteger n = raw ? (NSInteger)atol(raw) : 2;
+    return n < 1 ? 1 : n;
+}
+#endif
+
 @implementation WK2BrowserWindowController {
     WKWebViewConfiguration *_configuration;
     WKWebView *_webView;                  // ALWAYS the active tab (DriftstackTabManager keeps it aimed here)
     DriftstackTabManager *_tabManager;    // Driftstack iOS-26 chrome multi-tab model (gated)
+    NSMutableArray<WKWebView *> *_warmTabLRU; // Driftstack warm-tabs (doc 151): live tabs, most-recently-active first
     __weak WKWebView *_driftWiredWebView; // the tab currently carrying the shared chrome wiring (KVO/bindings/delegates)
     NSView *_driftTabOverlay;             // the iOS-style tab-overview overlay (nil when closed)
     BOOL _zoomTextOnly;
@@ -544,6 +560,8 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
         [containerView addSubview:wv];
     [_tabManager addTab:wv];
     [self driftActivateWebView:wv];
+    [self driftNoteWarmTabActive:wv];      // LRU: the new tab is now most-recently-active
+    [self driftEvictWarmTabsBeyondN];      // bound the warm set to N (evict the LRU non-active tab, never active/last)
     return wv;
 }
 
@@ -559,12 +577,54 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
     for (NSInteger i = 0; i < (NSInteger)_tabManager.count; i++) {
         if ([_tabManager webViewAtIndex:i] == webView) {
             WKWebView *wv = [_tabManager switchToIndex:i];
-            if (wv)
+            if (wv) {
                 [self driftActivateWebView:wv];   // idempotent — no-op if already the active/wired tab
+                [self driftNoteWarmTabActive:wv]; // LRU: switched-to tab is now most-recently-active
+            }
             return YES;
         }
     }
     return NO;
+}
+
+// Driftstack warm-tabs (doc 151 §5): mark `webView` most-recently-active in the LRU (create + switch both call
+// this). The warm set = the N most-recently-active live tabs.
+- (void)driftNoteWarmTabActive:(WKWebView *)webView
+{
+    if (!webView)
+        return;
+    if (!_warmTabLRU)
+        _warmTabLRU = [NSMutableArray array];
+    [_warmTabLRU removeObject:webView];
+    [_warmTabLRU insertObject:webView atIndex:0];   // most-recently-active first
+}
+
+// Driftstack warm-tabs (doc 151 §5, eviction trigger #1): while the live tab count exceeds N, evict the
+// least-recently-active tab that is NOT the active one — closeTabAtIndex: (which refuses to empty the list) +
+// drop it from the LRU + removeFromSuperview so the backing WebContent terminates on dealloc. Never evicts the
+// active/last tab; the evicted tab's {url,scrollY,title} stays in the harness's logical tab set (a later switch
+// to it is a cold reload — iOS-faithful). A warm-but-inactive tab was already unwired by -driftActivateWebView:
+// when it lost focus, so there is no KVO/delegate teardown to do here.
+- (void)driftEvictWarmTabsBeyondN
+{
+    NSInteger n = driftstackWarmTabsN();
+    while ((NSInteger)_tabManager.count > n) {
+        WKWebView *active = _tabManager.activeWebView;
+        WKWebView *victim = nil;
+        for (WKWebView *wv in [_warmTabLRU reverseObjectEnumerator]) {   // least-recently-active first
+            if (wv != active) { victim = wv; break; }
+        }
+        if (!victim)
+            break;   // nothing evictable — only the active/last tab remains
+        NSInteger idx = -1;
+        for (NSInteger i = 0; i < (NSInteger)_tabManager.count; i++) {
+            if ([_tabManager webViewAtIndex:i] == victim) { idx = i; break; }
+        }
+        if (idx < 0 || [_tabManager closeTabAtIndex:idx] < 0)
+            break;   // couldn't close (out-of-range / would empty) — stop
+        [_warmTabLRU removeObject:victim];
+        [victim removeFromSuperview];   // drop the view-hierarchy strong ref → WebContent terminates on dealloc
+    }
 }
 #endif
 
