@@ -6301,6 +6301,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             // the 26.3 archetype (26.3 HAS them). Correct boundary is 26.2.
             settings.setCSSFieldSizingEnabled(false);         // CSS.supports('field-sizing') (26.0=false, 26.2+=true)
             settings.setCSSScrollbarColorEnabled(false);      // CSS.supports('scrollbar-color') (26.0=false, 26.2+=true)
+            settings.setCSSTreeCountingFunctionsEnabled(false); // CSS.supports(sibling-index()/sibling-count()) (26.0=false, 26.2+=true — BS cap iPhone 17 Pro Max Safari 26.0 = false, iPhone 15 Safari 26.2 = true). FA block gates 18.6; this gates 26.0/26.1.
             // NEW 2026-06-19 (all False@26.0, True@26.2; each setting gates BOTH the window
             // global AND the member, so one flag closes the whole surface):
             settings.setSpeculationRulesPrefetchEnabled(false); // HTMLScriptElement.supports('speculationrules')
