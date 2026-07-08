@@ -137,6 +137,7 @@ public:
     static Ref<CSSValue> extractPaddingBottom(ExtractorState&);
     static Ref<CSSValue> extractPaddingLeft(ExtractorState&);
     static Ref<CSSValue> extractBorderTopWidth(ExtractorState&);
+    static Ref<CSSValue> extractOutlineWidth(ExtractorState&);
     static Ref<CSSValue> extractBorderRightWidth(ExtractorState&);
     static Ref<CSSValue> extractBorderBottomWidth(ExtractorState&);
     static Ref<CSSValue> extractBorderLeftWidth(ExtractorState&);
@@ -236,6 +237,7 @@ public:
     static void extractPaddingBottomSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
     static void extractPaddingLeftSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
     static void extractBorderTopWidthSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
+    static void extractOutlineWidthSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
     static void extractBorderRightWidthSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
     static void extractBorderBottomWidthSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
     static void extractBorderLeftWidthSerialization(ExtractorState&, StringBuilder&, const CSS::SerializationContext&);
@@ -877,6 +879,23 @@ template<> struct PropertyExtractorAdaptor<CSSPropertyBorderTopWidth> {
     template<typename F> decltype(auto) computedValue(ExtractorState& state, F&& functor) const
     {
         return functor(state.style.usedBorderTopWidth());
+    }
+};
+
+template<> struct PropertyExtractorAdaptor<CSSPropertyOutlineWidth> {
+    template<typename F> decltype(auto) computedValue(ExtractorState& state, F&& functor) const
+    {
+#if PLATFORM(DRIFTSTACK)
+        // Real iPhone Safari resolves computed outline-width to 0 when outline-style is none (exactly like
+        // border-width). usedOutlineWidth() (RenderStyle.cpp) returns 0_css_px on OutlineStyle::None (and the
+        // platform focus-ring width on Auto). The generated extractor reads RAW storage (medium=3px) and never
+        // consults the style → getComputedStyle(el).outlineWidth = "3px" where real iPhone (18.6 AND 26.x) = "0px".
+        // Route through the used getter to match — mirrors border-top-width's usedBorderTopWidth(). Band-uniform
+        // (real=0px both bands) so no archetype gate; the #else preserves upstream raw storage for non-fork builds.
+        return functor(state.style.usedOutlineWidth());
+#else
+        return functor(state.style.computedStyle().outlineWidth());
+#endif
     }
 };
 
@@ -2116,6 +2135,16 @@ inline Ref<CSSValue> ExtractorCustom::extractBorderTopWidth(ExtractorState& stat
 inline void ExtractorCustom::extractBorderTopWidthSerialization(ExtractorState& state, StringBuilder& builder, const CSS::SerializationContext& context)
 {
     extractSerialization<CSSPropertyBorderTopWidth>(state, builder, context);
+}
+
+inline Ref<CSSValue> ExtractorCustom::extractOutlineWidth(ExtractorState& state)
+{
+    return extractCSSValue<CSSPropertyOutlineWidth>(state);
+}
+
+inline void ExtractorCustom::extractOutlineWidthSerialization(ExtractorState& state, StringBuilder& builder, const CSS::SerializationContext& context)
+{
+    extractSerialization<CSSPropertyOutlineWidth>(state, builder, context);
 }
 
 inline Ref<CSSValue> ExtractorCustom::extractBorderRightWidth(ExtractorState& state)
