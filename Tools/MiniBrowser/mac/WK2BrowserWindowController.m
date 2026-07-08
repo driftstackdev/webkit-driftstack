@@ -185,6 +185,8 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
 - (void)driftOverviewNewTab:(id)sender;
 - (void)driftNoteWarmTabActive:(WKWebView *)webView;
 - (void)driftEvictWarmTabsBeyondN;
+- (void)driftEvictAllWarmToActive;
+- (void)driftEnsureWarmTabMemoryPressureSource;
 @end
 
 // Driftstack: multi-tab MODEL for the iOS-26 chrome (gated DRIFTSTACK_SAFARI_CHROME) — the (B)
@@ -329,6 +331,7 @@ static NSInteger driftstackWarmTabsN(void)
     WKWebView *_webView;                  // ALWAYS the active tab (DriftstackTabManager keeps it aimed here)
     DriftstackTabManager *_tabManager;    // Driftstack iOS-26 chrome multi-tab model (gated)
     NSMutableArray<WKWebView *> *_warmTabLRU; // Driftstack warm-tabs (doc 151): live tabs, most-recently-active first
+    dispatch_source_t _warmTabMemoryPressureSource; // Driftstack warm-tabs (doc 151 §5): pressure -> evict-to-active
     __weak WKWebView *_driftWiredWebView; // the tab currently carrying the shared chrome wiring (KVO/bindings/delegates)
     NSView *_driftTabOverlay;             // the iOS-style tab-overview overlay (nil when closed)
     BOOL _zoomTextOnly;
@@ -547,6 +550,7 @@ static NSInteger driftstackWarmTabsN(void)
 {
     if (!containerView || !_tabManager)
         return nil;
+    [self driftEnsureWarmTabMemoryPressureSource];   // arm the pressure safety-valve on first warm tab
     WKWebView *wv = [[WKWebView alloc] initWithFrame:[containerView bounds] configuration:_configuration];
     [wv setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     wv.hidden = YES;
@@ -625,6 +629,48 @@ static NSInteger driftstackWarmTabsN(void)
         [_warmTabLRU removeObject:victim];
         [victim removeFromSuperview];   // drop the view-hierarchy strong ref → WebContent terminates on dealloc
     }
+}
+
+// Driftstack warm-tabs (doc 151 §5, eviction trigger #2 — the REQUIRED safety valve, §2.3 guardrail 2): under
+// real memory pressure, drop ALL warm-but-inactive tabs to active-only, regardless of N. Mirrors iOS (Safari
+// unloads background tabs under pressure) and keeps warm-tabs from ever tripping the per-session RSS overuse
+// ceiling before the host-level guard fires.
+- (void)driftEvictAllWarmToActive
+{
+    WKWebView *active = _tabManager.activeWebView;
+    while ((NSInteger)_tabManager.count > 1) {
+        NSInteger idx = -1;
+        for (NSInteger i = 0; i < (NSInteger)_tabManager.count; i++) {
+            if ([_tabManager webViewAtIndex:i] != active) { idx = i; break; }
+        }
+        if (idx < 0)
+            break;   // only the active tab remains
+        WKWebView *victim = [_tabManager webViewAtIndex:idx];
+        if ([_tabManager closeTabAtIndex:idx] < 0)
+            break;
+        [_warmTabLRU removeObject:victim];
+        [victim removeFromSuperview];
+    }
+}
+
+// Lazily arm a main-queue memory-pressure source the first time warm-tabs opens a tab (so it's only active when
+// the feature is). WARN|CRITICAL → -driftEvictAllWarmToActive. A dispatch source is the ObjC-native mechanism
+// for this UI process (the WTF MemoryPressureHandler is C++ / WebContent-side, not usable from a .m). Torn down
+// in -dealloc.
+- (void)driftEnsureWarmTabMemoryPressureSource
+{
+    if (_warmTabMemoryPressureSource)
+        return;
+    dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+        DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL, dispatch_get_main_queue());
+    if (!src)
+        return;
+    __weak WK2BrowserWindowController *weakSelf = self;
+    dispatch_source_set_event_handler(src, ^{
+        [weakSelf driftEvictAllWarmToActive];
+    });
+    dispatch_resume(src);
+    _warmTabMemoryPressureSource = src;
 }
 #endif
 
@@ -767,6 +813,10 @@ static NSInteger driftstackWarmTabsN(void)
 
 - (void)dealloc
 {
+    if (_warmTabMemoryPressureSource) {   // Driftstack warm-tabs: tear down the memory-pressure source
+        dispatch_source_cancel(_warmTabMemoryPressureSource);
+        _warmTabMemoryPressureSource = nil;
+    }
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (_findBarClickMonitor)
         [NSEvent removeMonitor:_findBarClickMonitor];
