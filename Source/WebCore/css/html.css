@@ -784,7 +784,11 @@ input::placeholder {
 }
 
 input:disabled, textarea:disabled {
-    color: color-mix(CanvasText 66%, Canvas);
+    /* color-mix without an explicit color space defaults to OKLab (CSS Color 4 default / parser
+       defaultInterpolationMethodForColorMix), giving oklab(0.34 0 0) = srgb 0.219. Real iPhone Safari
+       (18.6 AND 26.x, BS-captured) resolves this disabled-text color IN sRGB = color(srgb 0.34 0.34 0.34).
+       Pin the sRGB interpolation to match real (66% CanvasText + 34% Canvas in sRGB = 0.34 gray). */
+    color: color-mix(in srgb, CanvasText 66%, Canvas);
 }
 
 input:is([type="hidden"], [type="image"], [type="file"]) {
