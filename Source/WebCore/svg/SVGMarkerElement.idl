@@ -45,7 +45,7 @@
     [SameObject] readonly attribute SVGAnimatedEnumeration orientType;
     [SameObject] readonly attribute SVGAnimatedAngle       orientAngle;
 
-    [EnabledBySetting=Safari262PrototypeMembersEnabled] attribute [AtomString] DOMString orient;
+    attribute [AtomString] DOMString orient;
 
     undefined setOrientToAuto();
     undefined setOrientToAngle(SVGAngle angle);
