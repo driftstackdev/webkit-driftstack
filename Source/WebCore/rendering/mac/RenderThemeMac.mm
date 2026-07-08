@@ -1758,6 +1758,15 @@ void RenderThemeMac::adjustSearchFieldCancelButtonStyle(RenderStyle& style, cons
     UNUSED_PARAM(element);
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: the fork emulates iOS, not Mac desktop — delegate to Cocoa (matching the refresh-ON path
+    // above + the adjustSearchFieldStyle field fix 996ed5e375) so the search decoration is iOS-sized, not the
+    // Mac sizeForSystemFont sizes below (whose decoration heights overshot the search-field height @18.6 by
+    // +5px, A3 band-parity box-REVERSE). LAUNCH-SAFE: 26.4 is refresh-ON → handled above. W3097-forms.
+    RenderThemeCocoa::adjustSearchFieldCancelButtonStyle(style, element);
+    return;
+#endif
+
     IntSize size = sizeForSystemFont(style, cancelButtonSizes());
     style.setWidth(Style::PreferredSize::Fixed { static_cast<float>(size.width()) });
     style.setHeight(Style::PreferredSize::Fixed { static_cast<float>(size.height()) });
@@ -1781,6 +1790,13 @@ void RenderThemeMac::adjustSearchFieldDecorationPartStyle(RenderStyle& style, co
     }
 #else
     UNUSED_PARAM(element);
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: iOS-sized search decoration via Cocoa, not the Mac sizes below (search-field height overshoot,
+    // see adjustSearchFieldCancelButtonStyle). LAUNCH-SAFE: 26.4 is refresh-ON → handled above. W3097-forms.
+    RenderThemeCocoa::adjustSearchFieldDecorationPartStyle(style, element);
+    return;
 #endif
 
     IntSize size = sizeForSystemFont(style, resultsButtonSizes());
@@ -1813,6 +1829,13 @@ void RenderThemeMac::adjustSearchFieldResultsDecorationPartStyle(RenderStyle& st
     UNUSED_PARAM(element);
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: iOS-sized search results decoration via Cocoa, not the Mac sizes below (search-field height
+    // overshoot, see adjustSearchFieldCancelButtonStyle). LAUNCH-SAFE: 26.4 is refresh-ON → handled above.
+    RenderThemeCocoa::adjustSearchFieldResultsDecorationPartStyle(style, element);
+    return;
+#endif
+
     IntSize size = sizeForSystemFont(style, resultsButtonSizes());
     style.setWidth(Style::PreferredSize::Fixed { static_cast<float>(size.width()) });
     style.setHeight(Style::PreferredSize::Fixed { static_cast<float>(size.height()) });
@@ -1828,6 +1851,13 @@ void RenderThemeMac::adjustSearchFieldResultsButtonStyle(RenderStyle& style, con
     }
 #else
     UNUSED_PARAM(element);
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: iOS-sized search results button via Cocoa, not the Mac sizes below (search-field height
+    // overshoot, see adjustSearchFieldCancelButtonStyle). LAUNCH-SAFE: 26.4 is refresh-ON → handled above.
+    RenderThemeCocoa::adjustSearchFieldResultsButtonStyle(style, element);
+    return;
 #endif
 
     IntSize size = sizeForSystemFont(style, resultsButtonSizes());
