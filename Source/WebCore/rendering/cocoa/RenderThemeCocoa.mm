@@ -5121,7 +5121,11 @@ void RenderThemeCocoa::adjustTextFieldStyle(RenderStyle& style, const Element* e
     if (RefPtr input = dynamicDowncast<HTMLInputElement>(element);
         input && (input->isDateField() || input->isTimeField() || input->isDateTimeLocalField()
             || input->isMonthField() || input->isWeekField())) {
-        if (!style.hasExplicitlySetColor())
+        // DISABLED date/time inputs keep the html.css:516-518 :disabled -apple-system-tertiary-label gray;
+        // the pre-refresh blue is for ENABLED date/time only. !hasExplicitlySetColor is author-origin-only
+        // (StyleBuilderCustom.h:811) so it does NOT block the UA :disabled cascade rule — exclude disabled
+        // explicitly, else the fork paints disabled date/time blue where real 18.6 = gray (nonform-hunt C3).
+        if (!style.hasExplicitlySetColor() && !input->isDisabledFormControl())
             style.setColor(systemColor(CSSValueAppleSystemBlue, element->document().styleColorOptions(&style)));
     }
 #endif
