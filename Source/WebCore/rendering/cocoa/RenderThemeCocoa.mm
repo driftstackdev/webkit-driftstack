@@ -4966,6 +4966,21 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
 #endif
 
     RenderTheme::adjustButtonStyle(style, element);
+
+#if PLATFORM(DRIFTSTACK)
+    // Family-A (Safari <26 / 18.6): real Safari bolds the submit button (input_submit font-weight 700;
+    // regular button + input[type=button] stay 400 — verified BOTH bands via band-parity box-REVERSE). The
+    // base RenderTheme::adjustButtonStyle above applied RenderThemeMac::controlFont (the Mac system font at
+    // NORMAL weight), clobbering that pre-refresh bold. Restore it for submit buttons only. LAUNCH-SAFE BY
+    // CONSTRUCTION: at 26.x adjustButtonStyleForVectorBasedControls returns true → the early-return above
+    // fires → this never runs (and the refresh path already normalizes a bold submit to 400 at
+    // driftstackArchetypeSafariAtLeastCocoa(26, 2), matching real 26.4). W3097-forms 2026-07-08.
+    if (RefPtr input = dynamicDowncast<HTMLInputElement>(element); input && input->isSubmitButton()) {
+        auto fontDescription = style.fontDescription();
+        fontDescription.setWeight(boldWeightValue());
+        style.setFontDescription(WTF::move(fontDescription));
+    }
+#endif
 }
 
 bool RenderThemeCocoa::paintButton(const RenderElement& box, const PaintInfo& paintInfo, const FloatRect& rect)
