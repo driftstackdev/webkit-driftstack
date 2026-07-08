@@ -139,9 +139,49 @@ static constexpr std::array strictFontSizeTable {
 // factors for each keyword value.
 static constexpr std::array fontSizeFactors { 0.60f, 0.75f, 0.89f, 1.0f, 1.2f, 1.5f, 2.0f, 3.0f };
 
+#if PLATFORM(DRIFTSTACK)
+// File-local per-archetype Safari-version gate (mirrors WebPage.cpp / RenderThemeMac.mm
+// driftstackMonospaceArchetypeSafariAtLeast; true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
+static bool driftstackMonospaceArchetypeSafariAtLeast(int wantMajor, int wantMinor)
+{
+    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!arch || !*arch)
+        return true;
+    std::string_view sv { arch };
+    auto pos = sv.find("safari");
+    if (pos == std::string_view::npos)
+        return true;
+    pos += 6;
+    int major = 0; bool sawMajor = false;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
+    if (!sawMajor)
+        return true;
+    if (pos < sv.size() && sv[pos] == '_')
+        ++pos;
+    int minor = 0;
+    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
+    if (major != wantMajor)
+        return major > wantMajor;
+    return minor >= wantMinor;
+}
+#endif
+
 float fontSizeForKeyword(unsigned keywordID, bool shouldUseFixedDefaultSize, const SettingsValues& settings, bool inQuirksMode)
 {
+#if PLATFORM(DRIFTSTACK)
+    // MONOSPACE default font-size band-key (nonform-divergence-hunt; A3 box-REVERSE bus 5815 proved the
+    // WebPage.cpp Settings override INERT — the embedder re-pins DefaultFixedFontSize=16 after updatePreferences).
+    // code/pre/tt/kbd/samp (font-family:monospace) resolve their default size HERE with shouldUseFixedDefaultSize
+    // =true → mediumSize=defaultFixedFontSize. Safari 26 raised the iOS fixed default 13→16; real code/pre =
+    // 13px@18.6 vs 16px@26.4. Force the 18.6-era fixed default (13) for Family-A (Safari <26) ONLY — embedder-
+    // immune (getenv archetype, not Settings); 26.x keeps the pinned 16 (real 26.4 already correct). getenv fires
+    // only on the monospace path (shouldUseFixedDefaultSize).
+    int mediumSize = shouldUseFixedDefaultSize
+        ? (!driftstackMonospaceArchetypeSafariAtLeast(26, 0) ? 13 : settings.defaultFixedFontSize)
+        : settings.defaultFontSize;
+#else
     int mediumSize = shouldUseFixedDefaultSize ? settings.defaultFixedFontSize : settings.defaultFontSize;
+#endif
     if (mediumSize >= fontSizeTableMin && mediumSize <= fontSizeTableMax) {
         // Look up the entry in the table.
         int row = mediumSize - fontSizeTableMin;
