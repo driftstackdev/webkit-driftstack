@@ -5068,11 +5068,32 @@ bool RenderThemeCocoa::paintInnerSpinButton(const RenderElement& box, const Pain
     return RenderTheme::paintInnerSpinButton(box, paintInfo, rect);
 }
 
+#if ENABLE(FORM_CONTROL_REFRESH) && PLATFORM(DRIFTSTACK)
+// Family-A (Safari <26 / 18.6) pre-refresh text-control border-radius. Real iOS applies this via
+// RenderThemeIOS::adjust{TextField,TextArea}Style -> applyCommonNonCapsuleBorderRadiusToStyle (5px),
+// but the fork builds on the Cocoa/Mac theme (RenderThemeMac, PLATFORM(MAC)) which never runs the
+// RenderThemeIOS overrides — so Family-A text controls were left at border-radius:0 (the 26.x
+// FormControlRefresh value) instead of 5px. VERIFIED for input[type=text] (mm.uaStylesheet + A3
+// box-REVERSE 2026-07-08: input_text.border-radius 0px >=26.0 vs 5px @18.6); textarea shares the
+// identical iOS mechanism (RenderThemeIOS.mm applyCommonNonCapsuleBorderRadiusToStyle — rule-13
+// source-truth for a CSS-geometry surface). This is only reached when formControlRefreshEnabled() is
+// off (the vector-based adjuster returned false). Completes the 357e09c841 button.color revert, which
+// covered color but NOT border-radius. Author-set radius still wins. Divergence-hunt-2 W3097 / A3.
+static void applyDriftstackFamilyAPreRefreshTextControlBorderRadius(RenderStyle& style)
+{
+    if (!style.hasExplicitlySetBorderRadius())
+        style.setBorderRadius({ 5_css_px, 5_css_px });
+}
+#endif
+
 void RenderThemeCocoa::adjustTextFieldStyle(RenderStyle& style, const Element* element) const
 {
 #if ENABLE(FORM_CONTROL_REFRESH)
     if (adjustTextFieldStyleForVectorBasedControls(style, element))
         return;
+#if PLATFORM(DRIFTSTACK)
+    applyDriftstackFamilyAPreRefreshTextControlBorderRadius(style);
+#endif
 #endif
 
     RenderTheme::adjustTextFieldStyle(style, element);
@@ -5103,6 +5124,9 @@ void RenderThemeCocoa::adjustTextAreaStyle(RenderStyle& style, const Element* el
 #if ENABLE(FORM_CONTROL_REFRESH)
     if (adjustTextAreaStyleForVectorBasedControls(style, element))
         return;
+#if PLATFORM(DRIFTSTACK)
+    applyDriftstackFamilyAPreRefreshTextControlBorderRadius(style);
+#endif
 #endif
 
     RenderTheme::adjustTextAreaStyle(style, element);
