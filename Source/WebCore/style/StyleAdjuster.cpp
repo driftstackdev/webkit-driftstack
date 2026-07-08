@@ -712,6 +712,24 @@ void Adjuster::adjust(RenderStyle& style) const
     if (style.appearance() != StyleAppearance::None && style.appearance() != StyleAppearance::Base)
         adjustThemeStyle(style, m_parentStyle);
 
+#if PLATFORM(DRIFTSTACK)
+    // Family-A: input[type=file] has appearance:None (autoAppearanceForElement) → the theme-adjust above is
+    // SKIPPED (adjustThemeStyle is gated on appearance != None, so RenderTheme::adjustStyle never runs for it),
+    // and the fork's newer html.css has no file border-radius rule → 0px both bands. But real Safari 18.6 gives
+    // input[type=file] a 5px border-radius (Safari 26.x = 0px — a UA-stylesheet version difference, verified
+    // input_file 5px@18.6 / 0px@26.4 band-parity box-REVERSE). -internal-auto-base can't band-key it:
+    // isBaseAppearance() is false for appearance:None (StyleSubstitutionResolver.cpp:690) → 5px on BOTH bands =
+    // a 26.4 launch regression (the date/time trap). This Adjuster::adjust path DOES run for appearance:None, so
+    // set it here, gated on !formControlRefreshEnabled(). LAUNCH-SAFE BY CONSTRUCTION: 26.x refresh ON → skipped
+    // → 0px. Author-set radius still wins. W3097-forms 2026-07-08.
+    if (m_element && !m_document->settings().formControlRefreshEnabled()) {
+        if (RefPtr input = dynamicDowncast<HTMLInputElement>(*m_element); input && input->isFileUpload()) {
+            if (!style.hasExplicitlySetBorderRadius())
+                style.setBorderRadius({ 5_css_px, 5_css_px });
+        }
+    }
+#endif
+
     // This should be kept in sync with requiresRenderingConsolidationForViewTransition
     if (style.usedTransformStyle3D() == TransformStyle3D::Preserve3D) {
         bool forceToFlat = style.overflowX() != Overflow::Visible
