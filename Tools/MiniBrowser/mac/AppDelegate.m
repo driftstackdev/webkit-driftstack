@@ -809,16 +809,33 @@ static NSNumber *_currentBadge;
 
 #pragma mark _WKAutomationSessionDelegate (item-9)
 
+// Driftstack warm-tabs (doc 151) runtime gate. Read live each call (not static-cached) per the
+// silently-inert-gate lesson — the flag is process-stable but a live read costs nothing here (new-tab is
+// rare) and can't go stale. Default-OFF → the delegate keeps the original single-page behavior byte-for-byte.
+static BOOL driftstackWarmTabsEnabled(void)
+{
+    const char *raw = getenv("DRIFTSTACK_WARM_TABS");
+    return raw && (raw[0] == '1' || raw[0] == 't' || raw[0] == 'T' || raw[0] == 'y' || raw[0] == 'Y');
+}
+
 - (void)_automationSession:(_WKAutomationSession *)automationSession requestNewWebViewWithOptions:(_WKAutomationSessionBrowsingContextOptions)options completionHandler:(void(^)(WKWebView *))completionHandler
 {
-    // Hand back the existing MiniBrowser window's web view (single in-process session).
     BrowserWindowController *controller = [self frontmostBrowserWindowController];
     if (![controller isKindOfClass:[WK2BrowserWindowController class]]) {
         [self newWindow:self];
         controller = [self frontmostBrowserWindowController];
     }
     if ([controller isKindOfClass:[WK2BrowserWindowController class]]) {
-        WKWebView *automationWebView = [(WK2BrowserWindowController *)controller webView];
+        WK2BrowserWindowController *wk2 = (WK2BrowserWindowController *)controller;
+        WKWebView *automationWebView = nil;
+        // Warm-tabs ON: create a REAL new live background tab (W3C POST /window/new) so a later switch to it
+        // is a bring-to-front, not a reload. Falls back to the active web view if creation fails (nil).
+        if (driftstackWarmTabsEnabled())
+            automationWebView = [wk2 driftCreateAndActivateAutomationTab];
+        // Default (flag OFF) OR fallback: hand back the existing window's active web view (single in-process
+        // session) — byte-identical to the pre-warm-tabs behavior.
+        if (!automationWebView)
+            automationWebView = [wk2 webView];
         [automationWebView _driftstackSetControlledByAutomation:YES]; // W1632: fix navigationOccurredForFrame
         completionHandler(automationWebView);
     } else

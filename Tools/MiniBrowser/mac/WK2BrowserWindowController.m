@@ -521,6 +521,33 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
     [self driftToggleTabOverview:nil];   // dismiss → reveal the fresh tab
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Driftstack warm-tabs (doc 151 §7.1): the automation-path new-tab. Same live-tab creation as
+// -driftOverviewNewTab: (shares _configuration → same store/fingerprint; z-ordered below the tap overlay;
+// added to _tabManager; activated via the -driftActivateWebView: engine which hides the previous tab) but
+// WITHOUT the about:blank load (the harness navigates it) and WITHOUT the overview-UI toggle. Returns the new
+// WKWebView so the automation delegate can hand it back + mark it controlledByAutomation. See header.
+- (WKWebView *)driftCreateAndActivateAutomationTab
+{
+    if (!containerView || !_tabManager)
+        return nil;
+    WKWebView *wv = [[WKWebView alloc] initWithFrame:[containerView bounds] configuration:_configuration];
+    [wv setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
+    wv.hidden = YES;
+    DriftstackTapOverlayView *existingOverlay = nil;
+    for (NSView *sub in containerView.subviews) {
+        if ([sub isKindOfClass:[DriftstackTapOverlayView class]]) { existingOverlay = (DriftstackTapOverlayView *)sub; break; }
+    }
+    if (existingOverlay)
+        [containerView addSubview:wv positioned:NSWindowBelow relativeTo:existingOverlay];
+    else
+        [containerView addSubview:wv];
+    [_tabManager addTab:wv];
+    [self driftActivateWebView:wv];
+    return wv;
+}
+#endif
+
 // Driftstack (gated DRIFTSTACK_TABS_SELFTEST): deterministic, screenshot-verifiable exercise of the
 // tab ENGINE with NO clicks/keystrokes — open a 2nd tab + activate it (proves the bind→new path), then
 // switch back to tab 0 (proves the unbind-old/rebind-new switch path + that the chrome follows). Each

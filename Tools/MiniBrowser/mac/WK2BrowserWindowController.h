@@ -30,6 +30,16 @@
 
 @property (readonly) WKWebView *webView;
 
+// Driftstack warm-tabs (doc 151, runtime-gated DRIFTSTACK_WARM_TABS): create a real new live tab in THIS
+// window — a genuine background WKWebView sharing the session configuration (same store / cookie jar /
+// fingerprint) — add it to the tab manager, activate it (moves the shared chrome + KVO via
+// -driftActivateWebView:, hides the previous tab), and return its WKWebView. Used by the automation
+// delegate's requestNewWebViewWithOptions (W3C POST /window/new) so a warm tab is a live page, not a reload.
+// Returns nil if the window has no content container yet. Does NOT navigate (the harness loads the URL).
+// (Declared unconditionally — this .h is imported before <WebKit> defines PLATFORM(); the impl is
+// #if PLATFORM(DRIFTSTACK)-guarded in the .m.)
+- (WKWebView *)driftCreateAndActivateAutomationTab;
+
 - (instancetype)initWithConfiguration:(WKWebViewConfiguration *)configuration;
 
 @end
