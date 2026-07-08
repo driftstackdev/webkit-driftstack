@@ -5782,13 +5782,23 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // RenderThemeMac.mm driftstackArchetypeSafariAtLeast live-getenv pattern.
     const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-        if (!archetype)
+        // W-DEBUG (2026-07-07, DRIFTSTACK_DEBUG_FAMILYA-gated, stderr-only, OFF by default —
+        // fingerprint-safe, no JS-observable effect): traces the getenv value + result AT THE
+        // MOMENT this lambda evaluates during updatePreferences, to diagnose the 26.0 flip-band
+        // enum residual (26.3 renders identical-classification members ON, 26.0 renders them OFF).
+        if (!archetype) {
+            if (getenv("DRIFTSTACK_DEBUG_FAMILYA")) {
+                WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+                fprintf(stderr, "DRIFTSTACK_DEBUG_FAMILYA {\"getenv\":null,\"result\":false}\n");
+                WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+            }
             return false;
+        }
         // Founder research-confirmed 2026-05-19: WebGPU enabled by default
         // Safari 26.0+ (iOS 26.0 release Sept 2025). Pre-Safari-26 (any
         // Safari 17.x / 18.x / 19.x major) = Family A; WebGPU undefined.
         std::string_view sv(archetype);
-        return sv.find("safari17_") != std::string_view::npos
+        const bool result = sv.find("safari17_") != std::string_view::npos
             || sv.find("safari18_") != std::string_view::npos
             || sv.find("safari19_") != std::string_view::npos
             || sv.find("safari20_") != std::string_view::npos
@@ -5797,6 +5807,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
             || sv.find("safari23_") != std::string_view::npos
             || sv.find("safari24_") != std::string_view::npos
             || sv.find("safari25_") != std::string_view::npos;
+        if (getenv("DRIFTSTACK_DEBUG_FAMILYA")) {
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+            fprintf(stderr, "DRIFTSTACK_DEBUG_FAMILYA {\"getenv\":\"%s\",\"result\":%s}\n", archetype, result ? "true" : "false");
+            WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+        }
+        return result;
     }();
     // Wave 29-406 §11.A.9 — MediaSource hide (both Family A AND Family B).
     // Empirical BS Automate 2026-05-19: real iPhone Safari 18.6 AND 26.4
