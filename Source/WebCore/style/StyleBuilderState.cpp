@@ -222,21 +222,23 @@ void BuilderState::updateFontForGenericFamilyChange()
     const auto& childFont = m_style.fontDescription();
 
 #if PLATFORM(DRIFTSTACK)
-    // DRIFTSTACK_DEBUG_MONO ENTRY trace (before BOTH early-returns) — fires for any monospace-CHILD element
-    // (code/pre) so we see its state EVEN IF it early-returns (isAbsoluteSize, or child.UFDS==parent.UFDS when
-    // the probe body is already monospace). Decodes: parent.UFDS=1 + willEarlyReturn → the size is INHERITED,
-    // gate must move to where the parent monospace size is first set. isAbsoluteSize=1 → early-return at 224.
-    if (getenv("DRIFTSTACK_DEBUG_MONO") && childFont.useFixedDefaultSize()) {
-        const auto& pf = parentStyle().fontDescription();
-        const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
-        WTFLogAlways("[DS_MONO] genericFamilyChange-ENTRY child.UFDS=1 parent.UFDS=%d isAbsoluteSize=%d earlyReturnUFDS=%d keywordId=%d childSpecified=%.1f arch=%s",
-            pf.useFixedDefaultSize(), childFont.isAbsoluteSize(), childFont.useFixedDefaultSize() == pf.useFixedDefaultSize(),
-            static_cast<int>(childFont.keywordSizeAsIdentifier()), childFont.specifiedSize(), dsa ? dsa : "(null)");
-    }
-#endif
-
+    // Monospace (code/pre/tt/kbd/samp etc.) reach here with an ABSOLUTE keyword size (medium) already resolved to
+    // the PROPORTIONAL default (16) upstream, so the plain isAbsoluteSize early-return SKIPS the monospace fixed-
+    // default rescale — leaving 16px where real Safari 18.6 = 13px (fixed default 13) and 26.4 = 16px. (DEBUG_MONO
+    // render bus 5890: code/pre hit here with child.UFDS=1 parent.UFDS=0 isAbsoluteSize=1 keywordId=98[medium], and
+    // NO other path re-resolves them.) For a generic-family CHANGE to/from monospace that carries a KEYWORD size,
+    // do NOT early-return — fall through so the keyword branch (Style::fontSizeForKeyword, which carries the
+    // Family-A defaultFixedFontSize=13 band-key) re-resolves it. Non-keyword absolute sizes (explicit px,
+    // keywordId==0) still early-return. Launch-safe: @26.4 fontSizeForKeyword(medium,true)=defaultFixedFontSize(16)
+    // =16 (unchanged); only Family-A (Safari <26) shifts to 13 via the fontSizeForKeyword gate.
+    bool dsMonospaceKeywordFamilyChange = childFont.keywordSizeAsIdentifier()
+        && childFont.useFixedDefaultSize() != parentStyle().fontDescription().useFixedDefaultSize();
+    if (childFont.isAbsoluteSize() && !dsMonospaceKeywordFamilyChange)
+        return;
+#else
     if (childFont.isAbsoluteSize())
         return;
+#endif
 
     const auto& parentFont = parentStyle().fontDescription();
     if (childFont.useFixedDefaultSize() == parentFont.useFixedDefaultSize())
@@ -256,17 +258,6 @@ void BuilderState::updateFontForGenericFamilyChange()
         return parentFont.useFixedDefaultSize() ? childFont.specifiedSize() / fixedScaleFactor : childFont.specifiedSize() * fixedScaleFactor;
     }();
 
-#if PLATFORM(DRIFTSTACK)
-    // DRIFTSTACK_DEBUG_MONO diagnostic (nonform-hunt monospace fix, A3 ask bus 5831): disambiguates why
-    // code/pre stayed 16px @18.6 after the fontSizeForKeyword band-key — prints whether this entry fires
-    // for monospace (child.UFDS=1 parent.UFDS=0), which sub-path (keyword vs scale), and the resulting size.
-    if (getenv("DRIFTSTACK_DEBUG_MONO")) {
-        const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
-        WTFLogAlways("[DS_MONO] genericFamilyChange child.UFDS=%d parent.UFDS=%d keywordId=%d specified=%.1f -> size=%.1f arch=%s",
-            childFont.useFixedDefaultSize(), parentFont.useFixedDefaultSize(),
-            static_cast<int>(childFont.keywordSizeAsIdentifier()), childFont.specifiedSize(), size, dsa ? dsa : "(null)");
-    }
-#endif
     auto newFontDescription = childFont;
     setFontSize(newFontDescription, size);
     m_style.setFontDescriptionWithoutUpdate(WTF::move(newFontDescription));
