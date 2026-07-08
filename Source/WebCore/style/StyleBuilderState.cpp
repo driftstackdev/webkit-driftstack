@@ -221,6 +221,20 @@ void BuilderState::updateFontForGenericFamilyChange()
 {
     const auto& childFont = m_style.fontDescription();
 
+#if PLATFORM(DRIFTSTACK)
+    // DRIFTSTACK_DEBUG_MONO ENTRY trace (before BOTH early-returns) — fires for any monospace-CHILD element
+    // (code/pre) so we see its state EVEN IF it early-returns (isAbsoluteSize, or child.UFDS==parent.UFDS when
+    // the probe body is already monospace). Decodes: parent.UFDS=1 + willEarlyReturn → the size is INHERITED,
+    // gate must move to where the parent monospace size is first set. isAbsoluteSize=1 → early-return at 224.
+    if (getenv("DRIFTSTACK_DEBUG_MONO") && childFont.useFixedDefaultSize()) {
+        const auto& pf = parentStyle().fontDescription();
+        const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
+        WTFLogAlways("[DS_MONO] genericFamilyChange-ENTRY child.UFDS=1 parent.UFDS=%d isAbsoluteSize=%d earlyReturnUFDS=%d keywordId=%d childSpecified=%.1f arch=%s",
+            pf.useFixedDefaultSize(), childFont.isAbsoluteSize(), childFont.useFixedDefaultSize() == pf.useFixedDefaultSize(),
+            static_cast<int>(childFont.keywordSizeAsIdentifier()), childFont.specifiedSize(), dsa ? dsa : "(null)");
+    }
+#endif
+
     if (childFont.isAbsoluteSize())
         return;
 
