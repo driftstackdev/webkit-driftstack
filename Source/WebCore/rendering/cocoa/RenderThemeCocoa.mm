@@ -5327,6 +5327,16 @@ void RenderThemeCocoa::adjustSearchFieldStyle(RenderStyle& style, const Element*
 #if ENABLE(FORM_CONTROL_REFRESH)
     if (adjustSearchFieldStyleForVectorBasedControls(style, element))
         return;
+#if PLATFORM(DRIFTSTACK)
+    // Family-A (refresh off): real iOS applies the pre-refresh 5px via RenderThemeIOS::adjustSearchFieldStyle
+    // -> applyCommonNonCapsuleBorderRadiusToStyle. Its adjustRoundBorderRadius capsule EARLY-RETURNS for
+    // search-field appearance (canAdjustBorderRadiusForAppearance false) — PROVEN by the real 18.6 capture:
+    // input_search height=21.48px but border-radius=5px (not height/2≈10.7px), so 5px is the flat
+    // applyCommonNonCapsule value, UNIVERSAL for search appearance (dimension-independent, not a capsule =
+    // mechanism-faithful, not a rule-5 lie-table). The fork's Cocoa path misses this -> search @18.6 was 0px
+    // where real=5px (real 26.x=0px matches the refresh path). Same helper as text-field/textarea (9cf9668040).
+    applyDriftstackFamilyAPreRefreshTextControlBorderRadius(style);
+#endif
 #endif
 
     RenderTheme::adjustSearchFieldStyle(style, element);
