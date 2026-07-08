@@ -188,7 +188,7 @@ float fontSizeForKeyword(unsigned keywordID, bool shouldUseFixedDefaultSize, con
     if (getenv("DRIFTSTACK_DEBUG_MONO") && shouldUseFixedDefaultSize) {
         const char* dsa = getenv("DRIFTSTACK_ARCHETYPE");
         WTFLogAlways("[DS_MONO] fontSizeForKeyword kw=%u UFDS=1 atLeast26_0=%d fixedDefault=%d mediumSize=%d arch=%s",
-            keywordID, driftstackMonospaceArchetypeSafariAtLeast(26, 0) ? 1 : 0, settings.defaultFixedFontSize, mediumSize, dsa ? dsa : "(null)");
+            keywordID, driftstackMonospaceArchetypeSafariAtLeast(26, 0) ? 1 : 0, static_cast<int>(settings.defaultFixedFontSize), mediumSize, dsa ? dsa : "(null)");
     }
 #endif
     if (mediumSize >= fontSizeTableMin && mediumSize <= fontSizeTableMax) {
