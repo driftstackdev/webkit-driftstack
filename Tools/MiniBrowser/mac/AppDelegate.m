@@ -841,6 +841,22 @@ static BOOL driftstackWarmTabsEnabled(void)
     } else
         completionHandler(nil);
 }
+
+- (void)_automationSession:(_WKAutomationSession *)automationSession requestSwitchToWebView:(WKWebView *)webView completionHandler:(void(^)(void))completionHandler
+{
+    // Warm-tabs (doc 151) — the W3C POST /window switch. The automation layer has already moved its active-page
+    // pointer to `webView`; route the VISUAL switch into the owning window's live tab manager (bring-to-front,
+    // no reload). Search each WK2 controller until one owns this tab. No-op when the flag is off (the harness
+    // takes the cold navigate path then). Always call completionHandler (a no-op switch still succeeds).
+    if (driftstackWarmTabsEnabled() && webView) {
+        for (BrowserWindowController *controller in _browserWindowControllers) {
+            if ([controller isKindOfClass:[WK2BrowserWindowController class]]
+                && [(WK2BrowserWindowController *)controller driftSwitchToAutomationWebView:webView])
+                break;
+        }
+    }
+    completionHandler();
+}
 #endif // PLATFORM(DRIFTSTACK)
 
 - (BrowserWindowController *)frontmostBrowserWindowController

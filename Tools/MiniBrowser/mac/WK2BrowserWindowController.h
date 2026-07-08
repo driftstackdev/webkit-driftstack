@@ -40,6 +40,12 @@
 // #if PLATFORM(DRIFTSTACK)-guarded in the .m.)
 - (WKWebView *)driftCreateAndActivateAutomationTab;
 
+// Driftstack warm-tabs: if `webView` is one of THIS window's live tabs, switch to it (live bring-to-front via
+// -driftActivateWebView: — moves shared chrome/KVO, toggles .hidden; idempotent no-op if already active) and
+// return YES; return NO if it is not a tab in this window's tab manager. The automation delegate's
+// requestSwitchToWebView (W3C POST /window switch) calls this on each controller until one returns YES.
+- (BOOL)driftSwitchToAutomationWebView:(WKWebView *)webView;
+
 - (instancetype)initWithConfiguration:(WKWebViewConfiguration *)configuration;
 
 @end

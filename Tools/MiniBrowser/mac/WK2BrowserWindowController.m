@@ -546,6 +546,26 @@ static void driftstackShowLoadFailurePage(WKWebView *webView, NSError *error)
     [self driftActivateWebView:wv];
     return wv;
 }
+
+// Driftstack warm-tabs (doc 151 §7.1): the automation-path tab switch (W3C POST /window). If `webView` is one
+// of this window's live tabs, make it active + visible via the -driftActivateWebView: engine (which hides the
+// previous tab, moves the shared chrome/KVO, and is idempotent so switching to the already-active tab is a
+// no-op). Returns YES if handled, NO if `webView` is not a tab here. This is the WARM fast-path — a live
+// bring-to-front with NO reload/navigate. See header.
+- (BOOL)driftSwitchToAutomationWebView:(WKWebView *)webView
+{
+    if (!webView || !_tabManager)
+        return NO;
+    for (NSInteger i = 0; i < (NSInteger)_tabManager.count; i++) {
+        if ([_tabManager webViewAtIndex:i] == webView) {
+            WKWebView *wv = [_tabManager switchToIndex:i];
+            if (wv)
+                [self driftActivateWebView:wv];   // idempotent — no-op if already the active/wired tab
+            return YES;
+        }
+    }
+    return NO;
+}
 #endif
 
 // Driftstack (gated DRIFTSTACK_TABS_SELFTEST): deterministic, screenshot-verifiable exercise of the
