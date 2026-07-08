@@ -4968,6 +4968,13 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
     RenderTheme::adjustButtonStyle(style, element);
 
 #if PLATFORM(DRIFTSTACK)
+    // W3097-forms DIAGNOSTIC (off by default, stderr): the file border-radius set below is INERT (A3 box-REVERSE:
+    // input_file still 0px @18.6 though the submit-bold in this same branch works). Trace whether adjustButtonStyle
+    // reaches the file input + isFileUpload()'s value + the pre-set explicit-radius, so an A3 render localizes it.
+    if (RefPtr dbg = dynamicDowncast<HTMLInputElement>(element); dbg && ::getenv("DRIFTSTACK_DEBUG_FORMS"))
+        WTFLogAlways("[DS_FORMS_BTN] adjustButtonStyle <%s> isFileUpload=%d isSubmit=%d explicitRadius=%d",
+            element->localName().string().utf8().data(), dbg->isFileUpload() ? 1 : 0, dbg->isSubmitButton() ? 1 : 0, style.hasExplicitlySetBorderRadius() ? 1 : 0);
+
     // Family-A (Safari <26 / 18.6): real Safari bolds the submit button (input_submit font-weight 700;
     // regular button + input[type=button] stay 400 — verified BOTH bands via band-parity box-REVERSE). The
     // base RenderTheme::adjustButtonStyle above applied RenderThemeMac::controlFont (the Mac system font at
