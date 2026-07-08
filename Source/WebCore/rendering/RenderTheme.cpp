@@ -333,10 +333,12 @@ void RenderTheme::adjustStyle(RenderStyle& style, const RenderStyle& parentStyle
     // (post-theme) values. Cracks input_submit.font-weight (700 vs 400: is the pre-refresh bold in the
     // cascade here, or set later by the theme?) + confirms the search/file appearance. W3097-forms 2026-07-08.
     if (element && ::getenv("DRIFTSTACK_DEBUG_FORMS")) {
-        WTFLogAlways("[DS_FORMS] <%s> appearance=%d postCascade fontWeight=%.0f",
+        WTFLogAlways("[DS_FORMS] <%s> appearance=%d postCascade fontWeight=%.0f explicitRadius=%d explicitColor=%d",
             element->localName().string().utf8().data(),
             static_cast<int>(appearance),
-            static_cast<float>(style.fontDescription().weight()));
+            static_cast<float>(style.fontDescription().weight()),
+            style.hasExplicitlySetBorderRadius() ? 1 : 0,
+            style.hasExplicitlySetColor() ? 1 : 0);
     }
 #endif
 
