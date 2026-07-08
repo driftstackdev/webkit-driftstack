@@ -6069,6 +6069,11 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // to ScrollTimeline.idl + ViewTimeline.idl since upstream WebKit
         // doesn't gate them at IDL level).
         settings.setScrollDrivenAnimationsEnabled(false);
+        // CSS.supports('margin-top: calc(sibling-index() * 1px)') — CSS Tree Counting Functions
+        // (sibling-index() / sibling-count(), CSS Values L5). CSSTreeCountingFunctionsEnabled defaults
+        // true so the 26.x-era build parses them; real iPhone Safari 18.6 does NOT (dual-band BS capture
+        // 2026-07-08: false@18.6, true@26.5). Gate off on Family A to match. 26.x keeps the default true.
+        settings.setCSSTreeCountingFunctionsEnabled(false);
 
         // Wave 29-406 §11.A.7 — WebCodecs Audio hide on Family A.
         // Empirical BS Automate 2026-05-19: AudioData, AudioDecoder,

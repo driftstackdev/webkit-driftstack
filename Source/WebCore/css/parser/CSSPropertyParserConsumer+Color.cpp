@@ -675,6 +675,15 @@ static std::optional<CSS::Color> consumeContrastColorFunction(CSSParserTokenRang
     // https://drafts.csswg.org/css-color-5/#funcdef-contrast-color
 
     ASSERT(range.peek().functionId() == CSSValueContrastColor);
+#if PLATFORM(DRIFTSTACK)
+    // Family-A (Safari <26): real iPhone 18.6 does NOT support contrast-color() (dual-band BS capture
+    // 2026-07-08: CSS.supports('color: contrast-color(red)') false@18.6, true@26.5). The 26.x-era build
+    // parses it unconditionally (no upstream runtime flag exists), so gate it off for Safari <26 to match
+    // real 18.6 — reuses the file-local color-parser archetype gate (also guards the color-mix strictness
+    // above). 26.x + the unset launch default keep it supported (== real 26.4/26.5, launch clean).
+    if (!driftstackColorMixArchetypeSafariAtLeast(26, 0))
+        return std::nullopt;
+#endif
 
     auto args = consumeFunction(range);
 
