@@ -6136,6 +6136,15 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // off — that's what real Safari 26.4 does.
         settings.setOverflowEventEnabled(true);
 
+        // Driftstack 2026-07-08 — HTMLFrameElement.getSVGDocument restoration on Family A.
+        // Real iPhone Safari 18.6 exposes HTMLFrameElement.prototype.getSVGDocument (drillOwn
+        // count 12); upstream removed it from HTMLFrameElement at 26.0 (kept on iframe/embed/
+        // object), so real 26.0/26.2/26.4/26.5 = 11. The 26.x binary lacks it -> without this the
+        // 18.x archetype under-reports by one. Setting default off; Family A flips it on. Family B
+        // (Safari 26.4) leaves it off — matches real. Backed by the inherited
+        // HTMLFrameOwnerElement::getSVGDocument impl. (boundary 26.0 = FA-only, not <26.2)
+        settings.setDriftstackLegacyFrameGetSVGDocumentEnabled(true);
+
         // Wave 29-406 §11.A.8 — additional Family A hides empirically
         // confirmed via Mac fork vs iPhone Safari 18.6 v2 diff 2026-05-19:
         // - FileSystemWritableFileStream undefined

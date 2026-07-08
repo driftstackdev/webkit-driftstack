@@ -2605,6 +2605,20 @@ DriftstackLegacyCanvasDrawImageFromRectEnabled:
     WebCore:
       default: false
 
+DriftstackLegacyFrameGetSVGDocumentEnabled:
+  type: bool
+  status: stable
+  category: html
+  humanReadableName: "Legacy HTMLFrameElement.getSVGDocument"
+  humanReadableDescription: "Re-expose HTMLFrameElement.getSVGDocument (removed upstream at Safari 26.0; kept on iframe/embed/object) for the Family-A (18.x) archetype band"
+  defaultValue:
+    WebKitLegacy:
+      default: false
+    WebKit:
+      default: false
+    WebCore:
+      default: false
+
 DriftstackLegacyWebGPUPerStageLimitsEnabled:
   type: bool
   status: stable

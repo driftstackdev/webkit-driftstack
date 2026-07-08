@@ -33,4 +33,10 @@
 
     [CEReactions=NotNeeded, Reflect] attribute [LegacyNullToEmptyString] DOMString marginHeight;
     [CEReactions=NotNeeded, Reflect] attribute [LegacyNullToEmptyString] DOMString marginWidth;
+
+    // Driftstack: real iPhone Safari 18.x exposes HTMLFrameElement.getSVGDocument (inherited
+    // HTMLFrameOwnerElement impl); upstream removed it from HTMLFrameElement at 26.0 (kept on
+    // iframe/embed/object). Re-expose for the Family-A band only (setting default false; the FA
+    // block flips it on). Launch 26.4 leaves it off — matches real Safari 26.x.
+    [CheckSecurityForNodeWithFrameOwner, EnabledBySetting=DriftstackLegacyFrameGetSVGDocumentEnabled] Document? getSVGDocument();
 };
