@@ -5093,6 +5093,19 @@ void RenderThemeCocoa::adjustTextFieldStyle(RenderStyle& style, const Element* e
         return;
 #if PLATFORM(DRIFTSTACK)
     applyDriftstackFamilyAPreRefreshTextControlBorderRadius(style);
+    // Family-A date/time inputs render their value in -apple-system-blue @18.6 (real rgb(0,122,255)); the 26.x
+    // refresh renders CanvasText/black (html.css W244). This is only reached when the vector-based adjuster
+    // returned false (formControlRefreshEnabled() OFF), so it is LAUNCH-SAFE BY CONSTRUCTION — it physically
+    // cannot run at 26.4. Set the pre-refresh blue for date/time-family inputs ONLY (input_text.color did NOT
+    // diverge — regular text stays black). -internal-auto-base could NOT band-key this in html.css: it keys on
+    // isBaseAppearance() (StyleSubstitutionResolver.cpp:600) and date/time inputs lack appearance:base, so it
+    // picked blue in BOTH bands and regressed the 26.4 launch (A3 box-REVERSE caught it, reverted). W3097-forms.
+    if (RefPtr input = dynamicDowncast<HTMLInputElement>(element);
+        input && (input->isDateField() || input->isTimeField() || input->isDateTimeLocalField()
+            || input->isMonthField() || input->isWeekField())) {
+        if (!style.hasExplicitlySetColor())
+            style.setColor(systemColor(CSSValueAppleSystemBlue, element->document().styleColorOptions(&style)));
+    }
 #endif
 #endif
 

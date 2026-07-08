@@ -523,13 +523,15 @@ input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], 
 #if defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK
 /* W244: this WebKit's html.css sets date/time input text to -apple-system-blue (non-Vision iOS), but a real
    iPhone-17 / Safari 26.4 renders it in CanvasText (black) — verified vs uastylesheet-iPhone_17 (input_date/
-   input_time color rgb(0,0,0)). W3097-forms (2026-07-08): but real Safari 18.6 (Family-A, FormControlRefresh
-   OFF) keeps the PRE-refresh blue (input_date/input_time color rgb(0,122,255), band-parity box-REVERSE). The
-   original unconditional CanvasText wrongly forced black on Family-A too. Band-key it via -internal-auto-base
-   (refresh OFF -> blue @18.6 ; refresh ON -> CanvasText/black @26.x) — the same mechanism select color uses
-   (html.css:1069, box-REVERSE-confirmed to revert). Launch 26.4 unchanged (black). */
+   input_time color rgb(0,0,0)). Override to CanvasText to match the launch target.
+   W3097-forms (2026-07-08): real Safari 18.6 (Family-A) keeps the PRE-refresh blue (rgb(0,122,255)). A first
+   attempt band-keyed this via -internal-auto-base(-apple-system-blue, CanvasText) — REVERTED: -internal-auto-base
+   keys on isBaseAppearance() (StyleSubstitutionResolver.cpp:600), and date/time inputs do NOT get appearance:base
+   under FormControlRefresh (unlike select/button), so it picked arg1 (blue) in BOTH bands = REGRESSED the 26.4
+   launch to rgb(0,136,255) (A3 box-REVERSE caught it). So keep the launch-safe unconditional CanvasText here;
+   the Family-A (18.6) blue is applied in RenderThemeCocoa gated on !formControlRefreshEnabled() instead. */
 input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]) {
-    color: -internal-auto-base(-apple-system-blue, CanvasText);
+    color: CanvasText;
 }
 #endif
 
