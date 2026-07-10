@@ -3417,9 +3417,22 @@ bool RenderThemeCocoa::adjustButtonStyleForVectorBasedControls(RenderStyle& styl
         // back to 400. Only act when the resolved weight is at/above bold so an author-set lighter
         // font-weight (or the already-correct <26.2 bold) is never clobbered — this removes the UA
         // default-button bold, it does not impose a weight.
-        if (driftstackArchetypeSafariAtLeastCocoa(26, 2) && style.fontDescription().weight() >= boldWeightValue()) {
+        // 2026-07-10 (local-REVERSE fix): the <26.2 emphasized bold was ONLY applied by adjustButtonStyle
+        // (~L4980), which the 26.x vector-based-controls early-return SKIPS → the 26.0/26.1 cells (Family-B
+        // but Safari <26.2, where real iPhone STILL serves 700) fell through at the Mac-default 400. So set
+        // the emphasized bold here on <26.2 when it is missing (weight below bold), covering 26.0/26.1;
+        // Family-A 18.6 already carries the bold from L4980 so this is a no-op there. Symmetric to the
+        // >=26.2 normalize below; both only touch the UA default weight (an author-set weight at/above bold
+        // stays, and <26.2 only fills in a MISSING bold). Launch (26.4 → AtLeastCocoa true) → normalize path.
+        if (driftstackArchetypeSafariAtLeastCocoa(26, 2)) {
+            if (style.fontDescription().weight() >= boldWeightValue()) {
+                auto submitFontDescription = style.fontDescription();
+                submitFontDescription.setWeight(normalWeightValue());
+                style.setFontDescription(WTF::move(submitFontDescription));
+            }
+        } else if (style.fontDescription().weight() < boldWeightValue()) {
             auto submitFontDescription = style.fontDescription();
-            submitFontDescription.setWeight(normalWeightValue());
+            submitFontDescription.setWeight(boldWeightValue());
             style.setFontDescription(WTF::move(submitFontDescription));
         }
 #elif PLATFORM(MAC)
