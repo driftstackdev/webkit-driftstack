@@ -1550,9 +1550,6 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
     if (h2req.path.isEmpty()) h2req.path = "/"_s;
     if (!url.query().isEmpty())
         h2req.path = makeString(h2req.path, '?', url.query());
-    // PathB v2 ITP: caller passes the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
-    if (!cookieHeader.isEmpty())
-        h2req.extraHeaders.append({ "cookie"_s, cookieHeader });
     // iPhone Safari 26 canonical header ORDER, WebKit's natural values.
     HashMap<String, String> webkitHdrs;
     for (auto& header : httpHeaders)
@@ -1655,6 +1652,13 @@ static WebKit::DriftstackHttp2Request driftstackBuildIphoneH2Request(const URL& 
             continue;
         h2req.extraHeaders.append({ lower, header.value });
     }
+    // Cookie LAST — real iPhone Safari 26.x emits Cookie as the TERMINAL H2 header
+    // (reference/realdevice-bs/h2-hpack-encoder-iPhone_17_*2026-07-03.json: every cookie'd stream ends
+    // ...accept-encoding, cookie). The trailing loop above skips cookie, so appending here makes it the
+    // final entry — mirrors the H1 serializer's Cookie-penultimate (H2/H3 drop Connection).
+    // PathB v2 ITP: caller passes the ITP-filtered Cookie header; empty => omit.
+    if (!cookieHeader.isEmpty())
+        h2req.extraHeaders.append({ "cookie"_s, cookieHeader });
     return h2req;
 }
 
@@ -3004,9 +3008,6 @@ void DriftstackNetworkLoader::resume()
             if (h2req.path.isEmpty()) h2req.path = "/"_s;
             if (!url.query().isEmpty())
                 h2req.path = makeString(h2req.path, '?', url.query());
-            // PathB v2 ITP: inject the ITP-filtered Cookie header (computed on the main thread). Empty => omit.
-            if (!driftstackCookieHeader.isEmpty())
-                h2req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
             // Wave 29-499.201 — iPhone Safari 26.0 EXACT HTTP/2 header order
             // (verified via tls.peet.ws default-mode capture).
             // Order matters for JA4H + Akamai pseudo-header order.
@@ -3139,6 +3140,11 @@ void DriftstackNetworkLoader::resume()
                     continue;
                 h2req.extraHeaders.append({ lower, header.value });
             }
+
+            // Cookie LAST — see driftstackBuildIphoneH2Request. Trailing loop above skips cookie; append
+            // here so it is the terminal H2 header (real iPhone: ...accept-encoding, cookie). ITP: empty => omit.
+            if (!driftstackCookieHeader.isEmpty())
+                h2req.extraHeaders.append({ "cookie"_s, driftstackCookieHeader });
 
             // Wave 29-499.193 — route HTTP/2 via custom TLS client if active.
             // Wave .321 P2.5 — when pooling is enabled + the custom TLS client
