@@ -27,6 +27,7 @@
 
 #include "CSSFontSelector.h"
 #include "DocumentInlines.h"
+#include "DriftstackArchetypeConfig.h"
 #include "FloatConversion.h"
 #include "FloatQuad.h"
 #include "FontCascadeInlines.h"
@@ -246,11 +247,32 @@ void RenderSVGInlineText::updateScaledFont()
 
 float RenderSVGInlineText::computeScalingFactorForRenderer(const RenderObject& renderer)
 {
+    float scalingFactor = 0;
+    bool computed = false;
     if (renderer.document().settings().layerBasedSVGEngineEnabled()) {
-        if (const auto* layerRenderer = lineageOfType<RenderLayerModelObject>(renderer).first())
-            return SVGLayerTransformComputation(*layerRenderer).calculateScreenFontSizeScalingFactor();
+        if (const auto* layerRenderer = lineageOfType<RenderLayerModelObject>(renderer).first()) {
+            scalingFactor = SVGLayerTransformComputation(*layerRenderer).calculateScreenFontSizeScalingFactor();
+            computed = true;
+        }
     }
-    return SVGRenderingContext::calculateScreenFontSizeScalingFactor(renderer);
+    if (!computed)
+        scalingFactor = SVGRenderingContext::calculateScreenFontSizeScalingFactor(renderer);
+
+#if PLATFORM(DRIFTSTACK)
+    // The SVG text scaling factor derives from the host Mac's real backing device scale, but an iPhone
+    // archetype reports a fixed devicePixelRatio (LocalDOMWindow getter override) and a real device renders
+    // at that DPR. SVG text geometry (getComputedTextLength / getSubStringLength) is one of the few surfaces
+    // that leaks the real backing scale, because it feeds the SF Pro 'trak' lookup at fontSize*scalingFactor
+    // (a per-glyph tracking term keyed on the scaled point size). Rescale so SVG text geometry stays faithful
+    // to the archetype DPR (e.g. 3x on iPhone 17) regardless of the host backing scale, matching a real
+    // device. No-op when the archetype DPR already equals the host device scale.
+    if (auto dpr = DriftstackArchetypeConfig::singleton().devicePixelRatio(); dpr > 0.0 && scalingFactor > 0.0) {
+        if (float hostScale = renderer.document().deviceScaleFactor(); hostScale > 0.0)
+            scalingFactor *= static_cast<float>(dpr / hostScale);
+    }
+#endif
+
+    return scalingFactor;
 }
 
 bool RenderSVGInlineText::computeNewScaledFontForStyle(const RenderObject& renderer, const RenderStyle& style, float& scalingFactor, FontCascade& scaledFont)
