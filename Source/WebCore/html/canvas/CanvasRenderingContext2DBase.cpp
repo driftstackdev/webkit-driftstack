@@ -3814,8 +3814,8 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
             if (canonical) {
                 metrics->setWidth(canonical->mtWidth);
                 FloatPoint offset = textOffset(canonical->mtWidth, textRun.direction());
-                metrics->setActualBoundingBoxAscent(canonical->mtActualBoundingBoxAscent);
-                metrics->setActualBoundingBoxDescent(canonical->mtActualBoundingBoxDescent);
+                metrics->setActualBoundingBoxAscent(canonical->mtActualBoundingBoxAscent - offset.y());
+                metrics->setActualBoundingBoxDescent(canonical->mtActualBoundingBoxDescent + offset.y());
                 metrics->setFontBoundingBoxAscent(canonical->mtFontBoundingBoxAscent - offset.y());
                 metrics->setFontBoundingBoxDescent(canonical->mtFontBoundingBoxDescent + offset.y());
                 metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
@@ -3854,8 +3854,8 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
                 if (familyLower != StringView::fromLatin1(entry.family)) continue;
                 metrics->setWidth(entry.width);
                 FloatPoint offset = textOffset(entry.width, textRun.direction());
-                metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent);
-                metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent);
+                metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent - offset.y());
+                metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent + offset.y());
                 metrics->setFontBoundingBoxAscent(entry.fontBoundingBoxAscent - offset.y());
                 metrics->setFontBoundingBoxDescent(entry.fontBoundingBoxDescent + offset.y());
                 metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
@@ -3877,8 +3877,8 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
             if (familyLower != StringView::fromLatin1(entry.family)) continue;
             metrics->setWidth(entry.width);
             FloatPoint offset = textOffset(entry.width, textRun.direction());
-            metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent);
-            metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent);
+            metrics->setActualBoundingBoxAscent(entry.actualBoundingBoxAscent - offset.y());
+            metrics->setActualBoundingBoxDescent(entry.actualBoundingBoxDescent + offset.y());
             metrics->setFontBoundingBoxAscent(entry.fontBoundingBoxAscent - offset.y());
             metrics->setFontBoundingBoxDescent(entry.fontBoundingBoxDescent + offset.y());
             metrics->setEmHeightAscent(fontMetrics.ascent() - offset.y());
