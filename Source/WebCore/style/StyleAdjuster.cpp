@@ -728,6 +728,22 @@ void Adjuster::adjust(RenderStyle& style) const
                 style.setBorderRadius({ 5_css_px, 5_css_px });
         }
     }
+
+    // Focus-ring outline-color: real iPhone Safari serves getComputedStyle(el).outlineColor for the
+    // outline-style:auto focus ring as the FIXED iOS focus accent — 0,122,255 @Family-A/<26 and
+    // 0,136,255 @Family-B/>=26 (verified reference/realdevice-bs focus-outline-color-band-parity:
+    // 0,122,255@18.6 / 0,136,255@26.4). The fork otherwise host-resolves it via platformFocusRingColor,
+    // which varies by the Mac's accent + window key-state (e.g. black on an off-screen render) — a
+    // host-dependent tell (a real iPhone's value is invariant). Serve the fixed accent so it is
+    // host-INDEPENDENT + bit-identical. Band via formControlRefreshEnabled (Family-A off / Family-B on),
+    // matching the input_submit.background-color accent boundary. Scoped to the outline-style:auto
+    // (focus-ring) case only; leaves an author-set outline-color untouched. 2026-07-10.
+    if (style.outlineStyle() == OutlineStyle::Auto) {
+        auto accent = m_document->settings().formControlRefreshEnabled()
+            ? WebCore::Color { WebCore::SRGBA<uint8_t> { 0, 136, 255 } }
+            : WebCore::Color { WebCore::SRGBA<uint8_t> { 0, 122, 255 } };
+        style.setOutlineColor({ accent });
+    }
 #endif
 
     // This should be kept in sync with requiresRenderingConsolidationForViewTransition
