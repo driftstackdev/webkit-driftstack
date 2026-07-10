@@ -29,6 +29,7 @@
 #include "CSSImageSetOptionValue.h"
 #include "CSSImageSetValue.h"
 #include "CSSPrimitiveValue.h"
+#include "DriftstackArchetypeConfig.h"
 #include "DocumentPage.h"
 #include "MIMETypeRegistry.h"
 #include "Page.h"
@@ -119,6 +120,14 @@ void ImageSet::updateDeviceScaleFactor(const Document& document)
     // All forms of scale should be included: Page::pageScaleFactor(), Frame::pageZoomFactor(),
     // and any CSS transforms. https://bugs.webkit.org/show_bug.cgi?id=81698
     float deviceScaleFactor = document.page() ? document.page()->deviceScaleFactor() : 1;
+#if PLATFORM(DRIFTSTACK)
+    // image-set() candidate selection is observable (resource timing reveals which density URL was fetched) and
+    // must match the archetype devicePixelRatio (the window.devicePixelRatio getter-override), not the host
+    // backing device scale — same as srcset (HTMLSrcsetParser) and SVG text geometry. Rendering the chosen image
+    // still uses the real backing scale downstream. No-op when the archetype DPR already equals the host scale.
+    if (auto dpr = DriftstackArchetypeConfig::singleton().devicePixelRatio(); dpr > 0.0)
+        deviceScaleFactor = static_cast<float>(dpr);
+#endif
     if (deviceScaleFactor == m_deviceScaleFactor)
         return;
     m_deviceScaleFactor = deviceScaleFactor;
