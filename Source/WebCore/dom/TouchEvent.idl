@@ -37,13 +37,14 @@
     readonly attribute TouchList? targetTouches;
     // FIXME: `changedTouches` should not be nullable.
     readonly attribute TouchList? changedTouches;
+    // iOS multi-touch gesture fields come BEFORE the modifier keys (real iPhone TouchEvent.prototype natural
+    // getOwnPropertyNames order, BS apienumorder-iPhone_17-1783724752581): scale, rotation, then the modifiers.
+    readonly attribute float scale;
+    readonly attribute float rotation;
     readonly attribute boolean ctrlKey;
     readonly attribute boolean shiftKey;
     readonly attribute boolean altKey;
     readonly attribute boolean metaKey;
-    // iOS multi-touch gesture fields + legacy init (match real iPhone TouchEvent prototype).
-    readonly attribute float rotation;
-    readonly attribute float scale;
     undefined initTouchEvent();
 };
 

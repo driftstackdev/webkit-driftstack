@@ -29,15 +29,19 @@
     Conditional=TOUCH_EVENTS|DRIFTSTACK_TOUCH_STUBS,
     Exposed=Window
 ] interface Touch {
-    readonly attribute double              clientX;
-    readonly attribute double              clientY;
-    readonly attribute double              screenX;
-    readonly attribute double              screenY;
-    readonly attribute double              pageX;
-    readonly attribute double              pageY;
+    // Member ORDER matches the real iPhone Touch.prototype natural getOwnPropertyNames order (BS
+    // apienumorder-iPhone_17-1783724752581): target, identifier, clientX/Y, pageX/Y, screenX/Y, then
+    // radiusX/Y, rotationAngle, force, touchType, altitudeAngle, azimuthAngle. The upstream/standard order
+    // (clientX first, screenX before pageX, target later, touchType last) differs from iOS = a getOwnPropertyNames tell.
     // FIXME: `target` should not be nullable.
     readonly attribute EventTarget?        target;
     readonly attribute long                identifier;
+    readonly attribute double              clientX;
+    readonly attribute double              clientY;
+    readonly attribute double              pageX;
+    readonly attribute double              pageY;
+    readonly attribute double              screenX;
+    readonly attribute double              screenY;
     // iOS Safari exposes the UNPREFIXED standard names (verified vs real iPhone-17 apiEnum.proto.Touch,
     // 2026-06-01: the real Touch.prototype has force/radiusX/radiusY/rotationAngle + altitudeAngle/
     // azimuthAngle/touchType and NO webkit-prefixed names). Re-expose the existing impls under the
@@ -46,7 +50,7 @@
     [ImplementedAs=webkitRadiusY]       readonly attribute double             radiusY;
     [ImplementedAs=webkitRotationAngle] readonly attribute unrestricted float rotationAngle;
     [ImplementedAs=webkitForce]         readonly attribute unrestricted float force;
+    readonly attribute DOMString          touchType;
     readonly attribute double             altitudeAngle;
     readonly attribute double             azimuthAngle;
-    readonly attribute DOMString          touchType;
 };
