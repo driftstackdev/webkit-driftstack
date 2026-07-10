@@ -3792,6 +3792,14 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
         if (familyLower.startsWith("-webkit-"_s))
             familyLower = familyLower.substring(8);
         CString textUtf8 = textRun.text().toString().utf8();
+        // V-184 canonical tables are captured at 14px only; serving them at any other font size returns a
+        // FROZEN (unscaled) width AND short-circuits the size-correct per-glyph DASA advance path — a real
+        // iPhone scales with size, so "identical width at two sizes" is a dead-giveaway tell. Gate the
+        // whole-string tables to 14px; at any other size fall through to native shaping (rich fonts then hit
+        // the DASA per-glyph atlas, which is size-correct across 12-48). The size-keyed DSCFM atlas above is
+        // exempt (it carries size in its lookup key).
+        float dsCanonSz = font.fontDescription().computedSize();
+        bool dsCanonicalSize = dsCanonSz > 13.99f && dsCanonSz < 14.01f;
 
         // Wave 29-283: V-184 random-text extension via DSCFM-v1 atlas.
         // Lookup (family|weight|style|size|text) keyed by sha256 prefix.
@@ -3847,6 +3855,7 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
         }
         if (dsFamilyA186) {
             for (const auto& entry : kCanonicalMetricsFamilyA186) {
+                if (!dsCanonicalSize) break;
                 auto entryTextView = StringView::fromLatin1(entry.text);
                 if (textUtf8.length() != entryTextView.length()) continue;
                 auto runText = StringView::fromLatin1(textUtf8.data());
@@ -3870,6 +3879,7 @@ Ref<TextMetrics> CanvasRenderingContext2DBase::measureTextInternal(const TextRun
         }
 
         for (const auto& entry : kCanonicalMetrics) {
+            if (!dsCanonicalSize) break;
             auto entryTextView = StringView::fromLatin1(entry.text);
             if (textUtf8.length() != entryTextView.length()) continue;
             auto runText = StringView::fromLatin1(textUtf8.data());
