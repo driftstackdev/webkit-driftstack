@@ -33,6 +33,7 @@
 #include "HTMLSrcsetParser.h"
 
 #include "CSSSerializationContext.h"
+#include "DriftstackArchetypeConfig.h"
 #include "Element.h"
 #include "HTMLParserIdioms.h"
 #include <ranges>
@@ -300,6 +301,16 @@ static ImageCandidate pickBestImageCandidate(float deviceScaleFactor, Vector<Ima
 
 ImageCandidate bestFitSourceForImageAttributes(float deviceScaleFactor, const String& srcAttribute, StringView srcsetAttribute, std::optional<float> sourceSize, NOESCAPE const Function<bool(const ImageCandidate&)>& shouldIgnoreCandidateCallback)
 {
+#if PLATFORM(DRIFTSTACK)
+    // Image candidate ('x' density descriptor) selection is JS-observable via img.currentSrc and decides which
+    // resource is fetched/preloaded. It must match the archetype devicePixelRatio (the window.devicePixelRatio
+    // getter-override), not the host backing device scale, so the fork picks the same density as a real device
+    // at the archetype DPR (e.g. the 3x candidate on iPhone 17). Rendering the chosen image still uses the real
+    // backing scale downstream. No-op when the archetype DPR already equals the host device scale.
+    if (auto dpr = DriftstackArchetypeConfig::singleton().devicePixelRatio(); dpr > 0.0)
+        deviceScaleFactor = static_cast<float>(dpr);
+#endif
+
     if (srcsetAttribute.isNull()) {
         if (srcAttribute.isNull())
             return { };
