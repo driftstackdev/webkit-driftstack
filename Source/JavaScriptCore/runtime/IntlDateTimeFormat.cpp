@@ -1379,14 +1379,21 @@ static const char* driftstackIPhoneZoneNameForVariant(const String& resolvedTime
         return driftstackIPhoneLongZoneName(resolvedTimeZone);
 
     bool isGMT = (resolvedTimeZone == "GMT"_s || resolvedTimeZone == "Etc/GMT"_s);
+    // GMT/Etc/GMT short + longGeneric are BAND-VARIANT and flip in lockstep with the GMT long name:
+    //   OLD (Safari 18.6 / 27+):  short="UTC",  longGeneric="GMT"                  [famA-18_6 GT]
+    //   NEW (Safari 26.x):        short="GMT",  longGeneric="Greenwich Mean Time"  [aio-iPhone_17 26.4 GT]
+    // Tie to driftstackGMTName() ("Coordinated Universal Time" on OLD bands, else "Greenwich Mean Time") so the
+    // whole GMT family is coherent. Previously these were hardcoded to the OLD values unconditionally, so the
+    // 26.4 launch archetype served the 18.6 names ('UTC'/'GMT') — a per-minor Intl tell.
+    bool gmtIsOld = (driftstackGMTName()[0] == 'C');
     switch (v) {
     case DriftstackTZNameVariant::Short:
         if (isGMT)
-            return "UTC";
+            return gmtIsOld ? "UTC" : "GMT";
         return nullptr;
     case DriftstackTZNameVariant::LongGeneric:
         if (isGMT)
-            return "GMT";
+            return gmtIsOld ? "GMT" : "Greenwich Mean Time";
         if (resolvedTimeZone == "Pacific/Honolulu"_s)
             return "Hawaii-Aleutian Standard Time";
         if (resolvedTimeZone == "Asia/Anadyr"_s)
