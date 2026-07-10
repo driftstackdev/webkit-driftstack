@@ -146,6 +146,7 @@ private:
     int64_t m_sendWindow { 65535 };    // our stream send window (guarded by m_writeLock)
     uint32_t m_peerInitialWindow { 65535 };
     uint64_t m_recvSinceUpdate { 0 };      // bytes received since our last STREAM WINDOW_UPDATE (toward window/4)
+    bool m_streamFirstWUFired { false };    // http2_windowupdate_midstream_cadence: first stream WU fires at the FULL 2 MiB, then window/4−maxframe
     uint64_t m_connRecvSinceUpdate { 0 };  // bytes received since our last CONNECTION WINDOW_UPDATE (toward window/2)
     Vector<uint8_t> m_dataLeftover;    // inbound DATA decoded but not yet returned by readData
     Vector<std::pair<String, String>> m_responseHeaders;  // CONNECT response headers (non-pseudo)
@@ -293,6 +294,9 @@ private:
         // per DATA frame (a non-Safari wire tell) — this tracks the stream accumulator so the
         // pooled path matches. Guarded by m_lock (only touched in the reader's DATA handler).
         uint64_t recvSinceWU { 0 };
+        // http2_windowupdate_midstream_cadence: the FIRST stream WU fires only after the full 2 MiB
+        // initial window is consumed (then window/4 − one max-frame cadence); this per-stream latch marks it.
+        bool firstWUFired { false };
     };
 
     std::unique_ptr<DriftstackTLS13Client> m_tls;       // owned; outlives the reader
