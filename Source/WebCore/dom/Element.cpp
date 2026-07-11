@@ -2506,6 +2506,26 @@ Ref<DOMRectList> Element::getClientRects()
 {
     protect(document())->updateLayoutIgnorePendingStylesheets({ LayoutOptions::TreatContentVisibilityHiddenAsVisible, LayoutOptions::TreatContentVisibilityAutoAsVisible }, this);
 
+#if PLATFORM(DRIFTSTACK)
+    // W3145 (2nd-audit fix): keep getClientRects coherent with the SERVED getBoundingClientRect/offsetWidth for
+    // the 5 exotic glyphHash codepoints (see driftstackServeGlyphHashGeom + the gbcr override at getBoundingClientRect).
+    // getClientRects returned the un-overridden Mac-natural quad while gbcr returned the served int/height — a
+    // detector comparing getClientRects()[0] to getBoundingClientRect() would see the divergence (a real iPhone's
+    // single-box element reports IDENTICAL rects). Return a single served rect (same client top/left as gbcr, served
+    // width/height) so the two APIs agree. Same narrow trigger as gbcr — arbitrary getClientRects fall through.
+    {
+        float sw = 0, sh = 0;
+        if (driftstackServeGlyphHashGeom(*this, sw, sh)) {
+            FloatRect rect = boundingClientRect();
+            rect.setWidth(sw);
+            rect.setHeight(sh);
+            Vector<FloatQuad> servedQuads;
+            servedQuads.append(FloatQuad { rect });
+            return DOMRectList::create(servedQuads);
+        }
+    }
+#endif
+
     CheckedPtr renderer = this->renderer();
 
     Vector<FloatQuad> quads;
