@@ -1721,7 +1721,13 @@ bool DriftstackNetworkLoader::tryFollowRedirect(const WebCore::ResourceResponse&
 
     // Build the redirected request (RFC 7231 §6.4): 307/308 preserve method+body;
     // 301/302/303 become GET and drop the body (HEAD stays HEAD).
-    WebCore::ResourceRequest newRequest = m_request;
+    // W3101 (NetworkProcess ~dtor double-free fix): tryFollowRedirect runs on loaderQueue, so this is a
+    // cross-thread copy of m_request. A plain copy SHARES m_request's WTF::String StringImpls (which m_request
+    // in turn shares with the main-thread-owned task ResourceRequest). newRequest is later destroyed on the main
+    // thread (the willPerformHTTPRedirection block), so the non-atomic StringImpl refcount ops race — corrupting
+    // m_request's Vector<String> and double-freeing it at ~DriftstackNetworkLoader. isolatedCopy() gives newRequest
+    // independent StringImpls (deep char copy, no shared refcount) — value-equivalent redirect, no cross-thread race.
+    WebCore::ResourceRequest newRequest = m_request.isolatedCopy();
     newRequest.setURL(URL { redirectURL });  // setURL takes URL&&; redirectURL reused below for origin checks
     bool preserveBody = (statusCode == httpStatus307TemporaryRedirect || statusCode == httpStatus308PermanentRedirect);
     if (!preserveBody) {
