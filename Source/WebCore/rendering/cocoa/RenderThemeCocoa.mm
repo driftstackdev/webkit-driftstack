@@ -4993,6 +4993,27 @@ void RenderThemeCocoa::adjustButtonStyle(RenderStyle& style, const Element* elem
         fontDescription.setWeight(boldWeightValue());
         style.setFontDescription(WTF::move(fontDescription));
     }
+    // W3097-forms-geom (2026-07-11, systematic 18.6 same-probe fork-vs-real diff): with FormControlRefresh OFF
+    // (Family-A), <button> + input[type=button/submit] fall through to the Mac AppKit push-button geometry
+    // (min-height 15px, padding-left 6px, border-radius 7.5px, 'none solid' 0px border) instead of the iOS
+    // button. Real iOS button (18.6 AND 26.x) == min-height 20px (ControlBaseHeight 20 / ControlBaseFontSize 11
+    // * font-size) + padding 0 1em. input/textarea already revert via html.css; only the native BUTTON path
+    // leaks Mac metrics. Restore the iOS button min-height + inline padding (font-scaled, mirrors
+    // RenderThemeIOS::adjustButtonStyle). LAUNCH-SAFE BY CONSTRUCTION: at 26.x adjustButtonStyleForVectorBased
+    // Controls returns true → the early-return above fires → this never runs. (border 1px-solid + border-radius
+    // 10px are theme-painted — handled separately; verify vs real 18.6 mm.uaStylesheet / uaStylesheet.computed.)
+    if (style.height().isAuto())
+        style.setMinHeight(Style::MinimumSize::Fixed { 20.0f / 11.0f * style.fontDescription().computedSize() });
+    applyEmPadding(style, 1.0f, 0.0f);
+    // border: real iOS button = 1px solid on ALL sides. The Mac push-button path leaves top/bottom
+    // border-style:none width:0 ('none solid' 0px). Force 1px solid uniformly (zoom-scaled like the Mac
+    // 2px pattern @RenderThemeMac.mm:1720); border-color is left to the html.css -webkit-control-background.
+    // (min-height above already yields the correct 10px pill radius since it is height-derived.)
+    auto buttonBorderWidth = 1_css_px * style.usedZoom();
+    style.setBorderTopWidth(buttonBorderWidth);    style.setBorderTopStyle(BorderStyle::Solid);
+    style.setBorderRightWidth(buttonBorderWidth);  style.setBorderRightStyle(BorderStyle::Solid);
+    style.setBorderBottomWidth(buttonBorderWidth); style.setBorderBottomStyle(BorderStyle::Solid);
+    style.setBorderLeftWidth(buttonBorderWidth);   style.setBorderLeftStyle(BorderStyle::Solid);
     // NOTE: the file-input border-radius is NOT handled here — input[type=file] has appearance:None
     // (autoAppearanceForElement), so it never reaches adjustButtonStyle. It is set in RenderTheme::adjustStyle
     // before the None early-return instead (W3097-forms; the 1740a4bc27 attempt here was inert).
