@@ -1431,7 +1431,23 @@ int LocalDOMWindow::innerHeight() const
         const auto& args = document->viewportArguments();
         bool noViewportMeta = (args.width == ViewportArguments::ValueAuto && !args.widthWasExplicit);
         if (noViewportMeta) {
-            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep).
+            // W3148: the no-<meta viewport> legacy layout is 980 CSS-px WIDE (fixed), so the reported
+            // innerHeight = the device's meta-viewport visible height scaled INTO that 980-px layout:
+            //   innerHeight_noMeta = round(innerHeight_meta * 980 / screenWidth).
+            // The prior Safari-version-keyed constants (1741 Family-B / 1653 Family-A) were width-BLIND —
+            // exact only for the 402-CSS-wide models (iPhone 17 / 16 Pro: 980*714/402=1741, 980*678/402=1653,
+            // both real-device byte-verified) but WRONG for every OTHER width: a 440-wide Pro Max = 980*796/440
+            // = 1773 (not 1741 — a 32px tell), a 390-wide iPhone 14 = 1756. Derive per-model from the SAME
+            // config fields the meta path (innerHeight L~1460) + innerWidth (screenWidth L~1375) already read.
+            // Byte-IDENTICAL to the old constant for every 402-wide launch + 26.0/26.3-flip archetype (the
+            // formula yields 1741/1653 there), so ZERO launch/flip change; only non-402 models shift to their
+            // physically-correct height. (Non-402 exact values are formula-derived from the 980-px legacy-
+            // layout mechanics + the two captured 402 cells; capture-confirmable per non-402 model.)
+            auto& cfg = DriftstackArchetypeConfig::singleton();
+            if (cfg.innerHeight() > 0 && cfg.screenWidth() > 0)
+                return static_cast<int>(std::lround(cfg.innerHeight() * 980.0 / cfg.screenWidth()));
+            // 2026-06-27 sweep: live getenv, NOT static-cached (silently-inert-gate sweep). Fallback for a
+            // config-less matrix model (no regression vs the prior Safari-version-keyed constants).
             const int s_legacyHeight = []() {
                 const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
                 if (!archetype || !archetype[0])
