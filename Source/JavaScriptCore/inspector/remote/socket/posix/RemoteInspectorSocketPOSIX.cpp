@@ -136,7 +136,16 @@ std::optional<PlatformSocketType> listen(const char* addressStr, uint16_t port)
         return std::nullopt;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    // A backlog of 1 refuses a second concurrent connect() with ECONNREFUSED. That is too tight for the
+    // warm-tabs harness, which can burst connections onto the session's WD port (an in-flight request + the
+    // switch's navigate POST) while the single accept loop is momentarily busy during the new tab's WebContent
+    // process spawn — a contributor to the warm-switch -1004. Allow a modest accept queue (complements the
+    // acceptInetSocketIfEnabled transient-error guard; both cut the refused window).
+    error = ::listen(fdListen, 128);
+#else
     error = ::listen(fdListen, 1);
+#endif
     if (error < 0) {
         LOG_ERROR("listen() failed, errno = %d", errno);
 #if PLATFORM(DRIFTSTACK)
