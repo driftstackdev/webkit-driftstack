@@ -101,6 +101,9 @@ std::optional<ConnectionID> RemoteInspectorSocketEndpoint::listenInet(const char
     if (!connection->isListening())
         return std::nullopt;
 
+#if PLATFORM(DRIFTSTACK)
+    WTFLogAlways("[Driftstack-WDLC] listenInet(): WD listener CREATED port=%u fd=%d", static_cast<unsigned>(port), static_cast<int>(connection->socket));
+#endif
     m_listeners.add(id, WTF::move(connection));
     wakeupWorkerThread();
     return id;
@@ -224,6 +227,9 @@ void RemoteInspectorSocketEndpoint::disconnect(ConnectionID id)
     Locker locker { m_connectionsLock };
 
     if (const auto& connection = m_listeners.get(id)) {
+#if PLATFORM(DRIFTSTACK)
+        WTFLogAlways("[Driftstack-WDLC] disconnect(): CLOSING listener fd=%d (explicit session teardown) — port now has NO listener until a re-listen", static_cast<int>(connection->socket));
+#endif
         m_listeners.remove(id);
         Socket::close(connection->socket);
         locker.unlockEarly();
@@ -259,6 +265,9 @@ void RemoteInspectorSocketEndpoint::invalidateListener(Listener& listener)
         const auto& connection = keyValue.value;
 
         if (&connection->listener == &listener) {
+#if PLATFORM(DRIFTSTACK)
+            WTFLogAlways("[Driftstack-WDLC] invalidateListener(): CLOSING listener fd=%d — port now has NO listener until a re-listen (if this fires during a warm switch, it IS the -1004 cause)", static_cast<int>(connection->socket));
+#endif
             Socket::close(connection->socket);
             return true;
         }
@@ -355,6 +364,12 @@ void RemoteInspectorSocketEndpoint::acceptInetSocketIfEnabled(ConnectionID id)
 
     Locker locker { m_connectionsLock };
     if (const auto& connection = m_listeners.get(id)) {
+#if PLATFORM(DRIFTSTACK)
+        // W3140: sentinel — if poll() said readable but the WD listen socket is NOT listening, the fd was
+        // closed out from under us (e.g. by a WebContent spawn) — the smoking gun for the warm-tab -1004.
+        if (!Socket::isListening(connection->socket))
+            WTFLogAlways("[Driftstack-WDLC] accept: WD listener fd=%d readable but NOT listening — fd closed externally (WebContent spawn?) = the -1004 race", static_cast<int>(connection->socket));
+#endif
         if (auto socket = Socket::accept(connection->socket)) {
             // Need to unlock before calling createClient as it also attempts to lock.
             locker.unlockEarly();

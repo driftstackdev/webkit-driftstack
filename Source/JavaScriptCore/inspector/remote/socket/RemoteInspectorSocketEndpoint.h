@@ -149,11 +149,20 @@ protected:
             if (auto newSocket = Socket::listen(address.utf8().data(), port)) {
                 if (setSocket(*newSocket)) {
                     retryInterval = initialRetryInterval;
+#if PLATFORM(DRIFTSTACK)
+                    // W3140 WD-listener lifecycle (always-on, low-frequency): pins the warm-tab -1004 —
+                    // a (re)bind means the listener was DOWN until now. If this logs DURING a warm switch,
+                    // the gap between a close (below) and this line is the ECONNREFUSED window the harness hit.
+                    WTFLogAlways("[Driftstack-WDLC] listener (re)bound: port=%u fd=%d", static_cast<unsigned>(port), static_cast<int>(socket));
+#endif
                     return true;
                 }
                 Socket::close(*newSocket);
             }
 
+#if PLATFORM(DRIFTSTACK)
+            WTFLogAlways("[Driftstack-WDLC] listen() FAILED: port=%u errno=%d -> backoff %.0f ms (NO LISTENER during backoff = the -1004 window)", static_cast<unsigned>(port), errno, retryInterval.milliseconds());
+#endif
             nextRetryTime = MonotonicTime::now() + retryInterval;
             retryInterval = std::min<Seconds>(retryInterval * 2, maxRetryInterval);
 
