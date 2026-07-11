@@ -5155,6 +5155,14 @@ void RenderThemeCocoa::adjustTextFieldStyle(RenderStyle& style, const Element* e
     if (RefPtr input = dynamicDowncast<HTMLInputElement>(element);
         input && (input->isDateField() || input->isTimeField() || input->isDateTimeLocalField()
             || input->isMonthField() || input->isWeekField())) {
+        // W3132: date/time-family inputs also need the iOS 20px min-height on this refresh-OFF (Family-A 18.6)
+        // path. The W1136 injection that supplies it lives in adjustTextFieldStyleForVectorBasedControls,
+        // which short-circuited above (formControlRefreshEnabled() OFF for Family-A) — so a real-18.6 date/time
+        // input fell to min-height:0 / height:18 where a real iPhone gives min-height:20 BAND-UNIFORMLY (verified
+        // uaStylesheet.computed.input_date/input_time = 20px on both Safari-18.6 AND 26.4). Applies to enabled AND
+        // disabled date/time inputs (the min-height is not color-gated). Mirrors W1136; guarded so author heights win.
+        if (style.logicalHeight().isAuto())
+            style.setLogicalMinHeight(Style::MinimumSize::Fixed { 20.f });
         // DISABLED date/time inputs keep the html.css:516-518 :disabled -apple-system-tertiary-label gray;
         // the pre-refresh blue is for ENABLED date/time only. !hasExplicitlySetColor is author-origin-only
         // (StyleBuilderCustom.h:811) so it does NOT block the UA :disabled cascade rule — exclude disabled
@@ -5229,6 +5237,26 @@ void RenderThemeCocoa::adjustMenuListStyle(RenderStyle& style, const Element* el
 #endif
 
     RenderTheme::adjustMenuListStyle(style, element);
+
+#if PLATFORM(DRIFTSTACK)
+    // W3132: restore the iOS <select> intrinsic metrics on the refresh-OFF (Family-A 18.6) path too.
+    // The W1135 injection (min-height:20px / border-radius:10px) lives in
+    // adjustMenuListStyleForVectorBasedControls, which short-circuits when formControlRefreshEnabled()
+    // is false — and WebPage.cpp (W3097) turns that setting OFF for Family-A (18.6). So a real-18.6
+    // <select> fell through to the base RenderTheme min-height:0 / border-radius:0 where a real iPhone
+    // gives min-height:20px / border-radius:10px BAND-UNIFORMLY (verified: uaStylesheet.computed.select
+    // = 20px/10px on both aio-iPhone_16_Pro Safari-18.6 AND aio-iPhone_17 Safari-26.4). Family-B (refresh
+    // on, incl the 26.4 launch) already returned above with the vector-path 20/10, so this touches ONLY
+    // the refresh-off band — the same iOS-metrics-on-the-Mac-build hardcode as W1135 (RenderThemeIOS
+    // minimumControlSize/applyCommonNonCapsuleBorderRadius are IOS_FAMILY-only, absent here). Guarded so
+    // author-set values still win.
+    if (element && is<HTMLSelectElement>(*element)) {
+        if (style.logicalHeight().isAuto())
+            style.setLogicalMinHeight(Style::MinimumSize::Fixed { 20.f });
+        if (!style.hasExplicitlySetBorderRadius())
+            style.setBorderRadius({ 10_css_px, 10_css_px });
+    }
+#endif
 }
 
 bool RenderThemeCocoa::paintMenuList(const RenderElement& box, const PaintInfo& paintInfo, const FloatRect& rect)
