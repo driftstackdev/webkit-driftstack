@@ -158,7 +158,16 @@ std::optional<PlatformSocketType> accept(PlatformSocketType socket)
     if (fd >= 0)
         return fd;
 
+#if PLATFORM(DRIFTSTACK)
+    // Preserve errno across LOG_ERROR (WTFReportError runs in release builds and can clobber errno) so the
+    // caller — RemoteInspectorSocketEndpoint::acceptInetSocketIfEnabled — can classify a transient accept()
+    // failure (retry, keep listening) versus a fatal one (re-bind). Warm-tab -1004 fix.
+    int driftstackAcceptErrno = errno;
+#endif
     LOG_ERROR("accept(inet) error (errno = %d)", errno);
+#if PLATFORM(DRIFTSTACK)
+    errno = driftstackAcceptErrno;
+#endif
     return std::nullopt;
 }
 

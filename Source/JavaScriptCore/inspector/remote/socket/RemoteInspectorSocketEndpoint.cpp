@@ -363,6 +363,21 @@ void RemoteInspectorSocketEndpoint::acceptInetSocketIfEnabled(ConnectionID id)
 
             Socket::close(*socket);
         } else {
+#if PLATFORM(DRIFTSTACK)
+            // Driftstack warm-tab switch fix: poll() reported the listen socket readable but accept() failed.
+            // The default recovery below (close the listen socket + re-bind/listen on the next worker loop)
+            // opens a window where the session's WD port has NO listener, so a client connect() landing in
+            // that window gets ECONNREFUSED (-1004). That is exactly what the harness hits when a warm-tab
+            // WebContent spawn causes a *transient* accept() failure (ECONNABORTED / EINTR / EMFILE from fd
+            // pressure). Only a genuinely broken listen socket (EBADF/EINVAL/ENOTSOCK) needs the re-bind; for
+            // every other errno keep the listener up and retry accept on the next poll loop.
+            int acceptErrno = errno;
+            if (acceptErrno != EBADF && acceptErrno != EINVAL && acceptErrno != ENOTSOCK) {
+                WTFLogAlways("[Driftstack] WD accept() transient failure (errno=%d) — keeping the listen socket, retrying (warm-tab -1004 guard)", acceptErrno);
+                return;
+            }
+            WTFLogAlways("[Driftstack] WD accept() fatal failure (errno=%d) — re-binding the listen socket", acceptErrno);
+#endif
             // If accept() returns error, we have to start over with bind() and listen().
             // By closing socket here, listen() will be called again at the next loop of worker thread.
             Socket::close(connection->socket);
