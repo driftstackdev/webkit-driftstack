@@ -1492,7 +1492,14 @@ static String driftstackPathBPriorityHeader(const String& secFetchDest, const St
 {
     // RFC 9218 priority — per-resource-type u-value, byte-matching real iPhone Safari
     // (gt-registry http2_priority_rfc9218; 4 real-device BS cells iOS 18.6–26.5, byte-identical).
-    if (secFetchDest == "document"_s || accept.contains("text/html"_s))
+    // W3146 (2nd-audit fix): the real RFC 9218 matrix keys PURELY on sec-fetch-dest (gt-registry
+    // http2_priority_rfc9218: "document(navigation)=u=0; fetch/xhr (dest=empty)=u=3"). The bare
+    // accept.contains("text/html") over-matched a FETCH/XHR that requests text/html (dest="empty") →
+    // it returned u=0 (document) where a real iPhone returns u=3 (dest-keyed). Restrict the accept
+    // belt to a sec-fetch-LESS request (secFetchDest EMPTY, i.e. "" — a nav with no Sec-Fetch-Dest), so
+    // a fetch (dest="empty", NOT isEmpty) falls through to the correct u=3. Navigations (dest="document")
+    // are unchanged; the gate's generic-fetch cell (u=3) is unaffected.
+    if (secFetchDest == "document"_s || (secFetchDest.isEmpty() && accept.contains("text/html"_s)))
         return "u=0, i"_s;  // navigation / document
     if (secFetchDest == "style"_s || secFetchDest == "script"_s)
         return "u=1, i"_s;  // CSS, classic script, ES module (module's sec-fetch-dest is "script")
