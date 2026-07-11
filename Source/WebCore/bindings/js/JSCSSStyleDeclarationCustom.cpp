@@ -89,7 +89,16 @@ void driftstackReifyFamilyACSSAccessorsOnStyleDeclaration(JSC::VM& vm, JSDOMGlob
     auto* document = dynamicDowncast<Document>(globalObject.scriptExecutionContext());
     if (!document || document->settingsValues().cssDescriptorBlocksEnabled)
         return; // Safari 26.x: post-split, accessors stay on CSSStyleProperties.prototype (launch-safe no-op).
-    reifyStaticProperties(vm, JSCSSStyleProperties::info(), JSCSSStylePropertiesPrototypeTableValues, styleDeclProto);
+    // Reify every accessor EXCEPT entry [0] ("constructor"). That entry maps to jsCSSStylePropertiesConstructor,
+    // whose getter throws a TypeError when its slot base is CSSStyleDeclaration.prototype (a JSCSSStyleDeclaration-
+    // Prototype, not a JSCSSStylePropertiesPrototype); the base JSCSSStyleDeclarationPrototype reify already
+    // installed the correct CSSStyleDeclaration constructor getter, and "constructor" stays in the name set either
+    // way. Every other entry (cssFloat + the CSS property accessors) is an instance getter that works on the
+    // element.style JSCSSStyleProperties instance. WebCore always emits "constructor" first.
+    std::span<const HashTableValue> accessorsWithoutConstructor { JSCSSStylePropertiesPrototypeTableValues };
+    if (!accessorsWithoutConstructor.empty() && accessorsWithoutConstructor[0].m_key == "constructor"_s)
+        accessorsWithoutConstructor = accessorsWithoutConstructor.subspan(1);
+    reifyStaticProperties(vm, JSCSSStyleProperties::info(), accessorsWithoutConstructor, styleDeclProto);
 
     // The generated table is 26.x-based (1553 accessors). Real Safari 18.6 CSSStyleDeclaration.prototype has
     // exactly 1450 own properties — the 26.x-added CSS properties did not exist yet. Delete the 113 post-18.6

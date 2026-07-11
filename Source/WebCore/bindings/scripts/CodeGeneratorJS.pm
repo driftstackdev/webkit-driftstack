@@ -5312,6 +5312,18 @@ sub GenerateImplementation
     unless (ShouldUseGlobalObjectPrototype($interface) || ShouldUseOrdinaryObjectPrototype($interface)) {
         push(@implContent, "JSObject* ${className}::createPrototype(VM& vm, JSDOMGlobalObject& globalObject)\n");
         push(@implContent, "{\n");
+        if ($interface->type->name eq "CSSStyleProperties") {
+            push(@implContent, "#if PLATFORM(DRIFTSTACK)\n");
+            push(@implContent, "    // Family-A pre-split (CSSStyleDeclaration-186): the CSSStyleProperties interface is hidden in\n");
+            push(@implContent, "    // Safari 18.6, so element.style must chain to CSSStyleDeclaration.prototype (the single merged\n");
+            push(@implContent, "    // pre-split object). Returning it here makes the wrapper structure store it, so element.style\n");
+            push(@implContent, "    // .__proto__ === window.CSSStyleDeclaration.prototype and element.style.constructor.name ===\n");
+            push(@implContent, "    // CSSStyleDeclaration. Gated on !cssDescriptorBlocksEnabled; the 26.x launch band keeps its own\n");
+            push(@implContent, "    // split CSSStyleProperties prototype via the normal path below.\n");
+            push(@implContent, "    if (auto* driftstackDoc = dynamicDowncast<Document>(globalObject.scriptExecutionContext()); driftstackDoc && !driftstackDoc->settingsValues().cssDescriptorBlocksEnabled)\n");
+            push(@implContent, "        return JSCSSStyleDeclaration::prototype(vm, globalObject);\n");
+            push(@implContent, "#endif\n");
+        }
         if ($interface->parentType) {
             my $parentClassNameForPrototype = "JS" . $interface->parentType->name;
             push(@implContent, "    auto* structure = ${className}Prototype::createStructure(vm, &globalObject, ${parentClassNameForPrototype}::prototype(vm, globalObject));\n");
