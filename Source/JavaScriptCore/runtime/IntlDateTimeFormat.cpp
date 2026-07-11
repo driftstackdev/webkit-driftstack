@@ -1948,6 +1948,43 @@ JSValue IntlDateTimeFormat::formatRange(JSGlobalObject* globalObject, double sta
     Vector<char16_t, 32> buffer(std::span<const char16_t> { formattedStringPointer, static_cast<size_t>(formattedStringLength) });
     replaceNarrowNoBreakSpaceOrThinSpaceWithNormalSpace(buffer);
 
+#if PLATFORM(DRIFTSTACK)
+    // W3149 (2nd-audit): mirror format()'s timeZoneName splice into the NON-equal interval branch (the
+    // equal branch above already delegates to format(), which is covered). Without this, formatRange
+    // leaks the HOST ICU display name for the 26 iOS/macOS-divergent zones (e.g. "Taiwan Standard Time"
+    // vs iPhone "Taipei Standard Time") while format()/formatToParts serve the iPhone name — an intra-object
+    // coherence tell. Gated on driftstackIPhoneZoneNameForVariant returning non-null, so every common range
+    // (no timeZoneName / non-divergent zone) is byte-UNCHANGED. Field indices are valid on `buffer`
+    // (space-normalize is length-preserving). Any ICU failure falls through to the un-spliced return.
+    // (Asuncion's DST offset-name is intentionally NOT spliced here — it needs the hour/day pre-shift to
+    // stay coherent, which formatRange does not apply; that is a separate, narrower residual.)
+    if (m_timeZoneName != TimeZoneName::None) {
+        if (const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName))) {
+            UErrorCode zstatus = U_ZERO_ERROR;
+            auto ziter = std::unique_ptr<UConstrainedFieldPosition, ICUDeleter<ucfpos_close>>(ucfpos_open(&zstatus));
+            if (U_SUCCESS(zstatus)) {
+                for (;;) {
+                    bool znext = ufmtval_nextPosition(formattedValue, ziter.get(), &zstatus);
+                    if (U_FAILURE(zstatus) || !znext)
+                        break;
+                    if (ucfpos_getCategory(ziter.get(), &zstatus) != UFIELD_CATEGORY_DATE || U_FAILURE(zstatus))
+                        continue;
+                    int32_t zfield = ucfpos_getField(ziter.get(), &zstatus);
+                    if (U_FAILURE(zstatus) || zfield < 0 || !driftstackIsTimeZoneField(UDateFormatField(zfield)))
+                        continue;
+                    int32_t zb = 0, ze = 0;
+                    ucfpos_getIndexes(ziter.get(), &zb, &ze, &zstatus);
+                    if (U_FAILURE(zstatus) || zb < 0 || zb > ze || ze > static_cast<int32_t>(buffer.size()))
+                        break;
+                    auto head = String(buffer.span().first(static_cast<size_t>(zb)));
+                    auto tail = String(buffer.span().subspan(static_cast<size_t>(ze)));
+                    return jsString(vm, makeString(head, String::fromUTF8(iosName), tail));
+                }
+            }
+        }
+    }
+#endif
+
     return jsString(vm, String(WTF::move(buffer)));
 }
 
@@ -2082,6 +2119,15 @@ JSValue IntlDateTimeFormat::formatRangeToParts(JSGlobalObject* globalObject, dou
         return createIntlPartObjectWithSource(globalObject, type, value, sourceType(beginIndex));
     };
 
+#if PLATFORM(DRIFTSTACK)
+    // W3149 (2nd-audit): the iPhone timeZoneName override for the 26 iOS/macOS-divergent zones, spliced
+    // into the timeZoneName part below so formatRangeToParts stays coherent with format()/formatToParts
+    // (which serve the iPhone name). nullptr (common case) => the ICU substring value is used unchanged.
+    const char* iosZoneName = nullptr;
+    if (m_timeZoneName != TimeZoneName::None)
+        iosZoneName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
+#endif
+
     int32_t resultLength = resultStringView.length();
     int32_t previousEndIndex = 0;
     while (true) {
@@ -2144,6 +2190,25 @@ JSValue IntlDateTimeFormat::formatRangeToParts(JSGlobalObject* globalObject, dou
         ASSERT(category == UFIELD_CATEGORY_DATE);
 
         auto type = jsNontrivialString(vm, partTypeString(UDateFormatField(fieldType)));
+#if PLATFORM(DRIFTSTACK)
+        // W3149: for a divergent zone, emit the iPhone timeZoneName value instead of the host ICU substring
+        // (keeps formatRangeToParts coherent with format()/formatToParts). source follows the field position.
+        if (iosZoneName && driftstackIsTimeZoneField(UDateFormatField(fieldType))) {
+            auto zoneSource = [&](int32_t index) -> JSString* {
+                if (startRange.contains(index))
+                    return startRangeString;
+                if (endRange.contains(index))
+                    return endRangeString;
+                return sharedString;
+            };
+            auto zoneValue = jsString(vm, String::fromUTF8(iosZoneName));
+            JSObject* zonePart = createIntlPartObjectWithSource(globalObject, type, zoneValue, zoneSource(beginIndex));
+            parts->push(globalObject, zonePart);
+            RETURN_IF_EXCEPTION(scope, { });
+            previousEndIndex = endIndex;
+            continue;
+        }
+#endif
         JSObject* part = createPart(type, beginIndex, endIndex - beginIndex);
         parts->push(globalObject, part);
         RETURN_IF_EXCEPTION(scope, { });
