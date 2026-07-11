@@ -60,6 +60,21 @@ static void* keyValueObservingContext = &keyValueObservingContext;
 static const int testHeaderBannerHeight = 42;
 static const int testFooterBannerHeight = 58;
 
+#if PLATFORM(DRIFTSTACK)
+// Warm-tabs fix (2026-07-11): the page-load stall watchdog (W2857) must be PER-TAB. A single per-controller
+// NSTimer both (a) got clobbered when any other tab started a navigation and (b) on fire acted on _webView —
+// the CURRENTLY visible tab — instead of the tab that armed it, so a background tab's stall surfaced a spurious
+// "page took too long" error page on the tab the user was actually looking at. Key the timer to the navigating
+// WKWebView via an associated object; fire on THAT webView only if it is still loading.
+static char kDriftstackNavWatchdogKey;
+static inline void driftstackDisarmNavWatchdog(WKWebView *webView)
+{
+    NSTimer *watchdog = objc_getAssociatedObject(webView, &kDriftstackNavWatchdogKey);
+    [watchdog invalidate];
+    objc_setAssociatedObject(webView, &kDriftstackNavWatchdogKey, nil, OBJC_ASSOCIATION_RETAIN);
+}
+#endif
+
 // Driftstack (W2649): make a FAILED customer load VISIBLE. When a navigation genuinely fails
 // (DNS/connect/cert/timeout/proxy error) the customer browser window otherwise shows a blank white
 // page with no indication of what went wrong — founder report. We render a neutral, Safari-like
@@ -336,7 +351,7 @@ static NSInteger driftstackWarmTabsN(void)
     NSView *_driftTabOverlay;             // the iOS-style tab-overview overlay (nil when closed)
     BOOL _zoomTextOnly;
     BOOL _isPrivateBrowsingWindow;
-    NSTimer *_driftstackNavWatchdog;      // W2857 (founder 2026-06-24): page-load STALL watchdog (no-commit timeout)
+    // W2857 page-load STALL watchdog is now PER-TAB (associated object kDriftstackNavWatchdogKey), not a controller ivar.
 
     BOOL _useShrinkToFit;
 
@@ -348,6 +363,7 @@ static NSInteger driftstackWarmTabsN(void)
     NSTextField *_findMatchCountLabel;
     FindBarFieldEditor *_findBarFieldEditor;
     id _findBarClickMonitor;
+    id _tapOverlayClickMonitor;   // Driftstack DRIFTSTACK_IOS_CURSOR tap-ring local event monitor (removed in dealloc; was leaked per window)
 
     BOOL _findBarVisible;
     BOOL _usingFindDelegate;
@@ -509,6 +525,12 @@ static NSInteger driftstackWarmTabsN(void)
     NSInteger newActive = [_tabManager closeTabAtIndex:sender.tag];
     if (newActive < 0)
         return;                              // refused (last tab) — nothing to do
+    // Warm-tabs fix (2026-07-11): drop the closed tab from the warm LRU too. _warmTabLRU is a controller ivar
+    // that closeTabAtIndex: (a DriftstackTabManager method) cannot touch, so a closed automation tab used to
+    // linger in the LRU — leaking its WKWebView + WebContent, and (worse) stalling eviction: a later
+    // driftEvictWarmTabsBeyondN picks the stale entry as victim, fails to find its index (idx<0), and breaks,
+    // so the warm set can grow past N.
+    [_warmTabLRU removeObject:closing];
     [closing removeFromSuperview];           // drop the closed tab's webview from the container
     WKWebView *active = [_tabManager activeWebView];
     if (active)
@@ -754,7 +776,7 @@ static NSInteger driftstackWarmTabsN(void)
         [tapOverlay setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
         [containerView addSubview:tapOverlay positioned:NSWindowAbove relativeTo:_webView];
         __weak DriftstackTapOverlayView *weakTapOverlay = tapOverlay;
-        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *event) {
+        _tapOverlayClickMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown handler:^NSEvent *(NSEvent *event) {
             DriftstackTapOverlayView *overlay = weakTapOverlay;
             if (overlay && event.window == overlay.window) {
                 NSPoint point = [overlay convertPoint:event.locationInWindow fromView:nil];
@@ -832,6 +854,8 @@ static NSInteger driftstackWarmTabsN(void)
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     if (_findBarClickMonitor)
         [NSEvent removeMonitor:_findBarClickMonitor];
+    if (_tapOverlayClickMonitor)
+        [NSEvent removeMonitor:_tapOverlayClickMonitor];
     _webView._findDelegate = nil;
     _textFinder.client = nil;
     _textFinder.findBarContainer = nil;
@@ -1715,20 +1739,24 @@ static BOOL isJavaScriptURL(NSURL *url)
     // otherwise shows an endless blank spinner ("loading then nothing"). Arm a watchdog; if no didCommit /
     // didFinish / didFailProvisional fires within the window, surface a timeout error page (W2649) so the
     // stall is VISIBLE in the stream + stop the hung load. Disarmed the moment the load commits/finishes/fails.
-    [_driftstackNavWatchdog invalidate];
+    driftstackDisarmNavWatchdog(webView);
     double watchdogSecs = 45.0;
     const char *watchdogEnv = getenv("DRIFTSTACK_NAV_WATCHDOG_SEC");
     if (watchdogEnv && watchdogEnv[0]) { double v = atof(watchdogEnv); if (v > 0) watchdogSecs = v; }
     __weak WK2BrowserWindowController *weakSelf = self;
-    _driftstackNavWatchdog = [NSTimer scheduledTimerWithTimeInterval:watchdogSecs repeats:NO block:^(NSTimer *timer) {
+    __weak WKWebView *weakWebView = webView;
+    NSTimer *watchdog = [NSTimer scheduledTimerWithTimeInterval:watchdogSecs repeats:NO block:^(NSTimer *timer) {
         WK2BrowserWindowController *strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf->_webView)
-            return;
+        WKWebView *strongWebView = weakWebView;
+        if (!strongSelf || !strongWebView || !strongWebView.loading)
+            return;   // the tab that armed this watchdog is gone, or already stopped loading — never touch _webView
+        objc_setAssociatedObject(strongWebView, &kDriftstackNavWatchdogKey, nil, OBJC_ASSOCIATION_RETAIN);
         NSError *timeoutError = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorTimedOut userInfo:@{
             NSLocalizedDescriptionKey: [NSString stringWithFormat:@"The page took too long to respond (no response within %.0f seconds). It may be blocked, or the proxy / network is unreachable.", watchdogSecs] }];
-        [strongSelf->_webView stopLoading];
-        driftstackShowLoadFailurePage(strongSelf->_webView, timeoutError);
+        [strongWebView stopLoading];
+        driftstackShowLoadFailurePage(strongWebView, timeoutError);
     }];
+    objc_setAssociatedObject(webView, &kDriftstackNavWatchdogKey, watchdog, OBJC_ASSOCIATION_RETAIN);
 #endif
     [self validateToolbar];
 }
@@ -1742,7 +1770,7 @@ static BOOL isJavaScriptURL(NSURL *url)
 {
     LOG(@"didFailProvisionalNavigation: %@navigation, error: %@", navigation, error);
 #if PLATFORM(DRIFTSTACK)
-    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: real failure fired — disarm the stall watchdog (W2649 handles it)
+    driftstackDisarmNavWatchdog(webView);  // W2857: real failure fired — disarm this tab's stall watchdog (W2649 handles it)
 #endif
     // Driftstack (W2649): show an on-screen error page so a failed customer load is VISIBLE in the
     // stream (not a blank white page). Skips the -999/cancelled supersede inside the helper.
@@ -1753,7 +1781,7 @@ static BOOL isJavaScriptURL(NSURL *url)
 {
     LOG(@"didCommitNavigation: %@", navigation);
 #if PLATFORM(DRIFTSTACK)
-    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: response committed (page rendering) — disarm stall watchdog
+    driftstackDisarmNavWatchdog(webView);  // W2857: response committed (page rendering) — disarm this tab's stall watchdog
 #endif
     [self updateTitle:nil];
 }
@@ -1762,7 +1790,7 @@ static BOOL isJavaScriptURL(NSURL *url)
 {
     LOG(@"didFinishNavigation: %@", navigation);
 #if PLATFORM(DRIFTSTACK)
-    [_driftstackNavWatchdog invalidate]; _driftstackNavWatchdog = nil;  // W2857: load finished — disarm stall watchdog
+    driftstackDisarmNavWatchdog(webView);  // W2857: load finished — disarm this tab's stall watchdog
 #endif
     // Dev-only network-fingerprint capture: DRIFTSTACK_DUMP_BODY_TEXT=<file> → after load,
     // write document.body.innerText to <file>. Used to extract the rendered JSON of a top-level
