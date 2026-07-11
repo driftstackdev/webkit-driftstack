@@ -3446,6 +3446,28 @@ bool RenderThemeCocoa::adjustButtonStyleForVectorBasedControls(RenderStyle& styl
         else
             style.setColor(buttonTextColor(styleColorOptions, isEnabled));
     }
+#if PLATFORM(DRIFTSTACK)
+    // W3142: the submit-button font-weight normalize (>=26.2 launch → 400, <26.2 → 700) was nested INSIDE
+    // adjustStyleForSubmitButton, which only runs under !hasExplicitlySetColor — so an author-COLORED submit
+    // (e.g. <input type=submit style="color:red">) SKIPPED the normalize and leaked the Mac-emphasized 700 at
+    // >=26.2 (incl the 26.4 LAUNCH) where a real iPhone submit is 400 (aio-iPhone_17 26.4 input_submit
+    // font-weight=400; author color does NOT affect the UA default weight). Apply the SAME normalize for the
+    // colored-submit case the block above cannot reach; color-unset submits still get it via the lambda, so
+    // this only fills the missed branch (no double-apply). Weight-only — does not touch the author color.
+    if (style.hasExplicitlySetColor() && isSubmitStyleButton(element)) {
+        if (driftstackArchetypeSafariAtLeastCocoa(26, 2)) {
+            if (style.fontDescription().weight() >= boldWeightValue()) {
+                auto submitFontDescription = style.fontDescription();
+                submitFontDescription.setWeight(normalWeightValue());
+                style.setFontDescription(WTF::move(submitFontDescription));
+            }
+        } else if (style.fontDescription().weight() < boldWeightValue()) {
+            auto submitFontDescription = style.fontDescription();
+            submitFontDescription.setWeight(boldWeightValue());
+            style.setFontDescription(WTF::move(submitFontDescription));
+        }
+    }
+#endif
 
 // PLATFORM(DRIFTSTACK): the fork builds the refresh path with FORM_CONTROL_REFRESH on; its #else Mac
 // branch yields button min-height 15px + padding 6px, but a real iPhone is min-height 20px + 1em(11px)

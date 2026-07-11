@@ -1872,7 +1872,7 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
     // below, so this size-specific carve-out cannot perturb c587ed44 (different size).
     if (cp == 0x05C6 && bucket == 3 && std::lround(computedSize) == 16) {
         outWidth = 10;
-        outHeight = 19;
+        outHeight = 20; // W3143 (2nd-audit fix): was 19; real monospace U+05C6 = '10,20' (3 geomserve-table-iPhone_17 caps byte-agree). 16px carve-out ≠ the 13px glyphHash, so c587ed44 holds.
         return true;
     }
     int expectedSize = (bucket == 3) ? (isGlyphHashCp ? 13 : 16) : 16;
@@ -1903,8 +1903,10 @@ static bool driftstackServeGlyphHashGeom(Element& element, float& outWidth, floa
  { 0x25CA, 3, 10, 20 },
  // W2611 Vedic Jihvamuliya — serif (bucket 2) + cursive (bucket 4), iOS-sim 16px width 8 (fork natural 9), height already 24.
 
- // W2612 U+05C6 system-ui (bucket 6, San Francisco) width 6 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
- { 0x05C6, 6, 6, 20 },
+ // W2612 U+05C6 system-ui (bucket 6, San Francisco) = 7,21 — distinct from default/serif (bucket 0 = 5, glyphHash-locked).
+ // W3143 (2nd-audit fix): was 6,20 (a stale/wrong source); the current 3 geomserve-table-iPhone_17 captures BYTE-AGREE
+ // on system-ui '7,21' (1781777231025 / 1781807498451 / 1782720873158). Bucket 6 is NOT a glyphHash cp so c587ed44 holds.
+ { 0x05C6, 6, 7, 21 },
  // W2620 U+2B06 (up-arrow, emoji-presentation) system-ui (bucket 6, San Francisco) = 23,20 — distinct
  // from the glyphHash default/serif emoji width (bucket 0 = 21,27). The glyphHash probe never measures
  // system-ui, so this is c587ed44-safe. (Atlas drift-guard excludes U+2B06 as a glyphHash cp.)
