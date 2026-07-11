@@ -4972,6 +4972,15 @@ sub GenerateImplementation
     if (PrototypeHasStaticPropertyTable($interface) && !IsGlobalInterface($interface) && !ShouldUseOrdinaryObjectPrototype($interface)) {
         push(@implContent, "    reifyStaticProperties(vm, ${className}::info(), ${className}PrototypeTableValues, *this);\n");
 
+        # PLATFORM(DRIFTSTACK) CSSStyleDeclaration-186: on Family-A (Safari <26) the CSS accessors are pre-split
+        # onto CSSStyleDeclaration.prototype; reify the CSSStyleProperties table onto it (no-op on 26.x, launch-safe).
+        if ($interface->type->name eq "CSSStyleDeclaration") {
+            push(@implContent, "#if PLATFORM(DRIFTSTACK)\n");
+            push(@implContent, "    void driftstackReifyFamilyACSSAccessorsOnStyleDeclaration(JSC::VM&, JSDOMGlobalObject&, JSC::JSObject&);\n");
+            push(@implContent, "    driftstackReifyFamilyACSSAccessorsOnStyleDeclaration(vm, *uncheckedDowncast<JSDOMGlobalObject>(realm()), *this);\n");
+            push(@implContent, "#endif\n");
+        }
+
         my @runtimeEnabledProperties = @runtimeEnabledOperations;
         push(@runtimeEnabledProperties, @runtimeEnabledAttributes);
         push(@runtimeEnabledProperties, @runtimeEnabledConstants);
@@ -8217,7 +8226,12 @@ sub GenerateHashTableValueArray
 
     my $packedSize = scalar @{$keys};
     my $arraySize = $packedSize || 1;
-    $string .= "\nstatic const std::array<HashTableValue, " . $arraySize . "> $nameEntries {\n";
+    # PLATFORM(DRIFTSTACK) CSSStyleDeclaration-186: the CSSStyleProperties prototype accessor table is
+    # referenced cross-TU by JSCSSStyleDeclarationCustom.cpp to reify the pre-split (Safari <26) CSS
+    # accessors onto CSSStyleDeclaration.prototype. Give it external linkage (non-static) so the extern
+    # declaration there resolves; every other table stays TU-static.
+    my $tableLinkage = ($nameEntries eq "JSCSSStylePropertiesPrototypeTableValues") ? "extern " : "static ";
+    $string .= "\n${tableLinkage}const std::array<HashTableValue, " . $arraySize . "> $nameEntries {\n";
 
     my $i = 0;
     foreach my $key (@{$keys}) {
