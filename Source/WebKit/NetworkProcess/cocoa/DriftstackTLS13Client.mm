@@ -1296,10 +1296,63 @@ bool DriftstackTLS13Client::sendClientFinished()
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.179] Client Finished sent (%zu bytes encrypted)", record.size());
     return true;
 }
+bool DriftstackTLS13Client::sendClientKeyUpdate()
+{
+    // Build the 5-byte KeyUpdate handshake message (type 0x18, length 1, body 0x00 = update_not_requested),
+    // wrap as an inner-0x16 (handshake) TLS 1.3 record, seal with the CURRENT client send key, and write it
+    // BEFORE rotating. Mirrors the app-data seal in writeApplicationRecord (outer record type stays 0x17).
+    Vector<uint8_t> inner;
+    inner.append(0x18); inner.append(0x00); inner.append(0x00); inner.append(0x01); inner.append(0x00);
+    inner.append(0x16);  // inner content_type = handshake
+
+    size_t encLen = inner.size() + 16;
+    Vector<uint8_t> aad;
+    aad.append(0x17);
+    aad.append(0x03); aad.append(0x03);
+    aad.append(static_cast<uint8_t>(encLen >> 8));
+    aad.append(static_cast<uint8_t>(encLen & 0xFF));
+
+    auto nonce = TLS13KeySchedule::recordNonce(m_clientAppKey.iv, m_clientAppKey.seqNum);
+    m_clientAppKey.seqNum++;
+    auto ct = aesGcmEncrypt(m_negotiatedCipher, m_clientAppKey.key, nonce, inner, aad);
+    if (ct.size() != encLen) {
+        m_errorMessage = "KeyUpdate echo: client record seal failed"_s;
+        return false;
+    }
+    Vector<uint8_t> record;
+    record.append(aad.span());
+    record.append(ct.span());
+    if (!writeAll(m_fd, record.span().data(), record.size())) {
+        m_errorMessage = "KeyUpdate echo: socket write failed"_s;
+        return false;
+    }
+
+    // Rotate the client send traffic secret (RFC 8446 §4.6.3 / §7.2 "traffic upd"); deriveTrafficKey resets
+    // the send seqNum to 0. All subsequent Application Data uses the new key. Mirrors the server read-key
+    // rotation in readApplicationRecord (#8), for the send side.
+    if (m_clientAppSecretCurrent.isEmpty())
+        m_clientAppSecretCurrent = m_keySchedule.clientApplicationSecret();
+    auto next = hkdfExpandLabel(m_negotiatedCipher, m_clientAppSecretCurrent, "traffic upd", { }, m_keySchedule.hashLen());
+    if (next.size() != m_keySchedule.hashLen()) {
+        m_errorMessage = "KeyUpdate echo: client traffic-secret update (traffic upd) failed"_s;
+        return false;
+    }
+    m_clientAppSecretCurrent = std::move(next);
+    m_clientAppKey = m_keySchedule.deriveTrafficKey(m_clientAppSecretCurrent);
+    WTFLogAlways("[Driftstack-EG-WK-PathB-v2] client KeyUpdate echoed (update_not_requested) + send key rekeyed (traffic upd), seqNum reset to 0");
+    return true;
+}
 int DriftstackTLS13Client::writeApplicationRecord(const uint8_t* data, size_t len)
 {
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.194] writeAppRecord len=%zu cipher=0x%04x clientAppKey.size=%zu seqNum=%llu",
         len, m_negotiatedCipher, m_clientAppKey.key.size(), (unsigned long long)m_clientAppKey.seqNum);
+    // RFC 8446 §4.6.3 send-side echo (net audit 2026-07-11): if the server sent KeyUpdate(update_requested),
+    // emit our KeyUpdate(update_not_requested) + rotate the send key BEFORE this Application Data. Done here
+    // on the writer thread so all m_clientAppKey mutation is single-threaded (the reader only sets the flag).
+    if (m_pendingSendKeyUpdate.exchange(false, std::memory_order_relaxed)) {
+        if (!sendClientKeyUpdate())
+            return -1;
+    }
     // W3077 — RFC 8446 §5.2: TLSInnerPlaintext MUST be ≤ 2^14 (16384) bytes. A single caller write
     // larger than that (a >16 KiB POST body on the h1 custom-TLS path, or a >16 KiB WebSocket frame)
     // would make a compliant server reply record_overflow (alert 22), and a >~64 KiB write would
@@ -1405,10 +1458,12 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord(int depth)
         // application_traffic_secret; without rekeying our READ key here, EVERY subsequent record fails
         // its AEAD tag ("decrypt failed") → the connection breaks mid-session. Advance the secret via
         // HKDF-Expand-Label("traffic upd") + re-derive the read key (deriveTrafficKey resets seqNum→0).
-        // KeyUpdate is post-handshake → NOT transcript material, so it is NOT appended. We deliberately
-        // do NOT rotate our own SEND key / echo a KeyUpdate on update_requested: the server keeps
-        // decrypting our records with our unchanged send key, so the connection stays valid — send-key
-        // rotation is a minor RFC-SHOULD follow-up, not required to keep reading.
+        // KeyUpdate is post-handshake → NOT transcript material, so it is NOT appended. Send side (net audit
+        // 2026-07-11): RFC 8446 §4.6.3 is a MUST — if request_update==update_requested the receiver MUST send
+        // its own KeyUpdate(update_not_requested) + rotate its send key before its next Application Data (real
+        // Safari/coreTLS does; not echoing is a deterministic wire tell). We defer that echo to the WRITER
+        // thread via m_pendingSendKeyUpdate (set below) so it never races an in-flight write on m_fd /
+        // m_clientAppKey (there is no send lock).
         if (!pt.isEmpty() && pt[0] == 0x18) {
             if (m_serverAppSecretCurrent.isEmpty())
                 m_serverAppSecretCurrent = m_keySchedule.serverApplicationSecret();
@@ -1420,6 +1475,12 @@ Vector<uint8_t> DriftstackTLS13Client::readApplicationRecord(int depth)
             m_serverAppSecretCurrent = std::move(next);
             m_serverAppKey = m_keySchedule.deriveTrafficKey(m_serverAppSecretCurrent);
             WTFLogAlways("[Driftstack-EG-WK-PathB-v2/wxzzaphvp] server KeyUpdate — server app read-key rekeyed (traffic upd), seqNum reset to 0");
+            // request_update lives at pt[4]: the 5-byte KeyUpdate handshake msg = type(0x18) + 3-byte
+            // length(00 00 01) + request_update; the trailing-zero padding strip ran BEFORE the inner-type
+            // removal, so a 0x00 request_update is preserved (pt[1..3] are the length). update_requested==0x01
+            // → flag the writer to echo + rotate the send key before its next Application Data (RFC 8446 §4.6.3).
+            if (pt.size() >= 5 && pt[4] == 0x01)
+                m_pendingSendKeyUpdate.store(true, std::memory_order_relaxed);
             return readApplicationRecord(depth + 1);
         }
         m_transcriptBytes.append(pt.span());

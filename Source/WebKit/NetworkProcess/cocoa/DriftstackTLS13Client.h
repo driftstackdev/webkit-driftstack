@@ -27,6 +27,7 @@
 
 #include "DriftstackCrypto.h"
 #include "DriftstackTLS13KeySchedule.h"
+#include <atomic>
 #include <memory>
 #include <stdint.h>
 #include <wtf/MonotonicTime.h>   // BUG-42 Fix #4: total handshake wall-clock deadline
@@ -119,6 +120,14 @@ private:
     // server KeyUpdate (RFC 8446 §7.2 "traffic upd"). Empty until the first KeyUpdate, then tracks
     // secret_N so successive KeyUpdates chain correctly. Read/updated only in readApplicationRecord.
     Vector<uint8_t> m_serverAppSecretCurrent;
+    // RFC 8446 §4.6.3 send-side echo (2026-07-11 net audit): the CURRENT client application_traffic_secret,
+    // advanced on each KeyUpdate WE send in reply to a server KeyUpdate(update_requested). Empty until the
+    // first send-side update. Mutated only on the writer thread (writeApplicationRecord/sendClientKeyUpdate).
+    Vector<uint8_t> m_clientAppSecretCurrent;
+    // Set by readApplicationRecord (reader thread) when the server sends KeyUpdate(update_requested); the
+    // writer emits our reply KeyUpdate + rotates m_clientAppKey before its next Application Data. Deferred to
+    // the writer so no cross-thread race touches m_clientAppKey / m_fd (there is no send lock).
+    std::atomic<bool> m_pendingSendKeyUpdate { false };
 
     // Saved ephemeral X25519 private keys (for ECDH after ServerHello).
     // DRIFTSTACK_TLS_KEYSHARE_DISTINCT (default-ON): the iPhone-correct wire emits TWO
@@ -195,6 +204,9 @@ private:
     bool validateCertificateBody(std::span<const uint8_t> body);
     bool sendClientFinished();
     int writeApplicationRecord(const uint8_t* data, size_t len);
+    // RFC 8446 §4.6.3: send our KeyUpdate(update_not_requested) with the CURRENT send key, then rotate the
+    // client send traffic secret (traffic upd) + reset send seqNum. Called from the writer thread only.
+    bool sendClientKeyUpdate();
     Vector<uint8_t> readApplicationRecord(int depth = 0);   // W2209: depth bounds the post-handshake (inner-0x16) recursion
 
     // Wave 29-499.340 — TLS 1.2 handshake + record layer.
