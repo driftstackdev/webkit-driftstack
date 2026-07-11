@@ -2061,6 +2061,12 @@ void DriftstackNetworkLoader::resume()
     // NetworkDataTask::restrictRequestReferrerToOriginIfNeeded (that method is protected on NetworkDataTask,
     // not callable here). Both must happen here: ResourceRequest + the ITP state are not thread-safe on loaderQueue.
     String driftstackCookieHeader = driftstackITPCookieHeader();
+    // W3147 — capture main-resource (document/iframe navigation) status on the MAIN thread here
+    // (ResourceRequest is not thread-safe on loaderQueue). ResourceRequestRequester::Main == a main
+    // resource load for a frame (top document OR iframe). Consumed only by the plaintext-http h1 path
+    // below, which emits Upgrade-Insecure-Requests: 1 — real Safari sends UIR ONLY on http:// navigations
+    // (gt-registry http1_request_header_order). Captured by value into the loaderQueue block (ObjC block).
+    const bool driftstackIsNavigation = m_request.requester() == WebCore::ResourceRequestRequester::Main;
     if (RefPtr task = protectedTask()) {
         if (WebKit::NetworkSession* session = task->networkSession()) {
             if ((session->sessionID().isEphemeral() || session->isTrackingPreventionEnabled())
@@ -3676,13 +3682,33 @@ _Pragma("clang diagnostic pop")
         rb.append(httpMethod, ' ', pathStr, " HTTP/1.1\r\n"_s);
         rb.append("Host: "_s, host, "\r\n"_s); // Host FIRST
         bool sawContentLength = false;
+        // W3147 (2nd-audit) — over PLAINTEXT http (no TLS) real Safari's CFNetwork emits a scheme-specific
+        // header set (gt-registry http1_request_header_order, real-device byte-verified): (a) Sec-Fetch-*
+        // are secure-context-gated → SUPPRESSED; (b) Accept-Encoding drops br/zstd → "gzip, deflate"; and
+        // (c) Upgrade-Insecure-Requests: 1 is emitted ONLY on an http:// document/iframe navigation, at
+        // position 3 (immediately after User-Agent). This CFStream serializer carries BOTH legacy-https-
+        // CFStream (isHttps, BoringSSL unavailable) AND every plaintext http:// request (h2/h3 require TLS
+        // so http:// can only land here); the transform is scoped to !isHttps so the https framing above is
+        // unchanged. UIR position is robust whether or not sec-fetch-dest is present in the vector (it is
+        // suppressed here regardless), because User-Agent is the first emitted header after Host either way.
+        const bool plaintextHttp = !isHttps;
         for (auto& [name, value] : h1Req.extraHeaders) {
-            // Cookie is emitted penultimate (below); UIR is never emitted on this https path.
+            // Cookie is emitted penultimate (below); UIR is emitted explicitly (plaintext-http nav only).
             if (equalIgnoringASCIICase(name, "cookie"_s) || equalIgnoringASCIICase(name, "upgrade-insecure-requests"_s))
+                continue;
+            // Sec-Fetch-* are secure-context-gated — real Safari suppresses them over plaintext http.
+            if (plaintextHttp && name.startsWith("sec-fetch-"_s))
                 continue;
             if (equalIgnoringASCIICase(name, "content-length"_s))
                 sawContentLength = true;
+            if (plaintextHttp && equalIgnoringASCIICase(name, "accept-encoding"_s)) {
+                rb.append("Accept-Encoding: gzip, deflate\r\n"_s); // br/zstd are secure-context-gated
+                continue;
+            }
             rb.append(titleCaseHeaderName(name), ": "_s, value, "\r\n"_s);
+            // UIR: 1 immediately after User-Agent on a plaintext-http document/iframe navigation (position 3).
+            if (plaintextHttp && driftstackIsNavigation && equalIgnoringASCIICase(name, "user-agent"_s))
+                rb.append("Upgrade-Insecure-Requests: 1\r\n"_s);
         }
         // W3070 — POST/PUT body over pure-h1. The builder harvests headers via an EMPTY body to the
         // h2 vector, so a body method to a TLS1.2/http1.1-only origin (unagi.amazon.com and other
