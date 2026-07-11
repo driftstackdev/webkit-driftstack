@@ -5312,14 +5312,16 @@ sub GenerateImplementation
     unless (ShouldUseGlobalObjectPrototype($interface) || ShouldUseOrdinaryObjectPrototype($interface)) {
         push(@implContent, "JSObject* ${className}::createPrototype(VM& vm, JSDOMGlobalObject& globalObject)\n");
         push(@implContent, "{\n");
-        if ($interface->type->name eq "CSSStyleProperties") {
+        if ($interface->type->name eq "CSSStyleProperties" || $interface->type->name eq "CSSFontFaceDescriptors" || $interface->type->name eq "CSSPageDescriptors") {
+            AddToImplIncludes("Document.h");
+            AddToImplIncludes("DocumentSettingsValues.h");
             push(@implContent, "#if PLATFORM(DRIFTSTACK)\n");
-            push(@implContent, "    // Family-A pre-split (CSSStyleDeclaration-186): the CSSStyleProperties interface is hidden in\n");
-            push(@implContent, "    // Safari 18.6, so element.style must chain to CSSStyleDeclaration.prototype (the single merged\n");
-            push(@implContent, "    // pre-split object). Returning it here makes the wrapper structure store it, so element.style\n");
-            push(@implContent, "    // .__proto__ === window.CSSStyleDeclaration.prototype and element.style.constructor.name ===\n");
-            push(@implContent, "    // CSSStyleDeclaration. Gated on !cssDescriptorBlocksEnabled; the 26.x launch band keeps its own\n");
-            push(@implContent, "    // split CSSStyleProperties prototype via the normal path below.\n");
+            push(@implContent, "    // Family-A pre-split (CSSStyleDeclaration-186): CSSStyleProperties (element.style), CSSFontFaceDescriptors\n");
+            push(@implContent, "    // (\@font-face rule.style) and CSSPageDescriptors (\@page rule.style) are all 26.x splits of the single\n");
+            push(@implContent, "    // pre-split CSSStyleDeclaration, hidden in Safari 18.6 by CSSDescriptorBlocksEnabled. Return the merged\n");
+            push(@implContent, "    // CSSStyleDeclaration prototype so the wrapper structure stores it — the instance's .__proto__ ===\n");
+            push(@implContent, "    // window.CSSStyleDeclaration.prototype, .constructor.name === CSSStyleDeclaration, and toString ===\n");
+            push(@implContent, "    // [object CSSStyleDeclaration]. Gated on !cssDescriptorBlocksEnabled; the 26.x launch band keeps its split.\n");
             push(@implContent, "    if (auto* driftstackDoc = dynamicDowncast<Document>(globalObject.scriptExecutionContext()); driftstackDoc && !driftstackDoc->settingsValues().cssDescriptorBlocksEnabled)\n");
             push(@implContent, "        return JSCSSStyleDeclaration::prototype(vm, globalObject);\n");
             push(@implContent, "#endif\n");
