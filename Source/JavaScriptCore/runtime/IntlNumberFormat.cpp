@@ -630,6 +630,24 @@ static String driftstackRemapLatnToTolsDigits(std::span<const char16_t> latn)
     }
     return out.toString();
 }
+// W3141: String overload — for the parts path (formatToParts) whose values are substrings of the ICU
+// latn-formatted String. 16-bit delegates to the span overload; 8-bit (the usual case for an ASCII latn
+// number) iterates span8(). Uses span8()/span16() (core String accessors) — no operator[] dependency.
+static String driftstackRemapLatnToTolsDigits(const String& latn)
+{
+    if (!latn.is8Bit())
+        return driftstackRemapLatnToTolsDigits(latn.span16());
+    StringBuilder out;
+    out.reserveCapacity(latn.length() + 16);
+    for (auto u : latn.span8()) {
+        if (u >= '0' && u <= '9') {
+            out.append(static_cast<char16_t>(0xD807));
+            out.append(static_cast<char16_t>(0xDDE0 + (u - '0')));
+        } else
+            out.append(static_cast<char16_t>(u));
+    }
+    return out.toString();
+}
 #endif
 
 JSValue IntlNumberFormat::format(JSGlobalObject* globalObject, double value) const
@@ -715,6 +733,13 @@ JSValue IntlNumberFormat::formatRange(JSGlobalObject* globalObject, double start
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "failed to format a range"_s);
 
+#if PLATFORM(DRIFTSTACK)
+    // W3141: Tolong-remap the range string to match format()/formatToParts when the fork fakes 'tols'
+    // (m_driftstackTolsDigits). Without this formatRange() stays latn while format() is Tolong on the same
+    // object = a numberingSystem coherence tell. Guarded so all-latn objects are byte-identical.
+    if (m_driftstackTolsDigits)
+        return jsString(vm, driftstackRemapLatnToTolsDigits(std::span<const char16_t> { string, static_cast<size_t>(length) }));
+#endif
     return jsString(vm, String({ string, static_cast<size_t>(length) }));
 }
 
@@ -753,6 +778,13 @@ JSValue IntlNumberFormat::formatRange(JSGlobalObject* globalObject, IntlMathemat
     if (U_FAILURE(status))
         return throwTypeError(globalObject, scope, "failed to format a range"_s);
 
+#if PLATFORM(DRIFTSTACK)
+    // W3141: Tolong-remap the range string to match format()/formatToParts when the fork fakes 'tols'
+    // (m_driftstackTolsDigits). Without this formatRange() stays latn while format() is Tolong on the same
+    // object = a numberingSystem coherence tell. Guarded so all-latn objects are byte-identical.
+    if (m_driftstackTolsDigits)
+        return jsString(vm, driftstackRemapLatnToTolsDigits(std::span<const char16_t> { string, static_cast<size_t>(length) }));
+#endif
     return jsString(vm, String({ string, static_cast<size_t>(length) }));
 }
 
@@ -1378,7 +1410,19 @@ void IntlNumberFormat::formatToPartsInternal(JSGlobalObject* globalObject, Style
     for (auto& field : flatten) {
         auto fieldType = field.m_field;
         auto partType = fieldType == literalField ? literalString : jsNontrivialString(vm, partTypeString(UNumberFormatFields(fieldType), style, sign, numberType));
+#if PLATFORM(DRIFTSTACK)
+        // W3141: keep formatToParts() digit-coherent with format(). format() Tolong-remaps the digits when
+        // m_driftstackTolsDigits (the fork FAKES 'tols' — Mac ICU lacks the data — by leaving the ICU
+        // formatter on latn and remapping the output digits post-hoc). Without this the SAME object's
+        // formatToParts().value fields stay latn while format() returns Tolong = a numberingSystem coherence
+        // tell (a real iPhone's single ICU formatter is consistently Tolong). Non-digit parts (separators,
+        // literals) pass through the remap unchanged. Guarded so all-latn objects are byte-identical.
+        JSString* partValue = m_driftstackTolsDigits
+            ? jsString(vm, driftstackRemapLatnToTolsDigits(formatted.substring(field.m_range.begin(), field.m_range.distance())))
+            : jsSubstring(vm, formatted, field.m_range.begin(), field.m_range.distance());
+#else
         auto partValue = jsSubstring(vm, formatted, field.m_range.begin(), field.m_range.distance());
+#endif
         JSObject* part;
         if (unit && sourceType)
             part = createIntlPartObjectWithUnitAndSource(globalObject, partType, partValue, unit, sourceType);
