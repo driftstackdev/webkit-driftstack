@@ -163,9 +163,30 @@ inline std::string_view driftstackFontsIosKey(std::string_view slug)
     return rest.substr(0, u2 == std::string_view::npos ? rest.size() : u2); // "18_7" | "18_6"
 }
 
+// W3144 (2nd-audit fix): parse the Safari MAJOR from the slug's "safariNN" token (mirrors
+// driftstackBlfonts69ShouldApply, FontCacheCoreText.cpp:145). No safari token (the Family-A entry key
+// "iphone16pro_ios18_6") → 0 (treated as < 26).
+inline int driftstackFontsSafariMajor(std::string_view slug)
+{
+    auto pos = slug.find("safari");
+    if (pos == std::string_view::npos)
+        return 0;
+    pos += 6;
+    int maj = 0;
+    while (pos < slug.size() && slug[pos] >= '0' && slug[pos] <= '9') { maj = maj * 10 + (slug[pos] - '0'); ++pos; }
+    return maj;
+}
+
 inline bool driftstackFontsArchetypeEq(const char* a, const char* b)
 {
-    return driftstackFontsIosKey(std::string_view(a)) == driftstackFontsIosKey(std::string_view(b));
+    // W3144: Mac-only-font EXPOSURE is SAFARI-version-keyed, NOT iOS-keyed (was driftstackFontsIosKey). Safari 26
+    // hides ~53 fonts that Safari <26 shows; a real iOS-18.6/Safari-26.0 hybrid hides them (aio-iPhone_17_Pro-
+    // 1781437796571 = 253 detected, Big Caslon/Songti SC/PT Mono/Skia/Apple Chancery/Luminari ABSENT) — matching
+    // the fork's OWN Safari-keyed Kefa hide (FontCacheCoreText driftstackKefaPresentForArchetype). The old iOS key
+    // collapsed the 14 _ios18_6_safari26_x hybrids onto the Safari-18.6 (22-font) list, leaving ~30 Mac fonts
+    // DETECTABLE that Safari-26 hides. Map by Safari band: >=26 → the iphone17_ios18_7_safari26_4 (53-font) list
+    // (incl the 26.4 LAUNCH + every safari26_x hybrid); <26 (incl Family-A safari18_6) → iphone16pro_ios18_6 (22).
+    return (driftstackFontsSafariMajor(std::string_view(a)) >= 26) == (driftstackFontsSafariMajor(std::string_view(b)) >= 26);
 }
 
 inline bool driftstackFamilyDenylistedForArchetype(const char* archetype, const WTF::AtomString& family)
