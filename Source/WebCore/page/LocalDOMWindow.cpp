@@ -1326,6 +1326,13 @@ int LocalDOMWindow::outerHeight() const
         if (RefPtr deferPage = deferFrame->page(); deferPage && deferPage->shouldApplyScreenFingerprintingProtections(*protect(document())))
             return innerHeight();
     }
+    // W-CriOS-outerHeight 2026-07-12: real Chrome-on-iOS (CriOS) reports window.outerHeight == innerHeight
+    // (the WKWebView height, e.g. 684), NOT screen.height (874) like Safari — verified across 7 real
+    // CriOS/137 iPhone-17 captures (outer==inner==684 uniformly; real Safari /aio = 874). Safari and CriOS
+    // genuinely differ here, so a browser:chrome archetype must defer to innerHeight() even first-party;
+    // the screenHeight pin below stays correct for Safari.
+    if (driftstackArchetypeIsChromeBrowser())
+        return innerHeight();
     if (auto h = DriftstackArchetypeConfig::singleton().screenHeight(); h > 0)
         return h;
     return 874;  // iPhone 17 / 16 Pro portrait fallback when Config not loaded
