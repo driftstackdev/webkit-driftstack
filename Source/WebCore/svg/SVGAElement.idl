@@ -28,13 +28,16 @@
 ] interface SVGAElement : SVGGraphicsElement {
     readonly attribute SVGAnimatedString target;
 
-    // Driftstack: SVGAElement.hreflang/type are 26.2-added — real iPhone Safari 18.6 serves them undefined,
-    // 26.2+ as function (dual-band apienum drillOwn 2026-07-08: absent@18.6, present@26.5). Their sibling
-    // SVG2-anchor URI attributes rel/relList were already gated Safari262PrototypeMembersEnabled; hreflang/type
-    // were missed by that audit. Gate them the same so Family-A (<26.2) hides them, 26.4/26.5 keep them.
+    // Driftstack: ONLY hreflang/type are 26.2-added — real iPhone Safari 18.6 serves them undefined, 26.2+
+    // as function. rel/relList are the SVG2-anchor URI attributes and are present ALREADY in Safari 18.6
+    // (real-device iPhone-16-Pro/18.6 apienum drillOwn 2026-07-12: SVGAElement.prototype ==
+    // [constructor,href,rel,relList,target], count=5/hash=e28f225; 26.4 == the same +hreflang+type = 7).
+    // The 2026-07-08 audit wrongly gated rel/relList behind Safari262 (its 18.6 capture had empty drillOwn),
+    // over-stripping Family-A to 3 members. Un-gate rel/relList (present all shipped bands >=18.6); keep the
+    // Safari262 gate on hreflang/type only, so Family-A(<26.2)=5 and 26.4/26.5=7.
     [Reflect, EnabledBySetting=Safari262PrototypeMembersEnabled] attribute DOMString hreflang;
-    [Reflect, EnabledBySetting=Safari262PrototypeMembersEnabled] attribute DOMString rel;
-    [SameObject, PutForwards=value, EnabledBySetting=Safari262PrototypeMembersEnabled] readonly attribute DOMTokenList relList;
+    [Reflect] attribute DOMString rel;
+    [SameObject, PutForwards=value] readonly attribute DOMTokenList relList;
     [Reflect, EnabledBySetting=Safari262PrototypeMembersEnabled] attribute DOMString type;
 };
 
