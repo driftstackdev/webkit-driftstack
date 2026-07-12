@@ -45,6 +45,7 @@
 #import "HTMLMeterElement.h"
 #import "HTMLNames.h"
 #import "HTMLPlugInElement.h"
+#import "HTMLSelectElement.h"
 #import "Icon.h"
 #import "Image.h"
 #import "ImageControlsButtonMac.h"
@@ -1550,6 +1551,23 @@ void RenderThemeMac::adjustMenuListStyle(RenderStyle& style, const Element* elem
 {
 #if ENABLE(FORM_CONTROL_REFRESH)
     if (element && element->document().settings().formControlRefreshEnabled()) {
+        RenderThemeCocoa::adjustMenuListStyle(style, element);
+        return;
+    }
+#endif
+
+#if PLATFORM(DRIFTSTACK)
+    // W3132: the DRIFTSTACK Mac build's theme singleton is RenderThemeMac, so a Family-A (18.6,
+    // refresh-OFF) <select> reaches HERE — the desktop menulist branch — and gets Mac popup sizing
+    // (min-height:0 / border-radius:0) instead of the iPhone intrinsic metrics (min-height:20 /
+    // border-radius:10, verified band-uniform on real iPhone-16-Pro/18.6 AND iPhone-17/26.4). The
+    // refresh-ON branch above already routes to RenderThemeCocoa (whose menulist adjuster injects the
+    // iOS metrics); route the refresh-OFF <select> to the SAME adjuster so both bands share one
+    // iOS-select adjustment. (RenderThemeCocoa::adjustMenuListStyle's vector short-circuit no-ops when
+    // refresh is off, so this yields base + the W3132 legacy-path 20/10 injection, NOT Mac desktop
+    // sizing — matching what Family-B already produces.) Scoped to <select> so non-select menulist
+    // elements keep the desktop path.
+    if (element && is<HTMLSelectElement>(*element)) {
         RenderThemeCocoa::adjustMenuListStyle(style, element);
         return;
     }
