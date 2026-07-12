@@ -791,7 +791,11 @@ JSValue IntlDurationFormat::formatToParts(JSGlobalObject* globalObject, ISO8601:
                     }
                     IntlFieldIterator iterator(*fieldItr.get());
                     JSString* type = jsString(vm, String(temporalUnitSingularPropertyName(vm, element.m_unit).uid()));
-                    IntlNumberFormat::formatToPartsInternal(globalObject, IntlNumberFormat::Style::Unit, element.m_valueSignBit, IntlMathematicalValue::NumberType::Integer, element.m_string, iterator, parts, nullptr, type);
+                    IntlNumberFormat::formatToPartsInternal(globalObject, IntlNumberFormat::Style::Unit, element.m_valueSignBit, IntlMathematicalValue::NumberType::Integer, element.m_string, iterator, parts, nullptr, type
+#if PLATFORM(DRIFTSTACK)
+                        , false // duration number part never tols-remaps (no numberingSystem:tols instance here)
+#endif
+                        );
                     RETURN_IF_EXCEPTION(scope, void());
                     break;
                 }

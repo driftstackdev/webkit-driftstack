@@ -376,7 +376,11 @@ JSValue IntlRelativeTimeFormat::formatToParts(JSGlobalObject* globalObject, doub
 
         double absValue = std::abs(value);
         IntlFieldIterator fieldIterator(WTF::move(numberFields));
-        IntlNumberFormat::formatToPartsInternal(globalObject, IntlNumberFormat::Style::Decimal, std::signbit(absValue), IntlMathematicalValue::numberTypeFromDouble(absValue), numberPartString, fieldIterator, parts, nullptr, jsString(vm, singularUnit(unit)));
+        IntlNumberFormat::formatToPartsInternal(globalObject, IntlNumberFormat::Style::Decimal, std::signbit(absValue), IntlMathematicalValue::numberTypeFromDouble(absValue), numberPartString, fieldIterator, parts, nullptr, jsString(vm, singularUnit(unit))
+#if PLATFORM(DRIFTSTACK)
+            , false // relative-time number part never tols-remaps (no numberingSystem:tols instance here)
+#endif
+            );
         RETURN_IF_EXCEPTION(scope, { });
 
         auto stringLength = formattedRelativeTime.length();

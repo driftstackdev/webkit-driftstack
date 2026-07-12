@@ -180,7 +180,13 @@ public:
 
     enum class Style : uint8_t { Decimal, Percent, Currency, Unit };
 
-    static void formatToPartsInternal(JSGlobalObject*, Style, bool sign, IntlMathematicalValue::NumberType, const String& formatted, IntlFieldIterator&, JSArray*, JSString* sourceType, JSString* unit);
+    static void formatToPartsInternal(JSGlobalObject*, Style, bool sign, IntlMathematicalValue::NumberType, const String& formatted, IntlFieldIterator&, JSArray*, JSString* sourceType, JSString* unit
+#if PLATFORM(DRIFTSTACK)
+        // W3141: the tols-digit remap reads the instance flag; thread it in (this stays static — it has a
+        // static-context caller in IntlRelativeTimeFormat, which passes false: relative-time never tols-remaps).
+        , bool driftstackTolsDigits
+#endif
+        );
     static void formatRangeToPartsInternal(JSGlobalObject*, Style, IntlMathematicalValue&&, IntlMathematicalValue&&, const UFormattedValue*, JSArray*);
 
     template<typename IntlType>

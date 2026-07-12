@@ -1379,7 +1379,11 @@ void IntlNumberFormat::setBoundFormat(VM& vm, JSBoundFunction* format)
     m_boundFormat.set(vm, this, format);
 }
 
-void IntlNumberFormat::formatToPartsInternal(JSGlobalObject* globalObject, Style style, bool sign, IntlMathematicalValue::NumberType numberType, const String& formatted, IntlFieldIterator& iterator, JSArray* parts, JSString* sourceType, JSString* unit)
+void IntlNumberFormat::formatToPartsInternal(JSGlobalObject* globalObject, Style style, bool sign, IntlMathematicalValue::NumberType numberType, const String& formatted, IntlFieldIterator& iterator, JSArray* parts, JSString* sourceType, JSString* unit
+#if PLATFORM(DRIFTSTACK)
+    , bool driftstackTolsDigits
+#endif
+    )
 {
     VM& vm = globalObject->vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
@@ -1417,7 +1421,7 @@ void IntlNumberFormat::formatToPartsInternal(JSGlobalObject* globalObject, Style
         // formatToParts().value fields stay latn while format() returns Tolong = a numberingSystem coherence
         // tell (a real iPhone's single ICU formatter is consistently Tolong). Non-digit parts (separators,
         // literals) pass through the remap unchanged. Guarded so all-latn objects are byte-identical.
-        JSString* partValue = m_driftstackTolsDigits
+        JSString* partValue = driftstackTolsDigits
             ? jsString(vm, driftstackRemapLatnToTolsDigits(formatted.substring(field.m_range.begin(), field.m_range.distance())))
             : jsSubstring(vm, formatted, field.m_range.begin(), field.m_range.distance());
 #else
@@ -1472,7 +1476,11 @@ JSValue IntlNumberFormat::formatToParts(JSGlobalObject* globalObject, double val
     if (!parts)
         return throwOutOfMemoryError(globalObject, scope);
 
-    formatToPartsInternal(globalObject, m_style, std::signbit(value), IntlMathematicalValue::numberTypeFromDouble(value), resultString, iterator, parts, sourceType, nullptr);
+    formatToPartsInternal(globalObject, m_style, std::signbit(value), IntlMathematicalValue::numberTypeFromDouble(value), resultString, iterator, parts, sourceType, nullptr
+#if PLATFORM(DRIFTSTACK)
+        , m_driftstackTolsDigits
+#endif
+        );
     RETURN_IF_EXCEPTION(scope, { });
 
     return parts;
@@ -1517,7 +1525,11 @@ JSValue IntlNumberFormat::formatToParts(JSGlobalObject* globalObject, IntlMathem
     if (!parts)
         return throwOutOfMemoryError(globalObject, scope);
 
-    formatToPartsInternal(globalObject, m_style, value.sign(), value.numberType(), resultString, iterator, parts, sourceType, nullptr);
+    formatToPartsInternal(globalObject, m_style, value.sign(), value.numberType(), resultString, iterator, parts, sourceType, nullptr
+#if PLATFORM(DRIFTSTACK)
+        , m_driftstackTolsDigits
+#endif
+        );
     RETURN_IF_EXCEPTION(scope, { });
 
     return parts;
