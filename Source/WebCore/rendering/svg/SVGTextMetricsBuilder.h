@@ -43,6 +43,9 @@ private:
     void advanceIterator(WidthIterator&);
     void advanceIterator(ComplexTextController&);
     bool NODELETE currentCharacterStartsSurrogatePair() const;
+#if PLATFORM(DRIFTSTACK)
+    void applyDriftstackSVGEmojiClusterCells();
+#endif
 
     void initializeMeasurementWithTextRenderer(RenderSVGInlineText&);
     void walkTree(RenderElement&, RenderSVGInlineText* stopAtLeaf, MeasureTextData&);

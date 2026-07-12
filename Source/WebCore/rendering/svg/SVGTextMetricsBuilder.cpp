@@ -30,6 +30,9 @@
 #include "RenderStyle+GettersInlines.h"
 #include "WidthIterator.h"
 #include <wtf/WeakPtr.h>
+#if PLATFORM(DRIFTSTACK)
+#include <wtf/text/CharacterProperties.h>
+#endif
 
 namespace WebCore {
 
@@ -101,6 +104,134 @@ void SVGTextMetricsBuilder::advanceIterator(ComplexTextController& complexTextCo
 
     m_totalWidth = m_complexStartToCurrentMetrics.width();
 }
+
+#if PLATFORM(DRIFTSTACK)
+// svgrect launch tell (real iPhone 17 / Safari 26.4, creepjsdomrect svgrectEmoji): iOS reports EVERY
+// color-emoji grapheme cluster's SVG getComputedTextLength at a uniform cell of 1.0006670379638672 *
+// fontSize (== 200.13340759 @200px), whereas canvas measureText reports exactly fontSize (the W554
+// FontCoreText color-glyph override, byte-correct FOR CANVAS — real iPhone canvas emoji == fontSize). iOS
+// itself differs between the two surfaces for color emoji; the fork routes both through W554, so its SVG
+// total is fontSize (200) and diverges from iOS SVG (200.133). The fork additionally distributes a
+// cluster's advance across its component glyphs (incl. visible joiners for un-ligated ZWJ sequences), so
+// the correction must be per grapheme-CLUSTER, not per character.
+//
+// Post-pass: group this renderer's run into emoji grapheme clusters (a cluster extends across ZWJ /
+// variation selectors / Fitzpatrick modifiers / tag chars / the codepoint following a ZWJ / the 2nd
+// regional indicator). For each cluster whose BASE resolves to a COLOR glyph (colorGlyphType == Color —
+// the exact discriminator: the gender signs ♀/♂ that iOS keeps at 200 are Outline; the text-rendered
+// candidates ©/®/™/U+2049/U+2639/U+2695 and all CJK / other text are Outline too), scale that cluster's
+// per-character metric widths so the cluster total equals the iOS cell. NON-color clusters are untouched,
+// so a run with no color-emoji base is a strict no-op — pure-text SVG (incl. the separate #160 latin arc)
+// is provably unaffected. Single per-color-glyph cell ratio, NOT a per-probe table (Rule 5).
+// glyphHash-isolated: the glyph-unicode-fp probe has zero color emoji and measures canvas/DOM, never SVG.
+void SVGTextMetricsBuilder::applyDriftstackSVGEmojiClusterCells()
+{
+    if (!m_text)
+        return;
+    float scalingFactor = m_text->scalingFactor();
+    if (scalingFactor <= 0)
+        return;
+    const FontCascade& scaledFont = m_text->scaledFont();
+    float logicalEm = scaledFont.size() / scalingFactor;
+    if (logicalEm <= 0)
+        return;
+    auto* attributes = m_text->layoutAttributes();
+    if (!attributes)
+        return;
+    auto& metrics = attributes->textMetricsValues();
+    if (metrics.isEmpty())
+        return;
+
+    // Double-precision then cast so the em==200 probe lands on the EXACT real-iPhone float 200.13340759.
+    const float cellWidth = static_cast<float>(1.0006670379638672 * static_cast<double>(logicalEm));
+    StringView runText = m_run.text();
+    unsigned runLength = runText.length();
+
+    // Perf early-out: color emoji live at/above U+2000 (symbols/dingbats/pictographs; surrogate leads are
+    // >= 0xD800). Pure Latin/Latin-ext SVG text is entirely below U+2000, so it never touches the per-cluster
+    // glyph resolution below — this keeps the common case a cheap scan. (© U+00A9 / ® U+00AE are below the
+    // threshold but are Outline glyphs that never need scaling, so skipping them is correct.)
+    bool hasSymbolRange = false;
+    for (unsigned p = 0; p < runLength; ++p) {
+        if (runText[p] >= 0x2000) {
+            hasSymbolRange = true;
+            break;
+        }
+    }
+    if (!hasSymbolRange)
+        return;
+
+    auto codePointAt = [&](unsigned pos) -> char32_t {
+        char16_t c = runText[pos];
+        if (U16_IS_LEAD(c) && pos + 1 < runLength && U16_IS_TRAIL(runText[pos + 1]))
+            return U16_GET_SUPPLEMENTARY(c, runText[pos + 1]);
+        return c;
+    };
+    auto isClusterContinuation = [](char32_t cp) -> bool {
+        return cp == 0x200D                     // ZERO WIDTH JOINER
+            || (cp >= 0xFE00 && cp <= 0xFE0F)   // variation selectors
+            || (cp >= 0x1F3FB && cp <= 0x1F3FF) // Fitzpatrick skin-tone modifiers
+            || (cp >= 0xE0020 && cp <= 0xE007F) // emoji tag sequence tags
+            || (cp >= 0x1F1E6 && cp <= 0x1F1FF); // regional indicators (2nd of a flag pair)
+    };
+    auto colorProbe = [&](char32_t cp, FontVariant variant, std::optional<ResolvedEmojiPolicy> policy) -> bool {
+        auto glyphData = scaledFont.glyphDataForCharacter(cp, false, variant, policy);
+        return glyphData.font && glyphData.colorGlyphType == ColorGlyphType::Color;
+    };
+    auto baseIsColorEmoji = [&](char32_t cp) -> bool {
+        // BMP: the live font resolution is reliable AND necessary — 2668/2139/arrows are text-default yet
+        // render color in Apple Color Emoji, while ♀/♂ (2640/2642) and ©/®/™ are Outline and must be kept.
+        if (colorProbe(cp, FontVariant::Auto, std::nullopt)
+            || colorProbe(cp, FontVariant::Auto, ResolvedEmojiPolicy::RequireEmoji)
+            || colorProbe(cp, FontVariant::Normal, ResolvedEmojiPolicy::RequireEmoji))
+            return true;
+        // Supplementary emoji: glyphDataForCharacter is unreliable here (the SVG complex measurement
+        // invalidates the FontCascadeCache mid-pass, so it inconsistently reports Outline for 1F600/1F469/
+        // 1F935/…). Every supplementary codepoint in the emoji blocks renders as a color cell, and the
+        // keep-at-non-cell candidates (♀/♂/©/®/™/⁉/☹/⚕) are all BMP — so intrinsic emoji-ness is a safe
+        // fallback above the BMP plane only.
+        return cp > 0xFFFF && (isEmojiGroupCandidate(cp) || isEmojiWithPresentationByDefault(cp));
+    };
+
+    bool diag = std::getenv("DRIFTSTACK_SVGEMOJI_DIAG");
+    unsigned charPos = 0;
+    size_t i = 0;
+    while (i < metrics.size() && charPos < runLength) {
+        char32_t baseCharacter = codePointAt(charPos);
+        size_t clusterStart = i;
+        double clusterSum = metrics[i].width();
+        unsigned len = metrics[i].length();
+        unsigned nextPos = charPos + (len ? len : 1);
+        bool prevWasZWJ = baseCharacter == 0x200D;
+        ++i;
+        // Extend the cluster across continuation codepoints (and the codepoint right after a ZWJ).
+        while (i < metrics.size() && nextPos < runLength) {
+            char32_t nextCharacter = codePointAt(nextPos);
+            if (!prevWasZWJ && !isClusterContinuation(nextCharacter))
+                break;
+            clusterSum += metrics[i].width();
+            unsigned nlen = metrics[i].length();
+            prevWasZWJ = nextCharacter == 0x200D;
+            nextPos += (nlen ? nlen : 1);
+            ++i;
+        }
+        bool isColor = clusterSum > 0.0 && baseIsColorEmoji(baseCharacter);
+        if (isColor) {
+            // Assign the whole cell to the first metric and zero the continuations, so the cluster total
+            // is EXACTLY the iOS cell (per-metric float scaling would leave a sub-ULP residue on multi-glyph
+            // ZWJ clusters). getComputedTextLength sums the cluster's metrics -> exactly cellWidth.
+            metrics[clusterStart].setWidth(cellWidth);
+            for (size_t k = clusterStart + 1; k < i; ++k)
+                metrics[k].setWidth(0);
+        }
+        if (diag)
+            WTFLogAlways("[DS-SVGEMOJI] base=U+%05X chars=%zu sum=%.6f color=%d -> %s",
+                static_cast<unsigned>(baseCharacter), i - clusterStart, clusterSum, isColor ? 1 : 0,
+                isColor ? "cell" : "kept");
+        charPos = nextPos;
+    }
+}
+#endif
 
 static inline bool NODELETE shouldUseComplexTextController(FontCascade::CodePath codePathToUse, const FontCascade& scaledFont)
 {
@@ -207,6 +338,9 @@ std::tuple<unsigned, char16_t> SVGTextMetricsBuilder::measureTextRenderer(Render
                 lastCharacter = currentCharacter;
             }
 
+#if PLATFORM(DRIFTSTACK)
+            applyDriftstackSVGEmojiClusterCells();
+#endif
             return std::tuple { valueListPosition + length - skippedCharacters, lastCharacter };
         }
     }
@@ -253,6 +387,10 @@ std::tuple<unsigned, char16_t> SVGTextMetricsBuilder::measureTextRendererWithIte
         lastCharacter = currentCharacter;
     }
 
+#if PLATFORM(DRIFTSTACK)
+    if (data.processRenderer)
+        applyDriftstackSVGEmojiClusterCells();
+#endif
     return std::tuple { valueListPosition + m_textPosition - skippedCharacters, lastCharacter };
 }
 
