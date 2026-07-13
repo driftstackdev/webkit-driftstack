@@ -95,12 +95,19 @@ std::optional<SourceImage> RemoteGraphicsContext::sourceImage(RenderingResourceI
 
 void RemoteGraphicsContext::save()
 {
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackClipStateStack.append(m_driftstackHasNonDefaultClip);
+#endif
     context().save();
 }
 
 void RemoteGraphicsContext::restore()
 {
     context().restore();
+#if PLATFORM(DRIFTSTACK)
+    if (!m_driftstackClipStateStack.isEmpty())
+        m_driftstackHasNonDefaultClip = m_driftstackClipStateStack.takeLast();
+#endif
 }
 
 void RemoteGraphicsContext::translate(float x, float y)
@@ -302,21 +309,33 @@ void RemoteGraphicsContext::setMiterLimit(float limit)
 void RemoteGraphicsContext::clip(const FloatRect& rect)
 {
     context().clip(rect);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipRoundedRect(const FloatRoundedRect& rect)
 {
     context().clipRoundedRect(rect);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipOut(const FloatRect& rect)
 {
     context().clipOut(rect);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipOutRoundedRect(const FloatRoundedRect& rect)
 {
     context().clipOutRoundedRect(rect);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipToImageBuffer(RenderingResourceIdentifier imageBufferIdentifier, const FloatRect& destinationRect)
@@ -329,16 +348,25 @@ void RemoteGraphicsContext::clipToImageBuffer(RenderingResourceIdentifier imageB
         return;
     }
     context().clipToImageBuffer(*clipImage, destinationRect);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipOutToPath(const Path& path)
 {
     context().clipOut(path);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipPath(const Path& path, WindRule rule)
 {
     context().clipPath(path, rule);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::clipCachedPath(RemotePathImplIdentifier identifier, WebCore::WindRule rule)
@@ -348,11 +376,17 @@ void RemoteGraphicsContext::clipCachedPath(RemotePathImplIdentifier identifier, 
 
     Path path(pathImpl.releaseNonNull());
     context().clipPath(path, rule);
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = true;
+#endif
 }
 
 void RemoteGraphicsContext::resetClip()
 {
     context().resetClip();
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackHasNonDefaultClip = false;
+#endif
 }
 
 void RemoteGraphicsContext::drawFilteredImageBufferInternal(std::optional<RenderingResourceIdentifier> sourceImageIdentifier, const FloatRect& sourceImageRect, Filter& filter, FilterResults& results)

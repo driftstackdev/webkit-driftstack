@@ -18,6 +18,10 @@
  *     key:    (font_id u16, pt_size_q4 u16, codepoint u32, pos_class u32)
  *             = 12 bytes
  *     pixels: 64*64 uint8_t row-major   4096 bytes
+ *   Optional trailer (65808 bytes):
+ *     complete DSGCMP1 fractional-alpha glyph-compositor response
+ *   Optional destination trailer (458768 bytes, requires DSGCMP1):
+ *     complete DSDCR1 opaque/text-backdrop source-over response
  *
  * Runtime lookup: O(log N) binary search.
  *
@@ -33,12 +37,21 @@
 
 namespace WebCore {
 
+class AffineTransform;
+
 struct DriftstackPerGlyphAtlasEntry {
     // 64x64 grayscale iPhone-canonical pixels (row-major).
     // Backed by mmap; lifetime = atlas singleton lifetime.
     const uint8_t* pixels;
     // = 4096
     size_t pixelsSize;
+};
+
+struct DriftstackGlyphCompositorPixel {
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t alpha;
 };
 
 class DriftstackPerGlyphAtlas {
@@ -60,6 +73,16 @@ public:
         uint32_t codepoint,
         uint32_t posClass) const;
 
+    std::optional<DriftstackGlyphCompositorPixel> compositorPixel(
+        uint8_t fillAlphaByte, uint8_t red, uint8_t green,
+        uint8_t blue, uint8_t coverage) const;
+
+    std::optional<DriftstackGlyphCompositorPixel> destinationPixel(
+        uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+        uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+        uint8_t destinationGreen, uint8_t destinationBlue,
+        uint8_t destinationAlpha) const;
+
 private:
     bool m_loaded { false };
     const uint8_t* m_mapBase { nullptr };
@@ -67,6 +90,11 @@ private:
     size_t m_entryCount { 0 };
     // Offset to first entry's key (immediately after 16-byte header).
     const uint8_t* m_entriesBase { nullptr };
+    uint8_t m_compositorFillAlphaByte { 0 };
+    const uint8_t* m_compositorAlpha { nullptr };
+    const uint8_t* m_compositorChannels { nullptr };
+    const uint8_t* m_destinationOpaqueChannels { nullptr };
+    const uint8_t* m_destinationTextBackdrop { nullptr };
 };
 
 // #79 (2026-06-21): the arbitrary-canvas-text N>1 serve places glyph i at
@@ -80,6 +108,41 @@ private:
 // FontCascade advance. Lazy-loaded once from DRIFTSTACK_WESTERN_ADVANCE_SIDECAR_PATH
 // (default reference/driftstack_western_advance_sidecar.bin).
 std::optional<float> driftstackWesternAdvanceSidecar(uint16_t fontId, uint16_t sizePx, uint32_t codepoint);
+
+// Map a glyph pen coordinate to the capture atlas's twelve horizontal
+// position classes. Canvas coordinates and accumulated advance widths can
+// arrive a few ulps below an exact k/12 boundary; tolerate only that numeric
+// noise so a captured boundary remains in class k rather than class k - 1.
+uint8_t driftstackTwelfthPositionClass(double coordinate);
+
+// Atlas cells are captured without scale, rotation, or skew. Translation is
+// safe because the captured mask is placed in user space and follows the
+// canvas translation exactly; other linear transforms retain native drawing.
+bool driftstackPerGlyphAtlasSupportsTransform(const AffineTransform&);
+
+// Return a valid premultiplied backing byte whose local unpremultiplied
+// readback is exactly the requested visible byte at this alpha.
+WEBCORE_EXPORT std::optional<uint8_t> driftstackPremultipliedChannelForVisible(uint8_t visible, uint8_t alpha);
+
+// Capture-derived iOS glyph-compositor response. The optional DSGCMP1 trailer
+// in the per-glyph mmap maps
+// (fill alpha byte, sRGB channel byte, opaque glyph coverage byte) to the
+// unpremultiplied RGBA bytes returned by iOS canvas getImageData(). A missing
+// trailer or an uncaptured fill-alpha byte returns nullopt so callers retain the
+// existing compositor path; in particular, opaque rendering is unchanged.
+std::optional<DriftstackGlyphCompositorPixel> driftstackGlyphCompositorPixel(
+    uint8_t fillAlphaByte, uint8_t red, uint8_t green, uint8_t blue, uint8_t coverage);
+
+// Capture-derived source-over response for destinations whose 8-bit visible
+// state was exhaustively characterized. Opaque destinations are channel-
+// separable for every sRGB byte; translucent #069 text backdrops are complete
+// for every destination-alpha/source-coverage pair. Other destinations miss so
+// the normal compositor remains authoritative.
+std::optional<DriftstackGlyphCompositorPixel> driftstackGlyphDestinationPixel(
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+    uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+    uint8_t destinationGreen, uint8_t destinationBlue,
+    uint8_t destinationAlpha);
 
 } // namespace WebCore
 

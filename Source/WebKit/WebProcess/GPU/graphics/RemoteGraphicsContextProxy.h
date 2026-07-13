@@ -98,6 +98,10 @@ private:
     void clipOutRoundedRect(const WebCore::FloatRoundedRect&) final;
     void clipPath(const WebCore::Path&, WebCore::WindRule) final;
     void clipToImageBuffer(WebCore::ImageBuffer&, const WebCore::FloatRect& destinationRect) final;
+#if PLATFORM(DRIFTSTACK)
+    bool beginDriftstackGlyphDestinationCorrection(std::span<const uint8_t>, const WebCore::FloatRect&, uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen, uint8_t sourceBlue) final;
+    void endDriftstackGlyphDestinationCorrection() final;
+#endif
     void resetClip() final;
     void beginTransparencyLayer(float) final;
     void beginTransparencyLayer(WebCore::CompositeOperator, WebCore::BlendMode) final;

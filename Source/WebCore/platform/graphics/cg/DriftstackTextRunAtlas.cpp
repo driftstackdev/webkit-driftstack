@@ -455,8 +455,6 @@ uint16_t driftstackMapFontToId(const Font& font)
     // PostScript name. Falls back to CSS family if the atlas table only
     // contains family aliases (the V-770.B builder accepts either).
     auto& atlas = DriftstackTextRunAtlas::singleton();
-    if (!atlas.isLoaded())
-        return UINT16_MAX; // sentinel: no font_id resolution possible
 
     CTFontRef ctFont = font.platformData().ctFont();
     if (!ctFont)
@@ -471,9 +469,11 @@ uint16_t driftstackMapFontToId(const Font& font)
         if (CFStringGetCString(psName.get(), psBuf, sizeof(psBuf), kCFStringEncodingUTF8)) {
             size_t bufLen = 0;
             while (bufLen < sizeof(psBuf) && psBuf[bufLen]) ++bufLen;
-            uint16_t fid = atlas.fontIdForName(psBuf, bufLen);
-            if (fid != UINT16_MAX)
-                return fid;
+            if (atlas.isLoaded()) {
+                uint16_t fid = atlas.fontIdForName(psBuf, bufLen);
+                if (fid != UINT16_MAX)
+                    return fid;
+            }
         }
     }
 
@@ -483,13 +483,17 @@ uint16_t driftstackMapFontToId(const Font& font)
         if (CFStringGetCString(familyName.get(), familyBuf, sizeof(familyBuf), kCFStringEncodingUTF8)) {
             size_t bufLen = 0;
             while (bufLen < sizeof(familyBuf) && familyBuf[bufLen]) ++bufLen;
-            uint16_t fid = atlas.fontIdForName(familyBuf, bufLen);
-            if (fid != UINT16_MAX)
-                return fid;
+            if (atlas.isLoaded()) {
+                uint16_t fid = atlas.fontIdForName(familyBuf, bufLen);
+                if (fid != UINT16_MAX)
+                    return fid;
+            }
         }
     }
 
-    // W1761: Asian system fallback fonts the Mac fleet's WebKit cascade resolves for
+    // Static fallback names keep the independent per-glyph atlas addressable when
+    // the whole-text-run atlas is intentionally not mapped, then cover the Asian
+    // system fallback fonts the Mac fleet's WebKit cascade resolves for
     // CJK/Kana/Hangul (not in the atlas font table — verified via the fork's V-583B/
     // V-770A diag, NOT macOS CTFontCreateForString which gives different names).
     // Mapped to dedicated font_ids so the V-790.L per-glyph atlas can key Asian
@@ -498,10 +502,32 @@ uint16_t driftstackMapFontToId(const Font& font)
     // fires only after the atlas table already missed, i.e. previously UINT16_MAX).
     {
         auto eq = [](const char* a, const char* b) {
-            while (*a && *a == *b) { ++a; ++b; }
+            while (*a && *a == *b) {
+                ++a;
+                ++b;
+            }
             return *a == *b;
         };
-        static const struct { const char* name; uint16_t id; } kAsianUiFonts[] = {
+        struct KnownFont {
+            const char* name;
+            uint16_t id;
+        };
+        static constexpr KnownFont kKnownFonts[] = {
+            // The whole-text-run atlas is deliberately suppressed in direct-browse mode,
+            // but its font-id resolver is also the key source for the independent V-790.L
+            // per-glyph canvas atlas. Keep the canonical Western mappings available even
+            // when the text-run table itself is not mapped; otherwise every ordinary
+            // canvas string becomes font_id=UINT16_MAX and silently falls back to Mac CG.
+            { "ArialMT", 1 },                    { "Arial", 1 },
+            { "Arial-BoldMT", 1 },               { "Courier", 2 },
+            { "CourierNewPSMT", 2 },             { "Courier New", 2 },
+            { "Georgia", 3 },                    { "Helvetica", 4 },
+            { "Tahoma", 5 },                     { "TimesNewRomanPSMT", 6 },
+            { "Times New Roman", 6 },            { "Times", 6 },
+            { "TrebuchetMS", 7 },                { "Trebuchet MS", 7 },
+            { "Verdana", 8 },                    { "AppleColorEmoji", 13 },
+            { "Apple Color Emoji", 13 },
+            { "Menlo-Regular", 12 },             { "Menlo", 12 },
             { ".AppleSimplifiedChineseFont-Regular", 22 }, { ".AppleSimplifiedChineseFont", 22 },
             { ".AppleJapaneseFont-Regular", 23 },          { ".AppleJapaneseFont", 23 },
             { ".AppleKoreanFont-Regular", 24 },            { ".AppleKoreanFont", 24 },
@@ -517,20 +543,8 @@ uint16_t driftstackMapFontToId(const Font& font)
             { ".ThonburiUI-Regular", 37 },        { "LaoSangamMN", 38 },
             { "KhmerSangamMN", 39 },              { "NotoSansMyanmar-Regular", 40 },
             { "KefaIII-Regular", 41 },            { ".AppleIndicFont-Regular", 42 },
-            // #79: Menlo (canvas monospace text) → font_id 12, matching the advance atlas
-            // (DriftstackAdvanceAtlas monospace slot) + the #79 Western per-glyph color/coverage
-            // atlas. Not in the text-run atlas name table, so resolve it here for the per-glyph
-            // canvas serve (DriftstackTextGlyphAtlas::fontIdForFamily lacks the 'Menlo' literal).
-            { "Menlo-Regular", 12 },              { "Menlo", 12 },
-            // #79: Arial (PS name "ArialMT") + Verdana — NOT in the text-run atlas name table
-            // (verified: advdiag never resolved fontId 1 → Arial canvas text fell to native Mac
-            // render). The per-glyph atlas has Arial (font_id 1, incl twelfths sub-pixel) + Verdana
-            // (8); resolve them here so the N>1 canvas serve engages (Mac Arial≈iOS but not exact —
-            // the atlas + sidecar advance close fox text byte-exact). glyphHash is DOM (unaffected).
-            { "ArialMT", 1 },                     { "Arial", 1 },
-            { "Arial-BoldMT", 1 },                { "Verdana", 8 },
         };
-        for (const auto& e : kAsianUiFonts) {
+        for (const auto& e : kKnownFonts) {
             if (eq(psBuf, e.name) || eq(familyBuf, e.name))
                 return e.id;
         }

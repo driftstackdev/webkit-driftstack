@@ -65,6 +65,15 @@ namespace DisplayList {
 class DisplayList;
 }
 
+#if PLATFORM(DRIFTSTACK)
+// Public cross-process entry point for the capture-derived destination response.
+// RGBA bytes are packed little-endian (R in bits 0..7, A in bits 24..31).
+WEBCORE_EXPORT std::optional<uint32_t> driftstackGlyphDestinationPixelPacked(
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+    uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+    uint8_t destinationGreen, uint8_t destinationBlue, uint8_t destinationAlpha);
+#endif
+
 class GraphicsContext {
     WTF_MAKE_TZONE_ALLOCATED_EXPORT(GraphicsContext, WEBCORE_EXPORT);
     WTF_MAKE_NONCOPYABLE(GraphicsContext);
@@ -299,6 +308,14 @@ public:
     virtual void clipPath(const Path&, WindRule = WindRule::EvenOdd) = 0;
     WEBCORE_EXPORT virtual void clipToImageBuffer(ImageBuffer&, const FloatRect&) = 0;
     WEBCORE_EXPORT virtual IntRect clipBounds() const;
+
+#if PLATFORM(DRIFTSTACK)
+    // A remote image-buffer context can snapshot a glyph cell before the normal
+    // draw and replace only capture-covered destination pixels afterwards.
+    // Other context implementations fail closed and retain the normal draw.
+    virtual bool beginDriftstackGlyphDestinationCorrection(std::span<const uint8_t>, const FloatRect&, uint8_t, uint8_t, uint8_t, uint8_t) { return false; }
+    virtual void endDriftstackGlyphDestinationCorrection() { }
+#endif
 
     // Text
 

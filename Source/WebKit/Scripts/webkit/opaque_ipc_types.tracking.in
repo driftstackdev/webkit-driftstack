@@ -227,6 +227,10 @@
     [NotSentFromWebContent] MessageParam WebProcess.SetInjectedBundleParameters parameters
 }
 
+[UnsafeWrapper] std::span<const uint8_t, 4096> {
+    [NeedsReview] MessageParam RemoteGraphicsContext.BeginDriftstackGlyphDestinationCorrection coverage
+}
+
 [UnsafeWrapper] std::optional<Vector<uint8_t>> {
     [Legacy] MessageParamReply WebPageProxy.SerializeAndWrapCryptoKey wrappedKey
     [Legacy] MessageParamReply WebPageProxy.UnwrapCryptoKey key

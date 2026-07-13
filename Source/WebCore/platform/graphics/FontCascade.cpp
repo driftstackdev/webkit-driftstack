@@ -33,6 +33,7 @@
 #include "FontInlines.h"
 #include "GlyphBuffer.h"
 #include "GraphicsContext.h"
+#include "ImageBuffer.h"
 #include "LayoutRect.h"
 #include "TextRun.h"
 #include "TextShapingResultAndDisplayList.h"
@@ -1880,12 +1881,22 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
             {
                 static const bool s_n1subGB = std::getenv("DRIFTSTACK_V790L_N1_SUB")
                     && std::getenv("DRIFTSTACK_V790L_N1_SUB")[0] == '1';
-                if (s_n1subGB && source.is8Bit() && source.length() == glyphBuffer.size()
+                if (s_n1subGB && context.textDrawingMode() == TextDrawingMode::Fill
+                    && driftstackPerGlyphAtlasSupportsTransform(context.getCTM())
+                    && source.length() == glyphBuffer.size()
                     && glyphBuffer.size() > 1) {
-                    auto srcB = source.span8();
+                    // ASCII is a semantic property of the text, not of WTF::String's
+                    // backing width. JS strings such as broprint's literal can reach
+                    // this layer as 16-bit storage even though every scalar is ASCII;
+                    // rejecting those runs makes an otherwise complete per-glyph plan
+                    // fall through to host CoreText.
                     bool allAscii = true;
-                    for (size_t i = 0; i < srcB.size(); ++i)
-                        if (srcB[i] >= 0x80) { allAscii = false; break; }
+                    for (size_t i = 0; i < source.length(); ++i) {
+                        if (source[i] >= 0x80) {
+                            allAscii = false;
+                            break;
+                        }
+                    }
                     if (allAscii) {
                         auto& pgGB = DriftstackPerGlyphAtlas::singleton();
                         uint16_t ptQ4 = static_cast<uint16_t>(ptSize * 16);
@@ -1903,22 +1914,84 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                         double penXg = point.x();
                         bool allHitG = true;
                         for (size_t i = 0; i < glyphBuffer.size(); ++i) {
-                            uint8_t b = srcB[i];
+                            uint8_t b = static_cast<uint8_t>(source[i]);
                             if (b == 0x20 || b == 0x09 || b == 0x0A) { penXg += advG(i, b); continue; }
-                            double xFracg = penXg - std::floor(penXg);
-                            uint8_t xBing = static_cast<uint8_t>(std::floor(std::min(xFracg, 0.999999) * 12.0));
+                            uint8_t xBing = driftstackTwelfthPositionClass(penXg);
                             uint8_t pcg = (yBing << 4) | xBing;
                             auto hit = pgGB.lookup(fontId, ptQ4, static_cast<uint32_t>(b), static_cast<uint32_t>(pcg));
-                            if (!hit) { allHitG = false; break; }
+                            if (!hit) {
+                                allHitG = false;
+                                break;
+                            }
                             entsG.append(*hit);
                             penXsG.append(penXg);
                             penXg += advG(i, b);
                         }
-                        if (allHitG && !entsG.isEmpty()) {
+                        if (allHitG && !entsG.isEmpty()
+                            && !context.fillGradient() && !context.fillPattern()) {
                             auto [fr, fg, fb, fa] = context.fillColor().toResolvedColorComponentsInColorSpace(ColorSpace::SRGB);
+                            auto toByte = [](float component) -> uint8_t {
+                                return static_cast<uint8_t>(std::lround(std::max(0.0f, std::min(1.0f, component)) * 255.0f));
+                            };
+                            uint8_t fillAlphaByte = toByte(fa * context.alpha());
+                            uint8_t fillRedByte = toByte(fr);
+                            uint8_t fillGreenByte = toByte(fg);
+                            uint8_t fillBlueByte = toByte(fb);
+                            bool useCapturedCompositor = !context.dropShadow()
+                                && driftstackGlyphCompositorPixel(fillAlphaByte,
+                                    fillRedByte, fillGreenByte, fillBlueByte, 255).has_value();
+                            bool useDestinationCorrection = useCapturedCompositor
+                                && context.alpha() == 1.0f
+                                && driftstackGlyphDestinationPixel(fillAlphaByte,
+                                    fillRedByte, fillGreenByte, fillBlueByte,
+                                    255, 0, 0, 0, 255).has_value();
                             for (size_t i = 0; i < entsG.size(); ++i) {
-                                std::array<uint8_t, 64 * 64 * 4> rgbaG;
                                 auto atlasPx = unsafeMakeSpan(entsG[i].pixels, 64 * 64);
+                                if (useCapturedCompositor) {
+                                    FloatRect dst(std::floor(penXsG[i]) - 8.0,
+                                        std::floor(penYg) - 46.0, 64, 64);
+                                    FloatRect cell(0, 0, 64, 64);
+                                    std::array<uint8_t, 64 * 64 * 4> maskG;
+                                    auto maskSpanG = unsafeMakeSpan(maskG.data(), maskG.size());
+                                    for (size_t pixelIndex = 0; pixelIndex < 64 * 64; ++pixelIndex) {
+                                        uint8_t ink = atlasPx[pixelIndex];
+                                        maskSpanG[pixelIndex * 4 + 0] = 0;
+                                        maskSpanG[pixelIndex * 4 + 1] = 0;
+                                        maskSpanG[pixelIndex * 4 + 2] = 0;
+                                        maskSpanG[pixelIndex * 4 + 3] = ink;
+                                    }
+                                    RetainPtr<CFDataRef> maskDataG = adoptCF(CFDataCreate(
+                                        kCFAllocatorDefault, maskG.data(), maskG.size()));
+                                    RetainPtr<CGDataProviderRef> maskProviderG = adoptCF(
+                                        CGDataProviderCreateWithCFData(maskDataG.get()));
+                                    RetainPtr<CGColorSpaceRef> maskColorSpaceG = adoptCF(
+                                        CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+                                    RetainPtr<CGImageRef> maskImageG = adoptCF(CGImageCreate(
+                                        64, 64, 8, 32, 64 * 4, maskColorSpaceG.get(),
+                                        kCGImageAlphaPremultipliedLast, maskProviderG.get(), nullptr,
+                                        false, kCGRenderingIntentDefault));
+                                    RefPtr maskNativeG = maskImageG
+                                        ? NativeImage::create(WTF::retainPtr(maskImageG.get())) : nullptr;
+                                    if (maskNativeG) {
+                                        if (RefPtr<ImageBuffer> coverageBufferG = context.createImageBuffer(FloatSize(64, 64))) {
+                                            coverageBufferG->context().fillRect(cell, Color::white);
+                                            coverageBufferG->context().drawNativeImage(*maskNativeG, cell, cell,
+                                                { CompositeOperator::DestinationIn });
+                                            bool correctDestinationG = useDestinationCorrection
+                                                && context.beginDriftstackGlyphDestinationCorrection(
+                                                    atlasPx, dst, fillAlphaByte,
+                                                    fillRedByte, fillGreenByte, fillBlueByte);
+                                            context.save();
+                                            context.clipToImageBuffer(*coverageBufferG, dst);
+                                            context.fillRect(dst, context.fillColor());
+                                            context.restore();
+                                            if (correctDestinationG)
+                                                context.endDriftstackGlyphDestinationCorrection();
+                                            continue;
+                                        }
+                                    }
+                                }
+                                std::array<uint8_t, 64 * 64 * 4> rgbaG;
                                 auto rgbaSpan = unsafeMakeSpan(rgbaG.data(), 64 * 64 * 4);
                                 for (size_t row = 0; row < 64; ++row) {
                                     for (size_t col = 0; col < 64; ++col) {
@@ -1931,11 +2004,12 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                         rgbaSpan[di + 3] = static_cast<uint8_t>(roundf(a * 255.0f));
                                     }
                                 }
-                                RetainPtr<CFDataRef> cfd = adoptCF(CFDataCreate(kCFAllocatorDefault, rgbaG.data(), 64 * 64 * 4));
+                                RetainPtr<CFDataRef> cfd = adoptCF(CFDataCreate(kCFAllocatorDefault, rgbaG.data(), rgbaG.size()));
                                 RetainPtr<CGDataProviderRef> dp = adoptCF(CGDataProviderCreateWithCFData(cfd.get()));
                                 RetainPtr<CGColorSpaceRef> cs = adoptCF(CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
-                                RetainPtr<CGImageRef> img = adoptCF(CGImageCreate(64, 64, 8, 32, 64 * 4, cs.get(),
-                                    kCGImageAlphaPremultipliedLast, dp.get(), nullptr, false, kCGRenderingIntentDefault));
+                                RetainPtr<CGImageRef> img = adoptCF(CGImageCreate(64, 64, 8, 32, 64 * 4,
+                                    cs.get(), kCGImageAlphaPremultipliedLast,
+                                    dp.get(), nullptr, false, kCGRenderingIntentDefault));
                                 if (!img) continue;
                                 RefPtr ni = NativeImage::create(WTF::retainPtr(img.get()));
                                 if (!ni) continue;

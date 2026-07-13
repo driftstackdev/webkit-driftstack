@@ -94,6 +94,10 @@ public:
     void clipOut(const WebCore::FloatRect&);
     void clipOutRoundedRect(const WebCore::FloatRoundedRect&);
     void clipToImageBuffer(WebCore::RenderingResourceIdentifier, const WebCore::FloatRect& destinationRect);
+#if PLATFORM(DRIFTSTACK)
+    virtual void beginDriftstackGlyphDestinationCorrection(std::span<const uint8_t, 4096>, const WebCore::FloatRect&, uint8_t, uint8_t, uint8_t, uint8_t) { }
+    virtual void endDriftstackGlyphDestinationCorrection() { }
+#endif
     void clipOutToPath(const WebCore::Path&);
     void clipPath(const WebCore::Path&, WebCore::WindRule);
     void clipCachedPath(RemotePathImplIdentifier, WebCore::WindRule);
@@ -173,6 +177,9 @@ protected:
 
     RemoteResourceCache& NODELETE resourceCache() const;
     WebCore::GraphicsContext& context() LIFETIME_BOUND { return m_context; }
+#if PLATFORM(DRIFTSTACK)
+    bool driftstackHasNonDefaultClip() const { return m_driftstackHasNonDefaultClip; }
+#endif
     RefPtr<WebCore::ImageBuffer> imageBuffer(WebCore::RenderingResourceIdentifier) const;
     std::optional<WebCore::SourceImage> sourceImage(WebCore::RenderingResourceIdentifier) const;
 
@@ -188,6 +195,10 @@ protected:
     const Ref<RemoteRenderingBackend> m_renderingBackend;
     const Ref<RemoteSharedResourceCache> m_sharedResourceCache;
     RefPtr<WebCore::ControlFactory> m_controlFactory;
+#if PLATFORM(DRIFTSTACK)
+    bool m_driftstackHasNonDefaultClip { false };
+    Vector<uint8_t, 16> m_driftstackClipStateStack;
+#endif
 #if PLATFORM(COCOA) && ENABLE(VIDEO)
     std::unique_ptr<SharedVideoFrameReader> m_sharedVideoFrameReader;
 #endif

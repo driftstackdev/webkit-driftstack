@@ -41,12 +41,29 @@ public:
 
     void drawImageBuffer(WebCore::RenderingResourceIdentifier imageBufferIdentifier, const WebCore::FloatRect& destinationRect, const WebCore::FloatRect& srcRect, WebCore::ImagePaintingOptions) final;
 
+#if PLATFORM(DRIFTSTACK)
+    void beginDriftstackGlyphDestinationCorrection(std::span<const uint8_t, 4096>, const WebCore::FloatRect&, uint8_t, uint8_t, uint8_t, uint8_t) final;
+    void endDriftstackGlyphDestinationCorrection() final;
+#endif
+
 private:
     RemoteImageBufferGraphicsContext(WebCore::ImageBuffer&, RemoteGraphicsContextIdentifier, RemoteRenderingBackend&);
     void startListeningForIPC();
 
     const Ref<WebCore::ImageBuffer> m_imageBuffer;
     const RemoteGraphicsContextIdentifier m_identifier;
+#if PLATFORM(DRIFTSTACK)
+    struct PendingGlyphDestinationCorrection {
+        Vector<uint8_t> coverage;
+        Vector<uint8_t> destinationPixels;
+        WebCore::IntRect destinationRect;
+        uint8_t fillAlphaByte;
+        uint8_t sourceRed;
+        uint8_t sourceGreen;
+        uint8_t sourceBlue;
+    };
+    std::optional<PendingGlyphDestinationCorrection> m_pendingGlyphDestinationCorrection;
+#endif
 };
 
 } // namespace WebKit

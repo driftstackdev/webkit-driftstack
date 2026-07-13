@@ -226,6 +226,26 @@ void RemoteGraphicsContextProxy::clipToImageBuffer(ImageBuffer& imageBuffer, con
     send(Messages::RemoteGraphicsContext::ClipToImageBuffer(imageBuffer.renderingResourceIdentifier(), destinationRect));
 }
 
+#if PLATFORM(DRIFTSTACK)
+bool RemoteGraphicsContextProxy::beginDriftstackGlyphDestinationCorrection(
+    std::span<const uint8_t> coverage, const FloatRect& destinationRect,
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen, uint8_t sourceBlue)
+{
+    if (coverage.size() != 64 * 64)
+        return false;
+    auto fixedCoverage = coverage.first<64 * 64>();
+    send(Messages::RemoteGraphicsContext::BeginDriftstackGlyphDestinationCorrection(
+        fixedCoverage, destinationRect, fillAlphaByte,
+        sourceRed, sourceGreen, sourceBlue));
+    return true;
+}
+
+void RemoteGraphicsContextProxy::endDriftstackGlyphDestinationCorrection()
+{
+    send(Messages::RemoteGraphicsContext::EndDriftstackGlyphDestinationCorrection());
+}
+#endif
+
 void RemoteGraphicsContextProxy::clipOut(const Path& path)
 {
     updateStateForClipOut(path);

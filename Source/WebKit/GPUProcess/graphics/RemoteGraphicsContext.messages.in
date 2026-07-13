@@ -71,6 +71,10 @@ messages -> RemoteGraphicsContext Stream {
     ClipOut(WebCore::FloatRect rect) StreamBatched
     ClipOutRoundedRect(WebCore::FloatRoundedRect rect) StreamBatched
     ClipToImageBuffer(WebCore::RenderingResourceIdentifier renderingResourceIdentifier, WebCore::FloatRect destinationRect) StreamBatched
+#if PLATFORM(DRIFTSTACK)
+    BeginDriftstackGlyphDestinationCorrection(std::span<const uint8_t, 4096> coverage, WebCore::FloatRect destinationRect, uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen, uint8_t sourceBlue) StreamBatched
+    EndDriftstackGlyphDestinationCorrection() StreamBatched
+#endif
     ClipOutToPath(WebCore::Path path) StreamBatched
     ClipPath(WebCore::Path path, enum:bool WebCore::WindRule windRule) StreamBatched
     ClipCachedPath(WebKit::RemotePathImplIdentifier identifier, enum:bool WebCore::WindRule windRule)

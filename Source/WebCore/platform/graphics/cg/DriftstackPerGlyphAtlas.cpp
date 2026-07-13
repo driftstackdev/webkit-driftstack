@@ -6,13 +6,19 @@
  */
 #include "config.h"
 #include "DriftstackPerGlyphAtlas.h"
+#include "AffineTransform.h"
+#include "GraphicsContext.h"
+#include "PixelBufferConversion.h"
 
 #if PLATFORM(DRIFTSTACK)
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 #include <fcntl.h>
@@ -31,6 +37,16 @@ constexpr size_t kKeySize = 12;     // font_id u16 + pt_size_q4 u16 + cp u32 + p
 constexpr size_t kPixelsSize = 64 * 64;
 constexpr size_t kEntrySize = kKeySize + kPixelsSize;
 constexpr const char kMagic[8] = { 'D', 'S', 'P', 'G', 'A', '1', '\0', '\0' };
+constexpr size_t kCompositorHeaderSize = 16;
+constexpr size_t kCompositorAlphaSize = 256;
+constexpr size_t kCompositorChannelSize = 256 * 256;
+constexpr size_t kCompositorSize = kCompositorHeaderSize + kCompositorAlphaSize + kCompositorChannelSize;
+constexpr const char kCompositorMagic[8] = { 'D', 'S', 'G', 'C', 'M', 'P', '1', '\0' };
+constexpr size_t kDestinationHeaderSize = 16;
+constexpr size_t kDestinationOpaqueSize = 3 * 256 * 256;
+constexpr size_t kDestinationTextSize = 256 * 256 * 4;
+constexpr size_t kDestinationSize = kDestinationHeaderSize + kDestinationOpaqueSize + kDestinationTextSize;
+constexpr const char kDestinationMagic[8] = { 'D', 'S', 'D', 'C', 'R', '1', '\0', '\0' };
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
 
@@ -82,6 +98,69 @@ DriftstackPerGlyphAtlas& DriftstackPerGlyphAtlas::singleton()
     if (!instance->m_loaded)
         instance->loadFromFile(nullptr);
     return instance.get();
+}
+
+uint8_t driftstackTwelfthPositionClass(double coordinate)
+{
+    double fraction = coordinate - std::floor(coordinate);
+    float roundedCoordinate = static_cast<float>(coordinate);
+    double floatUlp = static_cast<double>(std::nextafter(
+        roundedCoordinate, std::numeric_limits<float>::infinity())) - roundedCoordinate;
+    // Keep the tolerance below half a class even for very large, off-canvas
+    // coordinates where a float ulp can exceed the entire fractional range.
+    double boundaryTolerance = std::min(floatUlp * 12.0, 0.5);
+    double positionClass = std::floor(fraction * 12.0 + boundaryTolerance);
+    return static_cast<uint8_t>(std::min(positionClass, 11.0));
+}
+
+bool driftstackPerGlyphAtlasSupportsTransform(const AffineTransform& transform)
+{
+    return transform.isIdentityOrTranslationOrFlipped();
+}
+
+std::optional<uint8_t> driftstackPremultipliedChannelForVisible(uint8_t visible, uint8_t alpha)
+{
+    struct PreimageTable {
+        std::array<uint8_t, 256 * 256> value { };
+        std::array<uint8_t, 256 * 256> present { };
+    };
+    static const PreimageTable table = [] {
+        PreimageTable result;
+        Vector<uint8_t> premultipliedCandidates(256 * 256 * 4);
+        Vector<uint8_t> visibleCandidates(256 * 256 * 4);
+        for (size_t candidateAlpha = 0; candidateAlpha < 256; ++candidateAlpha) {
+            for (size_t channel = 0; channel < 256; ++channel) {
+                size_t offset = (candidateAlpha * 256 + channel) * 4;
+                premultipliedCandidates[offset] = static_cast<uint8_t>(channel);
+                premultipliedCandidates[offset + 1] = static_cast<uint8_t>(channel);
+                premultipliedCandidates[offset + 2] = static_cast<uint8_t>(channel);
+                premultipliedCandidates[offset + 3] = static_cast<uint8_t>(candidateAlpha);
+            }
+        }
+        auto srgb = DestinationColorSpace::SRGB();
+        convertImagePixels(
+            { { AlphaPremultiplication::Premultiplied, PixelFormat::RGBA8, srgb },
+                1024, premultipliedCandidates.span() },
+            { { AlphaPremultiplication::Unpremultiplied, PixelFormat::RGBA8, srgb },
+                1024, visibleCandidates.mutableSpan() },
+            { 256, 256 });
+        for (size_t candidateAlpha = 0; candidateAlpha < 256; ++candidateAlpha) {
+            for (size_t premultiplied = 0; premultiplied <= candidateAlpha; ++premultiplied) {
+                size_t candidateOffset = (candidateAlpha * 256 + premultiplied) * 4;
+                uint8_t candidateVisible = visibleCandidates[candidateOffset];
+                size_t tableOffset = candidateAlpha * 256 + candidateVisible;
+                if (!result.present[tableOffset]) {
+                    result.value[tableOffset] = static_cast<uint8_t>(premultiplied);
+                    result.present[tableOffset] = 1;
+                }
+            }
+        }
+        return result;
+    }();
+    size_t offset = static_cast<size_t>(alpha) * 256 + visible;
+    if (!table.present[offset])
+        return std::nullopt;
+    return table.value[offset];
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
@@ -155,14 +234,54 @@ bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
         return false;
     }
 
-    off_t expected = static_cast<off_t>(kHeaderSize) + static_cast<off_t>(count) * static_cast<off_t>(kEntrySize);
-    if (st.st_size != expected) {
-        WTFLogAlways("[V-790.L] per-glyph atlas size mismatch: got %lld "
-                     "expected %lld (count=%u) — Layer-A2 disabled",
-                     static_cast<long long>(st.st_size),
-                     static_cast<long long>(expected), count);
+    off_t baseExpected = static_cast<off_t>(kHeaderSize) + static_cast<off_t>(count) * static_cast<off_t>(kEntrySize);
+    off_t withCompositorExpected = baseExpected + static_cast<off_t>(kCompositorSize);
+    off_t withDestinationExpected = withCompositorExpected + static_cast<off_t>(kDestinationSize);
+    bool hasDestination = st.st_size == withDestinationExpected;
+    bool hasCompositor = st.st_size == withCompositorExpected || hasDestination;
+    if (st.st_size != baseExpected && !hasCompositor) {
+        WTFLogAlways(
+            "[V-790.L] per-glyph atlas size mismatch: got %lld "
+            "expected %lld or %lld or %lld (count=%u) — Layer-A2 disabled",
+            static_cast<long long>(st.st_size),
+            static_cast<long long>(baseExpected),
+            static_cast<long long>(withCompositorExpected),
+            static_cast<long long>(withDestinationExpected), count);
         ::munmap(base, st.st_size);
         return false;
+    }
+
+    const uint8_t* compositor = hasCompositor ? bytes + baseExpected : nullptr;
+    if (compositor) {
+        uint32_t compositorVersion = leU32(compositor + 8);
+        uint16_t capturedAlpha = leU16(compositor + 12);
+        uint16_t reserved = leU16(compositor + 14);
+        if (!equalSpans(unsafeMakeSpan(compositor, sizeof(kCompositorMagic)), asByteSpan(kCompositorMagic))
+            || compositorVersion != 1 || capturedAlpha > 255 || reserved) {
+            WTFLogAlways("[V-790.L] per-glyph compositor trailer invalid: version=%u alpha=%u reserved=%u — Layer-A2 disabled",
+                compositorVersion, capturedAlpha, reserved);
+            ::munmap(base, st.st_size);
+            return false;
+        }
+        m_compositorFillAlphaByte = static_cast<uint8_t>(capturedAlpha);
+        m_compositorAlpha = compositor + kCompositorHeaderSize;
+        m_compositorChannels = m_compositorAlpha + kCompositorAlphaSize;
+    }
+
+    const uint8_t* destination = hasDestination ? bytes + withCompositorExpected : nullptr;
+    if (destination) {
+        uint32_t destinationVersion = leU32(destination + 8);
+        uint16_t capturedAlpha = leU16(destination + 12);
+        uint16_t reserved = leU16(destination + 14);
+        if (!equalSpans(unsafeMakeSpan(destination, sizeof(kDestinationMagic)), asByteSpan(kDestinationMagic))
+            || destinationVersion != 1 || capturedAlpha != m_compositorFillAlphaByte || reserved) {
+            WTFLogAlways("[V-790.L] glyph-destination trailer invalid: version=%u alpha=%u reserved=%u — Layer-A2 disabled",
+                destinationVersion, capturedAlpha, reserved);
+            ::munmap(base, st.st_size);
+            return false;
+        }
+        m_destinationOpaqueChannels = destination + kDestinationHeaderSize;
+        m_destinationTextBackdrop = m_destinationOpaqueChannels + kDestinationOpaqueSize;
     }
 
     m_mapBase = bytes;
@@ -173,6 +292,10 @@ bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
 
     WTFLogAlways("[V-790.L] per-glyph atlas loaded: %u entries from %s",
                  count, resolved);
+    if (compositor)
+        WTFLogAlways("[V-790.L] glyph-compositor trailer loaded: alpha=%u", m_compositorFillAlphaByte);
+    if (destination)
+        WTFLogAlways("[V-790.L] glyph-destination trailer loaded: alpha=%u", m_compositorFillAlphaByte);
     return true;
 }
 
@@ -204,6 +327,52 @@ std::optional<DriftstackPerGlyphAtlasEntry> DriftstackPerGlyphAtlas::lookup(
             lo = mid + 1;
     }
     return std::nullopt;
+}
+
+std::optional<DriftstackGlyphCompositorPixel> DriftstackPerGlyphAtlas::compositorPixel(
+    uint8_t fillAlphaByte, uint8_t red, uint8_t green, uint8_t blue, uint8_t coverage) const
+{
+    if (!m_loaded || !m_compositorAlpha || !m_compositorChannels
+        || fillAlphaByte != m_compositorFillAlphaByte)
+        return std::nullopt;
+    auto channel = [&](uint8_t value) -> uint8_t {
+        return m_compositorChannels[static_cast<size_t>(value) * 256 + coverage];
+    };
+    uint8_t alpha = m_compositorAlpha[coverage];
+    return DriftstackGlyphCompositorPixel {
+        channel(red), channel(green), channel(blue), alpha
+    };
+}
+
+std::optional<DriftstackGlyphCompositorPixel> DriftstackPerGlyphAtlas::destinationPixel(
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+    uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+    uint8_t destinationGreen, uint8_t destinationBlue,
+    uint8_t destinationAlpha) const
+{
+    if (!m_loaded || !m_destinationOpaqueChannels || !m_destinationTextBackdrop
+        || fillAlphaByte != m_compositorFillAlphaByte
+        || sourceRed != 102 || sourceGreen != 204 || sourceBlue)
+        return std::nullopt;
+    if (destinationAlpha == 255) {
+        auto channel = [&](size_t component, uint8_t value) -> uint8_t {
+            return m_destinationOpaqueChannels[component * 256 * 256
+                + static_cast<size_t>(value) * 256 + coverage];
+        };
+        return DriftstackGlyphCompositorPixel {
+            channel(0, destinationRed), channel(1, destinationGreen),
+            channel(2, destinationBlue), 255
+        };
+    }
+    // RGB is semantically irrelevant at alpha zero, and the native overlap
+    // validation proves that row against transparent text-edge destinations.
+    if (destinationAlpha && (destinationRed || destinationGreen != 102 || destinationBlue != 153))
+        return std::nullopt;
+    size_t offset = (static_cast<size_t>(destinationAlpha) * 256 + coverage) * 4;
+    return DriftstackGlyphCompositorPixel {
+        m_destinationTextBackdrop[offset], m_destinationTextBackdrop[offset + 1],
+        m_destinationTextBackdrop[offset + 2], m_destinationTextBackdrop[offset + 3]
+    };
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
@@ -273,6 +442,42 @@ std::optional<float> driftstackWesternAdvanceSidecar(uint16_t fontId, uint16_t s
 }
 
 WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+std::optional<DriftstackGlyphCompositorPixel> driftstackGlyphCompositorPixel(
+    uint8_t fillAlphaByte, uint8_t red, uint8_t green, uint8_t blue, uint8_t coverage)
+{
+    return DriftstackPerGlyphAtlas::singleton().compositorPixel(
+        fillAlphaByte, red, green, blue, coverage);
+}
+
+std::optional<DriftstackGlyphCompositorPixel> driftstackGlyphDestinationPixel(
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+    uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+    uint8_t destinationGreen, uint8_t destinationBlue,
+    uint8_t destinationAlpha)
+{
+    return DriftstackPerGlyphAtlas::singleton().destinationPixel(
+        fillAlphaByte, sourceRed, sourceGreen, sourceBlue, coverage,
+        destinationRed, destinationGreen,
+        destinationBlue, destinationAlpha);
+}
+
+std::optional<uint32_t> driftstackGlyphDestinationPixelPacked(
+    uint8_t fillAlphaByte, uint8_t sourceRed, uint8_t sourceGreen,
+    uint8_t sourceBlue, uint8_t coverage, uint8_t destinationRed,
+    uint8_t destinationGreen, uint8_t destinationBlue,
+    uint8_t destinationAlpha)
+{
+    auto pixel = driftstackGlyphDestinationPixel(
+        fillAlphaByte, sourceRed, sourceGreen, sourceBlue, coverage,
+        destinationRed, destinationGreen, destinationBlue, destinationAlpha);
+    if (!pixel)
+        return std::nullopt;
+    return static_cast<uint32_t>(pixel->red)
+        | (static_cast<uint32_t>(pixel->green) << 8)
+        | (static_cast<uint32_t>(pixel->blue) << 16)
+        | (static_cast<uint32_t>(pixel->alpha) << 24);
+}
 
 } // namespace WebCore
 
