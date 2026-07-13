@@ -4723,13 +4723,18 @@ bool WebPage::s_driftstackRubberBandCoast()
 
 // W3010: scroll the main FRAME VIEW by (dx,dy); when rubberBandOn, the px past the page's own boundary that
 // the view couldn't consume is absorbed into the over-scroll STRETCH and the content is pushed past the edge
-// (unclamped) so it visibly translates (the iOS rubber-band). When off, this is a plain clamped view->scrollBy
-// (byte-identical to the prior behavior). The stretch is signed per-axis (+ past max, - past min) and is
+// (unclamped) so it visibly translates (the iOS rubber-band). When off, retain the synchronous programmatic
+// WebProcess update but include the original delta in the remote request. A default view.scrollBy sends only an
+// absolute position; consecutive synthetic touch moves need an accumulated delta in the UI-side scrolling tree
+// so the scrolling layer itself advances. The stretch is signed per-axis (+ past max, - past min) and is
 // relaxed back to the boundary by driftstackRubberBandTick on lift-off / coast-end.
 void WebPage::driftstackScrollMainFrameWithOverscroll(WebCore::LocalFrameView& view, int dx, int dy, bool rubberBandOn)
 {
     if (!rubberBandOn) {
-        view.scrollBy(WebCore::IntSize(dx, dy)); // unchanged hard-clamped behavior
+        auto delta = WebCore::FloatSize(dx, dy);
+        auto options = WebCore::ScrollPositionChangeOptions::createProgrammatic();
+        options.originalScrollDelta = delta;
+        view.setScrollPosition(view.scrollPosition() + WebCore::IntSize(dx, dy), options);
         return;
     }
 
