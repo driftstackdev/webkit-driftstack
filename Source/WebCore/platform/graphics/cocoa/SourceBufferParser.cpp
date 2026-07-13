@@ -56,16 +56,16 @@ MediaPlayerEnums::SupportsType SourceBufferParser::isContentTypeSupported(const 
     // real iPhone 18.6 verdict. Family B (launch 26.4) has no pin → unchanged (both accept).
     if (driftstackFamilyAVP9MSEUnsupported(type.parameter(ContentType::codecsParameter())))
         return MediaPlayerEnums::SupportsType::IsNotSupported;
-    // A17Pro+ av01 MP4 MMS pin — coherence fix for the cross-API gap where the raw
-    // AVFObjC MSE parser (AVStreamDataParser) does NOT advertise av01 for MP4 even
-    // on the AV1-capable fleet Mac, so it would LEAK IsNotSupported while the real
-    // iPhone 17 reports ManagedMediaSource.isTypeSupported(av01 mp4)=true (matching
-    // its canPlayType('av01')='probably' / decodingInfo / WebCodecs AV1 path).
-    // Scoped to mp4 av01 on an explicit A17Pro+ archetype; routed here (the single
-    // convergence point) so changeType(av01) stays coherent with isTypeSupported.
-    if (type.containerType() == "video/mp4"_s
-        && driftstackArchetypeMP4AV1MSESupported(type.parameter(ContentType::codecsParameter())))
-        return MediaPlayerEnums::SupportsType::IsSupported;
+    // Pin both sides of the MP4 AV1 hardware boundary before the host parser:
+    // A15/A16 are unsupported and A17Pro+ are supported. Without the subtractive
+    // side an AV1-capable Mac leaks true into an iPhone 14 archetype.
+    if (type.containerType() == "video/mp4"_s) {
+        auto codecs = type.parameter(ContentType::codecsParameter());
+        if (driftstackArchetypeMP4AV1MSEUnsupported(codecs))
+            return MediaPlayerEnums::SupportsType::IsNotSupported;
+        if (driftstackArchetypeMP4AV1MSESupported(codecs))
+            return MediaPlayerEnums::SupportsType::IsSupported;
+    }
 #endif
     MediaPlayerEnums::SupportsType supports = SourceBufferParserWebM::isContentTypeSupported(type);
     if (supports == MediaPlayerEnums::SupportsType::IsSupported)
@@ -75,6 +75,15 @@ MediaPlayerEnums::SupportsType SourceBufferParser::isContentTypeSupported(const 
 
 RefPtr<SourceBufferParser> SourceBufferParser::create(const ContentType& type, const MediaSourceConfiguration& configuration)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (type.containerType() == "video/mp4"_s) {
+        auto codecs = type.parameter(ContentType::codecsParameter());
+        if (driftstackArchetypeMP4AV1MSEUnsupported(codecs))
+            return nullptr;
+        if (driftstackArchetypeMP4AV1MSESupported(codecs))
+            return adoptRef(new SourceBufferParserAVFObjC(configuration));
+    }
+#endif
     if (SourceBufferParserWebM::isContentTypeSupported(type) != MediaPlayerEnums::SupportsType::IsNotSupported)
         return SourceBufferParserWebM::create();
 

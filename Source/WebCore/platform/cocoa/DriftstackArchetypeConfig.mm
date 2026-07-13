@@ -63,17 +63,8 @@ bool driftstackFamilyAVP9MSEUnsupported(const String& codecs)
     return isFamilyA;
 }
 
-// Shared MSE AV1 pin — the ONE source of truth (see header). The A17Pro+ family
-// boundary (iphone15pro / iphone16* / iphone17*) is byte-identical to the AV1-HW
-// gate in AV1UtilitiesCocoa.mm (driftstackArchetypeHasAV1Decode /
-// driftstackArchetypeExplicitlyA17ProPlus) and WebRTCProvider.cpp, so the MMS
-// av01 verdict stays coherent with canPlayType / decodingInfo / WebCodecs /
-// WebRTC AV1. SourceBufferParser::isContentTypeSupported delegates here so the
-// changeType / canSwitchToType route stays coherent with isTypeSupported.
-bool driftstackArchetypeMP4AV1MSESupported(const String& codecs)
+static bool driftstackArchetypeExplicitlyHasAV1Decode()
 {
-    if (!codecs.contains("av01"_s))
-        return false;
     const char* a = getenv("DRIFTSTACK_ARCHETYPE");
     if (!a || !a[0])
         return false;
@@ -82,6 +73,24 @@ bool driftstackArchetypeMP4AV1MSESupported(const String& codecs)
     // iphone15 / iphone15plus, which have no "pro"); "iphone16" / "iphone17"
     // match all of those families. Same prefix set as the AV1-HW gate.
     return arch.startsWith("iphone15pro"_s) || arch.startsWith("iphone16"_s) || arch.startsWith("iphone17"_s);
+}
+
+// Shared MSE AV1 pin — the ONE source of truth (see header). The A17Pro+ family
+// boundary is byte-identical to the AV1-HW gate in AV1UtilitiesCocoa.mm and
+// WebRTCProvider.cpp. Both sides must be explicit: an A17Pro+ archetype forces
+// MP4 AV1 supported, an older archetype forces it unsupported, and no archetype
+// keeps the upstream host verdict.
+bool driftstackArchetypeMP4AV1MSESupported(const String& codecs)
+{
+    return codecs.contains("av01"_s) && driftstackArchetypeExplicitlyHasAV1Decode();
+}
+
+bool driftstackArchetypeMP4AV1MSEUnsupported(const String& codecs)
+{
+    if (!codecs.contains("av01"_s))
+        return false;
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    return archetype && archetype[0] && !driftstackArchetypeExplicitlyHasAV1Decode();
 }
 
 // ── Chrome-on-iOS (CriOS) browser-archetype predicate (one source of truth) ──

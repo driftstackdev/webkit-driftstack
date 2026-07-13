@@ -209,27 +209,19 @@ private:
 bool driftstackFamilyAVP9MSEUnsupported(const String& codecs);
 
 // ── Shared MSE AV1 pin (one source of truth) ─────────────────────────────────
-// A17Pro+ archetypes (iphone15pro / iphone16* / iphone17*, the same hardware
-// boundary as driftstackArchetypeHasAV1Decode) expose av01 in the MP4
-// ManagedMediaSource codec verdict — verified real iPhone 17 / Safari 26.4
-// (aio-iPhone_17-1782256826126): ManagedMediaSource.isTypeSupported(
-// 'video/mp4; codecs="av01.0.04M.08"')=TRUE, coherent with canPlayType('av01')=
-// 'probably' and the WebCodecs/decodingInfo AV1 path (av1HardwareDecoderAvailable
-// pinned TRUE for A17Pro+). But the raw AVFObjC MSE parser (AVStreamDataParser /
-// AVStreamDataParserMIMETypeCache) does NOT advertise av01 for MP4 even on the
-// AV1-capable fleet Mac, so SourceBufferParserAVFObjC::isContentTypeSupported
-// LEAKS IsNotSupported → the fork reports av01 MMS=false while the real iPhone 17
-// = true (a cross-API coherence gap: only the MMS path diverged). This predicate
-// pins the A17Pro+ verdict to the real device.
+// The MP4 ManagedMediaSource AV1 verdict is chip-keyed: A15/A16 are false while
+// A17Pro+ are true. The host parser can disagree in either direction, so the two
+// predicates below pin both captured sides. With no explicit archetype both
+// return false and upstream host behavior is preserved.
 //
 // Routed through the SAME convergence point as the VP9 pin
 // (SourceBufferParser::isContentTypeSupported) so SourceBuffer::changeType(av01)
 // (via canSwitchToType → supportsTypeAndCodecs) stays coherent with
-// isTypeSupported(av01)=true. `codecs` is the ContentType "codecs" parameter.
-// Returns true ⟺ an explicit A17Pro+ archetype is set AND the codec string names
-// av01. Live getenv (NOT static-cached); same family check as the AV1 gate in
+// isTypeSupported(av01). `codecs` is the ContentType "codecs" parameter.
+// Live getenv (NOT static-cached); same family check as the AV1 gate in
 // AV1UtilitiesCocoa / WebRTCProvider.
 bool driftstackArchetypeMP4AV1MSESupported(const String& codecs);
+bool driftstackArchetypeMP4AV1MSEUnsupported(const String& codecs);
 
 // ── Chrome-on-iOS (CriOS) browser-archetype predicate ────────────────────────
 // True ⟺ the active archetype is a browser:chrome (Chrome-on-iOS) profile
