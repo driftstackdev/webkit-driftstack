@@ -1206,9 +1206,11 @@ select option:enabled:active {
     background-color: color-mix(currentColor 20%, transparent);
 }
 
+#if !((defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK))
 select option:disabled {
     color: color-mix(currentColor 50%, transparent);
 }
+#endif
 
 select option:focus-visible {
     outline-offset: -internal-inset;
@@ -1483,9 +1485,15 @@ iframe {
     border: 2px inset;
 }
 
+#if (defined(WTF_PLATFORM_IOS_FAMILY) && WTF_PLATFORM_IOS_FAMILY) || (defined(WTF_PLATFORM_DRIFTSTACK) && WTF_PLATFORM_DRIFTSTACK)
+hr, bdi, output {
+    unicode-bidi: isolate;
+}
+#else
 hr, bdi, legend, output {
     unicode-bidi: isolate;
 }
+#endif
 
 input[type=tel i]:dir(ltr) { direction: ltr; }
 

@@ -31,6 +31,7 @@
 #include "Element.h"
 #include "ShadowRoot.h"
 #include "TypedElementDescendantIteratorInlines.h"
+#include "UserAgentParts.h"
 
 namespace WebCore::Style {
 
@@ -51,6 +52,13 @@ ResolvedComputedPseudoElement resolveComputedPseudoElement(Element& element, con
     auto identifier = CSSSelectorParser::parsePseudoElement(pseudoElement, CSSSelectorParserContext { protect(element.document()) });
     if (!identifier)
         return { nullptr, { } };
+    // Real iOS exposes the originating input's computed style for ::placeholder queries even when
+    // author pseudo rules affect visual placeholder rendering. Keep this query-only compatibility
+    // behavior separate from pseudo-element style resolution and painting.
+#if PLATFORM(DRIFTSTACK)
+    if (identifier->type == PseudoElementType::UserAgentPartFallback && identifier->nameOrPart == UserAgentParts::placeholder())
+        return { &element, { } };
+#endif
     if (identifier->type == PseudoElementType::UserAgentPartFallback) {
         if (RefPtr backingElement = findElementForUserAgentPart(element, identifier->nameOrPart))
             return { WTF::move(backingElement), { } };
