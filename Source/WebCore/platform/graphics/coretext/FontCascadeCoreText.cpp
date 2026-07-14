@@ -935,7 +935,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             for (size_t i = 0; i < nEntries.size(); ++i) {
                                 auto atlasPxN = unsafeMakeSpan(nEntries[i].pixels, 64 * 64);
                                 if (useCapturedCompositor) {
-                                    FloatRect dst(std::floor(nPenX[i]) - 8.0,
+                                    FloatRect dst(std::floor(driftstackCanonicalGlyphCoordinate(nPenX[i])) - 8.0,
                                         std::floor(penYN) - 46.0, 64, 64);
                                     FloatRect cell(0, 0, 64, 64);
                                     std::array<uint8_t, 64 * 64 * 4> maskN;
@@ -1006,7 +1006,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                 RefPtr nativeImgN = NativeImage::create(WTF::retainPtr(glyphImgN.get()));
                                 if (!nativeImgN)
                                     continue;
-                                FloatRect destRectN(std::floor(nPenX[i]) - 8.0, std::floor(penYN) - 46.0, 64, 64);
+                                FloatRect destRectN(std::floor(driftstackCanonicalGlyphCoordinate(nPenX[i])) - 8.0, std::floor(penYN) - 46.0, 64, 64);
                                 FloatRect srcRectN(0, 0, 64, 64);
                                 context.drawNativeImage(*nativeImgN, destRectN, srcRectN, { CompositeOperator::SourceOver });
                             }
@@ -1088,6 +1088,17 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     }
                 }
 
+                // The DSPGA1 per-glyph atlas's current horizontal phase bands
+                // are twelfths, and the N>1 compositor above keys them with
+                // driftstackTwelfthPositionClass(). N=1 must use that same key
+                // space. Reusing the text-run atlas's 16x16 position class made
+                // fractional lookups miss and previously substituted a known-
+                // approximate class-0 cell. An exact miss now falls through to
+                // native rendering, matching N>1's all-or-nothing contract.
+                double yFraction = anchorPoint.y() - std::floor(anchorPoint.y());
+                uint8_t yBin = yFraction > 1e-4 ? 1 : 0;
+                uint8_t perGlyphPositionClass = (yBin << 4)
+                    | driftstackTwelfthPositionClass(anchorPoint.x());
                 if (std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
                     WTFLogAlways("[V-790.L] per-glyph atlas LOOKUP "
                                  "font_id=%u pt_size_q4=%u cp=U+%04x pos=%u "
@@ -1095,7 +1106,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                  static_cast<unsigned>(fontId),
                                  static_cast<unsigned>(ptSize * 16),
                                  static_cast<unsigned>(cp),
-                                 static_cast<unsigned>(positionClass),
+                                 static_cast<unsigned>(perGlyphPositionClass),
                                  static_cast<unsigned>(sourceText.length()),
                                  sourceText.is8Bit() ? 1 : 0);
                 }
@@ -1105,27 +1116,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                     fontId,
                     static_cast<uint16_t>(ptSize * 16),
                     cp,
-                    static_cast<uint32_t>(positionClass));
-
-                // V-790.L proof-of-concept: when exact pos_class missing,
-                // fall back to pos_class=0 entry. For (font_id, ptSize, cp)
-                // the central glyph rasterization is identical; only
-                // sub-pixel AA at the edges differs across pos_classes.
-                // pos_class=0 fallback gives ~95% pixel match (vs exact
-                // 100% for matching pos_class). v1 atlas only has
-                // pos_class=0 entries; later captures will expand.
-                if (!hit && positionClass != 0) {
-                    hit = pglyphAtlas.lookup(
-                        fontId,
-                        static_cast<uint16_t>(ptSize * 16),
-                        cp,
-                        0u);
-                    if (hit && std::getenv("DRIFTSTACK_PER_GLYPH_ATLAS_DIAG")) {
-                        WTFLogAlways("[V-790.L] per-glyph atlas pos-fallback "
-                                     "(actual_pos=%u, used pos=0)",
-                                     static_cast<unsigned>(positionClass));
-                    }
-                }
+                    static_cast<uint32_t>(perGlyphPositionClass));
                 // V-790.L-N1 alpha-mask blit (wave 29-203): atlas stores
                 // white-bg + black-text grayscale per V-790.L capture pages
                 // (ctx.fillStyle='white'; fillRect; ctx.fillStyle='black';
@@ -1208,7 +1199,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             CGContextRef destCG = context.platformContext();
                             CGContextSaveGState(destCG);
                             CGRect dstRect = CGRectMake(
-                                std::floor(anchorPoint.x()) - 8.0, std::floor(anchorPoint.y()) - 46.0, 64, 64);
+                                std::floor(driftstackCanonicalGlyphCoordinate(anchorPoint.x())) - 8.0, std::floor(anchorPoint.y()) - 46.0, 64, 64);
                             CGContextDrawImage(destCG, dstRect, glyphImg.get());
                             CGContextRestoreGState(destCG);
                             return;
@@ -1218,7 +1209,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             // The selected cell already encodes the pen's fractional
                             // phase. Blit it at the floored capture origin so the image
                             // is not shifted/resampled a second time.
-                            FloatRect destRect(std::floor(anchorPoint.x()) - 8.0,
+                            FloatRect destRect(std::floor(driftstackCanonicalGlyphCoordinate(anchorPoint.x())) - 8.0,
                                 std::floor(anchorPoint.y()) - 46.0, 64, 64);
                             FloatRect srcRect(0, 0, 64, 64);
                             context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
@@ -1228,7 +1219,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                                          static_cast<unsigned>(fontId),
                                          static_cast<unsigned>(ptSize),
                                          static_cast<unsigned>(cp),
-                                         static_cast<unsigned>(positionClass));
+                                         static_cast<unsigned>(perGlyphPositionClass));
                             return; // skip Layer B + platform CT raster
                         }
                     }

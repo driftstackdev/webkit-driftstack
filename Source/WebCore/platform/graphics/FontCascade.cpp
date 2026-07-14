@@ -1948,7 +1948,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                             for (size_t i = 0; i < entsG.size(); ++i) {
                                 auto atlasPx = unsafeMakeSpan(entsG[i].pixels, 64 * 64);
                                 if (useCapturedCompositor) {
-                                    FloatRect dst(std::floor(penXsG[i]) - 8.0,
+                                    FloatRect dst(std::floor(driftstackCanonicalGlyphCoordinate(penXsG[i])) - 8.0,
                                         std::floor(penYg) - 46.0, 64, 64);
                                     FloatRect cell(0, 0, 64, 64);
                                     std::array<uint8_t, 64 * 64 * 4> maskG;
@@ -2013,7 +2013,7 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
                                 if (!img) continue;
                                 RefPtr ni = NativeImage::create(WTF::retainPtr(img.get()));
                                 if (!ni) continue;
-                                FloatRect dst(std::floor(penXsG[i]) - 8.0, std::floor(penYg) - 46.0, 64, 64);
+                                FloatRect dst(std::floor(driftstackCanonicalGlyphCoordinate(penXsG[i])) - 8.0, std::floor(penYg) - 46.0, 64, 64);
                                 context.drawNativeImage(*ni, dst, FloatRect(0, 0, 64, 64), { CompositeOperator::SourceOver });
                             }
                             point.setX(penXg);

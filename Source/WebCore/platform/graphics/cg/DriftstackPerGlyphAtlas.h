@@ -116,9 +116,10 @@ private:
 std::optional<float> driftstackWesternAdvanceSidecar(uint16_t fontId, uint16_t sizePx, uint32_t codepoint);
 
 // Map a glyph pen coordinate to the capture atlas's twelve horizontal
-// position classes. Canvas coordinates and accumulated advance widths can
-// arrive a few ulps below an exact k/12 boundary; tolerate only that numeric
-// noise so a captured boundary remains in class k rather than class k - 1.
+// position classes. Canonicalize the captured 10-bit destination coordinate
+// before both lookup and blit placement; the classifier additionally tolerates
+// float conversion ulps at an exact k/12 boundary.
+double driftstackCanonicalGlyphCoordinate(double coordinate);
 uint8_t driftstackTwelfthPositionClass(double coordinate);
 
 // Atlas cells are captured without scale, rotation, or skew. Translation is

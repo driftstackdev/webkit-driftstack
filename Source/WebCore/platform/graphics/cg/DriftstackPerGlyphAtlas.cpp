@@ -100,8 +100,18 @@ DriftstackPerGlyphAtlas& DriftstackPerGlyphAtlas::singleton()
     return instance.get();
 }
 
+double driftstackCanonicalGlyphCoordinate(double coordinate)
+{
+    // Real iPhone canvas text canonicalizes the horizontal destination on the
+    // same 10-bit grid exposed by its advances. Fine-grained captures place
+    // every raster transition one 1/1024 step before the nominal third, and
+    // the near-one transition is exactly the integer-phase mask shifted right.
+    return coordinate + 1.0 / 1024.0;
+}
+
 uint8_t driftstackTwelfthPositionClass(double coordinate)
 {
+    coordinate = driftstackCanonicalGlyphCoordinate(coordinate);
     double fraction = coordinate - std::floor(coordinate);
     float roundedCoordinate = static_cast<float>(coordinate);
     double floatUlp = static_cast<double>(std::nextafter(
