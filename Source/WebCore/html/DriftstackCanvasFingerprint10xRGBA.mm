@@ -11,7 +11,9 @@
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
+#include <array>
 #include <cstdlib>
+#include <wtf/FileSystem.h>
 #include <wtf/HashMap.h>
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
@@ -59,6 +61,186 @@ HashMap<String, RefPtr<DecodedRGBABuffer>>& v510OpSeqCache()
 {
     static NeverDestroyed<HashMap<String, RefPtr<DecodedRGBABuffer>>> map;
     return map.get();
+}
+
+class RawOpSequenceAtlas {
+public:
+    bool lookup(const String&, int width, int height, Vector<uint8_t>&);
+
+private:
+    bool load();
+
+    bool m_loadAttempted { false };
+    bool m_valid { false };
+    uint32_t m_count { 0 };
+    size_t m_dataOffset { 0 };
+    Vector<uint8_t> m_bytes;
+};
+
+RawOpSequenceAtlas& rawOpSequenceAtlas()
+{
+    static NeverDestroyed<RawOpSequenceAtlas> atlas;
+    return atlas.get();
+}
+
+constexpr size_t rawAtlasHeaderSize = 24;
+constexpr size_t rawAtlasIndexEntrySize = 28;
+constexpr std::array<uint8_t, 8> rawAtlasMagic { 'D', 'S', 'C', 'R', 'A', 'W', '1', 0 };
+
+uint16_t readLittleEndianU16(std::span<const uint8_t> bytes, size_t offset)
+{
+    return static_cast<uint16_t>(bytes[offset])
+        | static_cast<uint16_t>(bytes[offset + 1]) << 8;
+}
+
+uint32_t readLittleEndianU32(std::span<const uint8_t> bytes, size_t offset)
+{
+    return static_cast<uint32_t>(bytes[offset])
+        | static_cast<uint32_t>(bytes[offset + 1]) << 8
+        | static_cast<uint32_t>(bytes[offset + 2]) << 16
+        | static_cast<uint32_t>(bytes[offset + 3]) << 24;
+}
+
+int compareRawAtlasKeys(std::span<const uint8_t> left, std::span<const uint8_t> right)
+{
+    ASSERT(left.size() == 16);
+    ASSERT(right.size() == 16);
+    for (size_t index = 0; index < 16; ++index) {
+        if (left[index] < right[index])
+            return -1;
+        if (left[index] > right[index])
+            return 1;
+    }
+    return 0;
+}
+
+std::optional<std::array<uint8_t, 16>> rawAtlasKey(const String& sha256Hex)
+{
+    if (sha256Hex.length() < 32)
+        return std::nullopt;
+    std::array<uint8_t, 16> key;
+    auto nibble = [](UChar character) -> int {
+        if (character >= '0' && character <= '9')
+            return character - '0';
+        if (character >= 'a' && character <= 'f')
+            return character - 'a' + 10;
+        if (character >= 'A' && character <= 'F')
+            return character - 'A' + 10;
+        return -1;
+    };
+    for (size_t index = 0; index < key.size(); ++index) {
+        int high = nibble(sha256Hex[index * 2]);
+        int low = nibble(sha256Hex[index * 2 + 1]);
+        if (high < 0 || low < 0)
+            return std::nullopt;
+        key[index] = static_cast<uint8_t>((high << 4) | low);
+    }
+    return key;
+}
+
+bool RawOpSequenceAtlas::load()
+{
+    if (m_loadAttempted)
+        return m_valid;
+    m_loadAttempted = true;
+
+    const char* path = std::getenv("DRIFTSTACK_CANVAS_RAW_ATLAS_PATH");
+    if (!path || !*path)
+        return false;
+    auto bytes = FileSystem::readEntireFile(String::fromUTF8(path));
+    if (!bytes || bytes->size() < rawAtlasHeaderSize) {
+        WTFLogAlways("[Driftstack canvas] raw op-sequence atlas unreadable or too small");
+        return false;
+    }
+    m_bytes = WTF::move(*bytes);
+    auto span = m_bytes.span();
+    if (!equalSpans(span.first(rawAtlasMagic.size()), std::span(rawAtlasMagic))) {
+        WTFLogAlways("[Driftstack canvas] raw op-sequence atlas magic mismatch");
+        return false;
+    }
+    uint16_t version = readLittleEndianU16(span, 8);
+    uint16_t entrySize = readLittleEndianU16(span, 10);
+    uint32_t count = readLittleEndianU32(span, 12);
+    uint32_t indexOffset = readLittleEndianU32(span, 16);
+    uint32_t dataOffset = readLittleEndianU32(span, 20);
+    uint64_t expectedDataOffset = rawAtlasHeaderSize + static_cast<uint64_t>(count) * rawAtlasIndexEntrySize;
+    if (version != 1 || entrySize != rawAtlasIndexEntrySize || indexOffset != rawAtlasHeaderSize
+        || expectedDataOffset != dataOffset || dataOffset > span.size()) {
+        WTFLogAlways("[Driftstack canvas] raw op-sequence atlas header invalid");
+        return false;
+    }
+
+    size_t expectedDataStart = 0;
+    std::span<const uint8_t> previousKey;
+    for (uint32_t index = 0; index < count; ++index) {
+        size_t offset = rawAtlasHeaderSize + static_cast<size_t>(index) * rawAtlasIndexEntrySize;
+        auto entry = span.subspan(offset, rawAtlasIndexEntrySize);
+        auto key = entry.first(16);
+        uint16_t width = readLittleEndianU16(entry, 16);
+        uint16_t height = readLittleEndianU16(entry, 18);
+        uint32_t dataStart = readLittleEndianU32(entry, 20);
+        uint32_t dataLength = readLittleEndianU32(entry, 24);
+        uint64_t expectedLength = static_cast<uint64_t>(width) * height * 4;
+        uint64_t dataEnd = static_cast<uint64_t>(dataOffset) + dataStart + dataLength;
+        if ((!previousKey.empty() && compareRawAtlasKeys(previousKey, key) >= 0)
+            || !width || !height || expectedLength != dataLength || dataStart != expectedDataStart
+            || dataEnd > span.size()) {
+            WTFLogAlways("[Driftstack canvas] raw op-sequence atlas entry invalid");
+            return false;
+        }
+        previousKey = key;
+        expectedDataStart += dataLength;
+    }
+    if (static_cast<uint64_t>(dataOffset) + expectedDataStart != span.size()) {
+        WTFLogAlways("[Driftstack canvas] raw op-sequence atlas size mismatch");
+        return false;
+    }
+    m_count = count;
+    m_dataOffset = dataOffset;
+    m_valid = true;
+    return true;
+}
+
+bool RawOpSequenceAtlas::lookup(const String& sha256Hex, int width, int height, Vector<uint8_t>& outRGBA)
+{
+    if (!load())
+        return false;
+    auto requestedKey = rawAtlasKey(sha256Hex);
+    if (!requestedKey)
+        return false;
+    auto requestedKeySpan = std::span<const uint8_t>(*requestedKey);
+    auto bytes = m_bytes.span();
+    size_t low = 0;
+    size_t high = m_count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        auto entry = bytes.subspan(rawAtlasHeaderSize + middle * rawAtlasIndexEntrySize, rawAtlasIndexEntrySize);
+        int comparison = compareRawAtlasKeys(entry.first(16), requestedKeySpan);
+        if (comparison < 0)
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    if (low >= m_count)
+        return false;
+    auto entry = bytes.subspan(rawAtlasHeaderSize + low * rawAtlasIndexEntrySize, rawAtlasIndexEntrySize);
+    if (compareRawAtlasKeys(entry.first(16), requestedKeySpan))
+        return false;
+    uint16_t entryWidth = readLittleEndianU16(entry, 16);
+    uint16_t entryHeight = readLittleEndianU16(entry, 18);
+    uint32_t dataStart = readLittleEndianU32(entry, 20);
+    uint32_t dataLength = readLittleEndianU32(entry, 24);
+    if (entryWidth != width || entryHeight != height
+        || dataLength != static_cast<uint64_t>(width) * height * 4)
+        return false;
+    outRGBA = Vector<uint8_t>(bytes.subspan(m_dataOffset + dataStart, dataLength));
+    return true;
+}
+
+bool rawOpSequenceAtlasLookup(const String& sha256Hex, int width, int height, Vector<uint8_t>& outRGBA)
+{
+    Locker locker(cacheLock());
+    return rawOpSequenceAtlas().lookup(sha256Hex, width, height, outRGBA);
 }
 
 RefPtr<DecodedRGBABuffer> decodeOnce(const char* dataURL)
@@ -120,8 +302,9 @@ RefPtr<DecodedRGBABuffer> decodeOnce(const char* dataURL)
     // a == 0; identity for a == 255. Matches the unpremultiply formula
     // WebKit uses elsewhere when reading a premultiplied buffer back as
     // unpremultiplied (see ImageBufferUtilities). Applying this to bytes
-    // produced by CG's premultiplying decode round-trips losslessly to
-    // the original PNG-encoded values.
+    // produced by CG's premultiplying decode gives the visible channel value,
+    // but the mapping is not one-to-one for translucent pixels. Exact captured
+    // getImageData bytes therefore use the raw op-sequence sidecar below.
     auto pixels = buffer->rgba.mutableSpan();
     const size_t pixelCount = static_cast<size_t>(w) * h;
     for (size_t i = 0; i < pixelCount; ++i) {
@@ -208,6 +391,12 @@ bool getV510AtlasRGBAForOpSeq(const String& opSequenceSHA256Hex, int width, int 
 {
     if (width <= 0 || height <= 0 || opSequenceSHA256Hex.length() < 32)
         return false;
+
+    // getImageData is an unpremultiplied byte surface. Prefer capture-backed
+    // bytes directly when the same complete operation key is present; decoding
+    // the PNG atlas through CoreGraphics can lose the original edge preimage.
+    if (rawOpSequenceAtlasLookup(opSequenceSHA256Hex, width, height, outRGBA))
+        return true;
 
     // P1 (canvas-op-timing-audit): memoize the decode. The original ran the FULL
     // CG decode (base64→CGImageSource→CGBitmapContext draw→per-pixel unpremult)

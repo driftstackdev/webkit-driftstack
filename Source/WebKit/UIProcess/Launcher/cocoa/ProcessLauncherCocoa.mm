@@ -433,6 +433,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // didn't inherit them so production behavior diverged from
             // cumrig (which uses __XPC_DRIFTSTACK_* shadow vars).
             { "DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH") },
+            { "DRIFTSTACK_CANVAS_RAW_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_RAW_ATLAS_PATH") },
             { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
             { "DRIFTSTACK_DIRECT_BROWSE", getenv("DRIFTSTACK_DIRECT_BROWSE") },
             { "DRIFTSTACK_DIRECT_EGRESS", getenv("DRIFTSTACK_DIRECT_EGRESS") },
