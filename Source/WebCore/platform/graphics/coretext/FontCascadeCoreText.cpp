@@ -575,7 +575,10 @@ static void driftstackBlitColorEmojiCell(GraphicsContext& context, const uint8_t
     RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
     if (!nativeImg)
         return;
-    FloatRect destRect(pen.x() - 8.0, pen.y() - 46.0, 64, 64);
+    // iOS snaps a fractional color-glyph pen to the next device-pixel origin.
+    // The cell already contains the raster captured at pen (8,46), so preserve
+    // those pixels and move only its integer destination (no CG resampling).
+    FloatRect destRect(std::ceil(pen.x()) - 8.0, pen.y() - 46.0, 64, 64);
     FloatRect srcRect(0, 0, 64, 64);
     context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
 }
@@ -1188,14 +1191,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             CGContextRef destCG = context.platformContext();
                             CGContextSaveGState(destCG);
                             CGRect dstRect = CGRectMake(
-                                anchorPoint.x() - 8.0, anchorPoint.y() - 46.0, 64, 64);
+                                std::floor(anchorPoint.x()) - 8.0, std::floor(anchorPoint.y()) - 46.0, 64, 64);
                             CGContextDrawImage(destCG, dstRect, glyphImg.get());
                             CGContextRestoreGState(destCG);
                             return;
                         }
                         RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
                         if (nativeImg) {
-                            FloatRect destRect(anchorPoint.x() - 8.0, anchorPoint.y() - 46.0, 64, 64);
+                            // The selected cell already encodes the pen's fractional
+                            // phase. Blit it at the floored capture origin so the image
+                            // is not shifted/resampled a second time.
+                            FloatRect destRect(std::floor(anchorPoint.x()) - 8.0,
+                                std::floor(anchorPoint.y()) - 46.0, 64, 64);
                             FloatRect srcRect(0, 0, 64, 64);
                             context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
                             WTFLogAlways("[V-790.L] per-glyph atlas HIT "
@@ -1683,7 +1690,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                         if (glyphImg) {
                             RefPtr nativeImg = NativeImage::create(WTF::retainPtr(glyphImg.get()));
                             if (nativeImg) {
-                                FloatRect destRect(positions[i].x - 8.0, positions[i].y - 46.0, 64, 64);
+                                FloatRect destRect(std::ceil(positions[i].x) - 8.0, positions[i].y - 46.0, 64, 64);
                                 FloatRect srcRect(0, 0, 64, 64);
                                 // DIAG (2026-07-03, #42 keycap1 step-8): tag THIS atlas cell so A3 can find where it
                                 // lands in [V-COLOR-OWNER] (match atlasImg=%p to the OWNER img=%p). For keycap1

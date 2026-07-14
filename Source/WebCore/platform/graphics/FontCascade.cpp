@@ -2616,13 +2616,58 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
     unsigned nextGlyph = 1;
 #if PLATFORM(DRIFTSTACK)
     size_t hitIdx = 0;
+    Vector<unsigned, 32> sourceOffsets;
+    if (!source.isEmpty()) {
+        sourceOffsets.reserveInitialCapacity(glyphBuffer.size());
+        for (size_t i = 0; i < glyphBuffer.size(); ++i) {
+            auto offset = glyphBuffer.checkedStringOffsetAt(i, source.length());
+            if (!offset) {
+                sourceOffsets.clear();
+                break;
+            }
+            sourceOffsets.append(static_cast<unsigned>(*offset));
+        }
+        std::sort(sourceOffsets.begin(), sourceOffsets.end());
+        auto uniqueEnd = std::unique(sourceOffsets.begin(), sourceOffsets.end());
+        sourceOffsets.shrink(uniqueEnd - sourceOffsets.begin());
+    }
+    auto sourceForGlyphRange = [&](size_t from, size_t to) -> StringView {
+        if (sourceOffsets.isEmpty() || from >= to)
+            return source;
+
+        unsigned firstOffset = source.length();
+        unsigned lastOffset = 0;
+        for (size_t i = from; i < to; ++i) {
+            unsigned offset = static_cast<unsigned>(glyphBuffer.uncheckedStringOffsetAt(i));
+            firstOffset = std::min(firstOffset, offset);
+            lastOffset = std::max(lastOffset, offset);
+        }
+
+        // A glyph offset identifies the start of its source cluster. The next
+        // greater offset anywhere in the buffer is therefore the end of the
+        // last cluster in this contiguous font run (or the source end for the
+        // final run). This preserves surrogate pairs, ligatures, and RTL runs.
+        unsigned endOffset = source.length();
+        auto nextOffset = std::upper_bound(sourceOffsets.begin(), sourceOffsets.end(), lastOffset);
+        if (nextOffset != sourceOffsets.end())
+            endOffset = *nextOffset;
+        if (firstOffset >= endOffset)
+            return source;
+        return source.substring(firstOffset, endOffset - firstOffset);
+    };
+    auto drawPlatformTextRun = [&](const Font& font, size_t from, size_t to, FloatPoint runStart) {
+        if (from >= to)
+            return;
+        DriftstackCurrentTextSourceScope runSourceScope(sourceForGlyphRange(from, to));
+        size_t glyphCount = to - from;
+        context.drawGlyphs(font, glyphBuffer.glyphs(from, glyphCount), glyphBuffer.advances(from, glyphCount), runStart, m_fontDescription.usedFontSmoothing());
+    };
     auto flushTextRun = [&](size_t from, size_t to, FloatPoint runStart) {
         if (from >= to)
             return;
         if (!shouldDrawIfLoading(*fontData, customFontNotReadyAction))
             return;
-        size_t glyphCount = to - from;
-        context.drawGlyphs(*fontData, glyphBuffer.glyphs(from, glyphCount), glyphBuffer.advances(from, glyphCount), runStart, m_fontDescription.usedFontSmoothing());
+        drawPlatformTextRun(*fontData, from, to, runStart);
     };
     // First glyph special-case: if 0 is start of an atlas hit, flush nothing,
     // emit composite, advance past hit.
@@ -2679,10 +2724,8 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
 #endif
 
         if (nextFontData != fontData) {
-            if (shouldDrawIfLoading(*fontData, customFontNotReadyAction)) {
-                size_t glyphCount = nextGlyph - lastFrom;
-                context.drawGlyphs(*fontData, glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
-            }
+            if (shouldDrawIfLoading(*fontData, customFontNotReadyAction))
+                drawPlatformTextRun(*fontData, lastFrom, nextGlyph, startPoint);
             lastFrom = nextGlyph;
             fontData = WTF::move(nextFontData);
             startPoint.setX(nextX);
@@ -2693,10 +2736,8 @@ void FontCascade::drawGlyphBuffer(GraphicsContext& context, const GlyphBuffer& g
         nextGlyph++;
     }
 
-    if (lastFrom < glyphBuffer.size() && shouldDrawIfLoading(*fontData, customFontNotReadyAction)) {
-        size_t glyphCount = nextGlyph - lastFrom;
-        context.drawGlyphs(*fontData, glyphBuffer.glyphs(lastFrom, glyphCount), glyphBuffer.advances(lastFrom, glyphCount), startPoint, m_fontDescription.usedFontSmoothing());
-    }
+    if (lastFrom < glyphBuffer.size() && shouldDrawIfLoading(*fontData, customFontNotReadyAction))
+        drawPlatformTextRun(*fontData, lastFrom, nextGlyph, startPoint);
     point.setX(nextX);
 }
 
