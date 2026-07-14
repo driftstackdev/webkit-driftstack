@@ -4730,11 +4730,20 @@ bool WebPage::s_driftstackRubberBandCoast()
 // relaxed back to the boundary by driftstackRubberBandTick on lift-off / coast-end.
 void WebPage::driftstackScrollMainFrameWithOverscroll(WebCore::LocalFrameView& view, int dx, int dy, bool rubberBandOn)
 {
+    // The Tiled Core Animation drawing area applies scrolling-layer positions during its rendering update.
+    // Order that update after the scrolling thread has consumed this request; otherwise the frame-view
+    // position can advance while the hosted layer remains at its previous committed position.
+    auto commitVisibleScrollPosition = [this] {
+        if (RefPtr drawingArea = this->drawingArea())
+            drawingArea->dispatchAfterEnsuringUpdatedScrollPosition([] { });
+    };
+
     if (!rubberBandOn) {
         auto delta = WebCore::FloatSize(dx, dy);
         auto options = WebCore::ScrollPositionChangeOptions::createProgrammatic();
         options.originalScrollDelta = delta;
         view.setScrollPosition(view.scrollPosition() + WebCore::IntSize(dx, dy), options);
+        commitVisibleScrollPosition();
         return;
     }
 
@@ -4797,6 +4806,8 @@ void WebPage::driftstackScrollMainFrameWithOverscroll(WebCore::LocalFrameView& v
         view.setAllowsUnclampedScrollPositionForTesting(false);
         m_driftstackRubberHadUnclamped = false;
     }
+
+    commitVisibleScrollPosition();
 }
 
 // W3010: start the τ=191ms exponential spring-back of the current over-boundary stretch to the boundary.
