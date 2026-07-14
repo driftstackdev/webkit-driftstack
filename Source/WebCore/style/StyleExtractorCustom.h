@@ -886,17 +886,12 @@ template<> struct PropertyExtractorAdaptor<CSSPropertyOutlineWidth> {
     template<typename F> decltype(auto) computedValue(ExtractorState& state, F&& functor) const
     {
 #if PLATFORM(DRIFTSTACK)
-        // getComputedStyle(el).outlineWidth is a BAND-SPLIT resolved value on real iPhone Safari — NOT band-
-        // uniform as an earlier fix assumed. Verified 2026-07-10 with two fresh provenance-certain BS captures
-        // (both outline-style:none, EVERY element — form controls AND plain h1/p/ul/a/div):
-        //   iOS 18.6 (Family-A, iPhone 16 Pro, BS 95062f99) = "0px"  — older WebKit applies the border-style
-        //       zero-on-none rule to outline-width (usedOutlineWidth() returns 0_css_px on OutlineStyle::None).
-        //   iOS 26.x (Family-B, iPhone 17 @26.5, BS 28be17d3) = "3px" — newer WebKit does NOT zero outline-width
-        //       on style:none; it returns the raw medium (3px) initial regardless of the style.
-        // So route through the USED getter (zero-on-none → 0px) only on the <26 band, and RAW storage (medium
-        // 3px) on >=26 — the launch archetype (iPhone 17 @26.4) MUST expose 3px or every element mismatches a
-        // real device. The #else preserves upstream raw storage for non-fork builds. See outline-width-parity-gate.
-        if (driftstackArchetypeSafariAtLeast(26, 0))
+        // getComputedStyle(el).outlineWidth has a Safari-minor boundary on real iPhone when outline-style is
+        // none: <=26.3 returns the used zero width; >=26.4 returns the raw medium width. The earlier major-only
+        // split was under-sampled and misclassified 26.0-26.3. Current-schema boundary evidence is registered in
+        // operations/boundary-registry.json:ua_stylesheet_outline_width and load-bearing in
+        // outline-width-parity-gate.sh. Keep the launch default (unset archetype => true) on the >=26.4 branch.
+        if (driftstackArchetypeSafariAtLeast(26, 4))
             return functor(state.style.computedStyle().outlineWidth());
         return functor(state.style.usedOutlineWidth());
 #else
