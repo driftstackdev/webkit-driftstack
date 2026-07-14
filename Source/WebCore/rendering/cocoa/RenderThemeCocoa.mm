@@ -2888,7 +2888,7 @@ bool RenderThemeCocoa::adjustTextFieldStyleForVectorBasedControls(RenderStyle& s
     if (!formControlRefreshEnabled(element))
         return false;
 
-#if PLATFORM(IOS_FAMILY)
+#if PLATFORM(IOS_FAMILY) || PLATFORM(DRIFTSTACK)
     if (RefPtr input = dynamicDowncast<HTMLInputElement>(*element); input && input->hasDataList())
         applyPaddingIfNotExplicitlySet(style, { 1_css_px / style.usedZoomForLength().value });
     else
