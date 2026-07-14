@@ -583,6 +583,23 @@ static void driftstackBlitColorEmojiCell(GraphicsContext& context, const uint8_t
     context.drawNativeImage(*nativeImg, destRect, srcRect, { CompositeOperator::SourceOver });
 }
 
+// Safari's willReadFrequently canvas path has a distinct color-emoji raster from
+// the default path. DSPGCA2's existing posClass field carries that canvas API
+// contract without changing the binary layout: 0=default, 1=willReadFrequently.
+// The originating setting is scoped through the synchronous canvas-text draw;
+// scratch/replay GraphicsContexts do not reliably retain it. A class-1 miss
+// deliberately falls back to class 0 so partial CPU coverage cannot regress the
+// previously served default surface.
+static std::optional<DriftstackPerGlyphColorAtlasEntry> driftstackLookupColorEmojiCell(
+    DriftstackPerGlyphColorAtlas& colorAtlas, uint16_t ptSizeQ4, uint32_t sequenceKey)
+{
+    uint32_t positionClass = driftstackCanvasTextWillReadFrequently() ? 1 : 0;
+    auto hit = colorAtlas.lookup(0, ptSizeQ4, sequenceKey, positionClass);
+    if (!hit && positionClass)
+        hit = colorAtlas.lookup(0, ptSizeQ4, sequenceKey, 0);
+    return hit;
+}
+
 // #42 keycap1 (approach-a): serve a color-emoji cluster's atlas cell DIRECTLY to a canvas context —
 // the canvas-level fallback for TEXT-SHAPED clusters (keycap1 [0x31,0xFE0F,0x20E3]) that deconstruct-
 // serve OFF the readback + native-render on it. The 25 single color-glyphs already serve on-canvas via
@@ -602,7 +619,7 @@ bool driftstackServeColorEmojiClusterToContext(GraphicsContext& context, StringV
         return false;
     uint16_t ptSizeQ4 = static_cast<uint16_t>(std::lround(ptSize * 16.0f));
     uint32_t seqHash = driftstackSeqHashForUtf8(source);
-    auto hit = colorAtlas.lookup(0, ptSizeQ4, seqHash, 0);
+    auto hit = driftstackLookupColorEmojiCell(colorAtlas, ptSizeQ4, seqHash);
     if (!hit)
         return false; // no cell for this cluster — do NOT clear (avoid a blank hole)
     // Clear the native-rendered keycap in the cell FIRST (only now that a cell is confirmed), so the
@@ -1573,18 +1590,18 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                             // them via the whole-source cluster hash (once per run). Fall back to the
                             // single-codepoint reverse map (a length-1 sequence) for the rest.
                             if (haveSourceSeqHash && !sourceConsumed)
-                                hit = colorAtlas.lookup(0, ptSizeQ4, sourceSeqHash, 0);
+                                hit = driftstackLookupColorEmojiCell(colorAtlas, ptSizeQ4, sourceSeqHash);
                             if (hit)
                                 sourceConsumed = true;
                             else {
                                 char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
                                 if (codepoint)
-                                    hit = colorAtlas.lookup(0, ptSizeQ4, driftstackSeqHashForCodepoint(codepoint), 0);
+                                    hit = driftstackLookupColorEmojiCell(colorAtlas, ptSizeQ4, driftstackSeqHashForCodepoint(codepoint));
                             }
                         } else {
                             char32_t codepoint = font.driftstackCodepointForColorGlyph(g);
                             if (codepoint)
-                                hit = colorAtlas.lookup(0, ptSizeQ4, static_cast<uint32_t>(codepoint), 0);
+                                hit = driftstackLookupColorEmojiCell(colorAtlas, ptSizeQ4, static_cast<uint32_t>(codepoint));
                         }
                         if (hit) { plan.hit = true; plan.pixels = hit->pixels; ++colorHits; }
                     }
@@ -1603,7 +1620,7 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
                 // per-glyph color hit already covered it. One emoji per fillText on the fingerprint surface,
                 // so the whole run IS this cluster → serve once at the anchor (cplans[0]) + suppress the rest.
                 if (seqKeyed && !colorHits && haveSourceSeqHash && !sourceConsumed && !cplans.isEmpty()) {
-                    if (auto clusterHit = colorAtlas.lookup(0, ptSizeQ4, sourceSeqHash, 0)) {
+                    if (auto clusterHit = driftstackLookupColorEmojiCell(colorAtlas, ptSizeQ4, sourceSeqHash)) {
                         cplans[0].hit = true;
                         cplans[0].pixels = clusterHit->pixels;
                         ++colorHits;

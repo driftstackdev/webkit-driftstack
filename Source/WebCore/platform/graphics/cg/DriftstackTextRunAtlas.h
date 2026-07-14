@@ -272,12 +272,17 @@ inline uint32_t driftstackSeqHashForUtf8(StringView text)
 // push/pop free functions (rather than an RAII class) so callers in other
 // WebCore directories — e.g. html/canvas/, which can't include this header —
 // can forward-declare them and wrap them in a local guard.
-void driftstackPushCanvasTextDraw();
+void driftstackPushCanvasTextDraw(bool willReadFrequently);
 void driftstackPopCanvasTextDraw();
 
 // True when the current thread is inside a canvas 2D text draw (fingerprint
 // surface). The drawGlyphs hook gates glyph pixel substitution on this.
 bool driftstackInCanvasTextDraw();
+
+// The originating CanvasRenderingContext2D setting for the current synchronous
+// text draw. This is intentionally carried alongside the canvas-text scope:
+// scratch/replay GraphicsContexts do not reliably retain that API-level intent.
+bool driftstackCanvasTextWillReadFrequently();
 
 // #79 fully-served guard: the readback-recompose re-renders pure-simple-text + applies the
 // rt2 unpremult, which is byte-exact ONLY for glyphs the per-glyph atlas served. If ANY glyph

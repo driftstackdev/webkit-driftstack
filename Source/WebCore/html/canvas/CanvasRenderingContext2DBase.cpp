@@ -131,7 +131,7 @@ bool getV510AtlasRGBAForOpSeq(const WTF::String& opSequenceSHA256Hex, int width,
 // DriftstackTextRunAtlas.cpp) and wrap them in a local RAII guard — no header
 // include needed, and the guard is exception/early-return safe.
 namespace WebCore {
-void driftstackPushCanvasTextDraw();
+void driftstackPushCanvasTextDraw(bool willReadFrequently);
 void driftstackPopCanvasTextDraw();
 void driftstackResetCanvasTextNativeFallback();
 // #42 keycap: carry the fillText source cluster across the whole synchronous draw (record + deconstruct
@@ -2944,7 +2944,7 @@ RefPtr<ImageData> CanvasRenderingContext2DBase::driftstackRecomposeFullCanvas() 
     Color fill = state().fillStyle.color();
     const auto& fontCascade = proxy->fontCascade();
     driftstackResetCanvasTextNativeFallback();
-    driftstackPushCanvasTextDraw();
+    driftstackPushCanvasTextDraw(willReadFrequently());
     for (auto& d : parsed.draws) {
         rc.setFillColor(fill);
         TextRun run(d.text);
@@ -3574,9 +3574,9 @@ void CanvasRenderingContext2DBase::drawTextUnchecked(const TextRun& textRun, dou
     // canvas fingerprint stays bit-identical while on-screen HTML text (which
     // reaches drawGlyphs WITHOUT this scope) renders natively → no black boxes.
     struct DriftstackCanvasTextGuard {
-        explicit DriftstackCanvasTextGuard(StringView src) { driftstackPushCanvasTextDraw(); driftstackPushColorEmojiSource(src); }
+        DriftstackCanvasTextGuard(StringView src, bool willReadFrequently) { driftstackPushCanvasTextDraw(willReadFrequently); driftstackPushColorEmojiSource(src); }
         ~DriftstackCanvasTextGuard() { driftstackPopColorEmojiSource(); driftstackPopCanvasTextDraw(); }
-    } driftstackCanvasTextGuard { textRun.text() };
+    } driftstackCanvasTextGuard { textRun.text(), willReadFrequently() };
 #endif
 
     auto& fontCascade = this->fontProxy()->fontCascade();

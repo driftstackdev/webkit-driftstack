@@ -663,6 +663,7 @@ namespace {
 // drawing (the fingerprint surface), so glyph pixel substitution applies.
 struct CanvasTextDepthSlot {
     unsigned depth { 0 };
+    Vector<bool> willReadFrequentlyStack;
     bool nativeFallback { false };   // #79: set when a canvas-text glyph fell to native CT raster
     bool colorServed { false };      // #42 keycap1: set when the V-COLOR per-glyph serve served a color
                                      // glyph this draw. The drawText fallback serves an in-atlas cluster
@@ -676,21 +677,31 @@ ThreadSpecific<CanvasTextDepthSlot>& canvasTextDepthSlot()
 }
 } // namespace
 
-void driftstackPushCanvasTextDraw()
+void driftstackPushCanvasTextDraw(bool willReadFrequently)
 {
-    ++canvasTextDepthSlot()->depth;
+    auto& slot = *canvasTextDepthSlot();
+    ++slot.depth;
+    slot.willReadFrequentlyStack.append(willReadFrequently);
 }
 
 void driftstackPopCanvasTextDraw()
 {
     auto& slot = *canvasTextDepthSlot();
-    if (slot.depth)
+    if (slot.depth) {
         --slot.depth;
+        slot.willReadFrequentlyStack.removeLast();
+    }
 }
 
 bool driftstackInCanvasTextDraw()
 {
     return canvasTextDepthSlot()->depth > 0;
+}
+
+bool driftstackCanvasTextWillReadFrequently()
+{
+    auto& stack = canvasTextDepthSlot()->willReadFrequentlyStack;
+    return !stack.isEmpty() && stack.last();
 }
 
 void driftstackResetCanvasTextNativeFallback()
