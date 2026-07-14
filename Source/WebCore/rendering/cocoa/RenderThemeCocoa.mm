@@ -2857,7 +2857,7 @@ static void applyEmPadding(RenderStyle& style, float paddingInlineEm, float padd
 static constexpr auto standardTextControlInlinePaddingEm = 0.5f;
 static constexpr auto standardTextControlBlockPaddingEm = 0.25f;
 
-#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
+#if PLATFORM(MAC)
 static Style::PaddingBox paddingBoxForNumberField(const RenderStyle& style)
 {
     const auto usedZoom = style.usedZoomForLength().value;
@@ -2875,10 +2875,12 @@ static Style::PaddingBox paddingBoxForNumberField(const RenderStyle& style)
     return paddingBox;
 }
 
+#if !PLATFORM(DRIFTSTACK)
 static void applyEmPaddingForNumberField(RenderStyle& style)
 {
     applyPaddingIfNotExplicitlySet(style, paddingBoxForNumberField(style));
 }
+#endif
 #endif
 
 bool RenderThemeCocoa::adjustTextFieldStyleForVectorBasedControls(RenderStyle& style, const Element* element) const
