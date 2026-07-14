@@ -43,6 +43,7 @@ constexpr uint16_t kOpClosePath                 = 0x0009;
 constexpr uint16_t kOpFill                      = 0x000A;
 constexpr uint16_t kOpStroke                    = 0x000B;
 constexpr uint16_t kOpArc                       = 0x000C;
+constexpr uint16_t kOpBezierCurveTo             = 0x000E;
 constexpr uint16_t kOpRect                      = 0x000F;
 constexpr uint16_t kOpFillStyle                 = 0x0020;
 constexpr uint16_t kOpStrokeStyle               = 0x0021;
@@ -66,6 +67,7 @@ constexpr uint16_t kArgs2Float                  = 2 * 8;
 constexpr uint16_t kArgs1Float                  = 1 * 8;
 constexpr uint16_t kArgs0                       = 0;
 constexpr uint16_t kArgsArc                     = 5 * 8 + 1;  // 5 doubles + 1 u8 ccw
+constexpr uint16_t kArgsBezierCurveTo           = 6 * 8;
 
 inline void appendBigEndianU16(Vector<uint8_t>& buf, uint16_t v)
 {
@@ -307,6 +309,13 @@ void OpSequenceRecorder::recordArc(double x, double y, double radius, double sta
     appendF64BE(startAngle); appendF64BE(endAngle);
     appendU8(counterClockwise ? 1 : 0);
 }
+void OpSequenceRecorder::recordBezierCurveTo(double cp1x, double cp1y, double cp2x, double cp2y, double x, double y)
+{
+    appendOpHeader(kOpBezierCurveTo, kArgsBezierCurveTo);
+    appendF64BE(cp1x); appendF64BE(cp1y);
+    appendF64BE(cp2x); appendF64BE(cp2y);
+    appendF64BE(x); appendF64BE(y);
+}
 
 // ---- Transforms ------------------------------------------------------------
 
@@ -436,6 +445,12 @@ constexpr ExpectedVector kVecCompositing = {
     "8b326a569d1857c2"_s
 };
 
+// Test 8: complete cubic Bézier path, matching the cross-language float contract.
+constexpr ExpectedVector kVecBezier = {
+    "bezier_cubic"_s, 200, 60,
+    "3161a95f99c82ded4dc3ecf6e8392545bd7f30b770dfb842621430f4a27254e3"_s
+};
+
 bool checkResult(ASCIILiteral name, const String& got, ASCIILiteral expected)
 {
     // Compare via StringView (bounds-checked). Match if `got` starts with
@@ -563,7 +578,22 @@ void runOpSequenceRecorderSelfTestIfRequested()
             ++fails;
     }
 
-    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 7 vectors", passes, fails);
+    // Test 8
+    {
+        OpSequenceRecorder r;
+        r.recordSetStrokeStyle("#205"_s);
+        r.recordSetLineWidth(3.0);
+        r.recordBeginPath();
+        r.recordMoveTo(5.0, 55.0);
+        r.recordBezierCurveTo(60.0, 5.0, 140.0, 55.0, 195.0, 5.0);
+        r.recordStroke();
+        if (checkResult(kVecBezier.name, r.finalizeSHA256Hex(kVecBezier.canvasW, kVecBezier.canvasH), kVecBezier.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 8 vectors", passes, fails);
 }
 
 } // namespace WebCore

@@ -120,6 +120,10 @@ void CanvasPath::quadraticCurveTo(float cpx, float cpy, float x, float y)
 
 void CanvasPath::bezierCurveTo(float cp1x, float cp1y, float cp2x, float cp2y, float x, float y)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (auto* r = driftstackOpRecorderForPath())
+        r->recordBezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y);
+#endif
     if (!std::isfinite(cp1x) || !std::isfinite(cp1y) || !std::isfinite(cp2x) || !std::isfinite(cp2y) || !std::isfinite(x) || !std::isfinite(y))
         return;
     if (!hasInvertibleTransform()) [[unlikely]]

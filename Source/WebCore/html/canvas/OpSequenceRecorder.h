@@ -92,6 +92,7 @@ public:
     void recordFill();
     void recordStroke();
     void recordArc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise);
+    void recordBezierCurveTo(double cp1x, double cp1y, double cp2x, double cp2y, double x, double y);
 
     // Transforms (0x0032-0x003F)
     void recordTranslate(double tx, double ty);
