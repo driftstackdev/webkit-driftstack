@@ -474,6 +474,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_EMOJI_ATLAS_PATH", getenv("DRIFTSTACK_EMOJI_ATLAS_PATH") },
             { "DRIFTSTACK_COMPOSITE_ATLAS_PATH", getenv("DRIFTSTACK_COMPOSITE_ATLAS_PATH") },
             { "DRIFTSTACK_PER_GLYPH_ATLAS_PATH", getenv("DRIFTSTACK_PER_GLYPH_ATLAS_PATH") },
+            { "DRIFTSTACK_PER_GLYPH_OVERLAY_PATH", getenv("DRIFTSTACK_PER_GLYPH_OVERLAY_PATH") },
             { "DRIFTSTACK_TEXT_GLYPH_ATLAS_PATH", getenv("DRIFTSTACK_TEXT_GLYPH_ATLAS_PATH") },
             { "DRIFTSTACK_TEXT_ATLAS", getenv("DRIFTSTACK_TEXT_ATLAS") },
             // Fingerprint overrides:

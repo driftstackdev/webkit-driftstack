@@ -84,6 +84,8 @@ public:
         uint8_t destinationAlpha) const;
 
 private:
+    bool loadOverlayFromFile(const char* path);
+
     bool m_loaded { false };
     const uint8_t* m_mapBase { nullptr };
     size_t m_mapSize { 0 };
@@ -95,6 +97,10 @@ private:
     const uint8_t* m_compositorChannels { nullptr };
     const uint8_t* m_destinationOpaqueChannels { nullptr };
     const uint8_t* m_destinationTextBackdrop { nullptr };
+    const uint8_t* m_overlayMapBase { nullptr };
+    size_t m_overlayMapSize { 0 };
+    size_t m_overlayEntryCount { 0 };
+    const uint8_t* m_overlayEntriesBase { nullptr };
 };
 
 // #79 (2026-06-21): the arbitrary-canvas-text N>1 serve places glyph i at

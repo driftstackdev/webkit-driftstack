@@ -160,6 +160,9 @@
     ;;; produces sha256 bit-identical iPhone glyph pixels via mmap +
     ;;; binary search (no ML inference path).
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_per_glyph_atlas.bin"))
+    ;;; Capture-driven per-archetype DSPGA1 overlays contain only entries whose
+    ;;; raster differs from the base atlas. Lookup is overlay-first, then base.
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_glyph_band_atlas"))
     ;;; #79 (2026-06-21): Western canvas-advance sidecar (DSWADV1) — supplies the
     ;;; iOS measureText width for the N>1 canvas serve's per-glyph pen positions
     ;;; (Arial/Verdana, which the V-689 advance atlas leaves empty). Read-only mmap.

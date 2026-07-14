@@ -166,6 +166,8 @@
     (regex (string-append "^" (param "HOME_DIR") "/code/driftstack/reference/driftstack_text_run_atlas_[a-z0-9_]+\\.bin$"))
     ;;; V-790.L: per-glyph DSPGA1 atlas
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_per_glyph_atlas.bin"))
+    ;;; Optional capture-driven DSPGA1 glyph-raster band overlays.
+    (subpath (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_glyph_band_atlas"))
     ;;; V-689: advance atlas
     (literal (string-append (param "HOME_DIR") "/code/driftstack/reference/driftstack_advance_atlas.bin"))
     (subpath "/var/driftstack/atlas")

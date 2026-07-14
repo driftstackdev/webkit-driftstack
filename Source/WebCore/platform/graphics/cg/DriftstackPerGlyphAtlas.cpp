@@ -296,6 +296,65 @@ bool DriftstackPerGlyphAtlas::loadFromFile(const char* path)
         WTFLogAlways("[V-790.L] glyph-compositor trailer loaded: alpha=%u", m_compositorFillAlphaByte);
     if (destination)
         WTFLogAlways("[V-790.L] glyph-destination trailer loaded: alpha=%u", m_compositorFillAlphaByte);
+
+    if (const char* overlayPath = std::getenv("DRIFTSTACK_PER_GLYPH_OVERLAY_PATH"); overlayPath && overlayPath[0])
+        loadOverlayFromFile(overlayPath);
+    return true;
+}
+
+bool DriftstackPerGlyphAtlas::loadOverlayFromFile(const char* path)
+{
+    int fd = ::open(path, O_RDONLY);
+    if (fd < 0) {
+        WTFLogAlways("[V-790.L] per-glyph overlay open failed: %s (errno=%d)", path, errno);
+        return false;
+    }
+
+    struct stat st;
+    if (::fstat(fd, &st) != 0 || st.st_size < static_cast<off_t>(kHeaderSize)) {
+        WTFLogAlways("[V-790.L] per-glyph overlay stat failed or too small: %s", path);
+        ::close(fd);
+        return false;
+    }
+
+    void* base = ::mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (base == MAP_FAILED) {
+        WTFLogAlways("[V-790.L] per-glyph overlay mmap failed: %s", path);
+        return false;
+    }
+
+    const uint8_t* bytes = static_cast<const uint8_t*>(base);
+    uint32_t version = leU32(bytes + 8);
+    uint32_t count = leU32(bytes + 12);
+    off_t expectedSize = static_cast<off_t>(kHeaderSize)
+        + static_cast<off_t>(count) * static_cast<off_t>(kEntrySize);
+    bool headerMatches = equalSpans(
+        unsafeMakeSpan(bytes, sizeof(kMagic)), asByteSpan(kMagic)) && version == 1;
+    if (!headerMatches || !count || st.st_size != expectedSize) {
+        WTFLogAlways("[V-790.L] per-glyph overlay invalid: %s (version=%u count=%u size=%lld expected=%lld)",
+            path, version, count, static_cast<long long>(st.st_size), static_cast<long long>(expectedSize));
+        ::munmap(base, st.st_size);
+        return false;
+    }
+
+    const uint8_t* entries = bytes + kHeaderSize;
+    for (size_t i = 1; i < count; ++i) {
+        const uint8_t* previousKey = entries + (i - 1) * kEntrySize;
+        const uint8_t* key = entries + i * kEntrySize;
+        if (!is_lt(compareSpans(
+            unsafeMakeSpan(previousKey, kKeySize), unsafeMakeSpan(key, kKeySize)))) {
+            WTFLogAlways("[V-790.L] per-glyph overlay keys not strictly sorted: %s (entry=%zu)", path, i);
+            ::munmap(base, st.st_size);
+            return false;
+        }
+    }
+
+    m_overlayMapBase = bytes;
+    m_overlayMapSize = static_cast<size_t>(st.st_size);
+    m_overlayEntryCount = count;
+    m_overlayEntriesBase = entries;
+    WTFLogAlways("[V-790.L] per-glyph overlay loaded: %u entries from %s", count, path);
     return true;
 }
 
@@ -308,25 +367,32 @@ std::optional<DriftstackPerGlyphAtlasEntry> DriftstackPerGlyphAtlas::lookup(
     uint8_t target[kKeySize];
     packKey(target, fontId, ptSizeQ4, codepoint, posClass);
 
-    // Binary search over sorted entries.
-    size_t lo = 0;
-    size_t hi = m_entryCount;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        const uint8_t* midKey = m_entriesBase + mid * kEntrySize;
-        int c = cmpKey(target, midKey);
-        if (c == 0) {
-            DriftstackPerGlyphAtlasEntry entry;
-            entry.pixels = midKey + kKeySize;
-            entry.pixelsSize = kPixelsSize;
-            return entry;
+    auto lookupInEntries = [&](const uint8_t* entries, size_t count) -> std::optional<DriftstackPerGlyphAtlasEntry> {
+        size_t lo = 0;
+        size_t hi = count;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            const uint8_t* midKey = entries + mid * kEntrySize;
+            int c = cmpKey(target, midKey);
+            if (c == 0) {
+                DriftstackPerGlyphAtlasEntry entry;
+                entry.pixels = midKey + kKeySize;
+                entry.pixelsSize = kPixelsSize;
+                return entry;
+            }
+            if (c < 0)
+                hi = mid;
+            else
+                lo = mid + 1;
         }
-        if (c < 0)
-            hi = mid;
-        else
-            lo = mid + 1;
+        return std::nullopt;
+    };
+
+    if (m_overlayEntriesBase && m_overlayEntryCount) {
+        if (auto overlayEntry = lookupInEntries(m_overlayEntriesBase, m_overlayEntryCount))
+            return overlayEntry;
     }
-    return std::nullopt;
+    return lookupInEntries(m_entriesBase, m_entryCount);
 }
 
 std::optional<DriftstackGlyphCompositorPixel> DriftstackPerGlyphAtlas::compositorPixel(
