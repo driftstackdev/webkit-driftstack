@@ -1386,17 +1386,25 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         if (ptPx >= 26)
             iphoneAdvance = ptSize;
         else switch (ptPx) {
-            // Exact Safari 26.3/26.4 raw TextMetrics captures cover these odd strikes too.
+            // Exact Safari 26.2/26.3/26.4 full-range TextMetrics captures.
+            case 8: iphoneAdvance = 11.f; break;
+            case 9: iphoneAdvance = 12.f; break;
+            case 10: iphoneAdvance = 13.f; break;
             case 11: iphoneAdvance = 15.f; break;
             case 12: iphoneAdvance = 16.f; break;
             case 13: iphoneAdvance = 17.f; break;
             case 14: iphoneAdvance = 19.f; break;
             case 15: iphoneAdvance = 20.f; break;
             case 16: iphoneAdvance = 21.f; break;
+            case 17: iphoneAdvance = 22.f; break;
             case 18: iphoneAdvance = 22.f; break;
+            case 19: iphoneAdvance = 23.f; break;
             case 20: iphoneAdvance = 23.f; break;
+            case 21: iphoneAdvance = 23.f; break;
             case 22: iphoneAdvance = 24.f; break;
+            case 23: iphoneAdvance = 24.f; break;
             case 24: iphoneAdvance = 25.f; break;
+            case 25: iphoneAdvance = 26.f; break;
             // Remaining uncaptured small sizes retain the prior proportional fallback.
             default: iphoneAdvance = ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize; break;
         }
@@ -2477,8 +2485,7 @@ static constexpr std::array<DriftstackEmojiBboxEntry, 89> driftstackEmojiBboxTab
     {  26.f,  26.f,       22.09375f,     3.890625f },   {  27.f,  27.f,       22.9375f,      4.046875f },
     {  28.f,  28.f,       23.796875f,    4.1875f },     {  29.f,  29.f,       24.640625f,    4.34375f },
     {  30.f,  30.f,       25.5f,         4.5f },        {  31.f,  31.f,       26.34375f,     4.640625f },
-    // Exact Safari 26.3/26.4 captures agree on actualBoundingBoxRight=32.5 at 32px.
-    {  32.f,  32.5f,      27.1875f,      4.796875f },   {  33.f,  33.f,       28.046875f,    4.9375f },
+    {  32.f,  32.f,       27.1875f,      4.796875f },   {  33.f,  33.f,       28.046875f,    4.9375f },
     {  34.f,  34.f,       28.890625f,    5.09375f },    {  35.f,  35.f,       29.75f,        5.25f },
     {  36.f,  36.f,       30.59375f,     5.390625f },   {  37.f,  37.f,       31.4375f,      5.546875f },
     {  38.f,  38.f,       32.296875f,    5.6875f },     {  39.f,  39.f,       33.140625f,    5.84375f },
@@ -2513,17 +2520,35 @@ static constexpr std::array<DriftstackEmojiBboxEntry, 89> driftstackEmojiBboxTab
     {  96.f,  96.f,       81.59375f,    14.390625f }
 }};
 
+// The original Stage D-3 table captured ascent/descent across the full integer
+// range but its horizontal column predated the full-range raw TextMetrics
+// capture. Safari 26.2/26.3/26.4 agree exactly: the last small strike tapers
+// from +9/64 to +3/64 at 26..28px, then every 29..96px bbox is advance+0.5.
+// Preserve the table's linear behavior for fractional point sizes.
+static float driftstackEmojiBboxWidthForSize(float size, float tableWidth)
+{
+    if (size < 26.f)
+        return tableWidth;
+    if (size < 28.f)
+        return size + 0.140625f - (size - 26.f) * 0.046875f;
+    if (size < 29.f)
+        return 28.046875f + (size - 28.f) * 1.453125f;
+    if (size < 96.f)
+        return size + 0.5f;
+    return 96.5f;
+}
+
 // Linear-interp lookup. Sizes outside [8, 96] clamp to nearest endpoint.
 // Most canvas sizes are integer points so the interp branch rarely fires.
 static FloatRect driftstackEmojiBboxForSize(float size)
 {
     if (size <= driftstackEmojiBboxTable.front().size) {
         const auto& e = driftstackEmojiBboxTable.front();
-        return FloatRect(0, -e.ascent, e.width, e.ascent + e.descent);
+        return FloatRect(0, -e.ascent, driftstackEmojiBboxWidthForSize(size, e.width), e.ascent + e.descent);
     }
     if (size >= driftstackEmojiBboxTable.back().size) {
         const auto& e = driftstackEmojiBboxTable.back();
-        return FloatRect(0, -e.ascent, e.width, e.ascent + e.descent);
+        return FloatRect(0, -e.ascent, driftstackEmojiBboxWidthForSize(size, e.width), e.ascent + e.descent);
     }
     DriftstackEmojiBboxEntry a = driftstackEmojiBboxTable.front();
     for (const auto& b : driftstackEmojiBboxTable) {
@@ -2532,7 +2557,7 @@ static FloatRect driftstackEmojiBboxForSize(float size)
             float w = a.width   + t * (b.width   - a.width);
             float ascent  = a.ascent  + t * (b.ascent  - a.ascent);
             float descent = a.descent + t * (b.descent - a.descent);
-            return FloatRect(0, -ascent, w, ascent + descent);
+            return FloatRect(0, -ascent, driftstackEmojiBboxWidthForSize(size, w), ascent + descent);
         }
         a = b;
     }
