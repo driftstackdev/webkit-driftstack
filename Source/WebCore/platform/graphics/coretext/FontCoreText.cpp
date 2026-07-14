@@ -1386,14 +1386,18 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         if (ptPx >= 26)
             iphoneAdvance = ptSize;
         else switch (ptPx) {
+            // Exact Safari 26.3/26.4 raw TextMetrics captures cover these odd strikes too.
+            case 11: iphoneAdvance = 15.f; break;
             case 12: iphoneAdvance = 16.f; break;
+            case 13: iphoneAdvance = 17.f; break;
             case 14: iphoneAdvance = 19.f; break;
+            case 15: iphoneAdvance = 20.f; break;
             case 16: iphoneAdvance = 21.f; break;
             case 18: iphoneAdvance = 22.f; break;
             case 20: iphoneAdvance = 23.f; break;
             case 22: iphoneAdvance = 24.f; break;
             case 24: iphoneAdvance = 25.f; break;
-            // odd / uncaptured small sizes (not in the V-405 even-size fuzzer set): best-effort.
+            // Remaining uncaptured small sizes retain the prior proportional fallback.
             default: iphoneAdvance = ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize; break;
         }
         // V-147 / V-143 Option A: when primary font is NOT Apple Color Emoji
@@ -2473,7 +2477,8 @@ static constexpr std::array<DriftstackEmojiBboxEntry, 89> driftstackEmojiBboxTab
     {  26.f,  26.f,       22.09375f,     3.890625f },   {  27.f,  27.f,       22.9375f,      4.046875f },
     {  28.f,  28.f,       23.796875f,    4.1875f },     {  29.f,  29.f,       24.640625f,    4.34375f },
     {  30.f,  30.f,       25.5f,         4.5f },        {  31.f,  31.f,       26.34375f,     4.640625f },
-    {  32.f,  32.f,       27.1875f,      4.796875f },   {  33.f,  33.f,       28.046875f,    4.9375f },
+    // Exact Safari 26.3/26.4 captures agree on actualBoundingBoxRight=32.5 at 32px.
+    {  32.f,  32.5f,      27.1875f,      4.796875f },   {  33.f,  33.f,       28.046875f,    4.9375f },
     {  34.f,  34.f,       28.890625f,    5.09375f },    {  35.f,  35.f,       29.75f,        5.25f },
     {  36.f,  36.f,       30.59375f,     5.390625f },   {  37.f,  37.f,       31.4375f,      5.546875f },
     {  38.f,  38.f,       32.296875f,    5.6875f },     {  39.f,  39.f,       33.140625f,    5.84375f },
