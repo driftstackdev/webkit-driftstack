@@ -28,9 +28,16 @@
 
 #include "FloatPoint.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include <wtf/Vector.h>
+#include <wtf/WeakPtr.h>
+#include <wtf/text/WTFString.h>
+#endif
+
 namespace WebCore {
 
 class Gradient;
+class OpSequenceRecorder;
 class ScriptExecutionContext;
 template<typename> class ExceptionOr;
 
@@ -46,12 +53,25 @@ public:
 
     ExceptionOr<void> addColorStop(ScriptExecutionContext&, double value, const String& color);
 
+#if PLATFORM(DRIFTSTACK)
+    struct DriftstackColorStop {
+        float offset;
+        String color;
+    };
+    const Vector<DriftstackColorStop>& driftstackColorStops() const { return m_driftstackColorStops; }
+    void driftstackRegisterOpSequenceRecorder(OpSequenceRecorder&);
+#endif
+
 private:
     CanvasGradient(const FloatPoint& p0, const FloatPoint& p1);
     CanvasGradient(const FloatPoint& p0, float r0, const FloatPoint& p1, float r1);
     CanvasGradient(const FloatPoint& centerPoint, float angleInRadians);
 
     const Ref<Gradient> m_gradient;
+#if PLATFORM(DRIFTSTACK)
+    Vector<DriftstackColorStop> m_driftstackColorStops;
+    Vector<WeakPtr<OpSequenceRecorder>> m_driftstackOpSequenceRecorders;
+#endif
 };
 
 } // namespace WebCore

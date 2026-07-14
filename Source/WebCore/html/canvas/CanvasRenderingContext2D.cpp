@@ -294,24 +294,12 @@ CanvasDirection CanvasRenderingContext2D::direction() const
 
 void CanvasRenderingContext2D::fillText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
-#if PLATFORM(DRIFTSTACK)
-    if (maxWidth)
-        driftstackOpSequenceRecorder().recordFillTextWithMaxWidth(text, x, y, *maxWidth);
-    else
-        driftstackOpSequenceRecorder().recordFillText(text, x, y);
-#endif
     canvasBase().recordLastFillText(text);
     drawTextInternal(text, x, y, true, maxWidth);
 }
 
 void CanvasRenderingContext2D::strokeText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
-#if PLATFORM(DRIFTSTACK)
-    if (maxWidth)
-        driftstackOpSequenceRecorder().recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
-    else
-        driftstackOpSequenceRecorder().recordStrokeText(text, x, y);
-#endif
     // Cross-context coherence (2026-07-01): record lastFillText on strokeText exactly as fillText does
     // (line ~303) and as the worker OffscreenCanvasRenderingContext2D::strokeText already does (:213). A
     // stroke-only text canvas otherwise keys the V-241/V-510 canonical lookup + the !lastFillText().isEmpty()
@@ -366,6 +354,21 @@ void CanvasRenderingContext2D::drawTextInternal(const String& text, double x, do
 
     if (!canDrawText(x, y, fill, maxWidth))
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    auto& recorder = driftstackOpSequenceRecorder();
+    if ((fill ? state().fillStyle : state().strokeStyle).canvasGradient())
+        recorder.recordGradientRenderPhaseIfNeeded();
+    if (fill) {
+        if (maxWidth)
+            recorder.recordFillTextWithMaxWidth(text, x, y, *maxWidth);
+        else
+            recorder.recordFillText(text, x, y);
+    } else if (maxWidth)
+        recorder.recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        recorder.recordStrokeText(text, x, y);
+#endif
 
     String normalizedText = normalizeSpaces(text);
     const RenderStyle* computedStyle;

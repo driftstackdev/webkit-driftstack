@@ -1339,7 +1339,14 @@ static WindRule NODELETE toWindRule(CanvasFillRule rule)
 void CanvasRenderingContext2DBase::fill(CanvasFillRule windingRule)
 {
 #if PLATFORM(DRIFTSTACK)
-    driftstackOpSequenceRecorder().recordFill();
+    auto& recorder = driftstackOpSequenceRecorder();
+    if (!m_path.isEmpty() && hasInvertibleTransform()) {
+        if (auto* context = effectiveDrawingContext()) {
+            if (auto gradient = context->fillGradient(); gradient && !gradient->isZeroSize())
+                recorder.recordGradientRenderPhaseIfNeeded();
+        }
+    }
+    recorder.recordFill();
 #endif
     fillInternal(m_path, windingRule);
 }
@@ -1347,7 +1354,14 @@ void CanvasRenderingContext2DBase::fill(CanvasFillRule windingRule)
 void CanvasRenderingContext2DBase::stroke()
 {
 #if PLATFORM(DRIFTSTACK)
-    driftstackOpSequenceRecorder().recordStroke();
+    auto& recorder = driftstackOpSequenceRecorder();
+    if (!m_path.isEmpty() && hasInvertibleTransform()) {
+        if (auto* context = effectiveDrawingContext()) {
+            if (auto gradient = context->strokeGradient(); gradient && !gradient->isZeroSize())
+                recorder.recordGradientRenderPhaseIfNeeded();
+        }
+    }
+    recorder.recordStroke();
 #endif
     strokeInternal(m_path);
 }
@@ -1359,11 +1373,27 @@ void CanvasRenderingContext2DBase::clip(CanvasFillRule windingRule)
 
 void CanvasRenderingContext2DBase::fill(Path2D& path, CanvasFillRule windingRule)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (!path.path().isEmpty() && hasInvertibleTransform()) {
+        if (auto* context = effectiveDrawingContext()) {
+            if (auto gradient = context->fillGradient(); gradient && !gradient->isZeroSize())
+                driftstackOpSequenceRecorder().recordGradientRenderPhaseIfNeeded();
+        }
+    }
+#endif
     fillInternal(path.path(), windingRule);
 }
 
 void CanvasRenderingContext2DBase::stroke(Path2D& path)
 {
+#if PLATFORM(DRIFTSTACK)
+    if (!path.path().isEmpty() && hasInvertibleTransform()) {
+        if (auto* context = effectiveDrawingContext()) {
+            if (auto gradient = context->strokeGradient(); gradient && !gradient->isZeroSize())
+                driftstackOpSequenceRecorder().recordGradientRenderPhaseIfNeeded();
+        }
+    }
+#endif
     strokeInternal(path.path());
 }
 
@@ -1600,9 +1630,6 @@ void CanvasRenderingContext2DBase::clearRect(double x, double y, double width, d
 
 void CanvasRenderingContext2DBase::fillRect(double x, double y, double width, double height)
 {
-#if PLATFORM(DRIFTSTACK)
-    driftstackOpSequenceRecorder().recordFillRect(x, y, width, height);
-#endif
     if (!validateRectForCanvas(x, y, width, height))
         return;
 
@@ -1622,6 +1649,13 @@ void CanvasRenderingContext2DBase::fillRect(double x, double y, double width, do
     auto gradient = c->fillGradient();
     if (gradient && gradient->isZeroSize())
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    auto& recorder = driftstackOpSequenceRecorder();
+    if (state().fillStyle.canvasGradient())
+        recorder.recordGradientRenderPhaseIfNeeded();
+    recorder.recordFillRect(x, y, width, height);
+#endif
 
     bool repaintEntireCanvas = false;
     if (rectContainsCanvas(rect)) {
@@ -1653,9 +1687,6 @@ void CanvasRenderingContext2DBase::fillRect(double x, double y, double width, do
 
 void CanvasRenderingContext2DBase::strokeRect(double x, double y, double width, double height)
 {
-#if PLATFORM(DRIFTSTACK)
-    driftstackOpSequenceRecorder().recordStrokeRect(x, y, width, height);
-#endif
     if (!validateRectForCanvas(x, y, width, height))
         return;
 
@@ -1677,6 +1708,13 @@ void CanvasRenderingContext2DBase::strokeRect(double x, double y, double width, 
     auto gradient = c->strokeGradient();
     if (gradient && gradient->isZeroSize())
         return;
+
+#if PLATFORM(DRIFTSTACK)
+    auto& recorder = driftstackOpSequenceRecorder();
+    if (state().strokeStyle.canvasGradient())
+        recorder.recordGradientRenderPhaseIfNeeded();
+    recorder.recordStrokeRect(x, y, width, height);
+#endif
 
     bool repaintEntireCanvas = false;
     if (isFullCanvasCompositeMode(state().globalComposite)) {
@@ -2347,6 +2385,9 @@ void CanvasRenderingContext2DBase::setStrokeStyle(String&& colorString)
 
 void CanvasRenderingContext2DBase::setStrokeStyle(RefPtr<CanvasGradient>&& gradient)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetStrokeGradient(*gradient);
+#endif
     realizeSaves();
     if (auto* c = effectiveDrawingContext())
         c->setStrokeGradient(gradient->gradient());
@@ -2388,6 +2429,9 @@ void CanvasRenderingContext2DBase::setFillStyle(String&& colorString)
 
 void CanvasRenderingContext2DBase::setFillStyle(RefPtr<CanvasGradient>&& gradient)
 {
+#if PLATFORM(DRIFTSTACK)
+    driftstackOpSequenceRecorder().recordSetFillGradient(*gradient);
+#endif
     realizeSaves();
     if (auto* c = effectiveDrawingContext())
         c->setFillGradient(gradient->gradient());

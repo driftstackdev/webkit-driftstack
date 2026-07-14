@@ -85,6 +85,21 @@ void OffscreenCanvasRenderingContext2D::drawText(const String& text, double x, d
     if (!canDrawText(x, y, fill, maxWidth))
         return;
 
+#if PLATFORM(DRIFTSTACK)
+    auto& recorder = driftstackOpSequenceRecorder();
+    if ((fill ? state().fillStyle : state().strokeStyle).canvasGradient())
+        recorder.recordGradientRenderPhaseIfNeeded();
+    if (fill) {
+        if (maxWidth)
+            recorder.recordFillTextWithMaxWidth(text, x, y, *maxWidth);
+        else
+            recorder.recordFillText(text, x, y);
+    } else if (maxWidth)
+        recorder.recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
+    else
+        recorder.recordStrokeText(text, x, y);
+#endif
+
     String normalizedText = normalizeSpaces(text);
     auto direction = (state().direction == Direction::Rtl) ? TextDirection::RTL : TextDirection::LTR;
     TextRun textRun(normalizedText, 0, 0, ExpansionBehavior::allowRightOnly(), direction, false, true);
@@ -194,10 +209,6 @@ void OffscreenCanvasRenderingContext2D::fillText(const String& text, double x, d
     // Wave 29-347 substitution fires on convertToBlob but with wrong table
     // entry, producing canonical bytes that DIFFER from main toDataURL
     // canonical bytes (still a cross-context fingerprint vector).
-    if (maxWidth)
-        driftstackOpSequenceRecorder().recordFillTextWithMaxWidth(text, x, y, *maxWidth);
-    else
-        driftstackOpSequenceRecorder().recordFillText(text, x, y);
     canvasBase().recordLastFillText(text);
 #endif
     drawText(text, x, y, true, maxWidth);
@@ -206,10 +217,6 @@ void OffscreenCanvasRenderingContext2D::fillText(const String& text, double x, d
 void OffscreenCanvasRenderingContext2D::strokeText(const String& text, double x, double y, std::optional<double> maxWidth)
 {
 #if PLATFORM(DRIFTSTACK)
-    if (maxWidth)
-        driftstackOpSequenceRecorder().recordStrokeTextWithMaxWidth(text, x, y, *maxWidth);
-    else
-        driftstackOpSequenceRecorder().recordStrokeText(text, x, y);
     canvasBase().recordLastFillText(text);
 #endif
     drawText(text, x, y, false, maxWidth);

@@ -45,23 +45,27 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include <wtf/CheckedPtr.h>
 #include <wtf/Forward.h>
+#include <wtf/HashMap.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/Vector.h>
+#include <wtf/WeakPtr.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
-class OpSequenceRecorder {
+class CanvasGradient;
+
+class OpSequenceRecorder : public CanMakeWeakPtr<OpSequenceRecorder>, public CanMakeCheckedPtr<OpSequenceRecorder> {
     WTF_MAKE_TZONE_ALLOCATED(OpSequenceRecorder);
+    WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(OpSequenceRecorder);
 public:
     OpSequenceRecorder() = default;
-    ~OpSequenceRecorder() = default;
+    ~OpSequenceRecorder();
 
     OpSequenceRecorder(const OpSequenceRecorder&) = delete;
     OpSequenceRecorder& operator=(const OpSequenceRecorder&) = delete;
-    OpSequenceRecorder(OpSequenceRecorder&&) = default;
-    OpSequenceRecorder& operator=(OpSequenceRecorder&&) = default;
 
     // State setters (op 0x0020-0x002F)
     void recordSetFillStyle(const String&);
@@ -75,6 +79,10 @@ public:
     void recordSetTextBaseline(const String&);
     void recordSetGlobalAlpha(double);
     void recordSetGlobalCompositeOperation(const String&);
+    void recordSetFillGradient(CanvasGradient&);
+    void recordSetStrokeGradient(CanvasGradient&);
+    void recordGradientAddColorStop(CanvasGradient&, double offset, const String& color);
+    void recordGradientRenderPhaseIfNeeded();
 
     // Draw / path ops (0x0001-0x001F)
     void recordFillRect(double x, double y, double w, double h);
@@ -115,7 +123,7 @@ public:
     String finalizeCanonicalBytesBase64(uint16_t canvasW, uint16_t canvasH) const;
 
     // Reset for reuse on the same context (e.g. canvas resized → ops invalidated).
-    void clear() { m_buffer.clear(); }
+    void clear();
 
     // Diagnostics.
     size_t opByteLength() const { return m_buffer.size(); }
@@ -129,16 +137,32 @@ public:
     const Vector<uint8_t>& driftstackOpBytes() const { return m_buffer; }
 
 private:
+    friend void runOpSequenceRecorderSelfTestIfRequested();
+
     // Internal serialization helpers — only the op-record bytes; canvas dims
     // are prepended at finalize time.
     void appendOpHeader(uint16_t opId, uint16_t argByteLen);
     void appendU16BE(uint16_t);
+    void appendU32BE(uint32_t);
     void appendF64BE(double);
     void appendStringU16LenUTF8(const String&);
     void appendStringU16LenUTF8(const CString&); // P4: append a precomputed UTF-8 (no re-transcode)
     void appendU8(uint8_t);
+    uint32_t ensureGradient(CanvasGradient&);
+    void recordCreateLinearGradient(uint32_t identifier, double x0, double y0, double x1, double y1);
+    void recordCreateRadialGradient(uint32_t identifier, double x0, double y0, double r0, double x1, double y1, double r1);
+    void recordCreateConicGradient(uint32_t identifier, double angle, double x, double y);
+    void recordGradientAddColorStop(uint32_t gradientIdentifier, double offset, const String& color);
+    void recordGradientRenderPhase(bool warm);
+    void recordSetFillGradient(uint32_t gradientIdentifier);
+    void recordSetStrokeGradient(uint32_t gradientIdentifier);
 
     Vector<uint8_t> m_buffer;
+    // Retain identities until clear so allocator address reuse cannot make a
+    // new gradient inherit a dead object's canonical identifier.
+    HashMap<Ref<CanvasGradient>, uint32_t> m_gradientIdentifiers;
+    uint32_t m_nextGradientIdentifier { 1 };
+    bool m_hasRecordedGradientRenderPhase { false };
 };
 
 // V-581 Phase C-3.A self-test: runs a small set of hardcoded canonical test

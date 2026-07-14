@@ -9,8 +9,11 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include "CanvasGradient.h"
+#include "Gradient.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +27,8 @@
 namespace WebCore {
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(OpSequenceRecorder);
+
+OpSequenceRecorder::~OpSequenceRecorder() = default;
 
 namespace {
 
@@ -45,6 +50,11 @@ constexpr uint16_t kOpStroke                    = 0x000B;
 constexpr uint16_t kOpArc                       = 0x000C;
 constexpr uint16_t kOpBezierCurveTo             = 0x000E;
 constexpr uint16_t kOpRect                      = 0x000F;
+constexpr uint16_t kOpCreateLinearGradient      = 0x0010;
+constexpr uint16_t kOpCreateRadialGradient      = 0x0011;
+constexpr uint16_t kOpCreateConicGradient       = 0x0012;
+constexpr uint16_t kOpGradientAddColorStop      = 0x0013;
+constexpr uint16_t kOpGradientRenderPhase       = 0x0014;
 constexpr uint16_t kOpFillStyle                 = 0x0020;
 constexpr uint16_t kOpStrokeStyle               = 0x0021;
 constexpr uint16_t kOpLineWidth                 = 0x0022;
@@ -56,6 +66,8 @@ constexpr uint16_t kOpTextAlign                 = 0x0029;
 constexpr uint16_t kOpTextBaseline              = 0x002A;
 constexpr uint16_t kOpGlobalAlpha               = 0x002B;
 constexpr uint16_t kOpGlobalCompositeOperation  = 0x002C;
+constexpr uint16_t kOpFillGradient              = 0x002D;
+constexpr uint16_t kOpStrokeGradient            = 0x002E;
 constexpr uint16_t kOpTranslate                 = 0x0032;
 constexpr uint16_t kOpScale                     = 0x0033;
 constexpr uint16_t kOpRotate                    = 0x0034;
@@ -68,9 +80,23 @@ constexpr uint16_t kArgs1Float                  = 1 * 8;
 constexpr uint16_t kArgs0                       = 0;
 constexpr uint16_t kArgsArc                     = 5 * 8 + 1;  // 5 doubles + 1 u8 ccw
 constexpr uint16_t kArgsBezierCurveTo           = 6 * 8;
+constexpr uint16_t kArgsGradientIdentifier      = 4;
+constexpr uint16_t kArgsLinearGradient          = 4 + 4 * 8;
+constexpr uint16_t kArgsRadialGradient          = 4 + 6 * 8;
+constexpr uint16_t kArgsConicGradient           = 4 + 3 * 8;
+
+std::atomic<bool> s_gradientRendererWarm { false };
 
 inline void appendBigEndianU16(Vector<uint8_t>& buf, uint16_t v)
 {
+    buf.append(static_cast<uint8_t>((v >> 8) & 0xff));
+    buf.append(static_cast<uint8_t>(v & 0xff));
+}
+
+inline void appendBigEndianU32(Vector<uint8_t>& buf, uint32_t v)
+{
+    buf.append(static_cast<uint8_t>((v >> 24) & 0xff));
+    buf.append(static_cast<uint8_t>((v >> 16) & 0xff));
     buf.append(static_cast<uint8_t>((v >> 8) & 0xff));
     buf.append(static_cast<uint8_t>(v & 0xff));
 }
@@ -136,6 +162,7 @@ static bool dsOpRecordingEnabled()
 }
 
 void OpSequenceRecorder::appendU16BE(uint16_t v)            { if (!dsOpRecordingEnabled()) return; appendBigEndianU16(m_buffer, v); }
+void OpSequenceRecorder::appendU32BE(uint32_t v)            { if (!dsOpRecordingEnabled()) return; appendBigEndianU32(m_buffer, v); }
 void OpSequenceRecorder::appendF64BE(double v)              { if (!dsOpRecordingEnabled()) return; appendBigEndianF64(m_buffer, v); }
 void OpSequenceRecorder::appendStringU16LenUTF8(const String& s) { if (!dsOpRecordingEnabled()) return; appendStringU16LenUTF8Buf(m_buffer, s); }
 // P4 (canvas-op-timing-audit): the setters already compute v.utf8() for the length — pass it here so the
@@ -158,6 +185,14 @@ void OpSequenceRecorder::appendOpHeader(uint16_t opId, uint16_t argByteLen)
         m_buffer.reserveInitialCapacity(2048);
     appendU16BE(opId);
     appendU16BE(argByteLen);
+}
+
+void OpSequenceRecorder::clear()
+{
+    m_buffer.clear();
+    m_gradientIdentifiers.clear();
+    m_nextGradientIdentifier = 1;
+    m_hasRecordedGradientRenderPhase = false;
 }
 
 // ---- State setters ---------------------------------------------------------
@@ -232,6 +267,107 @@ void OpSequenceRecorder::recordSetGlobalCompositeOperation(const String& v)
     auto len = utf8.length() > 0xffff ? 0xffff : utf8.length();
     appendOpHeader(kOpGlobalCompositeOperation, static_cast<uint16_t>(2 + len));
     appendStringU16LenUTF8(utf8);
+}
+
+uint32_t OpSequenceRecorder::ensureGradient(CanvasGradient& canvasGradient)
+{
+    if (auto iterator = m_gradientIdentifiers.find(&canvasGradient); iterator != m_gradientIdentifiers.end())
+        return iterator->value;
+
+    uint32_t identifier = m_nextGradientIdentifier++;
+    m_gradientIdentifiers.add(Ref { canvasGradient }, identifier);
+    const auto& data = canvasGradient.gradient().data();
+    WTF::switchOn(data,
+        [this, identifier](const Gradient::LinearData& linear) {
+            recordCreateLinearGradient(identifier, linear.point0.x(), linear.point0.y(), linear.point1.x(), linear.point1.y());
+        },
+        [this, identifier](const Gradient::RadialData& radial) {
+            recordCreateRadialGradient(identifier, radial.point0.x(), radial.point0.y(), radial.startRadius,
+                radial.point1.x(), radial.point1.y(), radial.endRadius);
+        },
+        [this, identifier](const Gradient::ConicData& conic) {
+            recordCreateConicGradient(identifier, conic.angleRadians, conic.point0.x(), conic.point0.y());
+        });
+    for (const auto& stop : canvasGradient.driftstackColorStops())
+        recordGradientAddColorStop(identifier, stop.offset, stop.color);
+    canvasGradient.driftstackRegisterOpSequenceRecorder(*this);
+    return identifier;
+}
+
+void OpSequenceRecorder::recordCreateLinearGradient(uint32_t identifier, double x0, double y0, double x1, double y1)
+{
+    appendOpHeader(kOpCreateLinearGradient, kArgsLinearGradient);
+    appendU32BE(identifier);
+    appendF64BE(x0); appendF64BE(y0); appendF64BE(x1); appendF64BE(y1);
+}
+
+void OpSequenceRecorder::recordCreateRadialGradient(uint32_t identifier, double x0, double y0, double r0, double x1, double y1, double r1)
+{
+    appendOpHeader(kOpCreateRadialGradient, kArgsRadialGradient);
+    appendU32BE(identifier);
+    appendF64BE(x0); appendF64BE(y0); appendF64BE(r0);
+    appendF64BE(x1); appendF64BE(y1); appendF64BE(r1);
+}
+
+void OpSequenceRecorder::recordCreateConicGradient(uint32_t identifier, double angle, double x, double y)
+{
+    appendOpHeader(kOpCreateConicGradient, kArgsConicGradient);
+    appendU32BE(identifier);
+    appendF64BE(angle); appendF64BE(x); appendF64BE(y);
+}
+
+void OpSequenceRecorder::recordGradientAddColorStop(uint32_t identifier, double offset, const String& color)
+{
+    auto utf8 = color.utf8();
+    auto length = utf8.length() > 0xffff ? 0xffff : utf8.length();
+    appendOpHeader(kOpGradientAddColorStop, static_cast<uint16_t>(kArgsGradientIdentifier + 8 + 2 + length));
+    appendU32BE(identifier);
+    appendF64BE(offset);
+    appendStringU16LenUTF8(utf8);
+}
+
+void OpSequenceRecorder::recordGradientAddColorStop(CanvasGradient& gradient, double offset, const String& color)
+{
+    auto iterator = m_gradientIdentifiers.find(&gradient);
+    if (iterator == m_gradientIdentifiers.end())
+        return;
+    recordGradientAddColorStop(iterator->value, offset, color);
+}
+
+void OpSequenceRecorder::recordGradientRenderPhase(bool warm)
+{
+    appendOpHeader(kOpGradientRenderPhase, 1);
+    appendU8(warm);
+}
+
+void OpSequenceRecorder::recordGradientRenderPhaseIfNeeded()
+{
+    if (m_hasRecordedGradientRenderPhase)
+        return;
+    recordGradientRenderPhase(s_gradientRendererWarm.exchange(true, std::memory_order_relaxed));
+    m_hasRecordedGradientRenderPhase = true;
+}
+
+void OpSequenceRecorder::recordSetFillGradient(CanvasGradient& gradient)
+{
+    recordSetFillGradient(ensureGradient(gradient));
+}
+
+void OpSequenceRecorder::recordSetFillGradient(uint32_t identifier)
+{
+    appendOpHeader(kOpFillGradient, kArgsGradientIdentifier);
+    appendU32BE(identifier);
+}
+
+void OpSequenceRecorder::recordSetStrokeGradient(CanvasGradient& gradient)
+{
+    recordSetStrokeGradient(ensureGradient(gradient));
+}
+
+void OpSequenceRecorder::recordSetStrokeGradient(uint32_t identifier)
+{
+    appendOpHeader(kOpStrokeGradient, kArgsGradientIdentifier);
+    appendU32BE(identifier);
 }
 
 // ---- Draw / path ops -------------------------------------------------------
@@ -451,6 +587,32 @@ constexpr ExpectedVector kVecBezier = {
     "3161a95f99c82ded4dc3ecf6e8392545bd7f30b770dfb842621430f4a27254e3"_s
 };
 
+// Tests 9/10: complete linear-gradient lifecycle and a stop added after assignment.
+constexpr ExpectedVector kVecGradient = {
+    "gradient_linear"_s, 200, 60,
+    "91a60f2033579aacb3e74cdeda009f6bea74288c69816688d7d744e1e0599a37"_s
+};
+constexpr ExpectedVector kVecGradientMutation = {
+    "gradient_post_assignment_stop"_s, 200, 60,
+    "256862410c37a3e930d15c3cb4129d6a576007543af98e644f86870698ad70b5"_s
+};
+constexpr ExpectedVector kVecRadialGradient = {
+    "gradient_radial"_s, 80, 40,
+    "1d3daeb243c858b229c0906fc5dcef0be89c17893a256ba1aaa4816f0e8d7c2b"_s
+};
+constexpr ExpectedVector kVecConicGradient = {
+    "gradient_conic_effective_geometry"_s, 64, 64,
+    "09afd5dca3036919837bf731ce89980cdfc5a5d6208ba60c2eaef27fa5fe999f"_s
+};
+constexpr ExpectedVector kVecWarmGradient = {
+    "gradient_warm_render_phase"_s, 200, 60,
+    "982a30f5ebd373fcf5b8b188afe3e20daf8d43b3caeac07806b5d55162f118d5"_s
+};
+constexpr ExpectedVector kVecWarmGradientMutation = {
+    "gradient_warm_post_assignment_stop"_s, 200, 60,
+    "abf43193fb816ae63d2ad9f36c06e32b745d16410140b6bfafe31f9a4a889be3"_s
+};
+
 bool checkResult(ASCIILiteral name, const String& got, ASCIILiteral expected)
 {
     // Compare via StringView (bounds-checked). Match if `got` starts with
@@ -593,7 +755,101 @@ void runOpSequenceRecorderSelfTestIfRequested()
             ++fails;
     }
 
-    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 8 vectors", passes, fails);
+    // Test 9
+    {
+        OpSequenceRecorder r;
+        r.recordCreateLinearGradient(1, 0.0, 0.0, 200.0, 0.0);
+        r.recordGradientAddColorStop(1, 0.0, "#f00"_s);
+        r.recordGradientAddColorStop(1, 1.0, "#00f"_s);
+        r.recordSetFillGradient(1);
+        r.recordGradientRenderPhase(false);
+        r.recordFillRect(0.0, 0.0, 200.0, 60.0);
+        if (checkResult(kVecGradient.name, r.finalizeSHA256Hex(kVecGradient.canvasW, kVecGradient.canvasH), kVecGradient.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    // Test 10: the mutation occurs after assignment and therefore after the
+    // fill-gradient operation in the canonical byte stream.
+    {
+        OpSequenceRecorder r;
+        r.recordCreateLinearGradient(1, 0.0, 0.0, 200.0, 0.0);
+        r.recordGradientAddColorStop(1, 0.0, "#f00"_s);
+        r.recordGradientAddColorStop(1, 1.0, "#00f"_s);
+        r.recordSetFillGradient(1);
+        r.recordGradientAddColorStop(1, 0.5, "#0f0"_s);
+        r.recordGradientRenderPhase(false);
+        r.recordFillRect(0.0, 0.0, 200.0, 60.0);
+        if (checkResult(kVecGradientMutation.name, r.finalizeSHA256Hex(kVecGradientMutation.canvasW, kVecGradientMutation.canvasH), kVecGradientMutation.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    // Test 11
+    {
+        OpSequenceRecorder r;
+        r.recordCreateRadialGradient(1, 10.25, 11.5, 2.25, 40.75, 20.5, 18.75);
+        r.recordGradientAddColorStop(1, 0.125, "red"_s);
+        r.recordGradientAddColorStop(1, 0.875, "rgba(0, 0, 255, 0.5)"_s);
+        r.recordSetStrokeGradient(1);
+        r.recordGradientRenderPhase(false);
+        r.recordStrokeRect(1.0, 2.0, 70.0, 30.0);
+        if (checkResult(kVecRadialGradient.name, r.finalizeSHA256Hex(kVecRadialGradient.canvasW, kVecRadialGradient.canvasH), kVecRadialGradient.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    // Test 12: createConicGradient(0, ...) is stored internally at pi/2 as a
+    // float. Hash the effective Gradient geometry exposed to ensureGradient.
+    {
+        OpSequenceRecorder r;
+        r.recordCreateConicGradient(1, static_cast<double>(1.5707963705062866f), 32.5, 31.25);
+        r.recordGradientAddColorStop(1, 0.0, "#fff"_s);
+        r.recordGradientAddColorStop(1, 1.0, "#000"_s);
+        r.recordSetFillGradient(1);
+        r.recordGradientRenderPhase(false);
+        r.recordFillRect(0.0, 0.0, 64.0, 64.0);
+        if (checkResult(kVecConicGradient.name, r.finalizeSHA256Hex(kVecConicGradient.canvasW, kVecConicGradient.canvasH), kVecConicGradient.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    // Test 13
+    {
+        OpSequenceRecorder r;
+        r.recordCreateLinearGradient(1, 0.0, 0.0, 200.0, 0.0);
+        r.recordGradientAddColorStop(1, 0.0, "#f00"_s);
+        r.recordGradientAddColorStop(1, 1.0, "#00f"_s);
+        r.recordSetFillGradient(1);
+        r.recordGradientRenderPhase(true);
+        r.recordFillRect(0.0, 0.0, 200.0, 60.0);
+        if (checkResult(kVecWarmGradient.name, r.finalizeSHA256Hex(kVecWarmGradient.canvasW, kVecWarmGradient.canvasH), kVecWarmGradient.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    // Test 14
+    {
+        OpSequenceRecorder r;
+        r.recordCreateLinearGradient(1, 0.0, 0.0, 200.0, 0.0);
+        r.recordGradientAddColorStop(1, 0.0, "#f00"_s);
+        r.recordGradientAddColorStop(1, 1.0, "#00f"_s);
+        r.recordSetFillGradient(1);
+        r.recordGradientAddColorStop(1, 0.5, "#0f0"_s);
+        r.recordGradientRenderPhase(true);
+        r.recordFillRect(0.0, 0.0, 200.0, 60.0);
+        if (checkResult(kVecWarmGradientMutation.name, r.finalizeSHA256Hex(kVecWarmGradientMutation.canvasW, kVecWarmGradientMutation.canvasH), kVecWarmGradientMutation.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 14 vectors", passes, fails);
 }
 
 } // namespace WebCore

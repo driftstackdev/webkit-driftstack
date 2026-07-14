@@ -30,6 +30,9 @@
 #include "CanvasStyle.h"
 #include "ExceptionOr.h"
 #include "Gradient.h"
+#if PLATFORM(DRIFTSTACK)
+#include "OpSequenceRecorder.h"
+#endif
 
 namespace WebCore {
 
@@ -74,8 +77,29 @@ ExceptionOr<void> CanvasGradient::addColorStop(ScriptExecutionContext& scriptExe
     if (!color.isValid())
         return Exception { ExceptionCode::SyntaxError };
 
-    m_gradient->addColorStop({ static_cast<float>(value), WTF::move(color) });
+    float effectiveOffset = static_cast<float>(value);
+    m_gradient->addColorStop({ effectiveOffset, WTF::move(color) });
+#if PLATFORM(DRIFTSTACK)
+    m_driftstackColorStops.append({ effectiveOffset, colorString });
+    m_driftstackOpSequenceRecorders.removeAllMatching([](const auto& recorder) { return !recorder; });
+    for (auto& weakRecorder : m_driftstackOpSequenceRecorders) {
+        if (auto* recorder = weakRecorder.get())
+            recorder->recordGradientAddColorStop(*this, effectiveOffset, colorString);
+    }
+#endif
     return { };
 }
+
+#if PLATFORM(DRIFTSTACK)
+void CanvasGradient::driftstackRegisterOpSequenceRecorder(OpSequenceRecorder& recorder)
+{
+    m_driftstackOpSequenceRecorders.removeAllMatching([](const auto& candidate) { return !candidate; });
+    for (auto& candidate : m_driftstackOpSequenceRecorders) {
+        if (candidate.get() == &recorder)
+            return;
+    }
+    m_driftstackOpSequenceRecorders.append(WeakPtr { recorder });
+}
+#endif
 
 } // namespace WebCore
