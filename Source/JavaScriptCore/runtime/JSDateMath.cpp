@@ -578,7 +578,9 @@ String DateCache::timeZoneDisplayName(bool isDST)
         // below: 18.6="Coordinated Universal Time", 26.0-26.x="Greenwich Mean Time", 27.0 reverts to
         // "Coordinated Universal Time" (real-device GTs).
         //
-        // newName==oldName for a zone where iOS never changed it (Anadyr, Honolulu) — invariant rows.
+        // newName==oldName for a deterministic selected row (Anadyr; Honolulu's selected variant).
+        // Two real iPhone-14/Safari-26.3 pool images expose different Honolulu names under the same
+        // public identity (GMT-10:00 vs Hawaii-Aleutian); this source selects the latter real variant.
         // An empty oldName/newName ("") means: serve NO override in that band (fall through to macOS
         // ICU). Used for Istanbul on pre-26.4, where the real device returns a bare "GMT+03:00" that
         // the macOS ICU fallback already produces.
@@ -612,7 +614,8 @@ String DateCache::timeZoneDisplayName(bool isDST)
             { "Asia/Kamchatka"_s,       "Petropavlovsk-Kamchatski Standard Time", "Kamchatka Standard Time" },
             { "Asia/Taipei"_s,          "Taipei Standard Time", "Taiwan Standard Time" },
             { "Pacific/Apia"_s,         "Apia Standard Time", "Samoa Standard Time" },
-            // Pacific/Honolulu: INVARIANT "Hawaii-Aleutian Standard Time" (macOS: bare "GMT-10:00").
+            // Pacific/Honolulu: selected real-device variant is "Hawaii-Aleutian Standard Time".
+            // iPhone-14/Safari-26.3 also has a capture-proven hidden-image "GMT-10:00" variant.
             { "Pacific/Honolulu"_s,     "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" },
             { "Pacific/Midway"_s,       "Samoa Standard Time", "American Samoa Standard Time" },
             { "Pacific/Pago_Pago"_s,    "Samoa Standard Time", "American Samoa Standard Time" },

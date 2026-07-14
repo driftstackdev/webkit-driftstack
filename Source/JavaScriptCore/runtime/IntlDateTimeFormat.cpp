@@ -1311,7 +1311,8 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
     if (resolvedTimeZone == "GMT"_s || resolvedTimeZone == "Etc/GMT"_s)
         return driftstackGMTName();
 
-    // newName/oldName == same string for zones iOS never changed (Anadyr, Honolulu). A nullptr
+    // newName/oldName == same string for a deterministic selected row (Anadyr; Honolulu's selected
+    // real variant). iPhone-14/Safari-26.3 also has a hidden-image GMT-10:00 capture variant. A nullptr
     // band-value means: serve NO override (fall through to macOS ICU) — used for Istanbul pre-26.4,
     // where the real device returns a bare "GMT+03:00" that macOS ICU already produces.
     struct Entry { ASCIILiteral zone; const char* oldName; const char* newName; };
@@ -1337,7 +1338,8 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
         { "Asia/Kamchatka"_s,            "Petropavlovsk-Kamchatski Standard Time", "Kamchatka Standard Time" },
         { "Asia/Taipei"_s,               "Taipei Standard Time", "Taiwan Standard Time" },
         { "Pacific/Apia"_s,              "Apia Standard Time", "Samoa Standard Time" },
-        { "Pacific/Honolulu"_s,          "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" }, // macOS: "GMT-10:00"; INVARIANT
+        // Selected real variant; iPhone-14/26.3 also captured GMT-10:00.
+        { "Pacific/Honolulu"_s,          "Hawaii-Aleutian Standard Time", "Hawaii-Aleutian Standard Time" },
         { "Pacific/Midway"_s,            "Samoa Standard Time", "American Samoa Standard Time" },
         { "Pacific/Pago_Pago"_s,         "Samoa Standard Time", "American Samoa Standard Time" },
         { "Pacific/Ponape"_s,            "Ponape Time", "Pohnpei Time" },
