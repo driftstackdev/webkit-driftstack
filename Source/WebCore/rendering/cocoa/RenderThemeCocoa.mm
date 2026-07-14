@@ -2857,7 +2857,7 @@ static void applyEmPadding(RenderStyle& style, float paddingInlineEm, float padd
 static constexpr auto standardTextControlInlinePaddingEm = 0.5f;
 static constexpr auto standardTextControlBlockPaddingEm = 0.25f;
 
-#if PLATFORM(MAC)
+#if PLATFORM(MAC) && !PLATFORM(DRIFTSTACK)
 static Style::PaddingBox paddingBoxForNumberField(const RenderStyle& style)
 {
     const auto usedZoom = style.usedZoomForLength().value;
