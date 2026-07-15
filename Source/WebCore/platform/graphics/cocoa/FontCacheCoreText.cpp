@@ -2646,6 +2646,64 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
     return nullptr;
 }
 
+// Safari before 26 keeps the PingFang UI Display optical face selected by the
+// 20px system-font cascade when realizing the fallback at smaller sizes. Newer
+// Safari releases reselect the Text face at those sizes. Preserve the physical
+// Display descriptor only for the capture-proven legacy SF-system CJK path;
+// every missing or unexpected identity fails open to the normal resolver.
+static bool driftstackUsesLegacyCJKDisplayFallback()
+{
+    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
+    if (!archetype || !archetype[0])
+        return false;
+
+    std::string_view value(archetype);
+    auto position = value.find("safari");
+    if (position == std::string_view::npos)
+        return false;
+    position += 6;
+
+    int major = 0;
+    while (position < value.size() && isASCIIDigit(value[position])) {
+        major = major * 10 + value[position] - '0';
+        ++position;
+    }
+    return major > 0 && major < 26;
+}
+
+static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescriptor(CTFontRef baseFont, CTFontRef resolvedFallback, StringView cluster, const FontDescription& description)
+{
+    if (!driftstackTrack7CandidateDEnabled() || !driftstackUsesLegacyCJKDisplayFallback())
+        return nullptr;
+    if (!baseFont || !resolvedFallback || cluster.isEmpty() || !isCJKHanCharacter(cluster[0]))
+        return nullptr;
+
+    RetainPtr baseFamily = adoptCF(CTFontCopyFamilyName(baseFont));
+    if (!baseFamily || CFStringCompare(baseFamily.get(), CFSTR(".SF UI"), 0) != kCFCompareEqualTo)
+        return nullptr;
+
+    RetainPtr fallbackFamily = adoptCF(CTFontCopyFamilyName(resolvedFallback));
+    if (!fallbackFamily || CFStringCompare(fallbackFamily.get(), CFSTR(".PingFang UI SC"), 0) != kCFCompareEqualTo)
+        return nullptr;
+
+    RetainPtr<CFStringRef> localeString;
+    if (!description.computedLocale().isNull())
+        localeString = description.computedLocale().string().createCFString();
+    RetainPtr systemFont = adoptCF(CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 20, localeString.get()));
+    if (!systemFont)
+        return nullptr;
+
+    RetainPtr displayFallback = lookupFallbackFont(systemFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), cluster);
+    if (!displayFallback)
+        return nullptr;
+
+    String postScriptName(adoptCF(CTFontCopyPostScriptName(displayFallback.get())).get());
+    if (!postScriptName.startsWith(".PingFangUIDisplaySC-"_s))
+        return nullptr;
+
+    return adoptCF(CTFontCopyFontDescriptor(displayFallback.get()));
+}
+
 // Emoji presentation ranges — covers the supplementary-plane emoji blocks +
 // the BMP emoji-presentation-defaulted ranges. Apple's font cascade for
 // emoji on iPhone uses the canonical multi-strike AppleColorEmoji.ttc
@@ -3450,6 +3508,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
 
     auto result = lookupFallbackFont(ctFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), characterCluster);
 #if PLATFORM(DRIFTSTACK)
+    RetainPtr<CTFontDescriptorRef> driftstackFallbackDescriptor;
     // V-433.Z wave 29-205: 10 universally-divergent codepoints route to SF Pro
     // FIRST (before script-specific overrides) so the explicit list always wins
     // even where script ranges (e.g. U+302E Hangul Tone Mark) would otherwise
@@ -3551,6 +3610,13 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             WTFLogAlways("[Driftstack-Track10-Hebrew] Hebrew fallback override fired (%u so far); cluster first cp = U+%04X originatingFamily=%s",
                 hitCount, (unsigned)characterCluster[0], platformData.familyName().utf8().data());
         result = WTF::move(driftstackHebrewFont);
+    } else if (auto driftstackCJKDisplayDescriptor = driftstackLegacyCJKDisplayFallbackDescriptor(
+            ctFont.get(), result.get(), characterCluster, description)) {
+        static unsigned hitCount = 0;
+        if (++hitCount <= 8)
+            WTFLogAlways("[Driftstack-CJK-Display] Legacy CJK Display fallback fired (%u so far); cluster first cp = U+%04X",
+                hitCount, (unsigned)characterCluster[0]);
+        driftstackFallbackDescriptor = WTF::move(driftstackCJKDisplayDescriptor);
     } else if (auto driftstackCJKFont = driftstackIOSFallbackFontForCJKCluster(
             characterCluster, description, platformData.size())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
@@ -3569,7 +3635,14 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
         result = WTF::move(driftstackEmojiFont);
     }
 #endif
-    result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
+#if PLATFORM(DRIFTSTACK)
+    if (driftstackFallbackDescriptor) {
+        UnrealizedCoreTextFont unrealizedFont { WTF::move(driftstackFallbackDescriptor) };
+        unrealizedFont.setSize(platformData.size());
+        result = preparePlatformFont(WTF::move(unrealizedFont), description, { });
+    } else
+#endif
+        result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
 
     if (!result)
         return lastResortFallbackFont(description);
