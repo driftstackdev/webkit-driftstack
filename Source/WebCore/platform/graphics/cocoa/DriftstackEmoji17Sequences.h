@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -20,6 +21,34 @@
 #include <wtf/text/StringView.h>
 
 namespace WebCore {
+
+// Emoji 17 coverage is capture-proven only for the exact Safari 26.4 band.
+// Keep this predicate independent of the font/config corpus: all archetypes
+// currently share one bundled TTC, while their observable coverage does not.
+// Read the environment at each use so a long-lived process cannot retain an
+// archetype decision across a test or session transition.
+inline constexpr bool driftstackEmoji17ArchetypeSupportsCoverage(std::string_view archetype)
+{
+    constexpr std::string_view suffix = "_safari26_4";
+    return archetype.size() >= suffix.size()
+        && archetype.substr(archetype.size() - suffix.size()) == suffix;
+}
+
+static_assert(driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_4"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage(""));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone16pro_ios18_6_safari18_6"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17pro_ios18_7_safari26_0"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17pro_ios18_7_safari26_3"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_5"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_40"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_chrome150"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_4_extra"));
+
+inline bool driftstackEmoji17EnabledForCurrentArchetype()
+{
+    const char* archetype = std::getenv("DRIFTSTACK_ARCHETYPE");
+    return archetype && driftstackEmoji17ArchetypeSupportsCoverage(archetype);
+}
 
 inline constexpr std::array<std::u16string_view, 163> driftstackEmoji17Sequences { {
     std::u16string_view { u"\U0001F468\U0001F3FB\u200D\U0001F430\u200D\U0001F468\U0001F3FC" },
@@ -428,7 +457,8 @@ inline DriftstackEmojiUIGeometry driftstackSystemEmojiUIGeometry(float pointSize
 
 inline std::optional<float> driftstackEmoji17TargetAdvance(CTFontRef font, float pointSize)
 {
-    if (!(pointSize > 0) || !driftstackIsBundledAppleColorEmojiFont(font))
+    if (!driftstackEmoji17EnabledForCurrentArchetype()
+        || !(pointSize > 0) || !driftstackIsBundledAppleColorEmojiFont(font))
         return std::nullopt;
     if (driftstackAppleColorEmojiFace(font) == DriftstackAppleColorEmojiFace::Public)
         return driftstackPublicAppleColorEmojiAdvance(pointSize);

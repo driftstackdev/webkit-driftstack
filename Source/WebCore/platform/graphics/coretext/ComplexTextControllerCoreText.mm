@@ -125,8 +125,9 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
     // + trailing cursor — too late for inter-run anchor parity.)
     bool normalizedEmoji17Run = false;
     CTFontRef macCTFont = m_font->platformData().ctFont();
-    const bool isBundledEmojiFace = driftstackIsBundledAppleColorEmojiFont(macCTFont);
-    if (isBundledEmojiFace && m_glyphCount && m_baseAdvances.size() == m_glyphCount
+    const bool isBundledEmoji17Face = driftstackEmoji17EnabledForCurrentArchetype()
+        && driftstackIsBundledAppleColorEmojiFont(macCTFont);
+    if (isBundledEmoji17Face && m_glyphCount && m_baseAdvances.size() == m_glyphCount
         && m_coreTextIndices.size() == m_glyphCount
         && indexBegin <= indexEnd && indexEnd <= characters.size()
         && driftstackMayStartEmoji17Sequence(characters.subspan(indexBegin, indexEnd - indexBegin))) {
@@ -200,7 +201,7 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
             // for the bundled emoji file, including mixed runs where exact
             // source text is unavailable. Positive advances retain the legacy
             // override byte-for-byte, so old one-glyph emoji are unchanged.
-            if (isBundledEmojiFace && !current.width) {
+            if (isBundledEmoji17Face && !current.width) {
                 overrideAdvances.append(current);
                 continue;
             }

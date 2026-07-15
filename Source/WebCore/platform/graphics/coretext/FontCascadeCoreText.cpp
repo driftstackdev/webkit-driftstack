@@ -696,7 +696,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     const auto& platformFamily = platformData.familyName();
     const bool isAppleColorEmojiFace = platformFamily == "Apple Color Emoji"_s || platformFamily == ".Apple Color Emoji UI"_s;
     const auto emojiFace = isAppleColorEmojiFace ? driftstackAppleColorEmojiFace(platformData.ctFont()) : DriftstackAppleColorEmojiFace::None;
-    const bool isBundledEmojiFace = emojiFace != DriftstackAppleColorEmojiFace::None && driftstackIsBundledAppleColorEmojiFont(platformData.ctFont());
+    const bool isBundledEmojiFace = driftstackEmoji17EnabledForCurrentArchetype()
+        && emojiFace != DriftstackAppleColorEmojiFace::None
+        && driftstackIsBundledAppleColorEmojiFont(platformData.ctFont());
     const bool isBundledEmojiUIFace = isBundledEmojiFace && emojiFace == DriftstackAppleColorEmojiFace::Ui;
 
     // Bundled face1 is injected only for exact Emoji 17 UI-context clusters.

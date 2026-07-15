@@ -424,7 +424,8 @@ void Font::platformInit()
     // loses the hidden face's shorter vertical geometry, so overlay the same
     // host-system probe used for its contextual advance. A missing/unexpected
     // host identity fails open to the bundled face's natural metrics.
-    if (driftstackIsBundledAppleColorEmojiUIFont(ctFont.get())) {
+    if (driftstackEmoji17EnabledForCurrentArchetype()
+        && driftstackIsBundledAppleColorEmojiUIFont(ctFont.get())) {
         auto geometry = driftstackSystemEmojiUIGeometry(pointSize);
         if (geometry) {
             ascent = geometry.ascent;
@@ -1383,7 +1384,8 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     // advance loses hidden-UI tracking. Restore the host UI proxy here. Exact
     // multi-glyph clusters bypass this per-glyph hook in ComplexTextController,
     // so their zero overlays remain protected by cluster-level normalization.
-    if (platformData().size() > 0.f
+    if (driftstackEmoji17EnabledForCurrentArchetype()
+        && platformData().size() > 0.f
         && driftstackIsBundledAppleColorEmojiUIFont(ctFont())
         && colorGlyphType(glyph) == ColorGlyphType::Color) {
         auto geometry = driftstackSystemEmojiUIGeometry(platformData().size());

@@ -2749,7 +2749,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView 
     // The 12-scalar prefilter is constant-time. Load and verify the physical
     // bundled face before paying for the full 163-sequence match, so ordinary
     // fallback clusters never enter the generated linear matcher.
-    if (driftstackMayStartEmoji17Sequence(cluster)) {
+    if (driftstackEmoji17EnabledForCurrentArchetype() && driftstackMayStartEmoji17Sequence(cluster)) {
         RetainPtr<CTFontRef> emoji17Font;
         bool hasExpectedBundledFace = false;
         if (isUIContext) {

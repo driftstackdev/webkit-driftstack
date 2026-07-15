@@ -9,6 +9,9 @@ from pathlib import Path
 
 EXPECTED_COUNT = 163
 EXPECTED_SOURCE_COUNTS = (17, 146)
+EXPECTED_UTF16_UNITS = 1674
+EXPECTED_FIRST_SCALAR_COUNT = 12
+EXPECTED_SINGLETONS = (0x1F6D8, 0x1FA8A, 0x1FA8E, 0x1FAC8, 0x1FACD, 0x1FAEA, 0x1FAEF)
 EXPECTED_CANONICAL_SHA256 = "2501eb2716ba14088393e0bfb5d78aaa0db923176999351d9e81ce373748c54c"
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -88,6 +91,7 @@ HEADER_PREFIX = """// Copyright (C) 2026 Driftstack. All rights reserved.
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -95,6 +99,34 @@ HEADER_PREFIX = """// Copyright (C) 2026 Driftstack. All rights reserved.
 #include <wtf/text/StringView.h>
 
 namespace WebCore {
+
+// Emoji 17 coverage is capture-proven only for the exact Safari 26.4 band.
+// Keep this predicate independent of the font/config corpus: all archetypes
+// currently share one bundled TTC, while their observable coverage does not.
+// Read the environment at each use so a long-lived process cannot retain an
+// archetype decision across a test or session transition.
+inline constexpr bool driftstackEmoji17ArchetypeSupportsCoverage(std::string_view archetype)
+{
+    constexpr std::string_view suffix = "_safari26_4";
+    return archetype.size() >= suffix.size()
+        && archetype.substr(archetype.size() - suffix.size()) == suffix;
+}
+
+static_assert(driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_4"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage(""));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone16pro_ios18_6_safari18_6"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17pro_ios18_7_safari26_0"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17pro_ios18_7_safari26_3"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_5"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_40"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_chrome150"));
+static_assert(!driftstackEmoji17ArchetypeSupportsCoverage("iphone17_ios18_7_safari26_4_extra"));
+
+inline bool driftstackEmoji17EnabledForCurrentArchetype()
+{
+    const char* archetype = std::getenv("DRIFTSTACK_ARCHETYPE");
+    return archetype && driftstackEmoji17ArchetypeSupportsCoverage(archetype);
+}
 
 inline constexpr std::array<std::u16string_view, 163> driftstackEmoji17Sequences { {
 """
@@ -336,7 +368,8 @@ inline DriftstackEmojiUIGeometry driftstackSystemEmojiUIGeometry(float pointSize
 
 inline std::optional<float> driftstackEmoji17TargetAdvance(CTFontRef font, float pointSize)
 {
-    if (!(pointSize > 0) || !driftstackIsBundledAppleColorEmojiFont(font))
+    if (!driftstackEmoji17EnabledForCurrentArchetype()
+        || !(pointSize > 0) || !driftstackIsBundledAppleColorEmojiFont(font))
         return std::nullopt;
     if (driftstackAppleColorEmojiFace(font) == DriftstackAppleColorEmojiFace::Public)
         return driftstackPublicAppleColorEmojiAdvance(pointSize);
@@ -375,6 +408,18 @@ def validated_sequences() -> list[tuple[int, ...]]:
     sequences = canonicalize([sequence for group in source_sequences for sequence in group])
     if len(sequences) != EXPECTED_COUNT:
         raise ValueError(f"expected {EXPECTED_COUNT} unique Emoji 17.0 sequences, found {len(sequences)}")
+
+    utf16_units = sum(1 if code_point <= 0xFFFF else 2 for sequence in sequences for code_point in sequence)
+    if utf16_units != EXPECTED_UTF16_UNITS:
+        raise ValueError(f"expected {EXPECTED_UTF16_UNITS} Emoji 17.0 UTF-16 units, found {utf16_units}")
+
+    first_scalars = {sequence[0] for sequence in sequences}
+    if len(first_scalars) != EXPECTED_FIRST_SCALAR_COUNT:
+        raise ValueError(f"expected {EXPECTED_FIRST_SCALAR_COUNT} Emoji 17.0 first scalars, found {len(first_scalars)}")
+
+    singletons = tuple(sequence[0] for sequence in sequences if len(sequence) == 1)
+    if singletons != EXPECTED_SINGLETONS:
+        raise ValueError(f"unexpected Emoji 17.0 singleton set: {singletons!r}")
 
     digest = hashlib.sha256(canonical_bytes(sequences)).hexdigest()
     if digest != EXPECTED_CANONICAL_SHA256:
