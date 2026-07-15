@@ -30,6 +30,9 @@
 #import "FontInlines.h"
 #import "Logging.h"
 #import "SimpleFontDataCoreText.h"
+#if PLATFORM(DRIFTSTACK)
+#import "../cocoa/DriftstackEmoji17Sequences.h"
+#endif
 #import <CoreText/CoreText.h>
 #import <pal/spi/cf/CoreTextSPI.h>
 #import <wtf/SoftLinking.h>
@@ -120,7 +123,64 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
     // accumulate from this, so overriding here propagates to the entire text
     // layout. (V-583.E hook in FontCascade::drawGlyphs only affected within-run
     // + trailing cursor — too late for inter-run anchor parity.)
-    if (m_glyphCount && m_baseAdvances.size() == m_glyphCount) {
+    bool normalizedEmoji17Run = false;
+    CTFontRef macCTFont = m_font->platformData().ctFont();
+    const bool isBundledEmojiFace = driftstackIsBundledAppleColorEmojiFont(macCTFont);
+    if (isBundledEmojiFace && m_glyphCount && m_baseAdvances.size() == m_glyphCount
+        && m_coreTextIndices.size() == m_glyphCount
+        && indexBegin <= indexEnd && indexEnd <= characters.size()
+        && driftstackMayStartEmoji17Sequence(characters.subspan(indexBegin, indexEnd - indexBegin))) {
+        if (auto targetAdvance = driftstackEmoji17TargetAdvance(macCTFont, m_font->platformData().size())) {
+            auto runCharacters = characters.subspan(indexBegin, indexEnd - indexBegin);
+            size_t sequenceCount = driftstackEmoji17SequenceRunCount(runCharacters);
+            if (sequenceCount) {
+                BaseAdvancesVector exactAdvances;
+                exactAdvances.reserveInitialCapacity(m_glyphCount);
+                for (auto advance : m_baseAdvances)
+                    exactAdvances.append(advance);
+
+                size_t sequenceOffset = 0;
+                size_t normalizedSequenceCount = 0;
+                while (sequenceOffset < runCharacters.size()) {
+                    size_t sequenceLength = driftstackEmoji17SequenceLengthAt(runCharacters, sequenceOffset);
+                    if (!sequenceLength)
+                        break;
+
+                    const size_t sequenceBegin = indexBegin + sequenceOffset;
+                    const size_t sequenceEnd = sequenceBegin + sequenceLength;
+                    size_t firstNonzero = m_glyphCount;
+                    float currentAdvance = 0;
+                    for (unsigned i = 0; i < m_glyphCount; ++i) {
+                        size_t sourceOffset = m_coreTextIndices[i];
+                        if (sourceOffset < sequenceBegin || sourceOffset >= sequenceEnd)
+                            continue;
+                        currentAdvance += static_cast<float>(exactAdvances[i].width);
+                        if (firstNonzero == m_glyphCount && exactAdvances[i].width)
+                            firstNonzero = i;
+                    }
+
+                    if (firstNonzero == m_glyphCount)
+                        break;
+                    exactAdvances[firstNonzero].width += *targetAdvance - currentAdvance;
+                    sequenceOffset += sequenceLength;
+                    ++normalizedSequenceCount;
+                }
+
+                if (normalizedSequenceCount == sequenceCount && sequenceOffset == runCharacters.size()) {
+                    m_baseAdvances = std::move(exactAdvances);
+                    normalizedEmoji17Run = true;
+                }
+            }
+        }
+    }
+
+    // The Emoji 17 path above must remain sequence-scoped: 140 of the
+    // 163 additions shape as (nonzero, zero-overlay). Running the established
+    // per-glyph override over those would assign a second full-cell advance to
+    // the overlay glyph. Adjusting the first nonzero native advance of each
+    // sequence makes adjacent clusters canonical at every boundary while
+    // preserving every zero overlay verbatim.
+    if (!normalizedEmoji17Run && m_glyphCount && m_baseAdvances.size() == m_glyphCount) {
         BaseAdvancesVector overrideAdvances;
         overrideAdvances.reserveInitialCapacity(m_glyphCount);
         // V-583.F.2 (#96 kerning fix): current.width is the IN-CONTEXT native CTRun advance — it
@@ -133,10 +193,18 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
         // For identical Mac==iPhone glyphs (no real override, macIsolated == iphoneWidth) this yields
         // `current` (kerned, kept); for genuinely-overridden glyphs (emoji, no kerning) it yields
         // iphoneWidth; for the canary/isolated-glyph glyphHash (no kern) it is unchanged.
-        CTFontRef macCTFont = m_font->platformData().ctFont();
         for (unsigned i = 0; i < m_glyphCount; ++i) {
-            float iphoneWidth = m_font->widthForGlyph(m_glyphs[i], Font::SyntheticBoldInclusion::Exclude);
             CGSize current = m_baseAdvances[i];
+            // A zero advance from CoreText is a contextual overlay, not the
+            // isolated glyph's spacing. Preserve that source-independent fact
+            // for the bundled emoji file, including mixed runs where exact
+            // source text is unavailable. Positive advances retain the legacy
+            // override byte-for-byte, so old one-glyph emoji are unchanged.
+            if (isBundledEmojiFace && !current.width) {
+                overrideAdvances.append(current);
+                continue;
+            }
+            float iphoneWidth = m_font->widthForGlyph(m_glyphs[i], Font::SyntheticBoldInclusion::Exclude);
             CGSize macIsolated = current;
             if (macCTFont) {
                 CGGlyph glyph = m_glyphs[i];

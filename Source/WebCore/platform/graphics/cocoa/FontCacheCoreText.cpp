@@ -27,6 +27,9 @@
 #include "FontCache.h"
 
 #include "Color.h"
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackEmoji17Sequences.h"
+#endif
 #include "Font.h"
 #include "FontCascade.h"
 #include "FontCascadeDescription.h"
@@ -2671,15 +2674,11 @@ static bool driftstackUsesLegacyCJKDisplayFallback()
     return major > 0 && major < 26;
 }
 
-static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescriptor(CTFontRef baseFont, CTFontRef resolvedFallback, StringView cluster, const FontDescription& description)
+static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescriptor(const String& originatingFamily, CTFontRef resolvedFallback, StringView cluster, const FontDescription& description)
 {
     if (!driftstackTrack7CandidateDEnabled() || !driftstackUsesLegacyCJKDisplayFallback())
         return nullptr;
-    if (!baseFont || !resolvedFallback || cluster.isEmpty() || !isCJKHanCharacter(cluster[0]))
-        return nullptr;
-
-    RetainPtr baseFamily = adoptCF(CTFontCopyFamilyName(baseFont));
-    if (!baseFamily || CFStringCompare(baseFamily.get(), CFSTR(".SF UI"), 0) != kCFCompareEqualTo)
+    if (originatingFamily != ".SF UI"_s || !resolvedFallback || cluster.isEmpty() || !isCJKHanCharacter(cluster[0]))
         return nullptr;
 
     RetainPtr fallbackFamily = adoptCF(CTFontCopyFamilyName(resolvedFallback));
@@ -2731,20 +2730,52 @@ static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescript
 // character in the broad range. POST-Track-7 validation should confirm
 // behavior matches iPhone for borderline cases (BMP symbol-vs-emoji
 // presentation, regional indicators rendering as flag emoji vs text, etc.).
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const FontDescription& description, float size, CTFontRef resolvedFallback)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const String& originatingFamily, const FontDescription& description, float size, CTFontRef resolvedFallback)
 {
     if (!driftstackTrack7CandidateDEnabled())
         return nullptr;
     if (cluster.isEmpty())
         return nullptr;
 
-    // An SF-system cascade resolves emoji to the host's hidden
-    // `.Apple Color Emoji UI` face. That identity is significant: CoreText
-    // applies its UI tracking and its shorter vertical metrics, producing the
-    // iPhone contextual advances without stretching the SF line box. Do not
-    // replace that already-correct result with the bundled face0 below.
-    // Non-SF cascades resolve the public face (or another fallback), so they
-    // still take the Stage-B override and retain the captured face0 behavior.
+    const bool isUIContext = originatingFamily == ".SF UI"_s;
+
+    // An SF-system cascade resolves emoji to the host's hidden UI face. Keep
+    // that capture-proven host result for every pre-17 sequence. The host face
+    // does not contain Emoji 17 additions, however, so route only those exact
+    // 163 sequences to face1 of the bundled TTC; its lost UI geometry is
+    // restored later at the metric/run layers. Classify this from the
+    // originating family rather than the resolved fallback: the seven new
+    // single scalars resolve to LastResort on the pre-17 host.
+    // The 12-scalar prefilter is constant-time. Load and verify the physical
+    // bundled face before paying for the full 163-sequence match, so ordinary
+    // fallback clusters never enter the generated linear matcher.
+    if (driftstackMayStartEmoji17Sequence(cluster)) {
+        RetainPtr<CTFontRef> emoji17Font;
+        bool hasExpectedBundledFace = false;
+        if (isUIContext) {
+            static const std::array<ASCIILiteral, 2> uiCandidates {
+                ".apple color emoji ui"_s,
+                ".applecoloremojiui"_s,
+            };
+            emoji17Font = driftstackLookupIOSFontByCandidates(uiCandidates, description, size);
+            hasExpectedBundledFace = driftstackIsBundledAppleColorEmojiUIFont(emoji17Font.get());
+        } else {
+            static const std::array<ASCIILiteral, 3> publicCandidates {
+                "apple color emoji"_s,
+                "applecoloremoji"_s,
+                "applecoloremoji-160px"_s,
+            };
+            emoji17Font = driftstackLookupIOSFontByCandidates(publicCandidates, description, size);
+            hasExpectedBundledFace = driftstackAppleColorEmojiFace(emoji17Font.get()) == DriftstackAppleColorEmojiFace::Public
+                && driftstackIsBundledAppleColorEmojiFont(emoji17Font.get());
+        }
+        if (hasExpectedBundledFace && driftstackIsEmoji17Sequence(cluster))
+            return emoji17Font;
+    }
+
+    // Preserve the actual hidden host UI face for all pre-17 sequences. This
+    // resolved-family check is defensive identity validation, not the context
+    // classifier for new additions.
     if (resolvedFallback) {
         RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(resolvedFallback));
         if (familyName && CFStringCompare(familyName.get(), CFSTR(".Apple Color Emoji UI"), kCFCompareCaseInsensitive) == kCFCompareEqualTo)
@@ -3611,7 +3642,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
                 hitCount, (unsigned)characterCluster[0], platformData.familyName().utf8().data());
         result = WTF::move(driftstackHebrewFont);
     } else if (auto driftstackCJKDisplayDescriptor = driftstackLegacyCJKDisplayFallbackDescriptor(
-            ctFont.get(), result.get(), characterCluster, description)) {
+            platformData.familyName(), result.get(), characterCluster, description)) {
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
             WTFLogAlways("[Driftstack-CJK-Display] Legacy CJK Display fallback fired (%u so far); cluster first cp = U+%04X",
@@ -3626,7 +3657,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
                 hitCount, (unsigned)characterCluster[0]);
         result = WTF::move(driftstackCJKFont);
     } else if (auto driftstackEmojiFont = driftstackIOSFallbackFontForEmojiCluster(
-            characterCluster, description, platformData.size(), result.get())) {
+            characterCluster, platformData.familyName(), description, platformData.size(), result.get())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
         static unsigned hitCount = 0;
         if (++hitCount <= 8)

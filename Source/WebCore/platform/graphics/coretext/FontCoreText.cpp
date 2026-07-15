@@ -30,8 +30,9 @@
 #if PLATFORM(DRIFTSTACK)
 #include "../cocoa/DriftstackAdvanceAtlas.h"
 #include "../cocoa/DriftstackAsciiAdvanceTable.h"
-#include "../cocoa/DriftstackNonAsciiAdvanceTable.h"
+#include "../cocoa/DriftstackEmoji17Sequences.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
+#include "../cocoa/DriftstackNonAsciiAdvanceTable.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "../DriftstackKefaAdvances.h"
 #include "DriftstackKerningTable.h"
@@ -414,6 +415,21 @@ void Font::platformInit()
             float dsRoundedDescent = std::round(descent);
             if (std::abs(descent - dsRoundedDescent) < kMetricFpEpsilon)
                 descent = dsRoundedDescent;
+        }
+    }
+#endif
+#if PLATFORM(DRIFTSTACK)
+    // Emoji 17 UI-context fallbacks use face1 of the bundled TTC because the
+    // host hidden UI face predates those glyphs. Directly materializing face1
+    // loses the hidden face's shorter vertical geometry, so overlay the same
+    // host-system probe used for its contextual advance. A missing/unexpected
+    // host identity fails open to the bundled face's natural metrics.
+    if (driftstackIsBundledAppleColorEmojiUIFont(ctFont.get())) {
+        auto geometry = driftstackSystemEmojiUIGeometry(pointSize);
+        if (geometry) {
+            ascent = geometry.ascent;
+            descent = geometry.descent;
+            lineGap = geometry.leading;
         }
     }
 #endif
@@ -1362,6 +1378,19 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             }
         }
     }
+    // The seven single-scalar Emoji 17 additions can take the simple one-glyph
+    // path. Their UI-context font is bundled face1, whose directly materialized
+    // advance loses hidden-UI tracking. Restore the host UI proxy here. Exact
+    // multi-glyph clusters bypass this per-glyph hook in ComplexTextController,
+    // so their zero overlays remain protected by cluster-level normalization.
+    if (platformData().size() > 0.f
+        && driftstackIsBundledAppleColorEmojiUIFont(ctFont())
+        && colorGlyphType(glyph) == ColorGlyphType::Color) {
+        auto geometry = driftstackSystemEmojiUIGeometry(platformData().size());
+        if (geometry)
+            return geometry.advance;
+    }
+
     // V-094 Track 5: iPhone Apple Color Emoji advance is constant per
     // ptSize across all emoji codepoints. Empirical (Track 5 capture
     // 159 probes / 53 codepoints / 3 sizes):
@@ -1380,34 +1409,7 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         // {12:16,14:19,16:21,18:22,20:23,22:24,24:25}. The old V-094 code linearly interpolated the
         // 24->48 segment (25->48) from only 3 captured points (14/24/48) — which yielded 32.67 @32px
         // (the OPEN closelist emoji item). The real curve is FLAT (ratio 1.0) from 26 up, so 32 -> 32.
-        const unsigned ptPx = static_cast<unsigned>(ptSize + 0.5f);
-        float iphoneAdvance;
-        if (ptPx >= 26)
-            iphoneAdvance = ptSize;
-        else switch (ptPx) {
-            // Exact Safari 26.2/26.3/26.4 full-range TextMetrics captures.
-            case 8: iphoneAdvance = 11.f; break;
-            case 9: iphoneAdvance = 12.f; break;
-            case 10: iphoneAdvance = 13.f; break;
-            case 11: iphoneAdvance = 15.f; break;
-            case 12: iphoneAdvance = 16.f; break;
-            case 13: iphoneAdvance = 17.f; break;
-            case 14: iphoneAdvance = 19.f; break;
-            case 15: iphoneAdvance = 20.f; break;
-            case 16: iphoneAdvance = 21.f; break;
-            case 17: iphoneAdvance = 22.f; break;
-            case 18: iphoneAdvance = 22.f; break;
-            case 19: iphoneAdvance = 23.f; break;
-            case 20: iphoneAdvance = 23.f; break;
-            case 21: iphoneAdvance = 23.f; break;
-            case 22: iphoneAdvance = 24.f; break;
-            case 23: iphoneAdvance = 24.f; break;
-            case 24: iphoneAdvance = 25.f; break;
-            case 25: iphoneAdvance = 26.f; break;
-            // Remaining uncaptured small sizes retain the prior proportional fallback.
-            default: iphoneAdvance = ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize; break;
-        }
-        return iphoneAdvance;
+        return driftstackPublicAppleColorEmojiAdvance(ptSize);
     }
 
     // V-145: Apple Color Emoji has a SPACE glyph (U+0020) at width 19/21/22/23/25

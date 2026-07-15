@@ -28,6 +28,7 @@
 #include "Font.h"
 
 #if PLATFORM(DRIFTSTACK)
+#include "../cocoa/DriftstackEmoji17Sequences.h"
 #include "../cocoa/DriftstackEmojiAtlas.h"
 #include "../cocoa/DriftstackTextGlyphAtlas.h"
 #include "../cg/DriftstackPerGlyphAtlas.h"
@@ -646,6 +647,9 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
         // glyph hits → blit via drawNativeImage, valid in the GPU process), fall through to that serve
         // instead of dropping. Any atlas miss → guard HOLDS (no native CTFontDrawGlyphs of a color glyph
         // in the GPU process). Non-canvas / atlas-off / partial-coverage → unchanged upstream behavior.
+        // Emoji 17 accelerated pixels remain explicitly OPEN: the current atlas
+        // covers 0/163 additions, so this source-only fallback/geometry work must
+        // not bypass the guard or represent those missing pixels as closed.
         if (!driftstackCanvasColorEmojiFullyServable(font, glyphs))
 #endif
         {
@@ -689,9 +693,27 @@ void FontCascade::drawGlyphs(GraphicsContext& context, const Font& font, std::sp
     // Mac fork's CT cursor reaches emoji 0.6 px later than iPhone's at fontSize=16
     // -apple-system multi-script text — closes when overrides fire here.)
     Vector<GlyphBufferAdvance, 256> driftstackAdvances;
-    if (advances.size() == glyphs.size()) {
+    const auto& platformFamily = platformData.familyName();
+    const bool isAppleColorEmojiFace = platformFamily == "Apple Color Emoji"_s || platformFamily == ".Apple Color Emoji UI"_s;
+    const auto emojiFace = isAppleColorEmojiFace ? driftstackAppleColorEmojiFace(platformData.ctFont()) : DriftstackAppleColorEmojiFace::None;
+    const bool isBundledEmojiFace = emojiFace != DriftstackAppleColorEmojiFace::None && driftstackIsBundledAppleColorEmojiFont(platformData.ctFont());
+    const bool isBundledEmojiUIFace = isBundledEmojiFace && emojiFace == DriftstackAppleColorEmojiFace::Ui;
+
+    // Bundled face1 is injected only for exact Emoji 17 UI-context clusters.
+    // On deconstruct/replay the source scope can be empty, but the incoming
+    // advances were already corrected by the simple-glyph or complex-cluster
+    // hook. Never send that face through the legacy per-glyph replacement,
+    // which would widen its zero overlays. Public face0 retains the old path
+    // for every positive advance. A CoreText zero on either bundled face is a
+    // contextual overlay invariant, however, and must stay zero independently
+    // of transient text-source TLS; old one-glyph emoji remain byte-unchanged.
+    if (!isBundledEmojiUIFace && advances.size() == glyphs.size()) {
         driftstackAdvances.reserveInitialCapacity(glyphs.size());
         for (size_t i = 0; i < glyphs.size(); ++i) {
+            if (isBundledEmojiFace && !advances[i].width) {
+                driftstackAdvances.append(advances[i]);
+                continue;
+            }
             float iphoneWidth = font.widthForGlyph(glyphs[i], Font::SyntheticBoldInclusion::Exclude);
             // platformWidthForGlyph returns iPhone advance via overrides, OR Mac
             // native advance if no override matches. If the override returned
