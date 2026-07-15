@@ -2727,34 +2727,10 @@ static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescript
     return adoptCF(CTFontCopyFontDescriptor(displayFallback.get()));
 }
 
-// Emoji presentation ranges — covers the supplementary-plane emoji blocks +
-// the BMP emoji-presentation-defaulted ranges. Apple's font cascade for
-// emoji on iPhone uses the canonical multi-strike AppleColorEmoji.ttc
-// regardless of context.
-//   U+2600-U+26FF    Miscellaneous Symbols (some emoji-presentation defaulted)
-//   U+2700-U+27BF    Dingbats (some emoji)
-//   U+1F000-U+1F02F  Mahjong Tiles
-//   U+1F0A0-U+1F0FF  Playing Cards
-//   U+1F100-U+1F1FF  Enclosed Alphanumeric Supplement (regional indicators)
-//   U+1F200-U+1F2FF  Enclosed Ideographic Supplement
-//   U+1F300-U+1F5FF  Misc Symbols and Pictographs
-//   U+1F600-U+1F64F  Emoticons
-//   U+1F680-U+1F6FF  Transport
-//   U+1F700-U+1F77F  Alchemical
-//   U+1F780-U+1F7FF  Geometric Shapes Extended
-//   U+1F800-U+1F8FF  Supplemental Arrows-C
-//   U+1F900-U+1F9FF  Supplemental Symbols and Pictographs
-//   U+1FA00-U+1FA6F  Chess Symbols
-//   U+1FA70-U+1FAFF  Symbols and Pictographs Extended-A
-//
-// Note: This is BROADER than just "default emoji presentation" — characters
-// like U+2622 (radioactive sign) get text presentation by default but
-// U+2622 U+FE0F (with VS-16) gets emoji presentation. The cluster's first
-// codepoint check here doesn't distinguish; the override fires for any
-// character in the broad range. POST-Track-7 validation should confirm
-// behavior matches iPhone for borderline cases (BMP symbol-vs-emoji
-// presentation, regional indicators rendering as flag emoji vs text, etc.).
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const String& originatingFamily, const FontDescription& description, float size, CTFontRef resolvedFallback)
+// Preserve the native, context-sensitive text-vs-emoji presentation for
+// ordinary pre-17 clusters. Only exact Emoji 17 additions need the bundled
+// iOS face because the pre-17 host font cannot contain them.
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const String& originatingFamily, const FontDescription& description, float size)
 {
     if (!driftstackTrack7CandidateDEnabled())
         return nullptr;
@@ -2797,38 +2773,7 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView 
             return emoji17Font;
     }
 
-    // Preserve the actual hidden host UI face for all pre-17 sequences. This
-    // resolved-family check is defensive identity validation, not the context
-    // classifier for new additions.
-    if (resolvedFallback) {
-        RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(resolvedFallback));
-        if (familyName && CFStringCompare(familyName.get(), CFSTR(".Apple Color Emoji UI"), kCFCompareCaseInsensitive) == kCFCompareEqualTo)
-            return nullptr;
-    }
-
-    char32_t cp = cluster[0];
-    bool isEmoji = (cp >= 0x2600 && cp <= 0x27BF)
-                || (cp >= 0x1F000 && cp <= 0x1F02F)
-                || (cp >= 0x1F0A0 && cp <= 0x1F0FF)
-                || (cp >= 0x1F100 && cp <= 0x1F1FF)
-                || (cp >= 0x1F200 && cp <= 0x1F2FF)
-                || (cp >= 0x1F300 && cp <= 0x1F5FF)
-                || (cp >= 0x1F600 && cp <= 0x1F64F)
-                || (cp >= 0x1F680 && cp <= 0x1F6FF)
-                || (cp >= 0x1F700 && cp <= 0x1F77F)
-                || (cp >= 0x1F780 && cp <= 0x1F7FF)
-                || (cp >= 0x1F800 && cp <= 0x1F8FF)
-                || (cp >= 0x1F900 && cp <= 0x1F9FF)
-                || (cp >= 0x1FA00 && cp <= 0x1FA6F)
-                || (cp >= 0x1FA70 && cp <= 0x1FAFF);
-    if (!isEmoji)
-        return nullptr;
-    static const std::array<ASCIILiteral, 3> candidates {
-        "apple color emoji"_s,
-        "applecoloremoji"_s,
-        "applecoloremoji-160px"_s,
-    };
-    return driftstackLookupIOSFontByCandidates(candidates, description, size);
+    return nullptr;
 }
 
 // Track 10 (V-165 closure): Devanagari fallback. Mac's lookupFallbackFont
@@ -3690,7 +3635,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
                 hitCount, (unsigned)characterCluster[0]);
         result = WTF::move(driftstackCJKFont);
     } else if (auto driftstackEmojiFont = driftstackIOSFallbackFontForEmojiCluster(
-            characterCluster, platformData.familyName(), description, platformData.size(), result.get())) {
+            characterCluster, platformData.familyName(), description, platformData.size())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
