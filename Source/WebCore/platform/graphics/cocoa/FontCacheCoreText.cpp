@@ -3617,7 +3617,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
         // CoreText to reselect the Text face. Verify the post-realization
         // identity too; an unexpected result leaves the original natural
         // fallback untouched and sends it through the ordinary preparation.
-        auto displayFallback = createFontForInstalledFonts(driftstackCJKDisplayDescriptor.get(), platformData.size(), description.shouldAllowUserInstalledFonts());
+        RetainPtr displayFallback = adoptCF(CTFontCreateWithFontDescriptor(driftstackCJKDisplayDescriptor.get(), platformData.size(), nullptr));
         if (driftstackIsLegacyCJKDisplayFont(displayFallback.get())) {
             static unsigned hitCount = 0;
             if (++hitCount <= 8)
