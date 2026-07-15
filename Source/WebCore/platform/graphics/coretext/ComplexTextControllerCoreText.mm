@@ -154,14 +154,14 @@ ComplexTextController::ComplexTextRun::ComplexTextRun(CTRunRef ctRun, const Font
                         size_t sourceOffset = m_coreTextIndices[i];
                         if (sourceOffset < sequenceBegin || sourceOffset >= sequenceEnd)
                             continue;
-                        currentAdvance += static_cast<float>(exactAdvances[i].width);
-                        if (firstNonzero == m_glyphCount && exactAdvances[i].width)
+                        currentAdvance += exactAdvances[i].width();
+                        if (firstNonzero == m_glyphCount && exactAdvances[i].width())
                             firstNonzero = i;
                     }
 
                     if (firstNonzero == m_glyphCount)
                         break;
-                    exactAdvances[firstNonzero].width += *targetAdvance - currentAdvance;
+                    exactAdvances[firstNonzero].setWidth(exactAdvances[firstNonzero].width() + *targetAdvance - currentAdvance);
                     sequenceOffset += sequenceLength;
                     ++normalizedSequenceCount;
                 }
