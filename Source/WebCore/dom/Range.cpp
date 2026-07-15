@@ -1082,54 +1082,15 @@ ExceptionOr<void> Range::expand(const String& unit)
     return setEnd(endContainer.releaseNonNull(), end.deepEquivalent().computeOffsetInContainerNode());
 }
 
-#if PLATFORM(DRIFTSTACK)
-// V-377 (Gap 5 closure 2026-05-07): mirror V-186's Element::getBoundingClientRect
-// canonical-shape line-height override on the Range path. Mac vs
-// iPhone CoreText pick slightly different fonts for CJK (Mac=17.5
-// / iPhone=18) and emoji / family (Mac=18.5 / iPhone=18) → 0.5px
-// line-box height drift on these specific text shapes via Range
-// readback as well as via Element. Same text-content match + same
-// 18.0 iPhone-canonical override; gate via DRIFTSTACK_UNICODE_RENDERING_OVERRIDE.
-static bool driftstackUnicodeRenderingOverrideEnabled()
-{
-    static const bool enabled = []() {
-        const char* env = getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE");
-        return env && env[0] == '1';
-    }();
-    return enabled;
-}
-
-static bool driftstackRangeMatchesUnicodeProbe(const String& text)
-{
-    return text == String::fromUTF8("\xE4\xB8\xAD\xE6\x96\x87\xE6\xB5\x8B\xE8\xAF\x95"_span)
-        || text == String::fromUTF8("\xF0\x9F\x8E\x89\xF0\x9F\x8D\x95\xF0\x9F\x93\xB1"_span)
-        || text == String::fromUTF8("\xF0\x9F\x91\xA8\xE2\x80\x8D\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x91\xA7\xE2\x80\x8D\xF0\x9F\x91\xA6"_span);
-}
-#endif
-
 Ref<DOMRectList> Range::getClientRects() const
 {
     protect(startContainer().document())->updateLayout();
     auto rects = RenderObject::clientBorderAndTextRects(makeSimpleRange(*this));
-#if PLATFORM(DRIFTSTACK)
-    if (driftstackUnicodeRenderingOverrideEnabled() && driftstackRangeMatchesUnicodeProbe(toString())) {
-        for (auto& rect : rects)
-            rect.setHeight(18.0f);
-    }
-#endif
     return DOMRectList::create(rects);
 }
 
 Ref<DOMRect> Range::getBoundingClientRect() const
 {
-#if PLATFORM(DRIFTSTACK)
-    if (driftstackUnicodeRenderingOverrideEnabled() && driftstackRangeMatchesUnicodeProbe(toString())) {
-        protect(startContainer().document())->updateLayout();
-        FloatRect rect = unionRectIgnoringZeroRects(RenderObject::clientBorderAndTextRects(makeSimpleRange(*this)));
-        rect.setHeight(18.0f);
-        return DOMRect::create(rect);
-    }
-#endif
     return boundingClientRect(makeSimpleRange(*this));
 }
 
