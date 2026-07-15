@@ -49,6 +49,10 @@ public:
 
     float width() const { return m_width; }
     void setWidth(float width) { m_width = width; }
+#if PLATFORM(DRIFTSTACK)
+    float driftstackSVGEmojiWidthAdjustment() const { return m_driftstackSVGEmojiWidthAdjustment; }
+    void setDriftstackSVGEmojiWidthAdjustment(float adjustment) { m_driftstackSVGEmojiWidthAdjustment = adjustment; }
+#endif
 
     float height() const { return m_height; }
     unsigned length() const { return m_length; }
@@ -59,6 +63,9 @@ private:
     float m_width { 0 };
     float m_height { 0 };
     unsigned m_length { 0 };
+#if PLATFORM(DRIFTSTACK)
+    float m_driftstackSVGEmojiWidthAdjustment { 0 };
+#endif
 };
 
 } // namespace WebCore

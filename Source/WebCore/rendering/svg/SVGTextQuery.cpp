@@ -276,6 +276,35 @@ SPECIALIZE_TYPE_TRAITS_SVGTEXTQUERY_DATA(SubStringLengthData, SubStringLength)
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+static float driftstackSVGEmojiWidthAdjustmentForRange(const SVGTextQuery::Data* queryData, const SVGTextFragment& fragment, unsigned startPosition, unsigned endPosition)
+{
+    ASSERT(startPosition < endPosition);
+
+    const auto* layoutAttributes = queryData->textRenderer->layoutAttributes();
+    if (!layoutAttributes)
+        return 0;
+
+    const auto& textMetricsValues = layoutAttributes->textMetricsValues();
+    unsigned textMetricsOffset = fragment.metricsListOffset;
+    unsigned fragmentPosition = 0;
+    float adjustment = 0;
+
+    // mapStartEndPositionsIntoFragmentCoordinates() has already expanded the query to complete metric
+    // cells. Add only the stored emoji-cell deltas for those selected cells; retaining the upstream
+    // isolated-range measurement preserves spacing, lengthAdjust, ligature, and every non-emoji result.
+    while (fragmentPosition < endPosition) {
+        const auto& metric = textMetricsValues.at(textMetricsOffset++);
+        unsigned nextPosition = fragmentPosition + metric.length();
+        if (fragmentPosition >= startPosition && nextPosition <= endPosition)
+            adjustment += metric.driftstackSVGEmojiWidthAdjustment();
+        fragmentPosition = nextPosition;
+    }
+
+    return adjustment;
+}
+#endif
+
 bool SVGTextQuery::subStringLengthCallback(Data* queryData, const SVGTextFragment& fragment) const
 {
     auto* data = downcast<SubStringLengthData>(queryData);
@@ -286,7 +315,12 @@ bool SVGTextQuery::subStringLengthCallback(Data* queryData, const SVGTextFragmen
         return false;
 
     SVGTextMetrics metrics = SVGTextMetrics::measureCharacterRange(*queryData->textRenderer, fragment.characterOffset + startPosition, endPosition - startPosition);
-    data->subStringLength += queryData->isVerticalText ? metrics.height() : metrics.width();
+    float length = queryData->isVerticalText ? metrics.height() : metrics.width();
+#if PLATFORM(DRIFTSTACK)
+    if (!queryData->isVerticalText)
+        length += driftstackSVGEmojiWidthAdjustmentForRange(queryData, fragment, startPosition, endPosition);
+#endif
+    data->subStringLength += length;
     return false;
 }
 

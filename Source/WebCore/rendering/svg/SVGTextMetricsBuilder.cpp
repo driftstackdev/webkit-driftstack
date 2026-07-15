@@ -219,10 +219,17 @@ void SVGTextMetricsBuilder::applyDriftstackSVGEmojiClusterCells()
         if (isColor) {
             // Assign the whole cell to the first metric and zero the continuations, so the cluster total
             // is EXACTLY the iOS cell (per-metric float scaling would leave a sub-ULP residue on multi-glyph
-            // ZWJ clusters). getComputedTextLength sums the cluster's metrics -> exactly cellWidth.
-            metrics[clusterStart].setWidth(cellWidth);
+            // ZWJ clusters). Preserve corrected-minus-natural on every changed metric so substring queries
+            // can add only this SVG-specific correction after their normal isolated-range measurement.
+            // getComputedTextLength still sums the corrected cluster metrics -> exactly cellWidth.
+            auto setCorrectedWidth = [&](size_t index, float correctedWidth) {
+                auto& metric = metrics[index];
+                metric.setDriftstackSVGEmojiWidthAdjustment(correctedWidth - metric.width());
+                metric.setWidth(correctedWidth);
+            };
+            setCorrectedWidth(clusterStart, cellWidth);
             for (size_t k = clusterStart + 1; k < i; ++k)
-                metrics[k].setWidth(0);
+                setCorrectedWidth(k, 0);
         }
         if (diag)
             WTFLogAlways("[DS-SVGEMOJI] base=U+%05X chars=%zu sum=%.6f color=%d -> %s",
