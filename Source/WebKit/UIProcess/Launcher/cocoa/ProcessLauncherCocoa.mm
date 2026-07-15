@@ -482,6 +482,7 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // Fingerprint overrides:
             { "DRIFTSTACK_MEASURE_TEXT_OVERRIDE", getenv("DRIFTSTACK_MEASURE_TEXT_OVERRIDE") },
             { "DRIFTSTACK_UNICODE_RENDERING_OVERRIDE", getenv("DRIFTSTACK_UNICODE_RENDERING_OVERRIDE") },
+            { "DRIFTSTACK_TRACK7_CANDIDATE_D", getenv("DRIFTSTACK_TRACK7_CANDIDATE_D") },
             // W2569 (#22 inline-offsetHeight): the snap-fix gate + its instrumentation. Read via
             // getenv in WebContent (RenderInline.cpp); must be in this explicit allowlist to reach
             // the sandboxed WebContent (the __XPC_ shadow path does not forward these). Both default-off.
