@@ -275,27 +275,6 @@ RefPtr<const DisplayList::DisplayList> FontCascade::displayListForGlyphBuffer(Gr
     return recordingContext.takeDisplayList();
 }
 
-#if PLATFORM(DRIFTSTACK)
-// V-147: thread-local primary font family for V-143 emoji-fallback +1 px
-// override. Set at FontCascade::widthOfTextRange entry; read in
-// Font::platformWidthForGlyph (FontCoreText.cpp). Stored as raw const
-// char* to avoid AtomString global destructor (Werror gates exit-time
-// destructors on globals).
-namespace Driftstack {
-thread_local const char* g_currentPrimaryFamilyCStr = nullptr;
-struct ScopedPrimaryFamily {
-    const char* prev;
-    CString owned;
-    ScopedPrimaryFamily(const AtomString& s) {
-        prev = g_currentPrimaryFamilyCStr;
-        owned = s.string().utf8();
-        g_currentPrimaryFamilyCStr = owned.data();
-    }
-    ~ScopedPrimaryFamily() { g_currentPrimaryFamilyCStr = prev; }
-};
-}
-#endif
-
 float FontCascade::widthOfTextRange(const TextRun& run, unsigned from, unsigned to, float& outWidthBeforeRange, float& outWidthAfterRange) const
 {
     ASSERT(from <= to);
@@ -303,11 +282,6 @@ float FontCascade::widthOfTextRange(const TextRun& run, unsigned from, unsigned 
 
     if (!run.length())
         return 0;
-
-#if PLATFORM(DRIFTSTACK)
-    // V-147: capture primary family for emoji-fallback +1 override.
-    Driftstack::ScopedPrimaryFamily _scopedPrimary(m_fontDescription.firstFamily().name);
-#endif
 
     float offsetBeforeRange = 0;
     float offsetAfterRange = 0;
@@ -350,11 +324,6 @@ float FontCascade::width(const TextRun& run, SingleThreadWeakHashSet<const Font>
 {
     if (!run.length())
         return 0;
-
-#if PLATFORM(DRIFTSTACK)
-    // V-147: capture primary family for emoji-fallback +1 override.
-    Driftstack::ScopedPrimaryFamily _scopedPrimary(m_fontDescription.firstFamily().name);
-#endif
 
     CodePath codePathToUse = codePath(run);
     if (codePathToUse != CodePath::Complex) {

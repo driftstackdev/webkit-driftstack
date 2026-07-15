@@ -42,9 +42,6 @@
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/AtomString.h>
-namespace WebCore::Driftstack {
-extern thread_local const char* g_currentPrimaryFamilyCStr;
-}
 #endif
 
 #include "Color.h"
@@ -551,12 +548,12 @@ void Font::platformInit()
     }
 
     // V-081 Stage D-2 Track 1: iPhone reports a different per-size
-    // fontBoundingBox{Ascent,Descent} for Apple Color Emoji than Mac's
-    // CoreText returns from the same iOS font binary. Captured per-size
-    // empirically (Stage D-3 Set A, sizes [8..96]). Override here so
-    // m_fontMetrics.intAscent() / .intDescent() (which feed
-    // fontBoundingBox* in TextMetrics) match iPhone exactly.
-    if (CTFontGetSymbolicTraits(ctFont.get()) & kCTFontTraitColorGlyphs) {
+    // fontBoundingBox{Ascent,Descent} for the public Apple Color Emoji face
+    // than Mac's CoreText returns from the same iOS font binary. Captured
+    // per-size empirically (Stage D-3 Set A, sizes [8..96]). The hidden UI
+    // face is intentionally excluded: its natural shorter metrics are what
+    // keep SF-system fallback inside the primary font's line box.
+    if (familyName && caseInsensitiveCompare(familyName.get(), CFSTR("Apple Color Emoji"))) {
         struct DriftstackEmojiFontMetricsEntry { float size; float ascent; float descent; };
         static constexpr std::array<DriftstackEmojiFontMetricsEntry, 89> driftstackEmojiFontMetricsTable = {{
             {  8.f, 10.f,  4.f }, {  9.f, 12.f,  4.f }, { 10.f, 13.f,  4.f }, { 11.f, 14.f,  5.f },
@@ -1373,7 +1370,9 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     //   ptSize 48 → advance 48
     // Override Mac CTFontGetAdvancesForGlyphs result for color glyphs
     // so canvas.measureText returns iPhone-equivalent widths.
-    if (platformData().size() > 0.f && colorGlyphType(glyph) == ColorGlyphType::Color) {
+    if (platformData().size() > 0.f
+        && m_platformData.familyName() == "Apple Color Emoji"_s
+        && colorGlyphType(glyph) == ColorGlyphType::Color) {
         const float ptSize = platformData().size();
         // W554 (2026-06-03): EXACT real iPhone 17 Apple Color Emoji measureText advance, captured
         // across the FULL V-405 fuzzer size set (BS /emoji-advance-curve, uniform across all emoji):
@@ -1408,17 +1407,6 @@ float Font::platformWidthForGlyph(Glyph glyph) const
             // Remaining uncaptured small sizes retain the prior proportional fallback.
             default: iphoneAdvance = ptSize <= 12.f ? 16.f * (ptSize / 12.f) : ptSize; break;
         }
-        // V-147 / V-143 Option A: when primary font is NOT Apple Color Emoji
-        // (i.e., emoji is rendered via fallback), iPhone CT adds +1 px to
-        // the natural emoji width. Per stage-f-emoji-advances capture:
-        //   "14px Apple Color Emoji" 😃/🍕 = 19 (primary)
-        //   "14px -apple-system" 😃/🍕 = 20 (fallback +1)
-        //   "14px sans-serif" 😃/🍕 = 19 (fallback +0 — only -apple-system gets +1)
-        // So the +1 only applies when primary is -apple-system (or system-ui
-        // which resolves to .AppleSystemUIFont same as -apple-system).
-        const char* primary = Driftstack::g_currentPrimaryFamilyCStr;
-        if (primary && (std::string_view(primary) == "-apple-system" || std::string_view(primary) == "system-ui"))
-            iphoneAdvance += 1.f;
         return iphoneAdvance;
     }
 

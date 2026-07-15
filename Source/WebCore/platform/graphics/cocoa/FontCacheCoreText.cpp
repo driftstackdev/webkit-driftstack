@@ -2673,12 +2673,26 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
 // character in the broad range. POST-Track-7 validation should confirm
 // behavior matches iPhone for borderline cases (BMP symbol-vs-emoji
 // presentation, regional indicators rendering as flag emoji vs text, etc.).
-static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const FontDescription& description, float size)
+static RetainPtr<CTFontRef> driftstackIOSFallbackFontForEmojiCluster(StringView cluster, const FontDescription& description, float size, CTFontRef resolvedFallback)
 {
     if (!driftstackTrack7CandidateDEnabled())
         return nullptr;
     if (cluster.isEmpty())
         return nullptr;
+
+    // An SF-system cascade resolves emoji to the host's hidden
+    // `.Apple Color Emoji UI` face. That identity is significant: CoreText
+    // applies its UI tracking and its shorter vertical metrics, producing the
+    // iPhone contextual advances without stretching the SF line box. Do not
+    // replace that already-correct result with the bundled face0 below.
+    // Non-SF cascades resolve the public face (or another fallback), so they
+    // still take the Stage-B override and retain the captured face0 behavior.
+    if (resolvedFallback) {
+        RetainPtr<CFStringRef> familyName = adoptCF(CTFontCopyFamilyName(resolvedFallback));
+        if (familyName && CFStringCompare(familyName.get(), CFSTR(".Apple Color Emoji UI"), kCFCompareCaseInsensitive) == kCFCompareEqualTo)
+            return nullptr;
+    }
+
     char32_t cp = cluster[0];
     bool isEmoji = (cp >= 0x2600 && cp <= 0x27BF)
                 || (cp >= 0x1F000 && cp <= 0x1F02F)
@@ -3546,7 +3560,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
                 hitCount, (unsigned)characterCluster[0]);
         result = WTF::move(driftstackCJKFont);
     } else if (auto driftstackEmojiFont = driftstackIOSFallbackFontForEmojiCluster(
-            characterCluster, description, platformData.size())) {
+            characterCluster, description, platformData.size(), result.get())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
         static unsigned hitCount = 0;
         if (++hitCount <= 8)
