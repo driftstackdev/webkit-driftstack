@@ -2649,84 +2649,6 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForCJKCluster(StringView cl
     return nullptr;
 }
 
-// Safari before 26 keeps the PingFang UI Display optical face selected by the
-// 20px system-font cascade when realizing the fallback at smaller sizes. Newer
-// Safari releases reselect the Text face at those sizes. Preserve the physical
-// Display descriptor only for the capture-proven legacy SF-system CJK path;
-// every missing or unexpected identity fails open to the normal resolver.
-static bool driftstackUsesLegacyCJKDisplayFallback()
-{
-    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-    if (!archetype || !archetype[0])
-        return false;
-
-    std::string_view value(archetype);
-    auto position = value.find("safari");
-    if (position == std::string_view::npos)
-        return false;
-    position += 6;
-
-    int major = 0;
-    while (position < value.size() && isASCIIDigit(value[position])) {
-        major = major * 10 + value[position] - '0';
-        ++position;
-    }
-    return major > 0 && major < 26;
-}
-
-static bool driftstackIsLegacyCJKDisplayFont(CTFontRef font)
-{
-    if (!font)
-        return false;
-    RetainPtr family = adoptCF(CTFontCopyFamilyName(font));
-    if (!family || CFStringCompare(family.get(), CFSTR(".PingFang UI SC"), 0) != kCFCompareEqualTo)
-        return false;
-    RetainPtr postScriptName = adoptCF(CTFontCopyPostScriptName(font));
-    return postScriptName && String(postScriptName.get()).startsWith(".PingFangUIDisplaySC-"_s);
-}
-
-static RetainPtr<CTFontDescriptorRef> driftstackLegacyCJKDisplayFallbackDescriptor(const String& originatingFamily, CTFontRef resolvedFallback, StringView cluster, const FontDescription& description)
-{
-    if (!driftstackTrack7CandidateDEnabled() || !driftstackUsesLegacyCJKDisplayFallback())
-        return nullptr;
-    if (originatingFamily != ".SF UI"_s || !resolvedFallback || cluster.isEmpty() || !isCJKHanCharacter(cluster[0]))
-        return nullptr;
-
-    // Direct realization below deliberately bypasses generic variation/feature
-    // preparation because its automatic opsz=<requested size> substitution is
-    // exactly what turns Display back into Text. Keep the bypass on the
-    // capture-proven default style only; custom CSS traits fail open.
-    if (description.weight() != normalWeightValue()
-        || description.width() != normalWidthValue()
-        || description.fontStyleSlope()
-        || description.fontStyleAxis() != FontStyleAxis::normal
-        || !description.featureSettings().isEmpty()
-        || !description.variationSettings().isEmpty()
-        || !description.variantSettings().isAllNormal()
-        || description.shouldDisableLigaturesForSpacing()
-        || description.textRenderingMode() != TextRenderingMode::Auto
-        || description.fontPalette().type != FontPalette::Type::Normal
-        || description.opticalSizing() != FontOpticalSizing::Auto)
-        return nullptr;
-
-    RetainPtr fallbackFamily = adoptCF(CTFontCopyFamilyName(resolvedFallback));
-    if (!fallbackFamily || CFStringCompare(fallbackFamily.get(), CFSTR(".PingFang UI SC"), 0) != kCFCompareEqualTo)
-        return nullptr;
-
-    RetainPtr<CFStringRef> localeString;
-    if (!description.computedLocale().isNull())
-        localeString = description.computedLocale().string().createCFString();
-    RetainPtr systemFont = adoptCF(CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 20, localeString.get()));
-    if (!systemFont)
-        return nullptr;
-
-    RetainPtr displayFallback = lookupFallbackFont(systemFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), cluster);
-    if (!driftstackIsLegacyCJKDisplayFont(displayFallback.get()))
-        return nullptr;
-
-    return adoptCF(CTFontCopyFontDescriptor(displayFallback.get()));
-}
-
 // Preserve the native, context-sensitive text-vs-emoji presentation for
 // ordinary pre-17 clusters. Only exact Emoji 17 additions need the bundled
 // iOS face because the pre-17 host font cannot contain them.
@@ -3508,7 +3430,6 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
 
     auto result = lookupFallbackFont(ctFont.get(), description.weight(), description.computedLocale(), description.shouldAllowUserInstalledFonts(), characterCluster);
 #if PLATFORM(DRIFTSTACK)
-    bool driftstackFallbackIsAlreadyPrepared = false;
     // V-433.Z wave 29-205: 10 universally-divergent codepoints route to SF Pro
     // FIRST (before script-specific overrides) so the explicit list always wins
     // even where script ranges (e.g. U+302E Hangul Tone Mark) would otherwise
@@ -3610,22 +3531,6 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
             WTFLogAlways("[Driftstack-Track10-Hebrew] Hebrew fallback override fired (%u so far); cluster first cp = U+%04X originatingFamily=%s",
                 hitCount, (unsigned)characterCluster[0], platformData.familyName().utf8().data());
         result = WTF::move(driftstackHebrewFont);
-    } else if (auto driftstackCJKDisplayDescriptor = driftstackLegacyCJKDisplayFallbackDescriptor(
-            platformData.familyName(), result.get(), characterCluster, description)) {
-        // Realize the verified physical Display descriptor directly. Passing it
-        // through preparePlatformFont adds an opsz axis at 14/16px and causes
-        // CoreText to reselect the Text face. Verify the post-realization
-        // identity too; an unexpected result leaves the original natural
-        // fallback untouched and sends it through the ordinary preparation.
-        RetainPtr displayFallback = adoptCF(CTFontCreateWithFontDescriptor(driftstackCJKDisplayDescriptor.get(), platformData.size(), nullptr));
-        if (driftstackIsLegacyCJKDisplayFont(displayFallback.get())) {
-            static unsigned hitCount = 0;
-            if (++hitCount <= 8)
-                WTFLogAlways("[Driftstack-CJK-Display] Legacy CJK Display fallback fired (%u so far); cluster first cp = U+%04X",
-                    hitCount, (unsigned)characterCluster[0]);
-            result = WTF::move(displayFallback);
-            driftstackFallbackIsAlreadyPrepared = true;
-        }
     } else if (auto driftstackCJKFont = driftstackIOSFallbackFontForCJKCluster(
             characterCluster, description, platformData.size())) {
         // Env-var-gated: DRIFTSTACK_TRACK7_CANDIDATE_D=1
@@ -3644,10 +3549,7 @@ RefPtr<Font> FontCache::systemFallbackForCharacterCluster(const FontDescription&
         result = WTF::move(driftstackEmojiFont);
     }
 #endif
-#if PLATFORM(DRIFTSTACK)
-    if (!driftstackFallbackIsAlreadyPrepared)
-#endif
-        result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
+    result = preparePlatformFont(UnrealizedCoreTextFont { WTF::move(result) }, description, { });
 
     if (!result)
         return lastResortFallbackFont(description);

@@ -28,21 +28,28 @@
 #include <wtf/RetainPtr.h>
 
 typedef const struct __CTFontDescriptor* CTFontDescriptorRef;
+typedef struct CGFont* CGFontRef;
 
 namespace WebCore {
 
-class FontDescription;
+class FontCascadeDescription;
 class FontRanges;
 
 class FontFamilySpecificationCoreText {
 public:
     FontFamilySpecificationCoreText(CTFontDescriptorRef);
+#if PLATFORM(DRIFTSTACK)
+    FontFamilySpecificationCoreText(CTFontDescriptorRef, CGFontRef legacyCJKDisplayPhysicalFace);
+#endif
     ~FontFamilySpecificationCoreText();
 
-    FontRanges fontRanges(const FontDescription&) const;
+    FontRanges fontRanges(const FontCascadeDescription&) const;
 
 private:
     RetainPtr<CTFontDescriptorRef> m_fontDescriptor;
+#if PLATFORM(DRIFTSTACK)
+    RetainPtr<CGFontRef> m_legacyCJKDisplayPhysicalFace;
+#endif
 };
 
 }

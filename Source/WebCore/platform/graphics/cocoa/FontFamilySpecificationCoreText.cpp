@@ -27,6 +27,7 @@
 #include "FontFamilySpecificationCoreText.h"
 
 #include "FontCache.h"
+#include "FontCascadeDescription.h"
 #include "FontFamilySpecificationCoreTextCache.h"
 #include "FontSelector.h"
 #include "StyleFontSizeFunctions.h"
@@ -39,16 +40,67 @@
 
 namespace WebCore {
 
+#if PLATFORM(DRIFTSTACK)
+static bool driftstackIsLegacyCJKDisplayFont(CTFontRef font)
+{
+    if (!font)
+        return false;
+    RetainPtr family = adoptCF(CTFontCopyFamilyName(font));
+    if (!family || CFStringCompare(family.get(), CFSTR(".PingFang UI SC"), 0) != kCFCompareEqualTo)
+        return false;
+    RetainPtr postScriptName = adoptCF(CTFontCopyPostScriptName(font));
+    return postScriptName && String(postScriptName.get()).startsWith(".PingFangUIDisplaySC-"_s);
+}
+
+static RetainPtr<CTFontRef> driftstackLegacyCJKDisplayFont(CGFontRef physicalFace, const FontCascadeDescription& description, CGFloat size)
+{
+    RetainPtr cascadeFont = adoptCF(CTFontCreateWithGraphicsFont(physicalFace, size, nullptr, nullptr));
+    if (!driftstackIsLegacyCJKDisplayFont(cascadeFont.get()))
+        return nullptr;
+    if (description.shouldAllowUserInstalledFonts() == AllowUserInstalledFonts::No) {
+        RetainPtr userInstalled = adoptCF(CTFontCopyAttribute(cascadeFont.get(), kCTFontUserInstalledAttribute));
+        if (userInstalled.get() == kCFBooleanTrue)
+            return nullptr;
+    }
+    return cascadeFont;
+}
+#endif
+
 FontFamilySpecificationCoreText::FontFamilySpecificationCoreText(CTFontDescriptorRef fontDescriptor)
     : m_fontDescriptor(fontDescriptor)
 {
 }
 
+#if PLATFORM(DRIFTSTACK)
+FontFamilySpecificationCoreText::FontFamilySpecificationCoreText(CTFontDescriptorRef fontDescriptor, CGFontRef legacyCJKDisplayPhysicalFace)
+    : m_fontDescriptor(fontDescriptor)
+    , m_legacyCJKDisplayPhysicalFace(legacyCJKDisplayPhysicalFace)
+{
+}
+#endif
+
 FontFamilySpecificationCoreText::~FontFamilySpecificationCoreText() = default;
 
-FontRanges FontFamilySpecificationCoreText::fontRanges(const FontDescription& fontDescription) const
+FontRanges FontFamilySpecificationCoreText::fontRanges(const FontCascadeDescription& fontDescription) const
 {
     auto size = fontDescription.computedSize();
+#if PLATFORM(DRIFTSTACK)
+    if (m_legacyCJKDisplayPhysicalFace) {
+        // This physical face was explicitly injected for the primary legacy
+        // -apple-system cascade. Keep it out of the shared specification cache:
+        // an equivalent descriptor can occur naturally in a later CSS family,
+        // where ordinary optical-size preparation must remain intact.
+        if (auto font = driftstackLegacyCJKDisplayFont(m_legacyCJKDisplayPhysicalFace.get(), fontDescription, size)) {
+            static unsigned hitCount = 0;
+            if (++hitCount <= 8)
+                WTFLogAlways("[Driftstack-CJK-Display] Legacy system CJK Display cascade selected (%u so far); size=%.1f", hitCount, size);
+            auto [syntheticBold, syntheticOblique] = computeNecessarySynthesis(font.get(), fontDescription, { }, ShouldComputePhysicalTraits::Yes).boldObliquePair();
+            FontPlatformData platformData(font.get(), size, false, syntheticOblique, fontDescription.orientation(), fontDescription.widthVariant(), fontDescription.textRenderingMode());
+            platformData.updateSizeWithFontSizeAdjust(fontDescription.fontSizeAdjust(), fontDescription.computedSize());
+            return FontRanges(protect(FontCache::forCurrentThread())->fontForPlatformData(platformData));
+        }
+    }
+#endif
     auto& originalPlatformData = FontFamilySpecificationCoreTextCache::forCurrentThread().ensure(FontFamilySpecificationKey(m_fontDescriptor.get(), fontDescription), [&]() {
         // FIXME: Stop creating this unnecessary CTFont once rdar://problem/105508842 is fixed.
         UnrealizedCoreTextFont unrealizedFont = { adoptCF(CTFontCreateWithFontDescriptor(m_fontDescriptor.get(), size, nullptr)) };
