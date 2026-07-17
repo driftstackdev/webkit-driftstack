@@ -652,6 +652,27 @@ GlyphData FontCascadeFonts::glyphDataForCharacter(char32_t c, const FontCascadeD
     if (variant != FontVariant::Normal)
         return glyphDataForVariant(c, description, fontSelector, variant, resolvedEmojiPolicy);
 
+#if PLATFORM(DRIFTSTACK)
+    // A NoPreference U+2764 request in iOS's system-font cascade resolves
+    // through the hidden color-emoji UI face. The full-page cache can accept an
+    // earlier outline face before the generic-range emoji filter examines the
+    // later system-cascade ranges. Bypass that cache only for this exact default
+    // presentation context and reuse the ordinary range walk with an emoji
+    // requirement. Reject its terminal system fallback (and every other face):
+    // only the native hidden UI face keeps the authenticated ink and advance
+    // curve coherent. Explicit Text/Emoji policies retain their normal paths.
+    const char* track7CandidateD = getenv("DRIFTSTACK_TRACK7_CANDIDATE_D");
+    if (c == 0x2764
+        && resolvedEmojiPolicy == ResolvedEmojiPolicy::NoPreference
+        && track7CandidateD && std::string_view(track7CandidateD) == "1"
+        && description.familyCount() && equalLettersIgnoringASCIICase(description.familyAt(0).name, "-apple-system"_s)) {
+        auto emojiHeart = glyphDataForVariant(c, description, fontSelector, variant, ResolvedEmojiPolicy::RequireEmoji);
+        if (emojiHeart.isValid() && emojiHeart.colorGlyphType == ColorGlyphType::Color
+            && emojiHeart.font->platformData().familyName() == ".Apple Color Emoji UI"_s)
+            return emojiHeart;
+    }
+#endif
+
     const unsigned pageNumber = GlyphPage::pageNumberForCodePoint(c);
 
     auto& cacheEntry = m_cachedPages[resolvedEmojiPolicy].ensure(pageNumber, [&] {
