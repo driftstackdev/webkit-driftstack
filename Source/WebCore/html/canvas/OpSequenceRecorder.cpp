@@ -78,6 +78,7 @@ constexpr uint16_t kArgsRect4Float              = 4 * 8;  // 4 doubles BE
 constexpr uint16_t kArgs2Float                  = 2 * 8;
 constexpr uint16_t kArgs1Float                  = 1 * 8;
 constexpr uint16_t kArgs0                       = 0;
+constexpr uint16_t kArgsFillRule                = 1;
 constexpr uint16_t kArgsArc                     = 5 * 8 + 1;  // 5 doubles + 1 u8 ccw
 constexpr uint16_t kArgsBezierCurveTo           = 6 * 8;
 constexpr uint16_t kArgsGradientIdentifier      = 4;
@@ -436,7 +437,18 @@ void OpSequenceRecorder::recordLineTo(double x, double y)
     appendF64BE(x); appendF64BE(y);
 }
 void OpSequenceRecorder::recordClosePath() { appendOpHeader(kOpClosePath, kArgs0); }
-void OpSequenceRecorder::recordFill()      { appendOpHeader(kOpFill, kArgs0); }
+void OpSequenceRecorder::recordFill(CanvasFillRule fillRule)
+{
+    // Preserve every existing default/nonzero key byte-for-byte. EvenOdd is
+    // the only non-default CanvasFillRule and carries one explicit discriminator
+    // byte so fill("evenodd") cannot alias a visually different fill().
+    if (fillRule == CanvasFillRule::Evenodd) {
+        appendOpHeader(kOpFill, kArgsFillRule);
+        appendU8(1);
+        return;
+    }
+    appendOpHeader(kOpFill, kArgs0);
+}
 void OpSequenceRecorder::recordStroke()    { appendOpHeader(kOpStroke, kArgs0); }
 void OpSequenceRecorder::recordArc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise)
 {
@@ -612,6 +624,50 @@ constexpr ExpectedVector kVecWarmGradientMutation = {
     "gradient_warm_post_assignment_stop"_s, 200, 60,
     "abf43193fb816ae63d2ad9f36c06e32b745d16410140b6bfafe31f9a4a889be3"_s
 };
+
+// Tests 15/16: cross-language FingerprintJS geometry operation stream, pinned
+// to the JS/TypeScript serializer's full SHA-256 vectors. The only difference
+// is the final fill rule: zero-argument nonzero must retain the historical
+// runtime key, while EvenOdd appends one 0x01 discriminator byte.
+constexpr ExpectedVector kVecFPJSGeometryNonzero = {
+    "fpjs_geometry_nonzero"_s, 122, 110,
+    "6d482a12584434032de931061575a5ec501b84766dafe53e3c5300c9119c6226"_s
+};
+constexpr ExpectedVector kVecFPJSGeometryEvenodd = {
+    "fpjs_geometry_evenodd"_s, 122, 110,
+    "29a7825ed34f851cc263fc90c620e92240646cc7b5f89797fff0b3124f3cec44"_s
+};
+
+void recordFPJSGeometry(OpSequenceRecorder& recorder, CanvasFillRule finalFillRule)
+{
+    // CanvasPath accepts float arguments, so the runtime recorder sees the
+    // float-rounded value of 2 * Math.PI rather than the original JS double.
+    constexpr double twoPiFloat = 6.2831854820251465;
+    recorder.recordSetGlobalCompositeOperation("multiply"_s);
+
+    recorder.recordSetFillStyle("#f2f"_s);
+    recorder.recordBeginPath();
+    recorder.recordArc(40.0, 40.0, 40.0, 0.0, twoPiFloat, true);
+    recorder.recordClosePath();
+    recorder.recordFill(CanvasFillRule::Nonzero);
+
+    recorder.recordSetFillStyle("#2ff"_s);
+    recorder.recordBeginPath();
+    recorder.recordArc(80.0, 40.0, 40.0, 0.0, twoPiFloat, true);
+    recorder.recordClosePath();
+    recorder.recordFill(CanvasFillRule::Nonzero);
+
+    recorder.recordSetFillStyle("#ff2"_s);
+    recorder.recordBeginPath();
+    recorder.recordArc(60.0, 80.0, 40.0, 0.0, twoPiFloat, true);
+    recorder.recordClosePath();
+    recorder.recordFill(CanvasFillRule::Nonzero);
+
+    recorder.recordSetFillStyle("#f9c"_s);
+    recorder.recordArc(60.0, 60.0, 60.0, 0.0, twoPiFloat, true);
+    recorder.recordArc(60.0, 60.0, 20.0, 0.0, twoPiFloat, true);
+    recorder.recordFill(finalFillRule);
+}
 
 bool checkResult(ASCIILiteral name, const String& got, ASCIILiteral expected)
 {
@@ -849,7 +905,26 @@ void runOpSequenceRecorderSelfTestIfRequested()
             ++fails;
     }
 
-    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 14 vectors", passes, fails);
+    // Tests 15/16: default/nonzero retains its historical zero-argument key;
+    // EvenOdd differs only by the final fill record's one-byte rule payload.
+    {
+        OpSequenceRecorder r;
+        recordFPJSGeometry(r, CanvasFillRule::Nonzero);
+        if (checkResult(kVecFPJSGeometryNonzero.name, r.finalizeSHA256Hex(kVecFPJSGeometryNonzero.canvasW, kVecFPJSGeometryNonzero.canvasH), kVecFPJSGeometryNonzero.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+    {
+        OpSequenceRecorder r;
+        recordFPJSGeometry(r, CanvasFillRule::Evenodd);
+        if (checkResult(kVecFPJSGeometryEvenodd.name, r.finalizeSHA256Hex(kVecFPJSGeometryEvenodd.canvasW, kVecFPJSGeometryEvenodd.canvasH), kVecFPJSGeometryEvenodd.expectedSha256))
+            ++passes;
+        else
+            ++fails;
+    }
+
+    WTFLogAlways("[Driftstack-OpSeq-SelfTest] V-581 Phase C-3.A summary: %d PASS / %d FAIL of 16 vectors", passes, fails);
 }
 
 } // namespace WebCore

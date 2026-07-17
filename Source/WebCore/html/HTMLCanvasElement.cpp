@@ -898,14 +898,17 @@ void initV510AtlasOnce()
     // dispatch happens above the WebKit layer (harness / GUI / agent service
     // per file 04 architecture).
     const char* envPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH");
-    const char* path = envPath ? envPath : kDefaultPath;
+    bool hasExplicitMainAtlasPath = envPath && envPath[0];
+    const char* path = hasExplicitMainAtlasPath ? envPath : kDefaultPath;
     loadAtlasIntoState(state, path, /*isPriority*/ false);
 
     // Wave 29-399 §6.A: priority bin override env. Same archetype-dispatch
     // pattern — orchestrator passes per-archetype priority path if needed.
     const char* envPriorityPath = getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PRIORITY_PATH");
-    const char* priorityPath = envPriorityPath ? envPriorityPath : kDefaultPriorityPath;
-    loadAtlasIntoState(v510AtlasStatePriority(), priorityPath, /*isPriority*/ true);
+    if (envPriorityPath && envPriorityPath[0])
+        loadAtlasIntoState(v510AtlasStatePriority(), envPriorityPath, /*isPriority*/ true);
+    else if (!hasExplicitMainAtlasPath)
+        loadAtlasIntoState(v510AtlasStatePriority(), kDefaultPriorityPath, /*isPriority*/ true);
 }
 
 // Wave 29-499.8 Task #79 — eager atlas init is hooked into the

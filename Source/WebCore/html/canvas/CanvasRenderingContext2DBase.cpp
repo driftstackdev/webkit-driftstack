@@ -1346,7 +1346,7 @@ void CanvasRenderingContext2DBase::fill(CanvasFillRule windingRule)
                 recorder.recordGradientRenderPhaseIfNeeded();
         }
     }
-    recorder.recordFill();
+    recorder.recordFill(windingRule);
 #endif
     fillInternal(m_path, windingRule);
 }

@@ -24,7 +24,8 @@
  *   0x0001 fillRect / 0x0002 strokeRect / 0x0003 clearRect
  *   0x0004 fillText / 0x0005 strokeText
  *   0x0006 beginPath / 0x0007 moveTo / 0x0008 lineTo / 0x0009 closePath
- *   0x000A fill / 0x000B stroke / 0x000C arc / 0x000F rect
+ *   0x000A fill (zero args = nonzero; one byte 0x01 = evenodd)
+ *   0x000B stroke / 0x000C arc / 0x000F rect
  *   0x0020 fillStyle / 0x0021 strokeStyle / 0x0022 lineWidth
  *   0x0023 lineCap / 0x0024 lineJoin / 0x0025 miterLimit
  *   0x0028 font / 0x0029 textAlign / 0x002A textBaseline
@@ -45,6 +46,7 @@
 
 #if PLATFORM(DRIFTSTACK)
 
+#include "CanvasFillRule.h"
 #include <wtf/CheckedPtr.h>
 #include <wtf/Forward.h>
 #include <wtf/HashMap.h>
@@ -97,7 +99,7 @@ public:
     void recordMoveTo(double x, double y);
     void recordLineTo(double x, double y);
     void recordClosePath();
-    void recordFill();
+    void recordFill(CanvasFillRule = CanvasFillRule::Nonzero);
     void recordStroke();
     void recordArc(double x, double y, double radius, double startAngle, double endAngle, bool counterClockwise);
     void recordBezierCurveTo(double cp1x, double cp1y, double cp2x, double cp2y, double x, double y);
