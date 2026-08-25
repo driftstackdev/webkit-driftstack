@@ -84,6 +84,9 @@ inline bool driftstackCanvasFamilyA()
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return false;  // unset env = launch default
+        if (a.safariMajor <= 0)
+            return false;  // slug carries no safari<N>_ token (e.g. a
+                           // chrome-on-iOS archetype) => NO INFORMATION, take the launch default
         if (a.safariMajor < 26)
             return true;   // any pre-26 Safari is Family A
         if (a.safariMajor > 26)
