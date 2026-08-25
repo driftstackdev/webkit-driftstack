@@ -17,7 +17,7 @@
 // helper. Unset env returns the launch default (Family B / Safari 26.4 / Kefa absent), matching every
 // current fork lambda's `if (!archetype) return ...` guardrail.
 //
-// Surfaces emitted from the registry: canvas_2d_pixel, webgpu_exposed, av1_canplaytype (+ driftstackKefaPresent, pending a registry surface).
+// Surfaces emitted from the registry: canvas_2d_pixel, webgpu_exposed, av1_canplaytype, canvas_avif_toblob_boundary, vp9_mse_istypesupported_boundary (+ driftstackKefaPresent, pending a registry surface).
 
 #pragma once
 
@@ -116,6 +116,32 @@ inline bool driftstackIsA17ProOrNewer()
         if (!a.present)
             return true;  // unset env = launch default
         return a.modelSlug.starts_with("iphone15pro") || a.modelSlug.starts_with("iphone15promax") || a.modelSlug.starts_with("iphone16") || a.modelSlug.starts_with("iphone17");
+    }();
+    return s_value;
+}
+
+// toBlob/convertToBlob normalizes image/avif to image/png iff Safari MAJOR < 26 (registry canvas_avif_toblob_boundary families.A "<26"). ⚠️ This is a MAJOR cutoff and is NOT the same boundary as driftstackCanvasFamilyA (MINOR <=26.3): 26.0-26.3 are Family-A for canvas PIXELS and Family-B here (they return avif natively, capture-confirmed over 213 aio captures). Conflating the two is the original Family-A/B bug. Migrate the safari17_..25_ enumerations in HTMLCanvasElement.cpp (main toBlob) and OffscreenCanvas.cpp (worker convertToBlob) to this.
+// derived from: registry surface "canvas_avif_toblob_boundary" (status: n/a)
+inline bool driftstackAvifToBlobNormalizesToPng()
+{
+    static const bool s_value = []() -> bool {
+        const DriftstackArchetype a = driftstackParseArchetype();
+        if (!a.present)
+            return false;  // unset env = launch default
+        return a.safariMajor > 0 && a.safariMajor < 26;
+    }();
+    return s_value;
+}
+
+// ManagedMediaSource.isTypeSupported(video/mp4; codecs="vp09.*") is FALSE iff Safari MAJOR < 26 (registry vp9_mse_istypesupported_boundary families.A "<26"). Chip-INDEPENDENT. Migrate DriftstackArchetypeConfig.mm driftstackFamilyAVP9MSEUnsupported() to this; both asserting gates (vp9-decinfo-container-split, mse-changetype-istypesupported-coherence) currently re-derive it from literals with no registry reference.
+// derived from: registry surface "vp9_mse_istypesupported_boundary" (status: n/a)
+inline bool driftstackVP9MSEUnsupported()
+{
+    static const bool s_value = []() -> bool {
+        const DriftstackArchetype a = driftstackParseArchetype();
+        if (!a.present)
+            return false;  // unset env = launch default
+        return a.safariMajor > 0 && a.safariMajor < 26;
     }();
     return s_value;
 }
