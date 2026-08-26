@@ -105,7 +105,15 @@ inline bool driftstackWebGPUExposed()
         if (!a.present)
             return true;  // unset env = launch default (A16+ launch model)
         const bool a16Plus = a.modelSlug.starts_with("iphone17") || a.modelSlug.starts_with("iphone16") || a.modelSlug.starts_with("iphone15") || a.modelSlug.starts_with("iphone14pro");
-        return a16Plus && a.safariMajor >= 26;
+        if (a16Plus)
+            return a.safariMajor >= 26;
+        // registry families.exposed second clause: A15-non-Pro from 26.2 onward
+        const bool secondary = a.modelSlug.starts_with("iphone13") || a.modelSlug.starts_with("iphone14") || a.modelSlug.starts_with("iphone14plus");
+        if (!secondary)
+            return false;
+        if (a.safariMajor > 26)
+            return true;
+        return a.safariMajor == 26 && a.safariMinor >= 2;
     }();
     return s_value;
 }
