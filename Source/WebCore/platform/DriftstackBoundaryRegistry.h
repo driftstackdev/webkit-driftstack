@@ -80,7 +80,7 @@ inline DriftstackArchetype driftstackParseArchetype()
 // derived from: registry surface "canvas_2d_pixel" (status: BOUNDARY-CONFIRMED, per-family target VERIFY-on-real-device)
 inline bool driftstackCanvasFamilyA()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return false;  // unset env = launch default
@@ -93,14 +93,13 @@ inline bool driftstackCanvasFamilyA()
             return false;
         return a.safariMinor <= 3;  // within major 26: Family A iff minor <= 3
     }();
-    return s_value;
 }
 
 // navigator.gpu exposed iff model is A16+ (registry webgpu_exposed families.exposed) AND Safari major >= 26. Replaces the 3-copy WebPage/Navigator/WorkerNavigator gate. exposed => true, hidden => false.
 // derived from: registry surface "webgpu_exposed" (status: VERIFIED VERSION-KEYED (Safari>=26 PRESENT all-chips incl A15, <26 ABSENT all-chips) real-device 2026-06-28 (a4222a80/#119): A15 flips on version axis (18.3.1 ABSENT -> 26.4 PRESENT), A17Pro/A18Pro PRESENT. Fork matches every captured cell. A15@26.0/26.1 sub-cell = BS-POOL PHYSICAL BOUND (proven 2026-06-29, see closure-analysis note): the BS iOS-26 pool floats to 26.2-26.4 (>7 iPhone-14 attempts incl 4 fresh never landed 26.0/26.1; no BS minor-pin). A18-non-Pro@26 sibling cell = BS HARD-REJECTS iPhone 16 @ os 26. DECISION PENDING (founder/A3): version-key the fork A15 cutoff to 26.0 to match the config (drafted in scratchpad A15-WEBGPU-MINOR-FIX-DRAFT.md; gate webgpu-a15-minor-boundary-gate.sh); else fork stays conservative-26.2 (config/fork incoherent at iphone14_..._safari26_0).)
 inline bool driftstackWebGPUExposed()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return true;  // unset env = launch default (A16+ launch model)
@@ -115,59 +114,54 @@ inline bool driftstackWebGPUExposed()
             return true;
         return a.safariMajor == 26 && a.safariMinor >= 2;
     }();
-    return s_value;
 }
 
 // Silicon tier: true iff the model is A17Pro or newer (registry av1_canplaytype families.A17Pro_plus). Version-INVARIANT — the SAME split backs av01 canPlayType, HEVC decode-level ceiling, webrtc video-pt and the webgl trig scene, at every Safari major measured. Migrate the hand-rolled `find("iphone15pro")==0 || …` chip lists in HEVCUtilitiesCocoa.mm / DriftstackArchetypeConfig.mm / Adapter.mm to this.
 // derived from: registry surface "av1_canplaytype" (status: CLOSED 2026-06-30 — BOUNDARY-CONFIRMED real-device (A15/A16 av01='' ; A17Pro+ av01='probably') AND REVERSE-render CLOSED 2026-06-30 daemon 70461 (HEAD f22cc48e0c, box=M2Pro-Mac14,12-devbox [chip confirmed 2026-07-08 — NOT the M3-Ultra fleet the label assumed; this surface is host-INDEPENDENT so the closure holds on any chip]): iphone17(A19) canPlayType.av01='probably' + iphone14(A15) '' + webcodecs false ; av1-canplaytype-perchip-gate.sh exit 0, boundary pair mutation-verified. decodingInfo matrix by av1-decinfo-matrix-gate.sh. Was — 'committed; A3 build-pending'.)
 inline bool driftstackIsA17ProOrNewer()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return true;  // unset env = launch default
         return a.modelSlug.starts_with("iphone15pro") || a.modelSlug.starts_with("iphone15promax") || a.modelSlug.starts_with("iphone16") || a.modelSlug.starts_with("iphone17");
     }();
-    return s_value;
 }
 
 // toBlob/convertToBlob normalizes image/avif to image/png iff Safari MAJOR < 26 (registry canvas_avif_toblob_boundary families.A "<26"). ⚠️ This is a MAJOR cutoff and is NOT the same boundary as driftstackCanvasFamilyA (MINOR <=26.3): 26.0-26.3 are Family-A for canvas PIXELS and Family-B here (they return avif natively, capture-confirmed over 213 aio captures). Conflating the two is the original Family-A/B bug. Migrate the safari17_..25_ enumerations in HTMLCanvasElement.cpp (main toBlob) and OffscreenCanvas.cpp (worker convertToBlob) to this.
 // derived from: registry surface "canvas_avif_toblob_boundary" (status: n/a)
 inline bool driftstackAvifToBlobNormalizesToPng()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return false;  // unset env = launch default
         return a.safariMajor > 0 && a.safariMajor < 26;
     }();
-    return s_value;
 }
 
 // ManagedMediaSource.isTypeSupported(video/mp4; codecs="vp09.*") is FALSE iff Safari MAJOR < 26 (registry vp9_mse_istypesupported_boundary families.A "<26"). Chip-INDEPENDENT. Migrate DriftstackArchetypeConfig.mm driftstackFamilyAVP9MSEUnsupported() to this; both asserting gates (vp9-decinfo-container-split, mse-changetype-istypesupported-coherence) currently re-derive it from literals with no registry reference.
 // derived from: registry surface "vp9_mse_istypesupported_boundary" (status: n/a)
 inline bool driftstackVP9MSEUnsupported()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return false;  // unset env = launch default
         return a.safariMajor > 0 && a.safariMajor < 26;
     }();
-    return s_value;
 }
 
 // Kefa font present iff Safari major < 26 (FontCacheCoreText.cpp 2026-06-27 split). No dedicated registry surface yet — boundary is the documented Safari-major cutoff.
 // derived from: no registry surface yet (status: n/a)
 inline bool driftstackKefaPresent()
 {
-    static const bool s_value = []() -> bool {
+    return [&]() -> bool {
         const DriftstackArchetype a = driftstackParseArchetype();
         if (!a.present)
             return false;  // unset env = launch default
         return a.safariMajor > 0 && a.safariMajor < 26;
     }();
-    return s_value;
 }
 
 } // namespace WebCore
