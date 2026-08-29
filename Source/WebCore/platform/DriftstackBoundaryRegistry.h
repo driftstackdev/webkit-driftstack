@@ -38,15 +38,19 @@ struct DriftstackArchetype {
     int safariMinor { 0 };
 };
 
-// Parse DRIFTSTACK_ARCHETYPE once. Pure of side effects; callers should cache in a static.
-inline DriftstackArchetype driftstackParseArchetype()
+// Parse an archetype SLUG. Pure of side effects.
+// ⭐ Split out of driftstackParseArchetype() (A1 2026-08-29) so the SAME parse can classify a slug that
+// is not this process's own archetype. The cross-archetype canvas fallback in
+// DriftstackCanvasFingerprint10xOverride.h classifies a DONOR archetype, and an env-reading function
+// structurally cannot answer that question — which is why that file hand-rolled its own parse (rule 7).
+// The env form below is unchanged in behaviour: it now delegates here.
+inline DriftstackArchetype driftstackParseArchetypeSlug(const char* slug)
 {
     DriftstackArchetype out;
-    const char* env = std::getenv("DRIFTSTACK_ARCHETYPE");
-    if (!env || !env[0])
+    if (!slug || !slug[0])
         return out;  // present stays false => launch default
     out.present = true;
-    std::string_view sv(env);
+    std::string_view sv(slug);
 
     // modelSlug = leading run up to "_ios" (fallback: up to first '_').
     auto iosPos = sv.find("_ios");
@@ -76,23 +80,46 @@ inline DriftstackArchetype driftstackParseArchetype()
     return out;
 }
 
+// Parse DRIFTSTACK_ARCHETYPE once. Pure of side effects; callers should cache in a static.
+inline DriftstackArchetype driftstackParseArchetype()
+{
+    return driftstackParseArchetypeSlug(std::getenv("DRIFTSTACK_ARCHETYPE"));
+}
+
+// ⛔⛔ THE CANVAS FAMILY QUESTION IS THREE-VALUED, AND EVERY BOOL FORM OF IT LOSES A VALUE (A1
+// 2026-08-29). A slug carrying no "safari<MAJ>_<MIN>" token — a chrome-on-iOS archetype, or a legacy
+// pre-26.4 slug like "iphone16pro_ios18_6" — says NOTHING about canvas family. Collapsing that into a
+// bool forces a wrong answer, and the two existing predicates collapse it in OPPOSITE directions:
+//   · driftstackCanvasFamilyA()                      false => "not A", read downstream as B
+//   · driftstackArchetypeIsFamilyB(slug) (hand-rolled) false => "not B", i.e. A
+// Same input, opposite conclusion, and neither is "B" — both are really "unknown". That is the actual
+// shape of the chrome-archetype-canvas-family defect, and a straight migration of the hand-rolled site
+// onto driftstackCanvasFamilyA() would NOT fix it: it swaps one wrong answer for a different one.
+// ⭐ So the registry exposes the three-valued form and lets each caller decide what Unknown means.
+enum class DriftstackCanvasFamily { Unknown, A, B };
+
+// derived from: registry surface "canvas_2d_pixel" (status: BOUNDARY-CONFIRMED, per-family target VERIFY-on-real-device)
+inline DriftstackCanvasFamily driftstackCanvasFamilyForSlug(const char* slug)
+{
+    const DriftstackArchetype a = driftstackParseArchetypeSlug(slug);
+    if (!a.present)
+        return DriftstackCanvasFamily::Unknown;  // unset/empty => launch default, not a family
+    if (a.safariMajor <= 0)
+        return DriftstackCanvasFamily::Unknown;  // no safari<N>_ token => NO INFORMATION
+    if (a.safariMajor < 26)
+        return DriftstackCanvasFamily::A;        // any pre-26 Safari is Family A
+    if (a.safariMajor > 26)
+        return DriftstackCanvasFamily::B;
+    return a.safariMinor <= 3 ? DriftstackCanvasFamily::A : DriftstackCanvasFamily::B;
+}
+
 // Canvas Family-A iff Safari minor <= 26.3 (registry canvas_2d_pixel families.A "<=26.3"). Replaces s_isFamilyAArchetype + the 14 canvas/CSS/webauthn hand-rolls. A => target 61b7a151, B => 57186fab.
+// ⚠️ Behaviour-preserving delegation: Unknown maps to false exactly as the two `return false` arms it
+// replaced did. Callers that need to tell "not A" from "unknown" must use the three-valued form.
 // derived from: registry surface "canvas_2d_pixel" (status: BOUNDARY-CONFIRMED, per-family target VERIFY-on-real-device)
 inline bool driftstackCanvasFamilyA()
 {
-    return [&]() -> bool {
-        const DriftstackArchetype a = driftstackParseArchetype();
-        if (!a.present)
-            return false;  // unset env = launch default
-        if (a.safariMajor <= 0)
-            return false;  // slug carries no safari<N>_ token (e.g. a
-                           // chrome-on-iOS archetype) => NO INFORMATION, take the launch default
-        if (a.safariMajor < 26)
-            return true;   // any pre-26 Safari is Family A
-        if (a.safariMajor > 26)
-            return false;
-        return a.safariMinor <= 3;  // within major 26: Family A iff minor <= 3
-    }();
+    return driftstackCanvasFamilyForSlug(std::getenv("DRIFTSTACK_ARCHETYPE")) == DriftstackCanvasFamily::A;
 }
 
 // navigator.gpu exposed iff model is A16+ (registry webgpu_exposed families.exposed) AND Safari major >= 26. Replaces the 3-copy WebPage/Navigator/WorkerNavigator gate. exposed => true, hidden => false.
