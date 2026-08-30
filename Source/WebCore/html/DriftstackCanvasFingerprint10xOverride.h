@@ -19,6 +19,13 @@
 //   python3 captures/v3/extract-vendor-canvas-canonical.py   (from the driftstack repo root)
 //
 #pragma once
+
+#if PLATFORM(DRIFTSTACK)
+// For driftstackCurrentArchetypeIsFamilyB(): the effective Safari version the slug cannot carry.
+// Guarded exactly as Screen.cpp:33-35 and MediaQueryFeatures.cpp guard it.
+#include "DriftstackArchetypeConfig.h"
+#endif
+
 #include <string_view>
 namespace WebCore {
 
@@ -65221,6 +65228,63 @@ inline const char* driftstackCurrentArchetypeCStr()
     return env && env[0] ? env : "iphone16pro_ios18_6";
 }
 
+// ⭐⭐ THIS PROCESS'S canvas family, resolved from the EFFECTIVE Safari version rather than the slug
+// (A1 2026-08-30). Real-device captures settled it: a CriOS/149 iPhone renders md5 57186fab = Family B,
+// on three distinct models, matching the Family-B Safari population exactly. The archetype config agrees
+// (chrome148/149/150 all declare os.safari_version 26.4 / canvas_family B). The SLUG does not, because it
+// carries no "_safari<MAJ>_<MIN>" token — so driftstackArchetypeIsFamilyB() takes its no-token branch,
+// whose comment justifies Family A on the grounds that such slugs "were captured pre-26.4 launch when
+// only iOS 18 Safari shipped". That was true of every slug class that existed when it was written; chrome
+// archetypes are 26.4-era and carry no token, so they satisfy the CONDITION while violating the REASONING
+// and were silently mis-filed. The consequence is the exact defect this file exists to prevent: at
+// lookupCanvasFp10xCanonicalWithText the cross-archetype borrow would serve a Chrome session FAMILY A
+// bytes ("wrong-pipeline canvas bytes (BL coherence bug source per Wave 29-358)").
+//
+// ⛔ CURRENT vs DONOR — do NOT collapse these into one path. This resolver answers only for THIS process.
+// The same predicate is also called on OTHER archetypes' slugs (the canonical table's entry.archetype),
+// where a config describing THIS process is meaningless; those stay on the slug parse, which is correct
+// for them because every donor is a Safari slug carrying the token (measured: zero chrome slugs appear
+// anywhere in this file).
+//
+// ⭐ Reading one config field behind a validity guard is the ESTABLISHED, SHIPPING pattern, not new
+// plumbing: MediaQueryFeatures.cpp:406/443 and Screen.cpp:96/124/214/239 use exactly
+// `if (auto v = ...singleton().x(); v > 0)`, and the ledger records that adoption VERIFIED IN FORK on two
+// archetypes (iphone17 unchanged 402/874; iphone13mini/18.6 -> 375/812). The waves that were reverted for
+// breaking cumrig were WHOLESALE default-path activation of many config fields, a different act.
+// ⛔ FAILS INERT BY CONSTRUCTION: safariVersion() is assigned only inside a successful JSON load, so an
+// unloaded or invalid config yields an empty string and we fall back to the slug — i.e. exactly today's
+// behaviour. A Safari archetype can never be re-classified by this function.
+// ⛔ TAKES THE SLUG EXPLICITLY so callers control the unset case. driftstackIsCanvasFamilyA() below must
+// NOT be handed driftstackCurrentArchetypeCStr(), whose legacy "iphone16pro_ios18_6" default would
+// classify the UNSET 26.4 launch path as Family A — the landmine this file already documents.
+inline bool driftstackResolvedIsFamilyB(const char* slug)
+{
+#if PLATFORM(DRIFTSTACK)
+    auto& cfg = DriftstackArchetypeConfig::singleton();
+    if (cfg.isValid()) {
+        const auto versionUtf8 = cfg.safariVersion().utf8();
+        const char* p = versionUtf8.data();
+        if (p && p[0]) {
+            int major = 0, minor = 0;
+            while (*p >= '0' && *p <= '9') { major = major * 10 + (*p - '0'); ++p; }
+            if (*p == '.') {
+                ++p;
+                while (*p >= '0' && *p <= '9') { minor = minor * 10 + (*p - '0'); ++p; }
+            }
+            if (major > 0)
+                return driftstackCanvasFamilyBForSafariVersion(major, minor);
+        }
+    }
+#endif
+    return driftstackArchetypeIsFamilyB(slug);
+}
+
+// This process's family, using the same defaulted slug the canonical-table path already used.
+inline bool driftstackCurrentArchetypeIsFamilyB()
+{
+    return driftstackResolvedIsFamilyB(driftstackCurrentArchetypeCStr());
+}
+
 // Wave 29-360 Item 5: classify an archetype slug as canvas pipeline
 // Family A (Safari ≤26.3) or Family B (Safari 26.4+). Boundary confirmed
 // hard-empirical Wave 29-358 Option C (canvas.fingerprint10x hash compare
@@ -65228,6 +65292,18 @@ inline const char* driftstackCurrentArchetypeCStr()
 // serving Family A bytes under a Family B archetype (which would cause
 // vendor cross-signal detection per the BL coherence bug founder spotted
 // 2026-05-17).
+// ⭐⭐ THE CANVAS-FAMILY CUTOFF, EXPRESSED ONCE (A1 2026-08-30). It was written out twice — here and in
+// DriftstackBoundaryRegistry.h — which is two places to drift and, per closure rule 7, two hand-rolls of a
+// boundary whose sole authority is operations/boundary-registry.json. Both slug- and version-keyed callers
+// now funnel through this one function.
+// derived from: registry surface "canvas_2d_pixel" (families.A "<=26.3", families.B ">=26.4")
+inline bool driftstackCanvasFamilyBForSafariVersion(int major, int minor)
+{
+    if (major > 26) return true;
+    if (major == 26 && minor >= 4) return true;
+    return false;
+}
+
 inline bool driftstackArchetypeIsFamilyB(const char* slug)
 {
     if (!slug) return false;
@@ -65255,10 +65331,8 @@ inline bool driftstackArchetypeIsFamilyB(const char* slug)
         if (c < '0' || c > '9') return false;
         minor = minor * 10 + (c - '0');
     }
-    // Family B threshold: Safari 26.4+ (major > 26 OR major == 26 && minor >= 4).
-    if (major > 26) return true;
-    if (major == 26 && minor >= 4) return true;
-    return false;
+    // Family B threshold: Safari 26.4+ — via the single shared cutoff above, not a second copy.
+    return driftstackCanvasFamilyBForSafariVersion(major, minor);
 }
 
 // V-790 Wave 3 — Safari (major,minor) extractor, mirroring the parse in
@@ -65402,7 +65476,14 @@ inline bool driftstackArchetypeIsCanvasFamilyA(const char* slug)
 inline bool driftstackIsCanvasFamilyA()
 {
     const char* env = getenv("DRIFTSTACK_ARCHETYPE");
-    return driftstackArchetypeIsCanvasFamilyA(env);
+    // GUARDRAIL UNCHANGED: unset env = the 26.4 launch default = Family B, never Family A. Checked here
+    // and NOT delegated, so no defaulted legacy slug can reach the resolver (A1 2026-08-30).
+    if (!env || !env[0])
+        return false;
+    // ⭐ Config-resolved for an EXPLICIT archetype: this is the path the 5 live canvas callers take
+    // (OffscreenCanvas.cpp:416, CanvasRenderingContext2DBase.cpp:3152, HTMLCanvasElement.cpp:1336/1735),
+    // and without it a chrome archetype reads Family A at every one of them.
+    return !driftstackResolvedIsFamilyB(env);
 }
 
 // V-245 archetype-aware content-aware dispatch (preferred path).
@@ -65445,7 +65526,7 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
         return hit;
     // Wave 29-360 Item 5: family-constrained cross-archetype content-match.
     // Current archetype's family determines which entries are eligible.
-    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
+    bool currentIsFamilyB = driftstackCurrentArchetypeIsFamilyB(); // config-resolved: the slug cannot carry a chrome archetype's effective Safari version (A1 2026-08-30)
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
         if (entry.width != width || entry.height != height)
             continue;
@@ -65481,7 +65562,7 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
     const char* arch = driftstackCurrentArchetypeCStr();
     if (auto* hit = lookupCanvasFp10xCanonicalForArchetype(arch, width, height))
         return hit;
-    bool currentIsFamilyB = driftstackArchetypeIsFamilyB(arch);
+    bool currentIsFamilyB = driftstackCurrentArchetypeIsFamilyB(); // config-resolved: the slug cannot carry a chrome archetype's effective Safari version (A1 2026-08-30)
     for (const auto& entry : kCanvasFp10xCanonicalTable) {
         if (entry.width != width || entry.height != height)
             continue;
