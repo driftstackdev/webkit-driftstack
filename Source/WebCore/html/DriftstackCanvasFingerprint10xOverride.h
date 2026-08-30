@@ -65228,6 +65228,57 @@ inline const char* driftstackCurrentArchetypeCStr()
     return env && env[0] ? env : "iphone16pro_ios18_6";
 }
 
+
+// Wave 29-360 Item 5: classify an archetype slug as canvas pipeline
+// Family A (Safari ≤26.3) or Family B (Safari 26.4+). Boundary confirmed
+// hard-empirical Wave 29-358 Option C (canvas.fingerprint10x hash compare
+// across Safari minors). Used by cross-archetype fallback to prevent
+// serving Family A bytes under a Family B archetype (which would cause
+// vendor cross-signal detection per the BL coherence bug founder spotted
+// 2026-05-17).
+// ⭐⭐ THE CANVAS-FAMILY CUTOFF, EXPRESSED ONCE (A1 2026-08-30). It was written out twice — here and in
+// DriftstackBoundaryRegistry.h — which is two places to drift and, per closure rule 7, two hand-rolls of a
+// boundary whose sole authority is operations/boundary-registry.json. Both slug- and version-keyed callers
+// now funnel through this one function.
+// derived from: registry surface "canvas_2d_pixel" (families.A "<=26.3", families.B ">=26.4")
+inline bool driftstackCanvasFamilyBForSafariVersion(int major, int minor)
+{
+    if (major > 26) return true;
+    if (major == 26 && minor >= 4) return true;
+    return false;
+}
+
+inline bool driftstackArchetypeIsFamilyB(const char* slug)
+{
+    if (!slug) return false;
+    std::string_view s { slug };
+    // Find "_safari" substring (last occurrence — slug pattern is
+    // ..._safari<MAJ>_<MIN>).
+    auto pos = s.rfind("_safari");
+    if (pos == std::string_view::npos) {
+        // Legacy slug like "iphone16pro_ios18_6" → Family A
+        // (these were captured pre-26.4 launch when only iOS 18 Safari shipped).
+        return false;
+    }
+    auto rest = s.substr(pos + 7); // skip past "_safari"
+    auto under = rest.find('_');
+    if (under == std::string_view::npos || under == 0 || under == rest.size() - 1)
+        return false;
+    auto majSV = rest.substr(0, under);
+    auto minSV = rest.substr(under + 1);
+    int major = 0, minor = 0;
+    for (char c : majSV) {
+        if (c < '0' || c > '9') return false;
+        major = major * 10 + (c - '0');
+    }
+    for (char c : minSV) {
+        if (c < '0' || c > '9') return false;
+        minor = minor * 10 + (c - '0');
+    }
+    // Family B threshold: Safari 26.4+ — via the single shared cutoff above, not a second copy.
+    return driftstackCanvasFamilyBForSafariVersion(major, minor);
+}
+
 // ⭐⭐ THIS PROCESS'S canvas family, resolved from the EFFECTIVE Safari version rather than the slug
 // (A1 2026-08-30). Real-device captures settled it: a CriOS/149 iPhone renders md5 57186fab = Family B,
 // on three distinct models, matching the Family-B Safari population exactly. The archetype config agrees
@@ -65283,56 +65334,6 @@ inline bool driftstackResolvedIsFamilyB(const char* slug)
 inline bool driftstackCurrentArchetypeIsFamilyB()
 {
     return driftstackResolvedIsFamilyB(driftstackCurrentArchetypeCStr());
-}
-
-// Wave 29-360 Item 5: classify an archetype slug as canvas pipeline
-// Family A (Safari ≤26.3) or Family B (Safari 26.4+). Boundary confirmed
-// hard-empirical Wave 29-358 Option C (canvas.fingerprint10x hash compare
-// across Safari minors). Used by cross-archetype fallback to prevent
-// serving Family A bytes under a Family B archetype (which would cause
-// vendor cross-signal detection per the BL coherence bug founder spotted
-// 2026-05-17).
-// ⭐⭐ THE CANVAS-FAMILY CUTOFF, EXPRESSED ONCE (A1 2026-08-30). It was written out twice — here and in
-// DriftstackBoundaryRegistry.h — which is two places to drift and, per closure rule 7, two hand-rolls of a
-// boundary whose sole authority is operations/boundary-registry.json. Both slug- and version-keyed callers
-// now funnel through this one function.
-// derived from: registry surface "canvas_2d_pixel" (families.A "<=26.3", families.B ">=26.4")
-inline bool driftstackCanvasFamilyBForSafariVersion(int major, int minor)
-{
-    if (major > 26) return true;
-    if (major == 26 && minor >= 4) return true;
-    return false;
-}
-
-inline bool driftstackArchetypeIsFamilyB(const char* slug)
-{
-    if (!slug) return false;
-    std::string_view s { slug };
-    // Find "_safari" substring (last occurrence — slug pattern is
-    // ..._safari<MAJ>_<MIN>).
-    auto pos = s.rfind("_safari");
-    if (pos == std::string_view::npos) {
-        // Legacy slug like "iphone16pro_ios18_6" → Family A
-        // (these were captured pre-26.4 launch when only iOS 18 Safari shipped).
-        return false;
-    }
-    auto rest = s.substr(pos + 7); // skip past "_safari"
-    auto under = rest.find('_');
-    if (under == std::string_view::npos || under == 0 || under == rest.size() - 1)
-        return false;
-    auto majSV = rest.substr(0, under);
-    auto minSV = rest.substr(under + 1);
-    int major = 0, minor = 0;
-    for (char c : majSV) {
-        if (c < '0' || c > '9') return false;
-        major = major * 10 + (c - '0');
-    }
-    for (char c : minSV) {
-        if (c < '0' || c > '9') return false;
-        minor = minor * 10 + (c - '0');
-    }
-    // Family B threshold: Safari 26.4+ — via the single shared cutoff above, not a second copy.
-    return driftstackCanvasFamilyBForSafariVersion(major, minor);
 }
 
 // V-790 Wave 3 — Safari (major,minor) extractor, mirroring the parse in
