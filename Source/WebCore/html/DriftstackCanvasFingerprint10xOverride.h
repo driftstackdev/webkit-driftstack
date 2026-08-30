@@ -65313,14 +65313,19 @@ inline bool driftstackResolvedIsFamilyB(const char* slug)
 #if PLATFORM(DRIFTSTACK)
     auto& cfg = DriftstackArchetypeConfig::singleton();
     if (cfg.isValid()) {
+        // ⛔ INDEXED string_view, not a raw char* walk: WebCore builds with
+        // -Werror,-Wunsafe-buffer-usage, so pointer arithmetic over a buffer is a BUILD FAILURE, not a
+        // style note (it is what BUILD_EXIT=65 reported here). This mirrors driftstackParseArchetypeSlug's
+        // own parse in DriftstackBoundaryRegistry.h, which is index-based for the same reason.
         const auto versionUtf8 = cfg.safariVersion().utf8();
-        const char* p = versionUtf8.data();
-        if (p && p[0]) {
+        const std::string_view sv(versionUtf8.data() ? versionUtf8.data() : "", versionUtf8.length());
+        if (!sv.empty()) {
+            size_t i = 0;
             int major = 0, minor = 0;
-            while (*p >= '0' && *p <= '9') { major = major * 10 + (*p - '0'); ++p; }
-            if (*p == '.') {
-                ++p;
-                while (*p >= '0' && *p <= '9') { minor = minor * 10 + (*p - '0'); ++p; }
+            while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
+            if (i < sv.size() && sv[i] == '.') {
+                ++i;
+                while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
             }
             if (major > 0)
                 return driftstackCanvasFamilyBForSafariVersion(major, minor);
