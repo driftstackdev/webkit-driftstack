@@ -8806,7 +8806,18 @@ static void driftstackEmitInputFocus(bool focused)
 {
     static const bool enabled = [] {
         const char* e = getenv("DRIFTSTACK_NAV_PAGESTATE");
-        return e && e[0] == '1';
+        // ⛔⛔ MUST MATCH WebLocalFrameLoaderClient.cpp's driftstackNavPageStateEnabled() EXACTLY.
+        // It did not (A1 2026-08-31): this site accepted only a literal '1' while that site accepts
+        // any non-"0" value, so DRIFTSTACK_NAV_PAGESTATE=true switched the nav/page-state channel ON
+        // and left THIS focus channel silently OFF — no error, no log line, just a keyboard that never
+        // appears. One flag is documented as closing three owner items (#3 white-screen surfacing,
+        // #3's honest 4xx/5xx landing, #5 keyboard auto-open); a divergent parse closed two of them
+        // for every value except '1'.
+        // ⭐ `e && e[0] && e[0] != '0'` is this fork's OWN env idiom — WebPage.cpp:4274 names it that
+        // ("avoids -Wunsafe strcmp") and three other sites already use it. This one was the outlier.
+        // ⚠️ The helper over there is file-local `static`, so the sites cannot share a function; the
+        // duplication is deliberate and is pinned by nav-pagestate-predicate-parity-guard.sh.
+        return e && e[0] && e[0] != '0';
     }();
     if (!enabled)
         return;
