@@ -447,6 +447,21 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             // readers stay off; this only makes the gate reachable, which is the precondition for the
             // owner-gated decision to flip it -- not the decision itself.
             { "DRIFTSTACK_NAV_PAGESTATE", getenv("DRIFTSTACK_NAV_PAGESTATE") },
+            // DRIFTSTACK: forward the base-archetype resolver's input alongside DRIFTSTACK_ARCHETYPE.
+            // Both are read by the SAME header, DriftstackCanvasFingerprint10xOverride.h:
+            //   getenv("DRIFTSTACK_ARCHETYPE")       x2   -- already forwarded above
+            //   getenv("DRIFTSTACK_BASE_ARCHETYPE")  x1   -- was not
+            // and the base one feeds driftstackEffectiveSafariSlugFor(), which 8 in-header call sites use
+            // for canvas Family A/B classification (driftstackResolvedIsFamilyB,
+            // driftstackArchetypeIsFamilyB, driftstackBrowserleaksCanvasSubBandEligible).
+            // ⚠️ NOT claiming this was broken. Unset is a DESIGNED state -- the resolver falls through
+            // (`return base && base[0] ? base : slug;`) and the header's own comment records that the 81
+            // archetypes without a base_archetype legitimately leave it unset. What is asymmetric is that
+            // its sibling in the same header is forwarded and this is not, and whether the header's code
+            // runs where forwarding is required is not observable from this repo.
+            // ⭐ So this is belt-and-braces, exactly like the NAV_PAGESTATE line above: it changes nothing
+            // when the launcher did not set it, and makes the value reach the resolver when it did.
+            { "DRIFTSTACK_BASE_ARCHETYPE", getenv("DRIFTSTACK_BASE_ARCHETYPE") },
             { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
             { "DRIFTSTACK_DIRECT_BROWSE", getenv("DRIFTSTACK_DIRECT_BROWSE") },
             { "DRIFTSTACK_DIRECT_EGRESS", getenv("DRIFTSTACK_DIRECT_EGRESS") },
