@@ -65250,14 +65250,21 @@ inline const char* driftstackCurrentArchetypeCStr()
 // the key's presence), so the 81 archetypes without a base_archetype leave it unset and fall through.
 // getenv LIVE for the same reason driftstackCurrentArchetypeCStr documents: a static cache would pin
 // whatever was set during early process init.
-inline const char* driftstackCurrentEffectiveSafariSlug()
+inline const char* driftstackEffectiveSafariSlugFor(const char* slug)
 {
-    const char* slug = driftstackCurrentArchetypeCStr();
     std::string_view s { slug ? slug : "" };
     if (s.find("_safari") != std::string_view::npos)
         return slug; // already a Safari slug — nothing to resolve, launch path untouched
     const char* base = getenv("DRIFTSTACK_BASE_ARCHETYPE");
     return base && base[0] ? base : slug;
+}
+
+// The current process's effective slug. Takes the DEFAULTED archetype, so callers that must NOT see the
+// legacy default (driftstackIsCanvasFamilyA's unset-env guardrail) use the slug-taking form above with
+// an explicit, already-checked env value instead.
+inline const char* driftstackCurrentEffectiveSafariSlug()
+{
+    return driftstackEffectiveSafariSlugFor(driftstackCurrentArchetypeCStr());
 }
 
 
@@ -65504,7 +65511,14 @@ inline bool driftstackArchetypeIsCanvasFamilyA(const char* slug)
 {
     if (!slug || !slug[0])
         return false; // unset = 26.4 launch default = Family B, never Family A
-    return !driftstackArchetypeIsFamilyB(slug);
+    // ⛔ EFFECTIVE slug (A1 2026-08-31). This function has ZERO callers in the fork — it exists as the
+    // slug-taking MIRROR of driftstackIsCanvasFamilyA() so a gate can drive it with explicit inputs. A
+    // mirror that stops mirroring is worse than no mirror: the live function was routed through
+    // driftstackResolvedIsFamilyB on 2026-08-30 while this one kept the RAW slug predicate, so
+    // chrome-archetype-canvas-family-gate.sh has been asserting against logic the runtime stopped using.
+    // Resolved via the slug-taking helper rather than driftstackResolvedIsFamilyB because that one pulls
+    // in DriftstackArchetypeConfig, which the gate cannot compile standalone.
+    return !driftstackArchetypeIsFamilyB(driftstackEffectiveSafariSlugFor(slug));
 }
 
 // Convenience overload keyed on the live process archetype env. Reads the RAW
@@ -65523,7 +65537,16 @@ inline bool driftstackIsCanvasFamilyA()
     // ⭐ Config-resolved for an EXPLICIT archetype: this is the path the 5 live canvas callers take
     // (OffscreenCanvas.cpp:416, CanvasRenderingContext2DBase.cpp:3152, HTMLCanvasElement.cpp:1336/1735),
     // and without it a chrome archetype reads Family A at every one of them.
-    return !driftstackResolvedIsFamilyB(env);
+    // ⛔ EFFECTIVE slug, not the raw env (A1 2026-08-31). This is the path ALL FIVE live canvas callers
+    // take, as the comment above already says — and a chrome archetype's own slug carries no "_safari"
+    // token, so passing it raw made every one of them read Family A. The first version of this fix moved
+    // only driftstackCurrentArchetypeIsFamilyB and the same-minor guard, and left this site raw: the
+    // canvas-family gate stayed red and named exactly these three archetypes.
+    // ⭐ The unset-env guardrail above is UNCHANGED and still runs FIRST, so the base resolution only ever
+    // applies to an EXPLICIT archetype — no defaulted legacy slug reaches the resolver. A legacy explicit
+    // slug is unaffected too: legacy archetypes declare no base_archetype, so the var is unset and the
+    // slug falls through unchanged.
+    return !driftstackResolvedIsFamilyB(driftstackEffectiveSafariSlugFor(env));
 }
 
 // V-245 archetype-aware content-aware dispatch (preferred path).
