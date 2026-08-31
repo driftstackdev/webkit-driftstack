@@ -435,6 +435,18 @@ void ProcessLauncher::tryFinishLaunchingProcess(ASCIILiteral name, Function<void
             { "DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_FUZZ_ATLAS_PATH") },
             { "DRIFTSTACK_CANVAS_RAW_ATLAS_PATH", getenv("DRIFTSTACK_CANVAS_RAW_ATLAS_PATH") },
             { "DRIFTSTACK_TEST_OPSEQ", getenv("DRIFTSTACK_TEST_OPSEQ") },
+            // DRIFTSTACK: forward the nav/page-state gate to WebContent. BOTH sites that read
+            // DRIFTSTACK_NAV_PAGESTATE live in the WEB PROCESS --
+            //   WebProcess/WebCoreSupport/WebLocalFrameLoaderClient.cpp:156
+            //   WebProcess/WebPage/WebPage.cpp:8808
+            // -- and it appeared nowhere in UIProcess/ or Shared/, so it was never forwarded. An XPC
+            // child does not inherit this process's environment (that is why this list exists), so a
+            // value set in the daemon environment reached MiniBrowser and stopped there: the gate could
+            // not be turned on in the only process that reads it.
+            // ⚠️ Forwarding does NOT enable the feature. The flag stays unset by default and both
+            // readers stay off; this only makes the gate reachable, which is the precondition for the
+            // owner-gated decision to flip it -- not the decision itself.
+            { "DRIFTSTACK_NAV_PAGESTATE", getenv("DRIFTSTACK_NAV_PAGESTATE") },
             { "DRIFTSTACK_SOCKS5_PROXY", getenv("DRIFTSTACK_SOCKS5_PROXY") },
             { "DRIFTSTACK_DIRECT_BROWSE", getenv("DRIFTSTACK_DIRECT_BROWSE") },
             { "DRIFTSTACK_DIRECT_EGRESS", getenv("DRIFTSTACK_DIRECT_EGRESS") },
