@@ -59,6 +59,21 @@ constexpr double kDecayPerMs = 0.998;
 // box-verify saw a 4390px fling on a slow drag. 205 separates the two bands (just above the
 // ~190 slow-drag ceiling) so a slow release stays 1:1 and only a real flick coasts. Paired
 // with the WebPage.cpp 8ms dt-floor (defense-in-depth vs micro-dt EWMA over-read).
+//
+// W3020-follow-up (A1 2026-08-31): 205 RE-VALIDATED, and the boundary is now MEASURED rather than
+// bracketed. A 17-gesture liftoff sweep on a real iPhone 17 / Safari 26.6 / iOS 18.7
+// (reference/realdevice-bs/scroll-liftoff-iPhone_17-1788194649149.json, 8 coasting / 9 not) brackets
+// the transition far more tightly than the ~190-vs-~1187 pair above, which spans 6x:
+//     lift-off px/s   0 0 0 50 71 111 131 147 | 213 | 214 | 382 495 827 1200 2120 5000 6013
+//     coasted         no no no no no no  no no| YES | no  | YES YES YES YES  YES  YES  YES
+//     highest NON-coasting 214   ·   lowest COASTING 213
+// So 205 sits ONE STEP BELOW a measured edge: conservative in the correct direction (a genuine flick
+// is never refused) while everything <= 147 stays 1:1.
+// ⚠️ 213 coasted and 214 did not — a 1 px/s inversion AT the boundary. That is threshold noise, and it
+// is exactly why the pin belongs below the edge and not on it. Do not "tighten" 205 toward 213.
+// ⛔ The margin is thin (205 vs a real ~213), which matters because WebPage.cpp prefers the
+// HARNESS-PASSED lift-off velocity and the harness ALSO gates at 205 before sending: a gentle flick
+// the harness under-reads is zeroed there and never reaches this constant at all.
 constexpr double kMinLiftoffSpeed = 205; // px/s
 
 // Once the coast slows below this speed (px/s) it stops and the velocity is zeroed -- iOS
