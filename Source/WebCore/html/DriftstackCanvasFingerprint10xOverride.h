@@ -65228,6 +65228,38 @@ inline const char* driftstackCurrentArchetypeCStr()
     return env && env[0] ? env : "iphone16pro_ios18_6";
 }
 
+// ⭐⭐ THE CURRENT PROCESS'S EFFECTIVE SAFARI SLUG (A1 2026-08-31). A chrome archetype is a Safari-26.4
+// ENGINE wearing a CriOS user agent: only the 3 chrome archetypes declare `base_archetype`
+// (-> iphone17_ios18_7_safari26_4), and their own slug carries NO "_safari" token at all. Both canvas
+// questions — which FAMILY am I, and which Safari MINOR am I — are properties of that base, not of a
+// tokenless slug that parses to Family A / key -1.
+//
+// ⛔⛔ WHY THIS EXISTS RATHER THAN TWO SEPARATE FIXES. The family predicate and the version key MUST
+// move together. Flipping only the family makes a chrome requester Family B while its key stays -1;
+// driftstackArchetypeSameSafariMinor then compares a real donor key (26004) against -1, rejects every
+// Family-B donor, and the archetype ends up with NO eligible donor at all. Routing both through ONE
+// resolver makes that coupling structural instead of a comment someone has to remember.
+//
+// ⛔ CURRENT PROCESS ONLY — NEVER A DONOR. DRIFTSTACK_BASE_ARCHETYPE describes THIS process. Applying
+// it while resolving `entry.archetype` would make a donor's identity depend on who is asking, so the
+// donor side deliberately keeps the plain slug parse.
+//
+// ⚠️ Env, not config: DriftstackArchetypeConfig::parseJSON only runs under archetype-env.sh, which is
+// ENABLE-GATED-OFF pending MULTI_ARCHETYPE_DISPATCH=1, so cfg.isValid() is false on the live path and
+// the config route cannot carry this today. Every fork launcher exports the var (17 of 17, guarded on
+// the key's presence), so the 81 archetypes without a base_archetype leave it unset and fall through.
+// getenv LIVE for the same reason driftstackCurrentArchetypeCStr documents: a static cache would pin
+// whatever was set during early process init.
+inline const char* driftstackCurrentEffectiveSafariSlug()
+{
+    const char* slug = driftstackCurrentArchetypeCStr();
+    std::string_view s { slug ? slug : "" };
+    if (s.find("_safari") != std::string_view::npos)
+        return slug; // already a Safari slug — nothing to resolve, launch path untouched
+    const char* base = getenv("DRIFTSTACK_BASE_ARCHETYPE");
+    return base && base[0] ? base : slug;
+}
+
 
 // Wave 29-360 Item 5: classify an archetype slug as canvas pipeline
 // Family A (Safari ≤26.3) or Family B (Safari 26.4+). Boundary confirmed
@@ -65338,7 +65370,9 @@ inline bool driftstackResolvedIsFamilyB(const char* slug)
 // This process's family, using the same defaulted slug the canonical-table path already used.
 inline bool driftstackCurrentArchetypeIsFamilyB()
 {
-    return driftstackResolvedIsFamilyB(driftstackCurrentArchetypeCStr());
+    // Effective slug: a chrome archetype resolves to its Safari base, so it classifies as the engine it
+    // actually is. A Safari slug returns unchanged, so the 26.4 launch path is byte-for-byte untouched.
+    return driftstackResolvedIsFamilyB(driftstackCurrentEffectiveSafariSlug());
 }
 
 // V-790 Wave 3 — Safari (major,minor) extractor, mirroring the parse in
@@ -65545,7 +65579,9 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
         // serve an 18.6 canonical) — a cross-minor leak. NO-OP today (all Family-A
         // minors are byte-identical fp10x); structural. Legacy/unset slugs key to
         // -1 on both sides → equal → pass-through (launch path unchanged).
-        if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
+        // Requester resolved through the base archetype (chrome -> its Safari base); DONOR stays the
+        // plain slug, so a donor's key never depends on the asking process's env.
+        if (!driftstackArchetypeSameSafariMinor(entry.archetype, driftstackCurrentEffectiveSafariSlug()))
             continue; // Cross-minor borrow — skip (V-790 Wave 3)
         // ASK-C 2026-07-01 sub-band tie-break — SCOPED to the browserleaks-canvas scene
         // (tag "text_arial14_220x30"): 18.6 and 26.0-26.3 render DIFFERENT Arial text so
@@ -65577,7 +65613,9 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
         // V-790 Wave 3 minor-awareness guard (mirror the WithText path): forbid
         // cross-Safari-MINOR borrows within a family. NO-OP today; structural.
         // Legacy/unset slugs key to -1 both sides → equal → pass-through.
-        if (!driftstackArchetypeSameSafariMinor(entry.archetype, arch))
+        // Requester resolved through the base archetype (chrome -> its Safari base); DONOR stays the
+        // plain slug, so a donor's key never depends on the asking process's env.
+        if (!driftstackArchetypeSameSafariMinor(entry.archetype, driftstackCurrentEffectiveSafariSlug()))
             continue; // Cross-minor borrow — skip (V-790 Wave 3)
         // ASK-C 2026-07-01 sub-band tie-break — SCOPED to the browserleaks-canvas scene
         // (mirror of the WithText path): the 220x30 Arial text canvas splits 18.6 vs 26.0-26.3.
