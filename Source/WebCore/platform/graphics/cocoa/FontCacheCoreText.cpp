@@ -52,6 +52,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 #include <sys/stat.h>
 #endif
@@ -2525,9 +2526,20 @@ static RetainPtr<CTFontRef> driftstackIOSFallbackFontForHebrewCluster(
 // silently → fall through → behavior unchanged → no regression.
 static bool driftstackTrack7CandidateDEnabled()
 {
+    // DRIFTSTACK: parse this flag the same way the other two consumers do. The other sites that gate on
+    // DRIFTSTACK_TRACK7_CANDIDATE_D both require the WHOLE value to be "1":
+    //   FontDescriptionCocoa.cpp:41   if (!enabled || std::string_view(enabled) != "1" ...)
+    //   FontCascadeFonts.cpp:664      && track7CandidateD && std::string_view(track7CandidateD) == "1"
+    // This one tested only the FIRST CHARACTER, so a value like "10" or "1x" enabled the CoreText half
+    // while the other two stayed disabled -- a PARTIALLY enabled font feature, and font selection is
+    // fingerprint-visible, so a split like that serves an identity neither branch was designed to.
+    // Aligned to the exact compare, which is both the majority idiom and the stricter of the two: no
+    // value that used to be rejected is now accepted.
+    // No behavioural change for "1" (what every launcher sets) or for unset -- this closes a divergence
+    // that only appears on a malformed value, which is precisely when nobody is looking.
     static bool s_enabled = []() {
         const char* env = getenv("DRIFTSTACK_TRACK7_CANDIDATE_D");
-        return env && env[0] == '1';
+        return env && std::string_view(env) == "1";
     }();
     return s_enabled;
 }
