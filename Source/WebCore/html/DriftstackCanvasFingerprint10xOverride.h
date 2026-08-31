@@ -65611,7 +65611,7 @@ inline const char* lookupCanvasFp10xCanonicalWithText(int width, int height, con
         // require the donor's Family-A sub-band to match the requester's. Every OTHER scene
         // is band-uniform and skips this (its two -1-keyed donors, if any, are byte-identical).
         if (entry.tag && std::string_view(entry.tag) == std::string_view("text_arial14_220x30")
-            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, arch))
+            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, driftstackCurrentEffectiveSafariSlug()))
             continue; // Wrong Family-A sub-band for the browserleaks-canvas scene
         return entry.dataURL;
     }
@@ -65643,7 +65643,7 @@ inline const char* lookupCanvasFp10xCanonical(int width, int height)
         // ASK-C 2026-07-01 sub-band tie-break — SCOPED to the browserleaks-canvas scene
         // (mirror of the WithText path): the 220x30 Arial text canvas splits 18.6 vs 26.0-26.3.
         if (entry.tag && std::string_view(entry.tag) == std::string_view("text_arial14_220x30")
-            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, arch))
+            && !driftstackBrowserleaksCanvasSubBandEligible(entry.archetype, driftstackCurrentEffectiveSafariSlug()))
             continue; // Wrong Family-A sub-band for the browserleaks-canvas scene
         return entry.dataURL;
     }
