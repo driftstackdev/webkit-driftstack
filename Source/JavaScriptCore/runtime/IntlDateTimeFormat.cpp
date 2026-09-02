@@ -1406,6 +1406,35 @@ static const char* driftstackIPhoneZoneNameForVariant(const String& resolvedTime
     }
 }
 
+// defect-2 (2026-09-02, A1 measured 24 zone/offset cases either side of Safari 26.4): the ONLY CLDR
+// generation difference in the offset-name family is the ZERO offset — OLD CLDR (<26.4) renders it
+// "GMT", NEW (>=26.4) renders "GMT+00:00". All 21 non-zero offsets are byte-identical in both
+// generations (Tokyo GMT+09:00, Lord Howe GMT+10:30, LA GMT-08:00, NY GMT-04:00, Apia GMT+13:00 —
+// half-hours and >12 included), so this rewrites ONLY a zero-offset LongOffset field and moves
+// nothing else. A general LongOffset rewrite would move 21 currently-correct renderings.
+// ⛔ ShortOffset is deliberately NOT handled: no capture in the corpus carries a shortOffset field,
+// so its old-CLDR spelling is UNMEASURED and must not be guessed (a guessed string is a new tell).
+//
+// ⭐ ONE DEFINITION, FOUR CALL SITES. format(), formatToParts(), formatRange() and formatRangeToParts()
+// must return the same zone name for the same options — the intra-object coherence the W3149 comments
+// below already state for the #106 zone-name override. The first cut of this fix lived only in
+// format(); the tzoffset probe formats via formatToParts(), so the render measured the untouched path
+// and the change read as inert on the box. Splitting the predicate (cheap, band+variant only) from the
+// rewrite (needs the ICU-rendered field text) lets every site keep its existing "is any override even
+// possible?" gate before doing the field-position work.
+static bool driftstackOldCLDRZeroOffsetApplies(uint8_t variant)
+{
+    return static_cast<DriftstackTZNameVariant>(variant) == DriftstackTZNameVariant::LongOffset
+        && !driftstackSafariIsNewCLDR();
+}
+
+static const char* driftstackOldCLDRZeroOffsetName(uint8_t variant, StringView icuFieldText)
+{
+    if (!driftstackOldCLDRZeroOffsetApplies(variant))
+        return nullptr;
+    return icuFieldText == "GMT+00:00"_s ? "GMT" : nullptr;
+}
+
 // True for the UDateFormatField values that partTypeString() maps to "timeZoneName".
 static bool driftstackIsTimeZoneField(UDateFormatField field)
 {
@@ -1602,7 +1631,11 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
         const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
         if (!iosName)
             iosName = driftstackAsuncionIntlOffsetName(m_timeZoneForResolvedOptions, value, static_cast<uint8_t>(m_timeZoneName));
-        if (iosName) {
+        // defect-2: the old-CLDR zero-offset rewrite (see driftstackOldCLDRZeroOffsetName). It needs the
+        // ICU-rendered field text, so the decision happens inside the loop; the cheap band+variant
+        // predicate here only decides whether the field-position work is worth doing at all.
+        bool maybeZeroOffset = driftstackOldCLDRZeroOffsetApplies(static_cast<uint8_t>(m_timeZoneName));
+        if (iosName || maybeZeroOffset) {
             UErrorCode fstatus = U_ZERO_ERROR;
             auto fields = std::unique_ptr<UFieldPositionIterator, UFieldPositionIteratorDeleter>(ufieldpositer_open(&fstatus));
             if (U_SUCCESS(fstatus)) {
@@ -1616,9 +1649,17 @@ JSValue IntlDateTimeFormat::format(JSGlobalObject* globalObject, double value) c
                         if (ft < 0)
                             break;
                         if (driftstackIsTimeZoneField(UDateFormatField(ft))) {
-                            auto head = String(fresult.span().first(static_cast<size_t>(b)));
-                            auto tail = String(fresult.span().subspan(static_cast<size_t>(e)));
-                            return jsString(vm, makeString(head, String::fromUTF8(iosName), tail));
+                            const char* replacement = iosName;
+                            if (!replacement) {
+                                replacement = driftstackOldCLDRZeroOffsetName(static_cast<uint8_t>(m_timeZoneName),
+                                    StringView(fresult.span().subspan(static_cast<size_t>(b), static_cast<size_t>(e - b))));
+                            }
+                            if (replacement) {
+                                auto head = String(fresult.span().first(static_cast<size_t>(b)));
+                                auto tail = String(fresult.span().subspan(static_cast<size_t>(e)));
+                                return jsString(vm, makeString(head, String::fromUTF8(replacement), tail));
+                            }
+                            break; // old-CLDR band but the field was not GMT+00:00 → standard ICU output stands.
                         }
                     }
                 }
@@ -1771,14 +1812,20 @@ JSValue IntlDateTimeFormat::formatToParts(JSGlobalObject* globalObject, double v
             // latter keyed on the ORIGINAL instant (the function parameter `value`, not the pre-shifted
             // icuValue) so the DST-window test uses the true UTC instant.
             const char* iosZoneName = nullptr;
+            auto icuFieldText = resultStringView.substring(beginIndex, endIndex - beginIndex);
             if (m_timeZoneName != TimeZoneName::None && driftstackIsTimeZoneField(UDateFormatField(fieldType))) {
                 iosZoneName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
                 if (!iosZoneName)
                     iosZoneName = driftstackAsuncionIntlOffsetName(m_timeZoneForResolvedOptions, value, static_cast<uint8_t>(m_timeZoneName));
+                // defect-2: old-CLDR zero-offset ("GMT+00:00" -> "GMT" below Safari 26.4). THIS is the
+                // path Intl.DateTimeFormat().formatToParts() takes, and it is what the tzoffset probe
+                // reads — format() alone does not cover it.
+                if (!iosZoneName)
+                    iosZoneName = driftstackOldCLDRZeroOffsetName(static_cast<uint8_t>(m_timeZoneName), icuFieldText);
             }
             auto value = iosZoneName
                 ? jsString(vm, String::fromUTF8(iosZoneName))
-                : jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
+                : jsString(vm, icuFieldText);
 #else
             auto value = jsString(vm, resultStringView.substring(beginIndex, endIndex - beginIndex));
 #endif
@@ -1995,7 +2042,12 @@ JSValue IntlDateTimeFormat::formatRange(JSGlobalObject* globalObject, double sta
     // (Asuncion's DST offset-name is intentionally NOT spliced here — it needs the hour/day pre-shift to
     // stay coherent, which formatRange does not apply; that is a separate, narrower residual.)
     if (m_timeZoneName != TimeZoneName::None) {
-        if (const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName))) {
+        const char* iosName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
+        // defect-2: the old-CLDR zero-offset rewrite applies here too, or formatRange would serve
+        // "GMT+00:00" on a <26.4 band while format()/formatToParts serve "GMT" — the same intra-object
+        // coherence tell this block was written to close for the #106 zone names.
+        bool maybeZeroOffset = driftstackOldCLDRZeroOffsetApplies(static_cast<uint8_t>(m_timeZoneName));
+        if (iosName || maybeZeroOffset) {
             UErrorCode zstatus = U_ZERO_ERROR;
             auto ziter = std::unique_ptr<UConstrainedFieldPosition, ICUDeleter<ucfpos_close>>(ucfpos_open(&zstatus));
             if (U_SUCCESS(zstatus)) {
@@ -2012,9 +2064,16 @@ JSValue IntlDateTimeFormat::formatRange(JSGlobalObject* globalObject, double sta
                     ucfpos_getIndexes(ziter.get(), &zb, &ze, &zstatus);
                     if (U_FAILURE(zstatus) || zb < 0 || zb > ze || ze > static_cast<int32_t>(buffer.size()))
                         break;
+                    const char* replacement = iosName;
+                    if (!replacement) {
+                        replacement = driftstackOldCLDRZeroOffsetName(static_cast<uint8_t>(m_timeZoneName),
+                            StringView(buffer.span().subspan(static_cast<size_t>(zb), static_cast<size_t>(ze - zb))));
+                    }
+                    if (!replacement)
+                        break; // old-CLDR band but the field was not GMT+00:00 → un-spliced ICU output stands.
                     auto head = String(buffer.span().first(static_cast<size_t>(zb)));
                     auto tail = String(buffer.span().subspan(static_cast<size_t>(ze)));
-                    return jsString(vm, makeString(head, String::fromUTF8(iosName), tail));
+                    return jsString(vm, makeString(head, String::fromUTF8(replacement), tail));
                 }
             }
         }
@@ -2162,6 +2221,11 @@ JSValue IntlDateTimeFormat::formatRangeToParts(JSGlobalObject* globalObject, dou
     const char* iosZoneName = nullptr;
     if (m_timeZoneName != TimeZoneName::None)
         iosZoneName = driftstackIPhoneZoneNameForVariant(m_timeZoneForResolvedOptions, static_cast<uint8_t>(m_timeZoneName));
+    // defect-2: the old-CLDR zero-offset rewrite. Unlike iosZoneName it depends on the ICU-rendered
+    // field text, so only the cheap band+variant predicate can be hoisted here; the rewrite itself
+    // happens at the timeZoneName part below.
+    bool maybeZeroOffset = m_timeZoneName != TimeZoneName::None
+        && driftstackOldCLDRZeroOffsetApplies(static_cast<uint8_t>(m_timeZoneName));
 #endif
 
     int32_t resultLength = resultStringView.length();
@@ -2229,20 +2293,29 @@ JSValue IntlDateTimeFormat::formatRangeToParts(JSGlobalObject* globalObject, dou
 #if PLATFORM(DRIFTSTACK)
         // W3149: for a divergent zone, emit the iPhone timeZoneName value instead of the host ICU substring
         // (keeps formatRangeToParts coherent with format()/formatToParts). source follows the field position.
-        if (iosZoneName && driftstackIsTimeZoneField(UDateFormatField(fieldType))) {
-            auto zoneSource = [&](int32_t index) -> JSString* {
-                if (startRange.contains(index))
-                    return startRangeString;
-                if (endRange.contains(index))
-                    return endRangeString;
-                return sharedString;
-            };
-            auto zoneValue = jsString(vm, String::fromUTF8(iosZoneName));
-            JSObject* zonePart = createIntlPartObjectWithSource(globalObject, type, zoneValue, zoneSource(beginIndex));
-            parts->push(globalObject, zonePart);
-            RETURN_IF_EXCEPTION(scope, { });
-            previousEndIndex = endIndex;
-            continue;
+        if ((iosZoneName || maybeZeroOffset) && driftstackIsTimeZoneField(UDateFormatField(fieldType))) {
+            const char* zoneName = iosZoneName;
+            if (!zoneName) {
+                // defect-2: rewrite ONLY the new-CLDR zero-offset form; anything else is band-invariant
+                // and must fall through to the ICU substring the generic part-builder below emits.
+                zoneName = driftstackOldCLDRZeroOffsetName(static_cast<uint8_t>(m_timeZoneName),
+                    resultStringView.substring(beginIndex, endIndex - beginIndex));
+            }
+            if (zoneName) {
+                auto zoneSource = [&](int32_t index) -> JSString* {
+                    if (startRange.contains(index))
+                        return startRangeString;
+                    if (endRange.contains(index))
+                        return endRangeString;
+                    return sharedString;
+                };
+                auto zoneValue = jsString(vm, String::fromUTF8(zoneName));
+                JSObject* zonePart = createIntlPartObjectWithSource(globalObject, type, zoneValue, zoneSource(beginIndex));
+                parts->push(globalObject, zonePart);
+                RETURN_IF_EXCEPTION(scope, { });
+                previousEndIndex = endIndex;
+                continue;
+            }
         }
 #endif
         JSObject* part = createPart(type, beginIndex, endIndex - beginIndex);
