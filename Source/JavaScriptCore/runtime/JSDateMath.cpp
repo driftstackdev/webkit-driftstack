@@ -97,9 +97,12 @@ static constexpr bool verbose = false;
 // G4 (tz-lang audit wponds5b1) — America/Asuncion DST host-leak override.
 // macOS system ICU ships tzdata >=2024b, in which Paraguay's DST was abolished
 // (America/Asuncion = permanent UTC-03:00). But every captured real iPhone still
-// ships the OLDER bundled tzdata that OBSERVES Paraguay DST — verified byte-identical
-// on iPhone 16 Pro/Safari 18.6 AND iPhone 17/Safari 26.5 (reference/realdevice-bs/
-// tzoffset-iPhone_17 + tzoffset-iPhone_16_Pro).
+// ships the OLDER bundled tzdata that OBSERVES Paraguay DST — verified on iPhone 16 Pro/Safari 18.6
+// (11 attributable tzoffset captures). ⛔ BAND-GATED 2026-09-02 (A1+A3): the override applies on Safari
+// <26 ONLY. The prior "iPhone 17/Safari 26.5 also observes it" claim was a PROVENANCE-LESS capture
+// (tzoffset-iPhone_17-1782850240988.json: no resolved version, its "26.5" is a filename) — every
+// attributable 26.5 capture reads NO DST, and 26.x is 187/187 no-DST across the corpus. See the band
+// gate at the top of the function body below.
 //
 // ⚠️ GROUND-TRUTH WINDOW (the captured GTs are authoritative — an earlier version of
 // this function had the window INVERTED): the real-device GTs read Asuncion as
@@ -125,13 +128,51 @@ static constexpr bool verbose = false;
 // a Paraguay session becomes INCOHERENT (getTimezoneOffset DST-window != Intl DST-window),
 // a tell real iPhones do not have.
 //
-// NOTE: this is band-INVARIANT across all currently captured iOS bands (18.6 + 26.5
-// both observe it). If a future iOS adopts the upstream abolition it will need a band
-// gate; until a capture shows that, the override applies on every archetype (matching
-// the only real-device truth we have).
+// ⛔ BAND-GATED, NOT band-invariant (corrected 2026-09-02 — this NOTE previously asserted the OPPOSITE
+// of the code below and was the first paragraph a reader hit). Safari <26 (18.x) observes Asuncion DST;
+// Safari 26.x does NOT (corpus 26.x = 187/187 no DST, attributable). The gate is the first statement of
+// the function body, keyed on the archetype Safari MAJOR (26.0 is the flip). ⚠️ The <26 side is 11/12,
+// NOT unanimous: one 18.6 device carries newer tzdata (2024b) that already dropped Paraguay DST — a
+// per-device tzdata-patch fact the fork cannot see, so <26 is a correlation that holds, not a mechanism.
+// A 27.0 revert (if Apple re-adopts) would need its own gate; until a 27.x capture shows it, 27+ stays
+// no-DST with 26.x.
 static constexpr int32_t kAsuncionStdOffsetMs = -10800000; // -03:00
+// Archetype Safari MAJOR parsed once from DRIFTSTACK_ARCHETYPE ("safariNN_M"); 0 when unset. Band-gates
+// the Asuncion DST override below (2026-09-02, A1+A3). Duplicated in JSDateMath.cpp + IntlDateTimeFormat.cpp
+// per the deliberate no-shared-header pattern — keep the two identical.
+static int driftstackArchetypeSafariMajorForAsuncion()
+{
+    static const int major = [] {
+        const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!a) return 0;
+        std::string_view sv { a };
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos) return 0;
+        sv.remove_prefix(pos + 6);
+        int m = 0;
+        for (size_t i = 0; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+            m = m * 10 + (sv[i] - '0');
+        return m;
+    }();
+    return major;
+}
+
 static int32_t driftstackAsuncionDstOffsetMs(double millisecondsFromEpoch)
 {
+    // ⛔ BAND GATE (2026-09-02, A1+A3 corpus): real iPhones observe America/Asuncion DST on Safari <26
+    // (18.x) and NOT on 26.x (attributable corpus: 26.x = 187/187 no DST). The prior "26.5 observes it"
+    // citation was a provenance-less filename (its one capture has no resolved version); every attributable
+    // 26.5 capture reads no-DST. The flip is at the MAJOR (26.0). ⚠ The <26 side is 11/12, NOT unanimous:
+    // one 18.6 device carries newer tzdata (2024b) that already dropped Paraguay DST — a per-device
+    // tzdata-patch fact the fork cannot see, so <26 is the right pin but a correlation, not a mechanism (the
+    // archetype fixes the device image). Unset major (0) → treat as 26+ (no DST), matching launch 26.4 and
+    // the dsNewCLDR default. MUST stay identical in the IntlDateTimeFormat twin (getTimezoneOffset window ==
+    // Intl window, or a Paraguay session is incoherent).
+    {
+        int dsMajor = driftstackArchetypeSafariMajorForAsuncion();
+        if (dsMajor == 0 || dsMajor >= 26)
+            return 0;
+    }
     constexpr int64_t kMsPerDay = 86400000LL;
     constexpr int64_t kHourMs = 3600000LL;
     auto daysFromCivil = [](int y, unsigned m, unsigned d) -> int64_t {

@@ -1451,8 +1451,42 @@ static bool driftstackIsTimeZoneField(UDateFormatField field)
 // Returns the DST component in milliseconds to ADD to the -03:00 standard offset: -3600000 inside
 // the Mar..Oct DST window, 0 (no override needed; macOS ICU's -03:00 is already correct) otherwise.
 static constexpr int32_t kDriftstackAsuncionStdOffsetMs = -10800000; // -03:00
+// Archetype Safari MAJOR parsed once from DRIFTSTACK_ARCHETYPE ("safariNN_M"); 0 when unset. Band-gates
+// the Asuncion DST override below (2026-09-02, A1+A3). Duplicated in JSDateMath.cpp + IntlDateTimeFormat.cpp
+// per the deliberate no-shared-header pattern — keep the two identical.
+static int driftstackArchetypeSafariMajorForAsuncion()
+{
+    static const int major = [] {
+        const char* a = getenv("DRIFTSTACK_ARCHETYPE");
+        if (!a) return 0;
+        std::string_view sv { a };
+        auto pos = sv.find("safari");
+        if (pos == std::string_view::npos) return 0;
+        sv.remove_prefix(pos + 6);
+        int m = 0;
+        for (size_t i = 0; i < sv.size() && sv[i] >= '0' && sv[i] <= '9'; ++i)
+            m = m * 10 + (sv[i] - '0');
+        return m;
+    }();
+    return major;
+}
+
 static int32_t driftstackAsuncionIntlDstOffsetMs(double millisecondsFromEpoch)
 {
+    // ⛔ BAND GATE (2026-09-02, A1+A3 corpus): real iPhones observe America/Asuncion DST on Safari <26
+    // (18.x) and NOT on 26.x (attributable corpus: 26.x = 187/187 no DST). The prior "26.5 observes it"
+    // citation was a provenance-less filename (its one capture has no resolved version); every attributable
+    // 26.5 capture reads no-DST. The flip is at the MAJOR (26.0). ⚠ The <26 side is 11/12, NOT unanimous:
+    // one 18.6 device carries newer tzdata (2024b) that already dropped Paraguay DST — a per-device
+    // tzdata-patch fact the fork cannot see, so <26 is the right pin but a correlation, not a mechanism (the
+    // archetype fixes the device image). Unset major (0) → treat as 26+ (no DST), matching launch 26.4 and
+    // the dsNewCLDR default. MUST stay identical in the IntlDateTimeFormat twin (getTimezoneOffset window ==
+    // Intl window, or a Paraguay session is incoherent).
+    {
+        int dsMajor = driftstackArchetypeSafariMajorForAsuncion();
+        if (dsMajor == 0 || dsMajor >= 26)
+            return 0;
+    }
     constexpr int64_t kMsPerDay = 86400000LL;
     constexpr int64_t kHourMs = 3600000LL;
     auto daysFromCivil = [](int y, unsigned m, unsigned d) -> int64_t {
