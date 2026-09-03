@@ -2532,11 +2532,12 @@ void DriftstackNetworkLoader::resume()
                 if (!task) return;
 
                 // ⭐ T-5 — drain COMPLETED handshakes here, AFTER every h3 path, and only here.
-                // ⛔ THIS CALL WAS INSIDE THE POOL BRANCH AND THE POOL IS DEFAULT OFF (A3 caught it, 2026-09-03),
-                //    so on the production default every request took the one-shot path, nothing ever drained, the
-                //    queue rotated at 64 and the UI process never logged the marker. The consumer field would have
-                //    stayed ABSENT for every session — silence-as-absent behaving exactly as designed, over a drain
-                //    that could not fire. Pooled, pooled-retry, claim-timeout fallback and one-shot all reach this.
+                // ⛔ THIS CALL WAS INSIDE THE POOL BRANCH ONLY (A3 caught it, 2026-09-03). ⚠️ RETRACTED the same
+                //    day: the pool is NOT default-off in production — launch-env-v1.sh exports
+                //    DRIFTSTACK_H3_POOL=1 per session and verify-quic-env.sh requires it — so the in-pool site DID
+                //    fire on the dominant path (proven live: 4 markers for 4 fresh connections, 0 for 3 reuses).
+                //    The real gap was the one-shot fallback and the claim-timeout `break`, which never drained.
+                //    One site after the join covers pooled, pooled-retry, claim-timeout fallback and one-shot.
                 driftstackDrainH3Observations(task);
                 // ⚠️ PLACED INSIDE THIS BLOCK ON PURPOSE: the enclosing scope at the one-shot assignment is one
                 //    brace SHALLOWER than the nearest `task` declaration, so a call there would not have seen it.
