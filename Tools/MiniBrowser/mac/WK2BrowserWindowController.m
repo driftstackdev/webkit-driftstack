@@ -925,15 +925,25 @@ static NSInteger driftstackWarmTabsN(void)
 // (UIDelegate.mm decidePolicyForGeolocationPermissionRequest) and, with no answer, DENIES —
 // instantly, before the DRIFTSTACK_GEO_* position override in WebGeolocationManagerProxy.cpp
 // ever runs. Measured on the box: getCurrentPosition -> PERMISSION_DENIED in 0 ms (that run
-// was the no-override control; the render harness sets no GEO env). Grant iff the SAME env the
-// position override keys on is present, so the permission and the position cannot disagree;
-// otherwise leave WebKit's default untouched so an un-overridden session is byte-identical.
+// was the no-override control; the render harness sets no GEO env). Grant iff the SAME inputs the
+// position override needs are present — BOTH latitude and longitude — so the permission cannot be
+// granted for a session the override will then fail to answer; otherwise leave WebKit's default
+// untouched so an un-overridden session is byte-identical.
+// ⚠️ This predicate is deliberately a SUBSET of the override's (WebGeolocationManagerProxy.cpp also
+// requires each value to parse as a double). A superset here — the first version keyed on LAT alone —
+// would grant permission and then deliver POSITION_UNAVAILABLE, a coherence tell no real device shows.
+static BOOL driftstackGeoEnvPresent(const char *name, const char *xpcName)
+{
+    const char *v = getenv(name);
+    if (!v || !v[0])
+        v = getenv(xpcName);
+    return v && v[0];
+}
+
 static BOOL driftstackHasSpoofedLocation(void)
 {
-    const char *lat = getenv("DRIFTSTACK_GEO_LAT");
-    if (!lat || !lat[0])
-        lat = getenv("__XPC_DRIFTSTACK_GEO_LAT");
-    return lat && lat[0];
+    return driftstackGeoEnvPresent("DRIFTSTACK_GEO_LAT", "__XPC_DRIFTSTACK_GEO_LAT")
+        && driftstackGeoEnvPresent("DRIFTSTACK_GEO_LON", "__XPC_DRIFTSTACK_GEO_LON");
 }
 
 - (void)_webView:(WKWebView *)webView requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin initiatedByFrame:(WKFrameInfo *)frame decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler
