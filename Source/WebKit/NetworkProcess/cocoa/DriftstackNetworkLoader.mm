@@ -2538,7 +2538,14 @@ void DriftstackNetworkLoader::resume()
                 //    fire on the dominant path (proven live: 4 markers for 4 fresh connections, 0 for 3 reuses).
                 //    The real gap was the one-shot fallback and the claim-timeout `break`, which never drained.
                 //    One site after the join covers pooled, pooled-retry, claim-timeout fallback and one-shot.
-                driftstackDrainH3Observations(task);
+                // ⛔ HOP TO THE MAIN RUN LOOP (A3's adversarial review, 2026-09-03). This runs inside the
+                //    dispatch_async(loaderQueue()) block, and the drain reads task->networkSession(), which is
+                //    WeakPtr<NetworkSession>::get() — main-thread-affine, not thread-safe. Every other main-thread
+                //    interaction in this block hops via callOnMainRunLoop; this call was the one that did not,
+                //    in both its original in-pool placement and the moved one. The drain is eventually
+                //    consistent by contract (silence is absent; the queue is bounded and drains on the next
+                //    request), so an async hop costs nothing semantically. `task` is the RefPtr from two lines up.
+                callOnMainRunLoop([task = task] { driftstackDrainH3Observations(task.get()); });
                 // ⚠️ PLACED INSIDE THIS BLOCK ON PURPOSE: the enclosing scope at the one-shot assignment is one
                 //    brace SHALLOWER than the nearest `task` declaration, so a call there would not have seen it.
                 //    Here `task` is declared on the line above and null-checked on the next, which is the only

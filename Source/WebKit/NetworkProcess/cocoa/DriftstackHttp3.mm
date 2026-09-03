@@ -1549,9 +1549,9 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
 }
 
 } // anonymous namespace — closed so the T-5 drain has EXTERNAL linkage (declared in
-  //                        DriftstackHttp3.h, drained from DriftstackNetworkLoader). Mirrors W2557
-  //                        at line 3235: this file opens `namespace {` at 81 and holds it to 3235,
-  //                        so anything defined in between is WebKit::(anonymous)::… and can never
+  //                        DriftstackHttp3.h, drained from DriftstackNetworkLoader). Mirrors the W2557
+  //                        close/reopen pair further down this file: it opens `namespace {` near the top and
+  //                        holds it for ~3,000 lines, so anything defined inside is WebKit::(anonymous)::… and can never
   //                        satisfy the header. clang caught it as an unused function; the real cost
   //                        would have been an undefined symbol at LINK.
 
