@@ -91,6 +91,7 @@
 #import <WebCore/CookieJar.h>               // full enum class IncludeSecureCookies { No, Yes }
 #import "NetworkProcess.h"                  // shouldRelaxThirdPartyCookieBlockingForPage (precedent: NetworkDataTask.cpp:33)
 #import "NetworkSession.h"                  // networkStorageSession / networkProcess / isResourceFromKnownCrossSiteTracker
+#import "NetworkProcessProxyMessages.h"     // T-5 — Messages::NetworkProcessProxy::DriftstackH3HandshakeObserved
 #import <dispatch/dispatch.h>
 #import <stdlib.h>
 #import <wtf/Assertions.h>
@@ -1982,6 +1983,26 @@ static Vector<uint8_t> driftstackNewTabPanelBytes()
     return out;
 }
 
+// T-5 — forward every COMPLETED QUIC handshake to the UI process, which logs the marker the harness
+// daemon parses. Silent when there is nothing to drain, and silent when no session is reachable: an
+// unobserved handshake must read as ABSENT (unknown) on the consumer side, never as a false negative
+// dressed as a measurement — the exact failure the h3InterposeLoaded restatement was reworked to end.
+static void driftstackDrainH3Observations(NetworkDataTask* task)
+{
+    if (!task)
+        return;
+    WebKit::NetworkSession* session = task->networkSession();
+    if (!session)
+        return;
+    auto* connection = session->networkProcess().parentProcessConnection();
+    if (!connection)
+        return;
+    String sni;
+    uint64_t connectionIdentifier = 0;
+    while (WebKit::driftstackHttp3TakeHandshakeObservation(sni, connectionIdentifier))
+        connection->send(Messages::NetworkProcessProxy::DriftstackH3HandshakeObserved(sni, connectionIdentifier), 0);
+}
+
 void DriftstackNetworkLoader::resume()
 {
     // W3093 — new-tab sentinel intercept. FIRST thing, before admission/egress: serve the box-local panel
@@ -2509,6 +2530,18 @@ void DriftstackNetworkLoader::resume()
                 {
                 RefPtr task = protectedTask();
                 if (!task) return;
+
+                // ⭐ T-5 — drain COMPLETED handshakes here, AFTER every h3 path, and only here.
+                // ⛔ THIS CALL WAS INSIDE THE POOL BRANCH AND THE POOL IS DEFAULT OFF (A3 caught it, 2026-09-03),
+                //    so on the production default every request took the one-shot path, nothing ever drained, the
+                //    queue rotated at 64 and the UI process never logged the marker. The consumer field would have
+                //    stayed ABSENT for every session — silence-as-absent behaving exactly as designed, over a drain
+                //    that could not fire. Pooled, pooled-retry, claim-timeout fallback and one-shot all reach this.
+                driftstackDrainH3Observations(task);
+                // ⚠️ PLACED INSIDE THIS BLOCK ON PURPOSE: the enclosing scope at the one-shot assignment is one
+                //    brace SHALLOWER than the nearest `task` declaration, so a call there would not have seen it.
+                //    Here `task` is declared on the line above and null-checked on the next, which is the only
+                //    place after ALL h3 paths where a valid task is guaranteed.
                 }
                 if (!h3resp.failed && h3resp.statusCode) {
                     String mimeType = "text/html"_s, charset = "UTF-8"_s;

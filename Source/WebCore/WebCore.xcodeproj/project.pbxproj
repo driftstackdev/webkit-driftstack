@@ -5040,6 +5040,8 @@
 		B71FE6DF11091CB300DAEF77 /* PrintContext.h in Headers */ = {isa = PBXBuildFile; fileRef = B776D43A1104525D00BEB0EC /* PrintContext.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		B7BF4500CD301A381100C574 /* UnifiedSource28-header-RenderStyleGetters.cpp in Sources */ = {isa = PBXBuildFile; fileRef = BAECA0A8276147146143052D /* UnifiedSource28-header-RenderStyleGetters.cpp */; };
 		B7F29403B52A562336FBE09F /* DriftstackArchetypeConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 936E7837059BA75D78CE6797 /* DriftstackArchetypeConfig.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		31BB383A8DE1BA412D03FFA6 /* DriftstackArchetypeVersion.h in Headers */ = {isa = PBXBuildFile; fileRef = A20639DBAE0A4FEDA7BB3609 /* DriftstackArchetypeVersion.h */; settings = {ATTRIBUTES = (Private, ); }; };
+		A40F057FD13CC26D035CD0EE /* DriftstackBoundaryRegistry.h in Headers */ = {isa = PBXBuildFile; fileRef = 44D08BC9843346FF65A56880 /* DriftstackBoundaryRegistry.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		B847DE321D298447456B661B /* UnifiedSource36-header-RenderStyleGetters.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 75FC345681CEC46DD9AE1331 /* UnifiedSource36-header-RenderStyleGetters.cpp */; };
 		B8DBDB4C130B0F8A00F5CDB1 /* SetSelectionCommand.h in Headers */ = {isa = PBXBuildFile; fileRef = B8DBDB48130B0F8A00F5CDB1 /* SetSelectionCommand.h */; };
 		B8DBDB4E130B0F8A00F5CDB1 /* SpellingCorrectionCommand.h in Headers */ = {isa = PBXBuildFile; fileRef = B8DBDB4A130B0F8A00F5CDB1 /* SpellingCorrectionCommand.h */; };
@@ -16271,6 +16273,8 @@
 		936B21F41DBBF8300052E117 /* CanvasPath.idl */ = {isa = PBXFileReference; lastKnownFileType = text; path = CanvasPath.idl; sourceTree = "<group>"; };
 		936DD03A09CEAC270056AE8C /* Range.idl */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = Range.idl; sourceTree = "<group>"; };
 		936E7837059BA75D78CE6797 /* DriftstackArchetypeConfig.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = platform/cocoa/DriftstackArchetypeConfig.h; sourceTree = SOURCE_ROOT; };
+		A20639DBAE0A4FEDA7BB3609 /* DriftstackArchetypeVersion.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = platform/DriftstackArchetypeVersion.h; sourceTree = SOURCE_ROOT; };
+		44D08BC9843346FF65A56880 /* DriftstackBoundaryRegistry.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = platform/DriftstackBoundaryRegistry.h; sourceTree = SOURCE_ROOT; };
 		9370918C1416D86B00477333 /* textAreaResizeCorner@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "textAreaResizeCorner@2x.png"; sourceTree = "<group>"; };
 		9371080D1DB754550060744E /* WindowOrWorkerGlobalScope.idl */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = WindowOrWorkerGlobalScope.idl; sourceTree = "<group>"; };
 		9372B5202559E51E00E058CF /* BoundaryPoint.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = BoundaryPoint.cpp; sourceTree = "<group>"; };
@@ -39112,6 +39116,8 @@
 		BCF1A5BA097832090061A123 /* platform */ = {
 			isa = PBXGroup;
 			children = (
+				A20639DBAE0A4FEDA7BB3609 /* DriftstackArchetypeVersion.h */,
+				44D08BC9843346FF65A56880 /* DriftstackBoundaryRegistry.h */,
 				49E912A40EFAC8E6009D0CAF /* animation */,
 				FD31604012B026A300C1A359 /* audio */,
 				1AE42F670AA4B8CB00C8612D /* cf */,
@@ -49895,6 +49901,8 @@
 				7A5515F5191830A3009687D2 /* YouTubePluginReplacement.h in Headers */,
 				FD537353137B651800008DCE /* ZeroPole.h in Headers */,
 				B7F29403B52A562336FBE09F /* DriftstackArchetypeConfig.h in Headers */,
+				31BB383A8DE1BA412D03FFA6 /* DriftstackArchetypeVersion.h in Headers */,
+				A40F057FD13CC26D035CD0EE /* DriftstackBoundaryRegistry.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

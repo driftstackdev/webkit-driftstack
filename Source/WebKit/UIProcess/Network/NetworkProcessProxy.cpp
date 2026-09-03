@@ -174,6 +174,14 @@ void NetworkProcessProxy::requestTermination()
     networkProcessDidTerminate(ProcessTerminationReason::RequestedByClient);
 }
 
+void NetworkProcessProxy::driftstackH3HandshakeObserved(const String& sni, uint64_t connectionIdentifier)
+{
+    // Same sink and same parse shape as [Driftstack-ChildPID kind=... pid=...], which the harness daemon
+    // already reads off this process's stderr. One line per COMPLETED handshake.
+    WTFLogAlways("[Driftstack-H3Observed sni=%s conn=%llu]", sni.utf8().data(),
+        static_cast<unsigned long long>(connectionIdentifier));
+}
+
 void NetworkProcessProxy::didBecomeUnresponsive()
 {
     RELEASE_LOG_ERROR(Process, "NetworkProcessProxy::didBecomeUnresponsive: NetworkProcess with PID %d became unresponsive, terminating it", processID());

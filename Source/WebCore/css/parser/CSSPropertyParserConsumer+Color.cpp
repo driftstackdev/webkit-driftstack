@@ -67,6 +67,10 @@
 #include <wtf/SortedArrayMap.h>
 #include <wtf/text/MakeString.h>
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeVersion.h"
+#endif
+
 namespace WebCore {
 namespace CSSPropertyParserHelpers {
 
@@ -573,33 +577,6 @@ static bool NODELETE hasNonCalculatedZeroPercentage(const CSS::ColorMix::Compone
     return false;
 }
 
-#if PLATFORM(DRIFTSTACK)
-// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm driftstackArchetypeSafariAtLeast;
-// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
-static bool driftstackColorMixArchetypeSafariAtLeast(int wantMajor, int wantMinor)
-{
-    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
-    if (!arch || !*arch)
-        return true;
-    std::string_view sv { arch };
-    auto pos = sv.find("safari");
-    if (pos == std::string_view::npos)
-        return true;
-    pos += 6;
-    int major = 0; bool sawMajor = false;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
-    if (!sawMajor)
-        return true;
-    if (pos < sv.size() && sv[pos] == '_')
-        ++pos;
-    int minor = 0;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
-    if (major != wantMajor)
-        return major > wantMajor;
-    return minor >= wantMinor;
-}
-#endif
-
 static std::optional<CSS::Color> consumeColorMixFunction(CSSParserTokenRange& range, ColorParserState& state)
 {
     // color-mix() = color-mix( <color-interpolation-method> , [ <color> && <percentage [0,100]>? ]#{2})
@@ -618,7 +595,7 @@ static std::optional<CSS::Color> consumeColorMixFunction(CSSParserTokenRange& ra
     // drops → the option keeps its inherited color = real). 26.x + the unset launch default keep the lenient
     // default (launch clean). A3 REVERSE bus 6003-6026 byte-verified: real 18.6 rejects → option:disabled = inherited
     // blue; NO -internal-auto-base regression (the arg1 branch survives an invalid arg2, real-18.6-proven).
-    if (args.peek().id() != CSSValueIn && !driftstackColorMixArchetypeSafariAtLeast(26, 0))
+    if (args.peek().id() != CSSValueIn && !driftstackArchetypeSafariAtLeast(26, 0))
         return std::nullopt;
 #endif
     if (args.peek().id() == CSSValueIn) {
@@ -679,9 +656,9 @@ static std::optional<CSS::Color> consumeContrastColorFunction(CSSParserTokenRang
     // Family-A (Safari <26): real iPhone 18.6 does NOT support contrast-color() (dual-band BS capture
     // 2026-07-08: CSS.supports('color: contrast-color(red)') false@18.6, true@26.5). The 26.x-era build
     // parses it unconditionally (no upstream runtime flag exists), so gate it off for Safari <26 to match
-    // real 18.6 — reuses the file-local color-parser archetype gate (also guards the color-mix strictness
-    // above). 26.x + the unset launch default keep it supported (== real 26.4/26.5, launch clean).
-    if (!driftstackColorMixArchetypeSafariAtLeast(26, 0))
+    // real 18.6 — reuses the shared archetype gate (DriftstackArchetypeVersion.h; also guards the color-mix
+    // strictness above). 26.x + the unset launch default keep it supported (== real 26.4/26.5, launch clean).
+    if (!driftstackArchetypeSafariAtLeast(26, 0))
         return std::nullopt;
 #endif
 

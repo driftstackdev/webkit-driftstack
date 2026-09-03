@@ -89,6 +89,10 @@
 #import <wtf/RetainPtr.h>
 #import <wtf/StdLibExtras.h>
 
+#if PLATFORM(DRIFTSTACK)
+#import "DriftstackArchetypeVersion.h"
+#endif
+
 #if ENABLE(SERVICE_CONTROLS)
 #include "ImageControlsMac.h"
 #endif
@@ -460,33 +464,6 @@ ALLOW_DEPRECATED_DECLARATIONS_END
 
     return makeFromComponentsClamping<SRGBA<uint8_t>>(pixel[0], pixel[1], pixel[2], pixel[3]);
 }
-
-#if PLATFORM(DRIFTSTACK)
-// File-local per-archetype Safari-version gate (mirrors WebPage.cpp driftstackArchetypeSafariAtLeast;
-// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
-static bool driftstackArchetypeSafariAtLeast(int wantMajor, int wantMinor)
-{
-    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
-    if (!arch || !*arch)
-        return true;
-    std::string_view sv { arch };
-    auto pos = sv.find("safari");
-    if (pos == std::string_view::npos)
-        return true;
-    pos += 6;
-    int major = 0; bool sawMajor = false;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
-    if (!sawMajor)
-        return true;
-    if (pos < sv.size() && sv[pos] == '_')
-        ++pos;
-    int minor = 0;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
-    if (major != wantMajor)
-        return major > wantMajor;
-    return minor >= wantMinor;
-}
-#endif
 
 Color RenderThemeMac::systemColor(CSSValueID cssValueID, OptionSet<StyleColorOptions> options) const
 {

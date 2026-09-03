@@ -86,6 +86,13 @@ DriftstackHttp3Response driftstackHttp3Execute(void* socks5UdpRelay, const Drift
 // DRIFTSTACK_PATHB_V2_H3=1 env. Default false until Phase 3 impl complete.
 bool driftstackHttp3Enabled();
 
+// T-5 — a COMPLETED QUIC handshake, recorded in the engine and drained by the integrated loader, which
+// forwards it to the UI process. The NetworkProcess's own stderr goes to launchd, not to the daemon's
+// pipe, so a marker logged here would never be observed (A3 measured 0 of 20 kept logs carrying any NP
+// line, including one that fires unconditionally). Presence of the UI-process marker means MEASURED.
+void driftstackHttp3RecordHandshakeObserved(const String& sni);
+bool driftstackHttp3TakeHandshakeObservation(String& sniOut, uint64_t& idOut);
+
 // Wave 29-499.321 — query the DNS HTTPS resource record (RFC 9460 type 65) for
 // `host` THROUGH the SOCKS5 §7 relay (no local leak), and return true if it
 // advertises HTTP/3 (alpn contains "h3"). This is how real Safari discovers h3

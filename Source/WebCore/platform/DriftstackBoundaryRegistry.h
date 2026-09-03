@@ -30,7 +30,8 @@ namespace WebCore {
 //   <model>_ios<MAJ>_<MIN>_safari<MAJ>_<MIN>   e.g. "iphone17_ios18_7_safari26_4"
 //                                                    "iphone16pro_ios18_6_safari18_6"
 // modelSlug is the leading token up to the first "_ios"; safariMajor/Minor are parsed from the
-// "safari<MAJ>_<MIN>" token. `present` is false iff the env var is unset/empty (=> launch default).
+// "safari<MAJ>_<MIN>" token; a '.' separator ("safari26.4") is accepted as well. `present` is false iff
+// the env var is unset/empty (=> launch default).
 struct DriftstackArchetype {
     bool present { false };
     std::string_view modelSlug {};   // e.g. "iphone17", "iphone16pro" (leading run up to "_ios")
@@ -56,7 +57,7 @@ inline DriftstackArchetype driftstackParseArchetypeSlug(const char* slug)
     out.modelSlug = (iosPos != std::string_view::npos) ? sv.substr(0, iosPos)
                                                        : sv.substr(0, sv.find('_'));
 
-    // safariMajor/Minor from the "safari<MAJ>_<MIN>" token.
+    // safariMajor/Minor from the "safari<MAJ>_<MIN>" token ('_' or '.' between major and minor).
     auto sfPos = sv.find("safari");
     if (sfPos != std::string_view::npos) {
         size_t i = sfPos + 6;  // len("safari")
@@ -66,7 +67,7 @@ inline DriftstackArchetype driftstackParseArchetypeSlug(const char* slug)
             ++i;
         }
         out.safariMajor = major;
-        if (i < sv.size() && sv[i] == '_') {
+        if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) {
             ++i;
             int minor = 0;
             while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') {

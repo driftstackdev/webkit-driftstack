@@ -28,6 +28,11 @@
 messages -> NetworkProcessProxy WantsDispatchMessage {
     DidReceiveAuthenticationChallenge(PAL::SessionID sessionID, WebKit::WebPageProxyIdentifier pageID, std::optional<WebCore::SecurityOriginData> topOrigin, WebCore::AuthenticationChallenge challenge, bool negotiatedLegacyTLS, WebKit::AuthenticationChallengeIdentifier challengeID)
     NegotiatedLegacyTLS(WebKit::WebPageProxyIdentifier pageID)
+
+    # T-5 — a COMPLETED QUIC/HTTP-3 handshake, announced by the UI process because the NetworkProcess's
+    # own stderr goes to launchd rather than to the harness daemon's pipe. Completed only: never an
+    # attempt, never a teardown. connectionIdentifier distinguishes one handshake from another.
+    DriftstackH3HandshakeObserved(String sni, uint64_t connectionIdentifier)
     DidNegotiateModernTLS(WebKit::WebPageProxyIdentifier pageID, URL url)
 
     DidBlockLoadToKnownTracker(WebKit::WebPageProxyIdentifier pageID, URL url)

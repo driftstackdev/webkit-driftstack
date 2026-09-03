@@ -1548,12 +1548,71 @@ static int driftstackCtRecvCrypto(DriftstackQuicConn* qc, uint32_t /*ngtcp2Level
     return 0;
 }
 
+} // anonymous namespace — closed so the T-5 drain has EXTERNAL linkage (declared in
+  //                        DriftstackHttp3.h, drained from DriftstackNetworkLoader). Mirrors W2557
+  //                        at line 3235: this file opens `namespace {` at 81 and holds it to 3235,
+  //                        so anything defined in between is WebKit::(anonymous)::… and can never
+  //                        satisfy the header. clang caught it as an unused function; the real cost
+  //                        would have been an undefined symbol at LINK.
+
+// ── T-5 completed-handshake observations, drained by DriftstackNetworkLoader ────────────────────────
+// A per-process queue of (sni, connectionId). The id is a monotonic counter, not an ngtcp2 CID: what the
+// consumer needs is to tell one completed handshake from another (and a fresh handshake to a NEW origin
+// from a reused connection), which a counter answers without reaching into ngtcp2 internals.
+static Lock& driftstackH3ObsLock()
+{
+    static NeverDestroyed<Lock> lock;
+    return lock.get();
+}
+
+static Vector<std::pair<String, uint64_t>>& driftstackH3Observations() WTF_REQUIRES_LOCK(driftstackH3ObsLock())
+{
+    static NeverDestroyed<Vector<std::pair<String, uint64_t>>> obs;
+    return obs.get();
+}
+
+void driftstackHttp3RecordHandshakeObserved(const String& sni)
+{
+    static std::atomic<uint64_t> counter { 0 };
+    uint64_t id = ++counter;
+    Locker locker { driftstackH3ObsLock() };
+    // Bounded: a long-lived NetworkProcess whose loader never drains must not grow without limit. Dropping
+    // the OLDEST keeps the most recent handshake observable, which is the one a caller is asking about.
+    auto& obs = driftstackH3Observations();
+    if (obs.size() >= 64)
+        obs.removeAt(0);
+    obs.append({ sni.isolatedCopy(), id });
+}
+
+bool driftstackHttp3TakeHandshakeObservation(String& sniOut, uint64_t& idOut)
+{
+    Locker locker { driftstackH3ObsLock() };
+    auto& obs = driftstackH3Observations();
+    if (obs.isEmpty())
+        return false;
+    sniOut = obs[0].first;
+    idOut = obs[0].second;
+    obs.removeAt(0);
+    return true;
+}
+
+
+namespace { // reopen the anonymous namespace for the file-local QUIC callbacks below (W2557)
+
 // handshake_completed: optional, but useful for state tracking.
 [[maybe_unused]] static int driftstackNgtcp2HandshakeCompleted(ngtcp2_conn* /*conn*/, void* user_data)
 {
     DriftstackQuicConn* qc = static_cast<DriftstackQuicConn*>(user_data);
     if (qc) qc->handshakeCompleted = true;
     WTFLogAlways("[Driftstack-EG-WK-PathB-v2/Wave29-499.230] QUIC handshake COMPLETED (BoringSSL TLS 1.3 over ngtcp2 reached 1-RTT keys)");
+    // ⭐ T-5 (A1 2026-09-03, A3's spec). Record the COMPLETED handshake for the UI process to announce.
+    // ⛔ Only here. Never on attempt, never on teardown — a marker that fires on an attempt turns
+    //    "observed" into "tried", which is the restatement T-6 was reworked to stop being.
+    // ⛔ And nothing WebKit-process-shaped is touched from inside an ngtcp2 C callback: this engine is
+    //    deliberately standalone (connectQuic is a static with no process handle), so the observation is
+    //    parked here and DRAINED by the integrated loader, which does have the parent connection.
+    if (qc)
+        driftstackHttp3RecordHandshakeObserved(qc->ctSni);
     return 0;
 }
 

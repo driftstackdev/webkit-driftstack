@@ -921,6 +921,49 @@ static NSInteger driftstackWarmTabsN(void)
     [_webView _toggleInWindow];
 }
 
+// T-11 (Driftstack 2026-09-03): geolocation PERMISSION. WebKit asks the client here
+// (UIDelegate.mm decidePolicyForGeolocationPermissionRequest) and, with no answer, DENIES —
+// instantly, before the DRIFTSTACK_GEO_* position override in WebGeolocationManagerProxy.cpp
+// ever runs. Measured on the box: getCurrentPosition -> PERMISSION_DENIED in 0 ms (that run
+// was the no-override control; the render harness sets no GEO env). Grant iff the SAME env the
+// position override keys on is present, so the permission and the position cannot disagree;
+// otherwise leave WebKit's default untouched so an un-overridden session is byte-identical.
+static BOOL driftstackHasSpoofedLocation(void)
+{
+    const char *lat = getenv("DRIFTSTACK_GEO_LAT");
+    if (!lat || !lat[0])
+        lat = getenv("__XPC_DRIFTSTACK_GEO_LAT");
+    return lat && lat[0];
+}
+
+- (void)_webView:(WKWebView *)webView requestGeolocationPermissionForOrigin:(WKSecurityOrigin *)origin initiatedByFrame:(WKFrameInfo *)frame decisionHandler:(void (^)(WKPermissionDecision decision))decisionHandler
+{
+    if (driftstackHasSpoofedLocation()) {
+        decisionHandler(WKPermissionDecisionGrant);
+        return;
+    }
+    // Deny, not Prompt. Before this delegate existed WebKit's path returned with the request
+    // unanswered, which the caller treats as an instant deny (measured: PERMISSION_DENIED in 0 ms).
+    // Prompt is NOT that default: UIDelegate.mm routes it to alertForPermission — a modal sheet —
+    // and a headless session without a location then hangs on it (measured: the no-override
+    // control render produced no capture in 60 s). Deny reproduces the pre-patch behaviour exactly.
+    decisionHandler(WKPermissionDecisionDeny);
+}
+
+// Sibling SPI with the older shape; WebKit uses whichever the delegate responds to. Both are
+// implemented so the answer does not depend on which selector this WebKit build prefers.
+- (void)_webView:(WKWebView *)webView requestGeolocationPermissionForFrame:(WKFrameInfo *)frame decisionHandler:(void (^)(BOOL allowed))decisionHandler
+{
+    decisionHandler(driftstackHasSpoofedLocation());
+}
+
+// No _webView:queryPermission:forOrigin:completionHandler: on purpose. permissions.query() for
+// geolocation is forced to "prompt" in the WebProcess (Permissions.cpp, §A row 13: a real iPhone
+// page never sees it auto-granted, 27/27 captures), and after a granted request the Geolocation
+// object reports "granted" on its own — measured here as before=prompt, after=granted, which is
+// the real-device first-visit sequence. A grant answered from this delegate would be overridden
+// there, so a hook here could only ever claim a behaviour it does not produce.
+
 - (void)_webView:(WKWebView *)webView requestNotificationPermissionForSecurityOrigin:(WKSecurityOrigin *)securityOrigin decisionHandler:(void (^)(BOOL))decisionHandler
 {
     NSDictionary *permissions = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"NotificationPermissions"];

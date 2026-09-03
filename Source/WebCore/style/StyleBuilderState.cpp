@@ -75,6 +75,10 @@
 #include "StylePrimitiveNumericTypes+Conversions.h"
 #include "StylePrimitiveNumericTypes+Evaluation.h"
 
+#if PLATFORM(DRIFTSTACK)
+#include "DriftstackArchetypeVersion.h"
+#endif
+
 namespace WebCore {
 namespace Style {
 
@@ -217,33 +221,6 @@ void BuilderState::updateFontForZoomChange()
     setFontDescriptionFontSize(m_style.fontDescription().specifiedSize());
 }
 
-#if PLATFORM(DRIFTSTACK)
-// File-local per-archetype Safari-version gate (mirrors RenderThemeMac.mm driftstackArchetypeSafariAtLeast;
-// true when DRIFTSTACK_ARCHETYPE is unset so the launch default is never gated).
-static bool driftstackBuilderStateArchetypeSafariAtLeast(int wantMajor, int wantMinor)
-{
-    const char* arch = getenv("DRIFTSTACK_ARCHETYPE");
-    if (!arch || !*arch)
-        return true;
-    std::string_view sv { arch };
-    auto pos = sv.find("safari");
-    if (pos == std::string_view::npos)
-        return true;
-    pos += 6;
-    int major = 0; bool sawMajor = false;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { major = major * 10 + (sv[pos] - '0'); ++pos; sawMajor = true; }
-    if (!sawMajor)
-        return true;
-    if (pos < sv.size() && sv[pos] == '_')
-        ++pos;
-    int minor = 0;
-    while (pos < sv.size() && sv[pos] >= '0' && sv[pos] <= '9') { minor = minor * 10 + (sv[pos] - '0'); ++pos; }
-    if (major != wantMajor)
-        return major > wantMajor;
-    return minor >= wantMinor;
-}
-#endif
-
 void BuilderState::updateFontForGenericFamilyChange()
 {
     const auto& childFont = m_style.fontDescription();
@@ -258,7 +235,7 @@ void BuilderState::updateFontForGenericFamilyChange()
     // comes from the PROPORTIONAL early-return, so 26.x MUST keep the early-return. LAUNCH-SAFE BY CONSTRUCTION.
     // (DEBUG_MONO bus 5890: code/pre hit here child.UFDS=1 parent.UFDS=0 isAbsoluteSize=1 keywordId=98[medium], no
     // other path re-resolves them.) Non-keyword absolute sizes (explicit px, keywordId==0) still early-return.
-    bool dsFamilyAMonospaceKeywordChange = !driftstackBuilderStateArchetypeSafariAtLeast(26, 0)
+    bool dsFamilyAMonospaceKeywordChange = !driftstackArchetypeSafariAtLeast(26, 0)
         && childFont.keywordSizeAsIdentifier()
         && childFont.useFixedDefaultSize() != parentStyle().fontDescription().useFixedDefaultSize();
     if (childFont.isAbsoluteSize() && !dsFamilyAMonospaceKeywordChange)

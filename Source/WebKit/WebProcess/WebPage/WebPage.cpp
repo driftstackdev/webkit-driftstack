@@ -487,6 +487,10 @@
 #include <WebCore/GraphicsContextCG.h>
 #endif
 
+#if PLATFORM(DRIFTSTACK)
+#include <WebCore/DriftstackArchetypeVersion.h>
+#endif
+
 #if ENABLE(LOCKDOWN_MODE_API)
 #import <pal/spi/cg/CoreGraphicsSPI.h>
 #endif
@@ -5727,30 +5731,6 @@ void WebPage::adjustSettingsForLockdownMode(Settings& settings, const WebPrefere
     }
 }
 
-#if PLATFORM(DRIFTSTACK)
-// Parse the Safari major.minor from the DRIFTSTACK_ARCHETYPE env slug (e.g. "..._safari26_4"),
-// read once per WebContent process. Used to version-key globals Apple added at a specific Safari
-// version (e.g. window.Origin at 26.5). Mirrors driftstackWebGLUniformBlocksV265Plus() in
-// WebGL2RenderingContext.cpp. No archetype env (default) = the 26.4 launch target → false.
-static bool driftstackArchetypeSafariAtLeast(int wantMajor, int wantMinor)
-{
-    const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
-    if (!archetype)
-        return false;
-    std::string_view sv(archetype);
-    auto pos = sv.find("safari");
-    if (pos == std::string_view::npos)
-        return false;
-    sv.remove_prefix(pos + 6);
-    int major = 0, minor = 0;
-    size_t i = 0;
-    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { major = major * 10 + (sv[i] - '0'); ++i; }
-    if (i < sv.size() && (sv[i] == '_' || sv[i] == '.')) ++i;
-    while (i < sv.size() && sv[i] >= '0' && sv[i] <= '9') { minor = minor * 10 + (sv[i] - '0'); ++i; }
-    return major > wantMajor || (major == wantMajor && minor >= wantMinor);
-}
-#endif
-
 void WebPage::updatePreferences(const WebPreferencesStore& store)
 {
     updatePreferencesGenerated(store);
@@ -5794,8 +5774,8 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // 2026-06-27 (silently-inert-gate sweep): read getenv LIVE — NOT a static cache.
     // A `static const` lambda caches at FIRST call, which can fire during early process
     // init BEFORE the per-band DRIFTSTACK_ARCHETYPE env is applied → it caches the
-    // launch/26.4 default for ALL archetypes (gate silently inert). Mirror the C1
-    // RenderThemeMac.mm driftstackArchetypeSafariAtLeast live-getenv pattern.
+    // launch/26.4 default for ALL archetypes (gate silently inert). Mirror the shared
+    // driftstackArchetypeSafariAtLeast live-getenv pattern (WebCore/DriftstackArchetypeVersion.h).
     const bool s_isFamilyAArchetype = []() {
         const char* archetype = getenv("DRIFTSTACK_ARCHETYPE");
         // W-DEBUG (2026-07-07, DRIFTSTACK_DEBUG_FAMILYA-gated, stderr-only, OFF by default —
@@ -6291,15 +6271,13 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // safari26_0/26_3 currently fall through to the Family-B 26.4 defaults and OVER-
     // expose members Apple added at a LATER 26.x minor. Real-capture triangulated
     // (15× real 26.0 + 1× 26.3 + 26.2 + 26.4 aio captures): boundaries are PER-MEMBER.
-    // GUARDRAIL (the landmine): driftstackArchetypeSafariAtLeast() returns false when
-    // DRIFTSTACK_ARCHETYPE is UNSET, so each block MUST also require dsHasArch — else
-    // it would fire on the unset 26.4 launch default and regress it.
+    // driftstackArchetypeSafariAtLeast() (WebCore/DriftstackArchetypeVersion.h) resolves an UNSET or
+    // unparseable DRIFTSTACK_ARCHETYPE to the 26.4 launch band, so none of these blocks fires on the
+    // unset launch default; no per-block env guard is needed.
     // See docs/internal/26-0-26-3-master-closure-ledger.md.
     {
-        const char* dsArch = getenv("DRIFTSTACK_ARCHETYPE");
-        const bool dsHasArch = dsArch && dsArch[0];
         // <26.4 — absent on BOTH 26.0 AND 26.3 (real 26.0==26.3 lack; real 26.4 has):
-        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 4)) {
+        if (!driftstackArchetypeSafariAtLeast(26, 4)) {
             settings.setWebTransportEnabled(false);           // window.WebTransport + 10 stream interfaces (VERIFIED 26.4 boundary)
             settings.setCaptionDisplaySettingsEnabled(false); // HTMLVideoElement.showCaptionDisplaySettings
             // NEW 2026-06-20 (verified 26.4 boundary, both 26.0 AND 26.3 lack these):
@@ -6317,7 +6295,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         }
         // <26.2 — absent on 26.0 ONLY (26.3 >= 26.2 HAS them; Apple added at 26.2). Boundary
         // VERIFIED across real 26.0/26.2/26.3/26.4/26.5 /aio (apiEnum + cssSupports, 2026-06-19).
-        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 2)) {
+        if (!driftstackArchetypeSafariAtLeast(26, 2)) {
             settings.setNavigationAPIEnabled(false);          // window.Navigation/NavigateEvent/… (26.0 undefined)
             settings.setEventTimingEnabled(false);            // Performance.eventCounts/interactionCount, EventCounts, PerformanceEventTiming
             settings.setLargestContentfulPaintEnabled(false); // LargestContentfulPaint + perfObs entry types (26.0=5, 26.2+=8)
@@ -6348,7 +6326,7 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
         // GPUDevice.adapterInfo added at Safari 26.2 (real 26.0 lacks it, 26.2+ have it; corrected
         // from 26.3 — adapterInfo is the single member 26.0→26.2 gains on GPUDevice). 26.0 hidden,
         // 26.3 keeps it (both correct). Only observable on WebGPU-capable models (18.x has no WebGPU).
-        if (dsHasArch && !driftstackArchetypeSafariAtLeast(26, 2))
+        if (!driftstackArchetypeSafariAtLeast(26, 2))
             settings.setWebGPUAdapterInfoEnabled(false);
     }
 #endif
