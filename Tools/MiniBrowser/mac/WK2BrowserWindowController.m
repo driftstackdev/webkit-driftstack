@@ -1864,7 +1864,21 @@ static BOOL isJavaScriptURL(NSURL *url)
     // page via window.__dsTapZoneCenter, robust to layout) so it fires a native touchstart into A3's oracle.
     // No #if ENABLE(): MiniBrowser is a framework client (ENABLE is undefined here); the runtime env guard
     // + the SPI being a no-op-without-impl on non-DRIFTSTACK builds suffices.
-    if (getenv("DRIFTSTACK_AUTOTAP")) {
+    // ⛔ A BARE getenv() PRESENCE CHECK MEANS `=0` TURNS THE FLAG ON (A1 2026-09-04). This read
+    // `if (getenv("DRIFTSTACK_AUTOTAP"))`, so DRIFTSTACK_AUTOTAP=0 — the spelling anyone would reach for
+    // to disable it — ENABLED the auto-tap, which then injects a named `window.__dsNT` global into the
+    // page's main world. A default-off flag that is not actually off is the same shape this file already
+    // fixed for DRIFTSTACK_IOS_CURSOR a few hundred lines up, whose comment states the rule outright:
+    // a FALSY value ("0"/"false"/"no"/"off") must DISABLE the feature, not enable it. Same semantics here,
+    // deliberately copied rather than re-invented so the two gates cannot drift apart.
+    const char* autoTapRaw = getenv("DRIFTSTACK_AUTOTAP");
+    NSString *autoTapVal = autoTapRaw
+        ? [[NSString stringWithUTF8String:autoTapRaw] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]].lowercaseString
+        : nil;
+    BOOL autoTapOn = autoTapVal.length > 0
+        && ![autoTapVal isEqualToString:@"0"] && ![autoTapVal isEqualToString:@"false"]
+        && ![autoTapVal isEqualToString:@"no"] && ![autoTapVal isEqualToString:@"off"];
+    if (autoTapOn) {
         // The iPhone viewport override (innerWidth -> ~402) applies late after didFinishNavigation, so
         // reading __dsTapZoneCenter too early gets the transient window-width layout and the tap misses the
         // reflowed tapZone. Poll innerWidth until it is stable across 2 reads (settled), then read center + tap.

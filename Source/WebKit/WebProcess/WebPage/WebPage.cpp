@@ -5857,7 +5857,12 @@ void WebPage::updatePreferences(const WebPreferencesStore& store)
     // WebCore/WebKit/WebKitLegacy), so this Mac-built fork inherited the wrong fractional behavior. Force integer
     // inline layout to test floor=match-iOS. Gated for cumrig / W2569-inline / measureText blast-radius verification
     // before any default-on flip.
-    if (getenv("DRIFTSTACK_INT_INLINE_LAYOUT"))
+    // ⛔ VALUE, NOT PRESENCE (A1 2026-09-04). This was a bare `getenv(...)` presence check, so
+    // DRIFTSTACK_INT_INLINE_LAYOUT=0 — the spelling anyone would use to turn it OFF — switched inline
+    // layout to integer mode and changed text metrics, a fingerprint surface. This fork already has the
+    // value idiom in FontCascade.cpp / FontCascadeCoreText.cpp (`std::getenv(X) && std::getenv(X)[0] == '1'`);
+    // using it here rather than inventing a third spelling.
+    if (const char* dsIntInline = getenv("DRIFTSTACK_INT_INLINE_LAYOUT"); dsIntInline && dsIntInline[0] == '1')
         settings.setSubpixelInlineLayoutEnabled(false);
 
     // W353 (2026-06-02) — two more fork-too-new attributes the full-enumeration apiEnum surface caught, both
