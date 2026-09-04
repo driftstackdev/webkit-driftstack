@@ -915,10 +915,14 @@ void WebAutomationSession::platformSimulateWheelInteraction(WebPageProxy& page, 
 // touch IPC — the same path iOS reaches via its UIKit gesture recognizer. The harness's W3C
 // WebDriver pointerType:"touch" Actions arrive here as TouchDown/MoveTo/LiftUp (SimulatedInputDispatcher
 // → simulateTouchInteraction → here); position+timing come from the Actions, the iPhone-17 contact
-// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY == radiusX because iOS sets
-// BOTH from UITouch.majorRadius — NativeWebTouchEventIOS.mm:110-111 setRadiusX(radius)+setRadiusY(radius);
-// rotationAngle/force 0 — Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
+// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY 0; rotationAngle/force 0 —
+// Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
 // fork instead of the mouse-alias (see operations/touch-capture/NATIVE-TOUCH-IMPL-PLAN.md).
+// ⛔ RETRACTED 2026-09-04: this comment used to say "radiusY == radiusX because iOS sets BOTH from
+// UITouch.majorRadius — NativeWebTouchEventIOS.mm:110-111". That is a CODE INFERENCE and it is refuted by
+// every capture we own: radiusY is 0 in 12/12 real-finger gold points and 114/114 BrowserStack points.
+// Corrected at the emission site below, and corrected HERE because the claim was written in two places
+// and fixing only the code would leave the reasoning that produced it standing.
 // VALUE CAVEAT: 24.278 is from a Safari 26.5 capture; confirm the exact 26.4 quantum before launch-pinning.
 void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, TouchInteraction interaction, const WebCore::IntPoint& locationInViewport, std::optional<Seconds> duration, AutomationCompletionHandler&& completionHandler)
 {
@@ -956,7 +960,28 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
     WebCore::DoublePoint location(locationInViewport.x() + dsInsets.left(), locationInViewport.y() + dsInsets.top());
     Vector<WebPlatformTouchPoint> touchPoints;
     touchPoints.append(WebPlatformTouchPoint(1u, location, location, location, phase,
-        24.278 /* radiusX */, 24.278 /* radiusY == radiusX: iOS sets both to UITouch.majorRadius, NativeWebTouchEventIOS.mm:110-111 */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
+        // ⛔⛔ radiusY IS 0 ON A REAL DEVICE — MEASURED, and the previous value here was a CODE INFERENCE
+        // standing against a capture, which closure rule 13 forbids for contact geometry.
+        // ⚠️⚠️ THIS VALUE HAS FLIPPED BEFORE, AND THIS IS THE SECOND TIME IT IS BEING SET FROM EVIDENCE.
+        // History, from operations/agent-bus/A1-A3-BUS.md: the fork originally emitted 0. A3 flagged the 0
+        // as a suspected tell; their auto-fixer changed it to 24.278 and they REVERTED that themselves,
+        // explicitly warning "resolve against GOLD-TRUTH, not code-inference". A1 then set it to 24.278
+        // anyway, replying "verified-from-source" and citing NativeWebTouchEventIOS.mm — a source read, not
+        // a capture. That is precisely the substitution rule 13 names. The captures below reverse it.
+        // If a future reader is tempted to set radiusY from the iOS source again: the page does not observe
+        // the source, it observes the value, and the value is 0 in every capture we hold. The old comment
+        // reasoned from NativeWebTouchEventIOS.mm:110-111 setting both radii from UITouch.majorRadius;
+        // whatever iOS does internally, what the PAGE OBSERVES is radiusY == 0. Measured 2026-09-04:
+        //   reference/realdevice-bs/tap-pointer-ios265-manual.json  (REAL-FINGER gold)  radiusY 0 in 12/12
+        //   reference/realdevice-bs/behavioral-variance-iPhone_17-*.json (4 files)       radiusY 0 in 114/114
+        // A page reading Touch.radiusY saw 24.278 from us and 0 from every real iPhone: a one-property tell.
+        // ⭐ radiusX 24.278 STAYS — it is genuine real-finger data, one of the two values the gold capture
+        // carries (24.277777958661318 x6 and 36.416667751967910 x6). Do NOT "correct" it to 23.598: that
+        // figure comes from the BrowserStack/Appium files only and is a synthetic-injection artefact, not
+        // a finger. The gold also fixes the companion invariant, PointerEvent.width == 2 x radiusX exactly
+        // (48.555555917322636 = 2 x 24.277777958661318; 72.833335503935810 = 2 x 36.416667751967910), so
+        // width must be DERIVED from whichever radiusX is chosen rather than drawn independently.
+        24.278 /* radiusX: real-finger gold value, see above */, 0.0 /* radiusY: measured 0 on real devices */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
         piOverTwoDouble /* altitudeAngle */, 0.0 /* azimuthAngle */, WebPlatformTouchPoint::TouchType::Direct));
 
     NativeWebTouchEvent touchEvent(WebEvent { type, OptionSet<WebEventModifier> { }, MonotonicTime::now() },
