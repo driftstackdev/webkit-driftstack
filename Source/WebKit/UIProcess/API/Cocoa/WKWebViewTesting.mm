@@ -118,9 +118,15 @@
 {
     WebCore::DoublePoint loc(point.x, point.y);
     {
+        // ⛔ THE TEST VEHICLE MUST EMIT WHAT PRODUCTION EMITS, or it validates something production does not
+        // do (WebAutomationSessionMac.mm is the production site; see its comment for the capture evidence).
+        // Measured 2026-09-04, n=589 real-finger points: radiusX is one of three literal doubles and the
+        // 69.8% rung is 24.277777958661318 — NOT the rounded 24.278, which is 6.6e-10 off and fails a
+        // bit-identical bar. force EQUALS radiusX on touchstart and is 0 on touchend; this rig had 0 on both.
         Vector<WebKit::WebPlatformTouchPoint> pts;
         pts.append(WebKit::WebPlatformTouchPoint(1u, loc, loc, loc, WebKit::WebPlatformTouchPoint::State::Pressed,
-            24.278, 0.0, 0.0, 0.0, 0.0, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
+            24.277777958661318 /* radiusX */, 0.0 /* radiusY: 0 on a real device */, 0.0, 0.0,
+            24.277777958661318 /* force == radiusX at touchstart */, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
         WebKit::NativeWebTouchEvent down(WebKit::WebEvent { WebKit::WebEventType::TouchStart, OptionSet<WebKit::WebEventModifier> { }, MonotonicTime::now() },
             pts, { }, { }, loc, true, false, 1.f, 0.f);
         _page->handleTouchEvent(nullptr, down);
@@ -128,7 +134,8 @@
     {
         Vector<WebKit::WebPlatformTouchPoint> pts;
         pts.append(WebKit::WebPlatformTouchPoint(1u, loc, loc, loc, WebKit::WebPlatformTouchPoint::State::Released,
-            24.278, 0.0, 0.0, 0.0, 0.0, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
+            24.277777958661318 /* radiusX */, 0.0 /* radiusY: 0 on a real device */, 0.0, 0.0,
+            0.0 /* force == 0 at touchend */, piOverTwoDouble, 0.0, WebKit::WebPlatformTouchPoint::TouchType::Direct));
         WebKit::NativeWebTouchEvent up(WebKit::WebEvent { WebKit::WebEventType::TouchEnd, OptionSet<WebKit::WebEventModifier> { }, MonotonicTime::now() },
             pts, { }, { }, loc, false, false, 1.f, 0.f);
         _page->handleTouchEvent(nullptr, up);

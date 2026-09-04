@@ -73,7 +73,8 @@ typedef NSVisualEffectView _WKPlatformVisualEffectView;
 - (void)_setPageScale:(CGFloat)scale withOrigin:(CGPoint)origin;
 - (CGFloat)_pageScale;
 
-// fork-test vehicle (radiusX=24.278); impl exists only on DRIFTSTACK_TOUCH_STUBS builds. Declared
+// fork-test vehicle (radiusX=24.277777958661318, force=radiusX at touchstart / 0 at touchend — kept
+// byte-identical to the production site); impl exists only on DRIFTSTACK_TOUCH_STUBS builds. Declared
 // unconditionally because ENABLE() is WebKit-internal and undefined for framework clients (MiniBrowser).
 - (void)_dsSimulateTouchDownUpAtPoint:(CGPoint)point;
 

@@ -915,7 +915,8 @@ void WebAutomationSession::platformSimulateWheelInteraction(WebPageProxy& page, 
 // touch IPC — the same path iOS reaches via its UIKit gesture recognizer. The harness's W3C
 // WebDriver pointerType:"touch" Actions arrive here as TouchDown/MoveTo/LiftUp (SimulatedInputDispatcher
 // → simulateTouchInteraction → here); position+timing come from the Actions, the iPhone-17 contact
-// geometry is set in C++ (radiusX quantized to 12.139, typical 24.278; radiusY 0; rotationAngle/force 0 —
+// geometry is set in C++ (radiusX 24.277777958661318, one of three measured literals; radiusY 0; force ==
+// radiusX at touchstart and 0 otherwise; rotationAngle 0 —
 // Haptic Touch has no 3D-Touch force sensor). This is what makes a tap fire a real touchstart on the
 // fork instead of the mouse-alias (see operations/touch-capture/NATIVE-TOUCH-IMPL-PLAN.md).
 // ⛔ RETRACTED 2026-09-04: this comment used to say "radiusY == radiusX because iOS sets BOTH from
@@ -923,7 +924,10 @@ void WebAutomationSession::platformSimulateWheelInteraction(WebPageProxy& page, 
 // every capture we own: radiusY is 0 in 12/12 real-finger gold points and 114/114 BrowserStack points.
 // Corrected at the emission site below, and corrected HERE because the claim was written in two places
 // and fixing only the code would leave the reasoning that produced it standing.
-// VALUE CAVEAT: 24.278 is from a Safari 26.5 capture; confirm the exact 26.4 quantum before launch-pinning.
+// VALUE CAVEAT: the three radii are from Safari 26.5 captures; confirm them on 26.4 before launch-pinning.
+// ⛔ They are LITERALS, not a derived ladder: 1x and 2x are an exact doubling but 3x is not (3 x 12.138888979330659
+// = 36.41666693799198 vs the measured 36.41666775196791). Reconstructing from a rounded quantum ships a value
+// no device reports — a first cut of this change did exactly that and was 6.6e-10 off.
 void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, TouchInteraction interaction, const WebCore::IntPoint& locationInViewport, std::optional<Seconds> duration, AutomationCompletionHandler&& completionHandler)
 {
     UNUSED_PARAM(duration);
@@ -958,6 +962,24 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
     // full viewportLocationToWindowLocation here is WRONG (its rootViewToWindow inverts the Y axis).
     auto dsInsets = page.obscuredContentInsets();
     WebCore::DoublePoint location(locationInViewport.x() + dsInsets.left(), locationInViewport.y() + dsInsets.top());
+    // ⭐ THE OBSERVED CONTACT RADII. Measured 2026-09-04 over 589 real-finger points across two independent
+    // files (gold tap-pointer-ios265-manual.json n=12, touch-capture sample n=577). radiusX takes exactly
+    // THREE values and no others:
+    //     12.138888979330659   n=4    (0.7%)
+    //     24.277777958661318   n=411 (69.8%)   <- the value emitted here
+    //     36.41666775196791    n=174 (29.5%)
+    // ⛔⛔ STORE THEM AS LITERALS; DO NOT DERIVE THEM FROM A QUANTUM. They LOOK like a 1x/2x/3x ladder and
+    // the first two are an exact doubling at double precision, but the third is NOT: 3 x 12.138888979330659
+    // = 36.41666693799198, while the device reports 36.41666775196791 — a ratio of 3.000000067055. A first
+    // cut of this comment reconstructed 24.277777958 from the rounded display figure "12.139" and was
+    // 6.6e-10 off the measured double. At a bit-identical bar that is a wrong value, and it is the same
+    // error class as reading the ladder off a rounded number instead of the capture.
+    // ⚠️ SCOPE, per A1's caution and stated rather than assumed away: n=589 is ONE SUBJECT. That supports
+    // these three values strongly and the SET's completeness weakly — with one hand you cannot distinguish
+    // "the ladder ends at the third rung" from "a fourth exists and this finger never produced it". The
+    // values and the force/width coupling are safe to pin; the SET and the 70/29/1 split are one-subject
+    // figures a later capture should widen. They are named constants so a capture widens a list, not a shape.
+    static constexpr double DRIFTSTACK_TOUCH_RADIUS_X = 24.277777958661318; // the 69.8% rung, verbatim from capture
     Vector<WebPlatformTouchPoint> touchPoints;
     touchPoints.append(WebPlatformTouchPoint(1u, location, location, location, phase,
         // ⛔⛔ radiusY IS 0 ON A REAL DEVICE — MEASURED, and the previous value here was a CODE INFERENCE
@@ -975,13 +997,26 @@ void WebAutomationSession::platformSimulateTouchInteraction(WebPageProxy& page, 
         //   reference/realdevice-bs/tap-pointer-ios265-manual.json  (REAL-FINGER gold)  radiusY 0 in 12/12
         //   reference/realdevice-bs/behavioral-variance-iPhone_17-*.json (4 files)       radiusY 0 in 114/114
         // A page reading Touch.radiusY saw 24.278 from us and 0 from every real iPhone: a one-property tell.
-        // ⭐ radiusX 24.278 STAYS — it is genuine real-finger data, one of the two values the gold capture
+        // ⭐ radiusX STAYS — it is genuine real-finger data, one of the three values the captures carry
         // carries (24.277777958661318 x6 and 36.416667751967910 x6). Do NOT "correct" it to 23.598: that
         // figure comes from the BrowserStack/Appium files only and is a synthetic-injection artefact, not
         // a finger. The gold also fixes the companion invariant, PointerEvent.width == 2 x radiusX exactly
         // (48.555555917322636 = 2 x 24.277777958661318; 72.833335503935810 = 2 x 36.416667751967910), so
         // width must be DERIVED from whichever radiusX is chosen rather than drawn independently.
-        24.278 /* radiusX: real-finger gold value, see above */, 0.0 /* radiusY: measured 0 on real devices */, 0.0 /* rotationAngle */, 0.0 /* twist */, 0.0 /* force */,
+        // ⛔⛔ FORCE IS NOT A CONSTANT ON A REAL DEVICE — it EQUALS radiusX on touchstart and is 0 on
+        // touchend/touchmove. Measured 2026-09-04 across 589 real-finger points in two independent files:
+        //   reference/realdevice-bs/tap-pointer-ios265-manual.json (gold): touchstart force 36.416667751967910
+        //     x3 and 24.277777958661318 x3 — each EXACTLY its own radiusX; touchend force 0 in 6/6.
+        //   operations/touch-capture/samples/iphone-safari26_5-real-2026-06-04.json (577 pts): 17 non-zero
+        //     force values, all equal to that point's radiusX, against 19 touchstarts; 0 everywhere else.
+        // This site hardcoded 0.0 on EVERY phase, so a page reading Touch.force at touchstart saw 0 where a
+        // real iPhone reports the contact size — the same class as the radiusY defect above (a constant
+        // standing where the device varies), found by the same sweep and confirmed by the same captures.
+        // ⚠️ The units look wrong and are not: iOS reports `force` here in the same magnitude as the radius,
+        // not a normalized 0-1 pressure. That is what the capture says, and rule 13 puts the capture above
+        // any reading of what the field "should" mean.
+        DRIFTSTACK_TOUCH_RADIUS_X /* radiusX: real-finger gold value, see above */, 0.0 /* radiusY: measured 0 on real devices */, 0.0 /* rotationAngle */, 0.0 /* twist */,
+        (phase == WebPlatformTouchPoint::State::Pressed) ? DRIFTSTACK_TOUCH_RADIUS_X : 0.0 /* force == radiusX at touchstart, 0 otherwise (measured) */,
         piOverTwoDouble /* altitudeAngle */, 0.0 /* azimuthAngle */, WebPlatformTouchPoint::TouchType::Direct));
 
     NativeWebTouchEvent touchEvent(WebEvent { type, OptionSet<WebEventModifier> { }, MonotonicTime::now() },
