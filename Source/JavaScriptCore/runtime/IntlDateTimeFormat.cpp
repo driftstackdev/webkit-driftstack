@@ -1406,19 +1406,33 @@ static const char* driftstackIPhoneZoneNameForVariant(const String& resolvedTime
             return "Anadyr Standard Time";
         return nullptr;
     // ⛔⛔ SHORTGENERIC WAS MISSING FROM THIS DISPATCH, so GMT/Etc/GMT fell through to macOS ICU, which
-    // renders the zero offset as "GMT+0" — a **Safari 27** value that the fork served while declaring 26.x.
+    // renders the zero offset as "GMT+0" where a real 26.x iPhone renders "GMT".
     // A fingerprinter reads it in ONE call: Intl.DateTimeFormat(_, {timeZoneName:'shortGeneric'}).
+    // ⚠️ MECHANISM, corrected 2026-09-04 — do NOT read this as "the fork emitted a Safari 27 value". Both
+    // this comment and the original filing said that, and it is wrong in a way that sends the next reader
+    // hunting for a version-keyed emission path that does not exist. The fork emitted **macOS ICU's**
+    // rendering, because nothing intercepted this variant; ICU's zero-offset form merely COINCIDES with what
+    // Safari 27 renders. The version correlation below is real evidence about what the DEVICE does and says
+    // nothing about how the fork chose its value — the cause is this missing case, full stop.
     // ⚠️ THE COMMENT ABOVE THIS FUNCTION CLAIMED COMPLETENESS AND WAS WRONG — "(All other variant cells for
     // all probed zones already match macOS ICU.)" was true of the PROBED set, not of the surface. That is
     // completeness asserted over an incidental population, and it is why this cell survived a closure that
     // read as covering the whole family. The earlier fix (021fc67e6e, "at all four format ENTRY POINTS")
     // was complete for the entry points and for the variants then captured; shortGeneric was never among
     // them, so this is a gap in coverage rather than a regression of that change.
-    // ⭐ EVIDENCE (A1, 2026-09-04, split by Safari version rather than pooled):
-    //     17.1 .. 26.6 : "GMT" in 170 captures, **zero** "GMT+0"
-    //     27.0         : "GMT+0" = 22, "GMT" = 4
-    //   So "GMT+0 is legitimate at 26.x" is REFUTED, not merely unaddressed — it predicts some 26.x
-    //   captures showing it and 170 show none. The 26.x band is what this build declares, so serve "GMT".
+    // ⭐ EVIDENCE (A1, 2026-09-04, re-derived through the canonical resolver and split BY FAMILY as well as
+    // by version — the first pass pooled two capture families and that is a trap this team hit twice today):
+    //     tznamevariants (this gate's OWN family) : "GMT" at 18.6, 26.0, 26.0.1, 26.2-26.6.1 — and NO 27.0
+    //                                               rows at all, so the gate's "matches no captured
+    //                                               generation" was correct WITHIN its own data
+    //     aio                                     : "GMT" everywhere 15.4-26.6 (690 values, zero "GMT+0");
+    //                                               "GMT+0" only at 27.0, 22 of 26
+    //   ⚠️ The "GMT+0 exists on real devices" evidence therefore comes ENTIRELY from `aio`, which makes the
+    //   original comparison cross-family. It survives only because the split also holds STRICTLY WITHIN aio
+    //   — 690 values from 15.4 to 26.6 with zero "GMT+0". Without that within-family check it would have
+    //   been a cross-family artefact rather than a finding. Keep both halves when citing this.
+    //   So "GMT+0 is legitimate at 26.x" is REFUTED, not merely unaddressed — it predicts some 26.x captures
+    //   showing it and none of 690 do. The 26.x band is what this build declares, so serve "GMT".
     // ⚠️ LIMIT, stated rather than papered over: the OLD band's shortGeneric value is UNCAPTURED. The
     // sibling Short/LongGeneric cells flip with `gmtIsOld`, but nothing here establishes that shortGeneric
     // does, and at 27.0 itself the split is 22/4 rather than unanimous — possibly a sub-version or CLDR
