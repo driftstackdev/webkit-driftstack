@@ -1366,7 +1366,11 @@ static const char* driftstackIPhoneLongZoneName(const String& resolvedTimeZone)
 //   - GMT / Etc/GMT, longGeneric  : macOS "Greenwich Mean Time" -> iPhone "GMT"
 //   - Pacific/Honolulu, longGeneric : macOS "Honolulu Time"     -> iPhone "Hawaii-Aleutian Standard Time"
 //   - Asia/Anadyr, longGeneric    : macOS "Petropavlovsk-Kamchatski Standard Time" -> iPhone "Anadyr Standard Time"
-// (All other variant cells for all probed zones already match macOS ICU.) Returns nullptr →
+// ⛔ THIS LIST WAS READ AS COMPLETE AND IS NOT — it is complete over the PROBED set, which is a different
+// thing, and the difference cost a live tell. shortGeneric on GMT/Etc/GMT diverges too and was absent from
+// this list until 2026-09-04; see the ShortGeneric case below for the evidence. Before adding a cell here,
+// state which zones and variants were probed, so the next reader can tell coverage from completeness.
+// (All other PROBED variant cells already match macOS ICU.) Returns nullptr →
 // fall through to macOS ICU (the common case for every other zone/variant).
 //
 // `variant` is the raw IntlDateTimeFormat::TimeZoneName enumerator value (uint8_t underlying) —
@@ -1400,6 +1404,29 @@ static const char* driftstackIPhoneZoneNameForVariant(const String& resolvedTime
             return "Hawaii-Aleutian Standard Time";
         if (resolvedTimeZone == "Asia/Anadyr"_s)
             return "Anadyr Standard Time";
+        return nullptr;
+    // ⛔⛔ SHORTGENERIC WAS MISSING FROM THIS DISPATCH, so GMT/Etc/GMT fell through to macOS ICU, which
+    // renders the zero offset as "GMT+0" — a **Safari 27** value that the fork served while declaring 26.x.
+    // A fingerprinter reads it in ONE call: Intl.DateTimeFormat(_, {timeZoneName:'shortGeneric'}).
+    // ⚠️ THE COMMENT ABOVE THIS FUNCTION CLAIMED COMPLETENESS AND WAS WRONG — "(All other variant cells for
+    // all probed zones already match macOS ICU.)" was true of the PROBED set, not of the surface. That is
+    // completeness asserted over an incidental population, and it is why this cell survived a closure that
+    // read as covering the whole family. The earlier fix (021fc67e6e, "at all four format ENTRY POINTS")
+    // was complete for the entry points and for the variants then captured; shortGeneric was never among
+    // them, so this is a gap in coverage rather than a regression of that change.
+    // ⭐ EVIDENCE (A1, 2026-09-04, split by Safari version rather than pooled):
+    //     17.1 .. 26.6 : "GMT" in 170 captures, **zero** "GMT+0"
+    //     27.0         : "GMT+0" = 22, "GMT" = 4
+    //   So "GMT+0 is legitimate at 26.x" is REFUTED, not merely unaddressed — it predicts some 26.x
+    //   captures showing it and 170 show none. The 26.x band is what this build declares, so serve "GMT".
+    // ⚠️ LIMIT, stated rather than papered over: the OLD band's shortGeneric value is UNCAPTURED. The
+    // sibling Short/LongGeneric cells flip with `gmtIsOld`, but nothing here establishes that shortGeneric
+    // does, and at 27.0 itself the split is 22/4 rather than unanimous — possibly a sub-version or CLDR
+    // rollout boundary nobody has separated yet. So the override is applied ONLY on the NEW (26.x) band and
+    // OLD falls through to ICU exactly as before. Do not extend it to OLD without a capture.
+    case DriftstackTZNameVariant::ShortGeneric:
+        if (isGMT && !gmtIsOld)
+            return "GMT";
         return nullptr;
     default:
         return nullptr;
